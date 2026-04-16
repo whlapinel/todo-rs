@@ -1,0 +1,11 @@
+[package]
+name = "todo"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+todo-server-sdk = { path = "todo-server-sdk" }
+hyper = { version = "0.14", features = ["server", "tcp"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"

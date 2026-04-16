@@ -1,0 +1,13 @@
+# Rust
+/target
+
+# Gradle
+.gradle/
+build/
+model/build/
+
+# Generated Rust SDK — regenerate with: ./gradlew :model:assemble
+/todo-server-sdk/
+
+# Taskfile checksum cache
+.task/

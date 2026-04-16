@@ -1,0 +1,38 @@
+version: "3"
+
+tasks:
+  codegen:
+    desc: Generate the Rust server SDK from the Smithy model
+    cmds:
+      - ./gradlew :model:assemble
+    sources:
+      - model/src/main/smithy/**/*.smithy
+      - model/smithy-build.json
+    generates:
+      - todo-server-sdk/src/**/*.rs
+
+  build:
+    desc: Build the server (runs codegen first if needed)
+    deps: [codegen]
+    cmds:
+      - cargo build
+
+  run:
+    desc: Run the server (runs codegen first if needed)
+    deps: [codegen]
+    cmds:
+      - cargo run
+
+  check:
+    desc: Type-check without producing a binary
+    deps: [codegen]
+    cmds:
+      - cargo check
+
+  clean:
+    desc: Remove all build artifacts
+    cmds:
+      - cargo clean
+      - rm -rf todo-server-sdk
+      - rm -rf model/build
+      - rm -rf build
