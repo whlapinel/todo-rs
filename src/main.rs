@@ -9,7 +9,7 @@ use todo_server_sdk::{error, input, output, server, types::DateTime as SmithyDat
 
 use crate::domain::{item::Item, list::List, user::User};
 use crate::storage::{
-    memory::{InMemoryItemRepo, InMemoryListRepo, InMemoryUserRepo},
+    sqlite::{create_pool, SqliteItemRepo, SqliteListRepo, SqliteUserRepo},
     ItemRepo, ListRepo, RepoError, UserRepo,
 };
 
@@ -43,6 +43,18 @@ async fn get_user(
         first_name: user.first_name,
         last_name: user.last_name,
     })
+}
+
+async fn update_user(
+    input: input::UpdateUserInput,
+    server::Extension(repo): server::Extension<Arc<dyn UserRepo>>,
+) -> Result<output::UpdateUserOutput, error::UpdateUserError> {
+    let user = User { id: input.user_id, first_name: input.first_name, last_name: input.last_name };
+    repo.update(&user).await.map_err(|e| match e {
+        RepoError::NotFound => error::UpdateUserError::from(not_found()),
+        _ => error::UpdateUserError::from(internal(format!("{e:?}"))),
+    })?;
+    Ok(output::UpdateUserOutput {})
 }
 
 async fn list_users(
@@ -97,6 +109,18 @@ async fn list_lists(
     Ok(output::ListListsOutput { lists })
 }
 
+async fn update_list(
+    input: input::UpdateListInput,
+    server::Extension(repo): server::Extension<Arc<dyn ListRepo>>,
+) -> Result<output::UpdateListOutput, error::UpdateListError> {
+    let list = List { id: input.list_id, user_id: input.user_id, name: input.name };
+    repo.update(&list).await.map_err(|e| match e {
+        RepoError::NotFound => error::UpdateListError::from(not_found()),
+        _ => error::UpdateListError::from(internal(format!("{e:?}"))),
+    })?;
+    Ok(output::UpdateListOutput {})
+}
+
 async fn create_item(
     input: input::CreateItemInput,
     server::Extension(repo): server::Extension<Arc<dyn ItemRepo>>,
@@ -108,6 +132,23 @@ async fn create_item(
     }
     let item_id = repo.create(&item).await.map_err(|e| internal(format!("{e:?}")))?;
     Ok(output::CreateItemOutput { item_id })
+}
+
+async fn update_item(
+    input: input::UpdateItemInput,
+    server::Extension(repo): server::Extension<Arc<dyn ItemRepo>>,
+) -> Result<output::UpdateItemOutput, error::UpdateItemError> {
+    let mut item = Item::new(&input.user_id, &input.list_id, &input.name);
+    item.id = input.item_id;
+    if let Some(dt) = input.due_date {
+        item.deadline = chrono::DateTime::from_timestamp(dt.secs(), dt.subsec_nanos())
+            .map(|d| d.with_timezone(&chrono::Utc));
+    }
+    repo.update(&item).await.map_err(|e| match e {
+        RepoError::NotFound => error::UpdateItemError::from(not_found()),
+        _ => error::UpdateItemError::from(internal(format!("{e:?}"))),
+    })?;
+    Ok(output::UpdateItemOutput {})
 }
 
 async fn get_item(
@@ -141,6 +182,7 @@ async fn list_items(
         .map(|i| todo_server_sdk::model::ItemSummary {
             item_id: Some(i.id),
             name: Some(i.name),
+            due_date: i.deadline.map(|dt| SmithyDateTime::from_secs(dt.timestamp())),
         })
         .collect();
     Ok(output::ListItemsOutput { items })
@@ -150,20 +192,26 @@ async fn list_items(
 async fn main() {
     tracing_subscriber::fmt::init();
 
-    let user_repo = Arc::new(InMemoryUserRepo::new()) as Arc<dyn UserRepo>;
-    let list_repo = Arc::new(InMemoryListRepo::new()) as Arc<dyn ListRepo>;
-    let item_repo = Arc::new(InMemoryItemRepo::new()) as Arc<dyn ItemRepo>;
+    let pool = create_pool("sqlite://todo.db?mode=rwc")
+        .await
+        .expect("failed to open database");
+    let user_repo = Arc::new(SqliteUserRepo(pool.clone())) as Arc<dyn UserRepo>;
+    let list_repo = Arc::new(SqliteListRepo(pool.clone())) as Arc<dyn ListRepo>;
+    let item_repo = Arc::new(SqliteItemRepo(pool)) as Arc<dyn ItemRepo>;
 
     let config = ListeriaConfig::builder().build();
     let smithy = Listeria::builder(config)
         .create_user(create_user)
         .get_user(get_user)
+        .update_user(update_user)
         .list_users(list_users)
         .create_list(create_list)
         .get_list(get_list)
+        .update_list(update_list)
         .list_lists(list_lists)
         .create_item(create_item)
         .get_item(get_item)
+        .update_item(update_item)
         .list_items(list_items)
         .build_unchecked();
 

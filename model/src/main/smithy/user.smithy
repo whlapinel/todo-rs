@@ -13,6 +13,7 @@ resource User {
     read: GetUser
     list: ListUsers
     create: CreateUser
+    update: UpdateUser
     resources: [
         List
     ]
@@ -72,6 +73,28 @@ operation GetUser {
         @required
         $lastName
     }
+
+    errors: [
+        ListeriaError
+    ]
+}
+
+@idempotent
+@http(method: "PUT", uri: "/users/{userId}")
+operation UpdateUser {
+    input := for User {
+        @required
+        @httpLabel
+        $userId
+
+        @required
+        $firstName
+
+        @required
+        $lastName
+    }
+
+    output := {}
 
     errors: [
         ListeriaError

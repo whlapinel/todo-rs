@@ -17,6 +17,7 @@ resource Item {
     read: GetItem
     list: ListItems
     create: CreateItem
+    update: UpdateItem
 }
 
 @http(method: "POST", uri: "/users/{userId}/lists/{listId}/items")
@@ -76,6 +77,35 @@ operation GetItem {
     ]
 }
 
+@idempotent
+@http(method: "PUT", uri: "/users/{userId}/lists/{listId}/items/{itemId}")
+operation UpdateItem {
+    input := for Item {
+        @required
+        @httpLabel
+        $userId
+
+        @required
+        @httpLabel
+        $listId
+
+        @required
+        @httpLabel
+        $itemId
+
+        @required
+        $name
+
+        $dueDate
+    }
+
+    output := {}
+
+    errors: [
+        ListeriaError
+    ]
+}
+
 list Items {
     member: ItemSummary
 }
@@ -83,6 +113,7 @@ list Items {
 structure ItemSummary for Item {
     $itemId
     $name
+    $dueDate
 }
 
 @readonly

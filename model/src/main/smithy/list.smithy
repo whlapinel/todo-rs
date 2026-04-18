@@ -16,6 +16,7 @@ resource List {
     read: GetList
     list: ListLists
     create: CreateList
+    update: UpdateList
 }
 
 @http(method: "POST", uri: "/users/{userId}/lists")
@@ -55,6 +56,29 @@ operation GetList {
     output := for List {
         $name
     }
+
+    errors: [
+        ListeriaError
+    ]
+}
+
+@idempotent
+@http(method: "PUT", uri: "/users/{userId}/lists/{listId}")
+operation UpdateList {
+    input := for List {
+        @required
+        @httpLabel
+        $userId
+
+        @required
+        @httpLabel
+        $listId
+
+        @required
+        $name
+    }
+
+    output := {}
 
     errors: [
         ListeriaError

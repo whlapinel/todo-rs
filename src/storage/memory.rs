@@ -80,6 +80,14 @@ impl UserRepo for InMemoryUserRepo {
         Ok(id)
     }
 
+    async fn update(&self, user: &User) -> Result<(), RepoError> {
+        let mut map = self.users.write().map_err(lock_err)?;
+        let entry = map.get_mut(&user.id).ok_or(RepoError::NotFound)?;
+        entry.first_name = user.first_name.clone();
+        entry.last_name = user.last_name.clone();
+        Ok(())
+    }
+
     async fn delete(&self, user_id: &str) -> Result<(), RepoError> {
         self.users
             .write()
@@ -124,6 +132,13 @@ impl ListRepo for InMemoryListRepo {
         Ok(id)
     }
 
+    async fn update(&self, list: &List) -> Result<(), RepoError> {
+        let mut map = self.lists.write().map_err(lock_err)?;
+        let entry = map.get_mut(&list.id).ok_or(RepoError::NotFound)?;
+        entry.name = list.name.clone();
+        Ok(())
+    }
+
     async fn delete(&self, list_id: &str) -> Result<(), RepoError> {
         self.lists
             .write()
@@ -166,6 +181,14 @@ impl ItemRepo for InMemoryItemRepo {
             .map_err(lock_err)?
             .insert(id.clone(), stored);
         Ok(id)
+    }
+
+    async fn update(&self, item: &Item) -> Result<(), RepoError> {
+        let mut map = self.items.write().map_err(lock_err)?;
+        let entry = map.get_mut(&item.id).ok_or(RepoError::NotFound)?;
+        entry.name = item.name.clone();
+        entry.deadline = item.deadline;
+        Ok(())
     }
 
     async fn delete(&self, item_id: &str) -> Result<(), RepoError> {
