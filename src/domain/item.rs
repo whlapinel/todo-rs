@@ -11,7 +11,6 @@ pub struct Item {
     pub deadline: Option<DateTime<Utc>>,
 }
 
-
 impl Item {
     pub fn new(user_id: &str, list_id: &str, name: &str) -> Self {
         Self {

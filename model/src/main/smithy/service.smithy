@@ -8,6 +8,6 @@ use aws.protocols#restJson1
 service Listeria {
     version: "2026-04-14"
     resources: [
-        List
+        User
     ]
 }

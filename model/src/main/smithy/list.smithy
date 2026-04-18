@@ -15,6 +15,28 @@ resource List {
     ]
     read: GetList
     list: ListLists
+    create: CreateList
+}
+
+@http(method: "POST", uri: "/users/{userId}/lists")
+operation CreateList {
+    input := for List {
+        @required
+        @httpLabel
+        $userId
+
+        @required
+        $name
+    }
+
+    output := for List {
+        @required
+        $listId
+    }
+
+    errors: [
+        ListeriaError
+    ]
 }
 
 @readonly
@@ -39,7 +61,7 @@ operation GetList {
     ]
 }
 
-structure TodoList {
+structure ListSummary {
     @required
     listId: String
 
@@ -51,7 +73,7 @@ structure TodoList {
 }
 
 list Lists {
-    member: TodoList
+    member: ListSummary
 }
 
 @readonly

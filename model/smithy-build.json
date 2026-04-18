@@ -18,6 +18,15 @@
         }
       }
     },
+    "todo-typescript-client": {
+      "plugins": {
+        "typescript-client-codegen": {
+          "package": "@todo/client",
+          "packageVersion": "0.1.0",
+          "service": "common#Listeria"
+        }
+      }
+    },
     "todo-client": {
       "plugins": {
         "rust-client-codegen": {

@@ -16,6 +16,34 @@ resource Item {
     }
     read: GetItem
     list: ListItems
+    create: CreateItem
+}
+
+@http(method: "POST", uri: "/users/{userId}/lists/{listId}/items")
+operation CreateItem {
+    input := for Item {
+        @required
+        @httpLabel
+        $userId
+
+        @required
+        @httpLabel
+        $listId
+
+        @required
+        $name
+
+        $dueDate
+    }
+
+    output := for Item {
+        @required
+        $itemId
+    }
+
+    errors: [
+        ListeriaError
+    ]
 }
 
 @readonly

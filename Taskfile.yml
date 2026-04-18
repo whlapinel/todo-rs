@@ -8,18 +8,47 @@ tasks:
     sources:
       - model/src/main/smithy/**/*.smithy
       - model/smithy-build.json
+      - model/build.gradle.kts
     generates:
       - todo-server-sdk/src/**/*.rs
+      - todo-client/src/**/*.rs
+      - todo-typescript-client/
+
+  client:
+    desc: Build the generated TypeScript client package
+    dir: todo-typescript-client
+    cmds:
+      - npm install
+      - npm run build
+    sources:
+      - src/**/*.ts
+    generates:
+      - dist-cjs/**/*
+      - dist-es/**/*
+      - dist-types/**/*
+
+  frontend:
+    desc: Build the frontend (outputs to frontend/dist/)
+    dir: frontend
+    deps: [client]
+    cmds:
+      - npm install
+      - npm run build
+    sources:
+      - src/**/*.ts
+      - index.html
+    generates:
+      - dist/**/*
 
   build:
-    desc: Build the server (runs codegen first if needed)
-    deps: [codegen]
+    desc: Build everything (codegen + frontend + server)
+    deps: [codegen, frontend]
     cmds:
       - cargo build
 
   run:
-    desc: Run the server (runs codegen first if needed)
-    deps: [codegen]
+    desc: Build and run the server
+    deps: [codegen, frontend]
     cmds:
       - cargo run
 

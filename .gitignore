@@ -9,6 +9,9 @@ model/build/
 # Generated Rust SDK — regenerate with: ./gradlew :model:assemble
 /todo-server-sdk/
 /todo-client/
+/todo-typescript-client/
 
 # Taskfile checksum cache
 .task/
+
+frontend/node_modules/
