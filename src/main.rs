@@ -192,9 +192,9 @@ async fn list_items(
 async fn main() {
     tracing_subscriber::fmt::init();
 
-    let pool = create_pool("sqlite://todo.db?mode=rwc")
-        .await
-        .expect("failed to open database");
+    let db_url = std::env::var("DATABASE_URL")
+        .unwrap_or_else(|_| "sqlite://todo.db?mode=rwc".to_string());
+    let pool = create_pool(&db_url).await.expect("failed to open database");
     let user_repo = Arc::new(SqliteUserRepo(pool.clone())) as Arc<dyn UserRepo>;
     let list_repo = Arc::new(SqliteListRepo(pool.clone())) as Arc<dyn ListRepo>;
     let item_repo = Arc::new(SqliteItemRepo(pool)) as Arc<dyn ItemRepo>;
@@ -233,7 +233,10 @@ async fn main() {
                 .fallback(ServeFile::new("frontend/dist/index.html")),
         );
 
-    let bind: SocketAddr = "127.0.0.1:3000".parse().unwrap();
+    let bind: SocketAddr = std::env::var("BIND")
+        .unwrap_or_else(|_| "0.0.0.0:3000".to_string())
+        .parse()
+        .expect("invalid BIND address");
     tracing::info!("listening on {}", bind);
     axum::Server::bind(&bind)
         .serve(app.into_make_service())

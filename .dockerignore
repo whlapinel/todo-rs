@@ -1,0 +1,15 @@
+target/
+smithy-rs/.git/
+model/build/
+model/.gradle/
+.gradle/
+frontend/node_modules/
+frontend/dist/
+todo-typescript-client/node_modules/
+todo-typescript-client/dist-cjs/
+todo-typescript-client/dist-es/
+todo-typescript-client/dist-types/
+*.db
+*.db-shm
+*.db-wal
+.git/
