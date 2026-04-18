@@ -12,7 +12,26 @@
           "module": "todo-server-sdk",
           "moduleVersion": "0.1.0",
           "moduleDescription": "Rust server SDK for todo app",
-          "moduleAuthors": ["whlapinel@gmail.com"]
+          "moduleAuthors": [
+            "whlapinel@gmail.com"
+          ]
+        }
+      }
+    },
+    "todo-client": {
+      "plugins": {
+        "rust-client-codegen": {
+          "runtimeConfig": {
+            "relativePath": "../smithy-rs/rust-runtime"
+          },
+          "codegen": {},
+          "service": "common#Listeria",
+          "module": "todo-client",
+          "moduleVersion": "0.1.0",
+          "moduleDescription": "Rust client for todo app",
+          "moduleAuthors": [
+            "whlapinel@gmail.com"
+          ]
         }
       }
     }

@@ -12,7 +12,7 @@ This README explains the full setup from scratch, including what every piece is 
 
 ```sh
 # Clone with submodules (smithy-rs is a submodule)
-git clone --recurse-submodules <repo-url>
+git clone --recurse-submodules https://github.com/whlapinel/todo-rs
 cd todo
 
 # Generate the Rust server SDK from the Smithy model (slow on first run)

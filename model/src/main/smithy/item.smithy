@@ -6,9 +6,9 @@ string ItemId
 
 resource Item {
     identifiers: {
-        itemId: ItemId
-        listId: ListId
-        userId: UserId
+        itemId: String
+        listId: String
+        userId: String
     }
     properties: {
         name: String
@@ -63,11 +63,11 @@ operation ListItems {
     input := {
         @required
         @httpLabel
-        listId: ListId
+        listId: String
 
         @required
         @httpLabel
-        userId: UserId
+        userId: String
     }
 
     output := {

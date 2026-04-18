@@ -8,6 +8,11 @@ resource User {
     identifiers: {
         userId: UserId
     }
+    properties: {
+        id: String
+        firstName: String
+        lastName: String
+    }
     resources: [
         List
     ]

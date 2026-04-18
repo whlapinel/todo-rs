@@ -2,17 +2,13 @@ $version: "2"
 
 namespace common
 
-string ListName
-
-string ListId
-
 resource List {
     identifiers: {
-        listId: ListId
-        userId: UserId
+        listId: String
+        userId: String
     }
     properties: {
-        name: ListName
+        name: String
     }
     resources: [
         Item
@@ -45,13 +41,13 @@ operation GetList {
 
 structure TodoList {
     @required
-    listId: ListId
+    listId: String
 
     @required
-    userId: UserId
+    userId: String
 
     @required
-    name: ListName
+    name: String
 }
 
 list Lists {
