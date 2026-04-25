@@ -9,6 +9,10 @@ pub struct Item {
     pub description: Option<String>,
     pub goal_date: Option<DateTime<Utc>>,
     pub deadline: Option<DateTime<Utc>>,
+    pub complete: bool,
+    pub recurrence: Option<String>,
+    pub recurrence_basis: Option<String>,
+    pub has_due_time: bool,
 }
 
 impl Item {

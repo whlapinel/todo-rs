@@ -13,11 +13,16 @@ resource Item {
     properties: {
         name: String
         dueDate: Timestamp
+        complete: Boolean
+        recurrence: String
+        recurrenceBasis: String
+        hasDueTime: Boolean
     }
     read: GetItem
     list: ListItems
     create: CreateItem
     update: UpdateItem
+    delete: DeleteItem
 }
 
 @http(method: "POST", uri: "/users/{userId}/lists/{listId}/items")
@@ -35,6 +40,14 @@ operation CreateItem {
         $name
 
         $dueDate
+
+        $complete
+
+        $recurrence
+
+        $recurrenceBasis
+
+        $hasDueTime
     }
 
     output := for Item {
@@ -70,6 +83,11 @@ operation GetItem {
 
         @required
         $dueDate
+
+        @required
+        $complete
+
+        $hasDueTime
     }
 
     errors: [
@@ -97,6 +115,39 @@ operation UpdateItem {
         $name
 
         $dueDate
+
+        @required
+        $complete
+
+        $recurrence
+
+        $recurrenceBasis
+
+        $hasDueTime
+    }
+
+    output := {}
+
+    errors: [
+        ListeriaError
+    ]
+}
+
+@idempotent
+@http(method: "DELETE", uri: "/users/{userId}/lists/{listId}/items/{itemId}")
+operation DeleteItem {
+    input := for Item {
+        @required
+        @httpLabel
+        $userId
+
+        @required
+        @httpLabel
+        $listId
+
+        @required
+        @httpLabel
+        $itemId
     }
 
     output := {}
@@ -114,6 +165,10 @@ structure ItemSummary for Item {
     $itemId
     $name
     $dueDate
+    $complete
+    $recurrence
+    $recurrenceBasis
+    $hasDueTime
 }
 
 @readonly

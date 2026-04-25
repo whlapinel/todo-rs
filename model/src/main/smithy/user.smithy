@@ -17,6 +17,9 @@ resource User {
     resources: [
         List
     ]
+    operations: [
+        ListItemsDue
+    ]
 }
 
 structure UserSummary for User {

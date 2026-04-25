@@ -188,6 +188,7 @@ impl ItemRepo for InMemoryItemRepo {
         let entry = map.get_mut(&item.id).ok_or(RepoError::NotFound)?;
         entry.name = item.name.clone();
         entry.deadline = item.deadline;
+        entry.complete = item.complete;
         Ok(())
     }
 
@@ -198,6 +199,23 @@ impl ItemRepo for InMemoryItemRepo {
             .remove(item_id)
             .map(|_| ())
             .ok_or(RepoError::NotFound)
+    }
+
+    async fn delete_by_list(&self, list_id: &str) -> Result<(), RepoError> {
+        self.items
+            .write()
+            .map_err(lock_err)?
+            .retain(|_, item| item.list_id != list_id);
+        Ok(())
+    }
+
+    async fn list_due(
+        &self,
+        _user_id: &str,
+        _deadline_after: Option<i64>,
+        _deadline_before: Option<i64>,
+    ) -> Result<Vec<crate::storage::DueItem>, RepoError> {
+        Ok(vec![])
     }
 }
 

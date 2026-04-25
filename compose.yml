@@ -1,0 +1,11 @@
+services:
+  todo:
+    image: whlapinel/todo:latest
+    ports:
+      - "3000:3000"
+    volumes:
+      - todo-data:/data
+    restart: unless-stopped
+
+volumes:
+  todo-data:

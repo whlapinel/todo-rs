@@ -9,6 +9,7 @@ resource List {
     }
     properties: {
         name: String
+        hasTasks: Boolean
     }
     resources: [
         Item
@@ -17,6 +18,7 @@ resource List {
     list: ListLists
     create: CreateList
     update: UpdateList
+    delete: DeleteList
 }
 
 @http(method: "POST", uri: "/users/{userId}/lists")
@@ -28,6 +30,8 @@ operation CreateList {
 
         @required
         $name
+
+        $hasTasks
     }
 
     output := for List {
@@ -55,6 +59,7 @@ operation GetList {
 
     output := for List {
         $name
+        $hasTasks
     }
 
     errors: [
@@ -76,6 +81,28 @@ operation UpdateList {
 
         @required
         $name
+
+        $hasTasks
+    }
+
+    output := {}
+
+    errors: [
+        ListeriaError
+    ]
+}
+
+@idempotent
+@http(method: "DELETE", uri: "/users/{userId}/lists/{listId}")
+operation DeleteList {
+    input := for List {
+        @required
+        @httpLabel
+        $userId
+
+        @required
+        @httpLabel
+        $listId
     }
 
     output := {}
@@ -94,6 +121,8 @@ structure ListSummary {
 
     @required
     name: String
+
+    hasTasks: Boolean
 }
 
 list Lists {

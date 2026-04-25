@@ -58,6 +58,22 @@ tasks:
     cmds:
       - cargo check
 
+  docker-build:
+    desc: Build the Docker image
+    cmds:
+      - docker build -t whlapinel/todo:latest .
+
+  docker-push:
+    desc: Push the Docker image to Docker Hub
+    cmds:
+      - docker push whlapinel/todo:latest
+
+  docker-release:
+    desc: Build and push the Docker image
+    cmds:
+      - task: docker-build
+      - task: docker-push
+
   clean:
     desc: Remove all build artifacts
     cmds:

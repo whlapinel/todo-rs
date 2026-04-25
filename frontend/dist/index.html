@@ -5,22 +5,28 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Todo</title>
   <style>
-    body { font-family: sans-serif; max-width: 600px; margin: 2rem auto; padding: 0 1rem; }
-    h1 { margin-bottom: 0.25rem; }
-    .subtitle { color: #666; font-size: 0.85rem; margin-top: 0; }
+    body { font-family: sans-serif; max-width: 600px; margin: 2rem auto; padding: 0 1rem; background: #0a0a0a; color: #a8d8f0; }
+    h1 { margin-bottom: 0.25rem; color: #c8e8ff; }
+    .subtitle { color: #5a8fa8; font-size: 0.85rem; margin-top: 0; }
     form { display: flex; gap: 0.5rem; flex-wrap: wrap; margin: 1rem 0; }
-    input { flex: 1; padding: 0.4rem; border: 1px solid #ccc; border-radius: 4px; }
-    button { padding: 0.4rem 0.8rem; cursor: pointer; }
+    input:not([type=checkbox]), textarea { flex: 1; padding: 0.4rem; border: 1px solid #2a5a78; border-radius: 4px; background: #0f1e2a; color: #a8d8f0; resize: vertical; }
+    input:not([type=checkbox]):focus, textarea:focus { outline: none; border-color: #5aace0; }
+    button { padding: 0.4rem 0.8rem; cursor: pointer; background: #0f1e2a; color: #a8d8f0; border: 1px solid #2a5a78; border-radius: 4px; }
+    button:hover { background: #1a3a52; border-color: #5aace0; }
+    select { padding: 0.4rem; border: 1px solid #2a5a78; border-radius: 4px; background: #0f1e2a; color: #a8d8f0; }
+    .recurrence-tag { font-size: 0.8rem; color: #5aace0; flex: 0 0 auto; cursor: text; }
     ul { list-style: none; padding: 0; margin: 0; }
-    li { padding: 0.5rem 0.4rem; border-bottom: 1px solid #eee; }
+    li { padding: 0.5rem 0.4rem; border-bottom: 1px solid #1a3a52; }
     li.row { display: flex; align-items: center; gap: 0.5rem; }
     li span { cursor: text; flex: 1; }
-    li span:hover { background: #f0f4ff; border-radius: 3px; }
-a { color: #1a73e8; text-decoration: none; }
+    li span:hover { background: #0f1e2a; border-radius: 3px; }
+    a { color: #5aace0; text-decoration: none; }
     a:hover { text-decoration: underline; }
-    .error { color: red; font-size: 0.9rem; }
+    @keyframes toast-fade { 0%, 70% { opacity: 1; } 100% { opacity: 0; } }
+    .error   { color: #ff6b6b; font-size: 0.9rem; animation: toast-fade 4s forwards; }
+    .success { color: #4caf50; font-size: 0.9rem; animation: toast-fade 2s forwards; }
   </style>
-  <script type="module" crossorigin src="/assets/index-DW9ll_qG.js"></script>
+  <script type="module" crossorigin src="/assets/index-uY9bEJAx.js"></script>
 </head>
 <body>
   <div id="app"></div>

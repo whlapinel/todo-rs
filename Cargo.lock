@@ -2231,6 +2231,7 @@ dependencies = [
  "aws-smithy-legacy-http-server",
  "aws-smithy-runtime-api",
  "aws-smithy-types",
+ "form_urlencoded",
  "futures-util",
  "http 0.2.12",
  "hyper",

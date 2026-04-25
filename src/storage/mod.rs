@@ -5,6 +5,11 @@ pub mod dynamo;
 
 use crate::domain::{item::Item, list::List, user::User};
 
+pub struct DueItem {
+    pub item: Item,
+    pub list_name: String,
+}
+
 #[derive(Debug)]
 pub enum RepoError {
     NotFound,
@@ -39,4 +44,11 @@ pub trait ItemRepo: Send + Sync {
     async fn create(&self, item: &Item) -> Result<String, RepoError>;
     async fn update(&self, item: &Item) -> Result<(), RepoError>;
     async fn delete(&self, item_id: &str) -> Result<(), RepoError>;
+    async fn delete_by_list(&self, list_id: &str) -> Result<(), RepoError>;
+    async fn list_due(
+        &self,
+        user_id: &str,
+        deadline_after: Option<i64>,
+        deadline_before: Option<i64>,
+    ) -> Result<Vec<DueItem>, RepoError>;
 }
