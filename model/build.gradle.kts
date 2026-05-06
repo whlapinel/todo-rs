@@ -33,6 +33,9 @@ tasks {
     }
     register<Copy>("copyTypescriptClient") {
         dependsOn("smithyBuild")
+        doFirst {
+            delete("$srcDir/$typescriptClientName/src")
+        }
         from(layout.buildDirectory.dir("smithyprojections/model/todo-typescript-client/typescript-client-codegen"))
         into("$srcDir/$typescriptClientName")
     }

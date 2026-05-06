@@ -4,16 +4,12 @@ use std::sync::RwLock;
 use async_trait::async_trait;
 use uuid::Uuid;
 
-use crate::domain::{item::Item, list::List, user::User};
+use crate::domain::{item::Item, user::User};
 use crate::storage::RepoError;
-use crate::storage::{ItemRepo, ListRepo, UserRepo};
+use crate::storage::{DueItem, ItemRepo, UserRepo};
 
 pub struct InMemoryUserRepo {
     users: RwLock<HashMap<String, User>>,
-}
-
-pub struct InMemoryListRepo {
-    lists: RwLock<HashMap<String, List>>,
 }
 
 pub struct InMemoryItemRepo {
@@ -22,25 +18,13 @@ pub struct InMemoryItemRepo {
 
 impl InMemoryUserRepo {
     pub fn new() -> Self {
-        Self {
-            users: RwLock::new(HashMap::new()),
-        }
-    }
-}
-
-impl InMemoryListRepo {
-    pub fn new() -> Self {
-        Self {
-            lists: RwLock::new(HashMap::new()),
-        }
+        Self { users: RwLock::new(HashMap::new()) }
     }
 }
 
 impl InMemoryItemRepo {
     pub fn new() -> Self {
-        Self {
-            items: RwLock::new(HashMap::new()),
-        }
+        Self { items: RwLock::new(HashMap::new()) }
     }
 }
 
@@ -51,32 +35,18 @@ fn lock_err(e: impl std::fmt::Display) -> RepoError {
 #[async_trait]
 impl UserRepo for InMemoryUserRepo {
     async fn get(&self, user_id: &str) -> Result<User, RepoError> {
-        self.users
-            .read()
-            .map_err(lock_err)?
-            .get(user_id)
-            .cloned()
-            .ok_or(RepoError::NotFound)
+        self.users.read().map_err(lock_err)?.get(user_id).cloned().ok_or(RepoError::NotFound)
     }
 
     async fn list(&self) -> Result<Vec<User>, RepoError> {
-        Ok(self
-            .users
-            .read()
-            .map_err(lock_err)?
-            .values()
-            .cloned()
-            .collect())
+        Ok(self.users.read().map_err(lock_err)?.values().cloned().collect())
     }
 
     async fn create(&self, user: &User) -> Result<String, RepoError> {
         let id = Uuid::new_v4().to_string();
         let mut stored = user.clone();
         stored.id = id.clone();
-        self.users
-            .write()
-            .map_err(lock_err)?
-            .insert(id.clone(), stored);
+        self.users.write().map_err(lock_err)?.insert(id.clone(), stored);
         Ok(id)
     }
 
@@ -89,85 +59,55 @@ impl UserRepo for InMemoryUserRepo {
     }
 
     async fn delete(&self, user_id: &str) -> Result<(), RepoError> {
-        self.users
-            .write()
-            .map_err(lock_err)?
-            .remove(user_id)
-            .map(|_| ())
-            .ok_or(RepoError::NotFound)
-    }
-}
-
-#[async_trait]
-impl ListRepo for InMemoryListRepo {
-    async fn get(&self, user_id: &str, list_id: &str) -> Result<List, RepoError> {
-        self.lists
-            .read()
-            .map_err(lock_err)?
-            .get(list_id)
-            .filter(|l| l.user_id == user_id)
-            .cloned()
-            .ok_or(RepoError::NotFound)
+        self.users.write().map_err(lock_err)?.remove(user_id).map(|_| ()).ok_or(RepoError::NotFound)
     }
 
-    async fn list(&self, user_id: &str) -> Result<Vec<List>, RepoError> {
-        Ok(self
-            .lists
-            .read()
-            .map_err(lock_err)?
-            .values()
-            .filter(|l| l.user_id == user_id)
-            .cloned()
-            .collect())
-    }
-
-    async fn create(&self, list: &List) -> Result<String, RepoError> {
+    async fn get_or_create_by_google_id(
+        &self,
+        google_id: &str,
+        email: &str,
+        first_name: &str,
+        last_name: &str,
+    ) -> Result<User, RepoError> {
+        let existing = {
+            let map = self.users.read().map_err(lock_err)?;
+            map.values().find(|u| u.google_id.as_deref() == Some(google_id)).cloned()
+        };
+        if let Some(user) = existing {
+            return Ok(user);
+        }
         let id = Uuid::new_v4().to_string();
-        let mut stored = list.clone();
-        stored.id = id.clone();
-        self.lists
-            .write()
-            .map_err(lock_err)?
-            .insert(id.clone(), stored);
-        Ok(id)
-    }
-
-    async fn update(&self, list: &List) -> Result<(), RepoError> {
-        let mut map = self.lists.write().map_err(lock_err)?;
-        let entry = map.get_mut(&list.id).ok_or(RepoError::NotFound)?;
-        entry.name = list.name.clone();
-        Ok(())
-    }
-
-    async fn delete(&self, list_id: &str) -> Result<(), RepoError> {
-        self.lists
-            .write()
-            .map_err(lock_err)?
-            .remove(list_id)
-            .map(|_| ())
-            .ok_or(RepoError::NotFound)
+        let user = User {
+            id: id.clone(),
+            first_name: first_name.to_string(),
+            last_name: last_name.to_string(),
+            email: Some(email.to_string()),
+            google_id: Some(google_id.to_string()),
+        };
+        self.users.write().map_err(lock_err)?.insert(id, user.clone());
+        Ok(user)
     }
 }
 
 #[async_trait]
 impl ItemRepo for InMemoryItemRepo {
-    async fn get(&self, user_id: &str, list_id: &str, item_id: &str) -> Result<Item, RepoError> {
-        self.items
-            .read()
-            .map_err(lock_err)?
-            .get(item_id)
-            .filter(|i| i.user_id == user_id && i.list_id == list_id)
+    async fn get(&self, user_id: &str, item_id: &str) -> Result<Item, RepoError> {
+        self.items.read().map_err(lock_err)?.get(item_id)
+            .filter(|i| i.user_id == user_id)
             .cloned()
             .ok_or(RepoError::NotFound)
     }
 
-    async fn list(&self, user_id: &str, list_id: &str) -> Result<Vec<Item>, RepoError> {
-        Ok(self
-            .items
-            .read()
-            .map_err(lock_err)?
-            .values()
-            .filter(|i| i.user_id == user_id && i.list_id == list_id)
+    async fn list(&self, user_id: &str) -> Result<Vec<Item>, RepoError> {
+        Ok(self.items.read().map_err(lock_err)?.values()
+            .filter(|i| i.user_id == user_id && i.parent_item_id.is_none())
+            .cloned()
+            .collect())
+    }
+
+    async fn list_children(&self, parent_item_id: &str) -> Result<Vec<Item>, RepoError> {
+        Ok(self.items.read().map_err(lock_err)?.values()
+            .filter(|i| i.parent_item_id.as_deref() == Some(parent_item_id))
             .cloned()
             .collect())
     }
@@ -176,10 +116,7 @@ impl ItemRepo for InMemoryItemRepo {
         let id = Uuid::new_v4().to_string();
         let mut stored = item.clone();
         stored.id = id.clone();
-        self.items
-            .write()
-            .map_err(lock_err)?
-            .insert(id.clone(), stored);
+        self.items.write().map_err(lock_err)?.insert(id.clone(), stored);
         Ok(id)
     }
 
@@ -189,24 +126,16 @@ impl ItemRepo for InMemoryItemRepo {
         entry.name = item.name.clone();
         entry.deadline = item.deadline;
         entry.complete = item.complete;
+        entry.recurrence = item.recurrence.clone();
+        entry.recurrence_basis = item.recurrence_basis.clone();
+        entry.has_due_time = item.has_due_time;
+        entry.has_tasks = item.has_tasks;
+        entry.parent_item_id = item.parent_item_id.clone();
         Ok(())
     }
 
     async fn delete(&self, item_id: &str) -> Result<(), RepoError> {
-        self.items
-            .write()
-            .map_err(lock_err)?
-            .remove(item_id)
-            .map(|_| ())
-            .ok_or(RepoError::NotFound)
-    }
-
-    async fn delete_by_list(&self, list_id: &str) -> Result<(), RepoError> {
-        self.items
-            .write()
-            .map_err(lock_err)?
-            .retain(|_, item| item.list_id != list_id);
-        Ok(())
+        self.items.write().map_err(lock_err)?.remove(item_id).map(|_| ()).ok_or(RepoError::NotFound)
     }
 
     async fn list_due(
@@ -214,33 +143,7 @@ impl ItemRepo for InMemoryItemRepo {
         _user_id: &str,
         _deadline_after: Option<i64>,
         _deadline_before: Option<i64>,
-    ) -> Result<Vec<crate::storage::DueItem>, RepoError> {
+    ) -> Result<Vec<DueItem>, RepoError> {
         Ok(vec![])
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::{
-        domain::{item::Item, list::List, user::User},
-        storage::{
-            ItemRepo, ListRepo, UserRepo,
-            memory::{InMemoryItemRepo, InMemoryListRepo, InMemoryUserRepo},
-        },
-    };
-
-    async fn test_one() {
-        let user_repo = InMemoryUserRepo::new();
-        let list_repo = InMemoryListRepo::new();
-        let item_repo = InMemoryItemRepo::new();
-
-        let user = User::new("Hannah", "Barbara");
-        let user_id = user_repo.create(&user).await.unwrap();
-
-        let list = List::new(&user_id, "Groceries");
-        let list_id = list_repo.create(&list).await.unwrap();
-
-        let item = Item::new(&user_id, &list_id, "milk");
-        let item_id = item_repo.create(&item).await.unwrap();
     }
 }

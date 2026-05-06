@@ -3,6 +3,8 @@ pub struct User {
     pub id: String,
     pub first_name: String,
     pub last_name: String,
+    pub email: Option<String>,
+    pub google_id: Option<String>,
 }
 
 impl User {
@@ -11,6 +13,8 @@ impl User {
             id: String::new(),
             first_name: first_name.to_string(),
             last_name: last_name.to_string(),
+            email: None,
+            google_id: None,
         }
     }
 }

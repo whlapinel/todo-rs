@@ -4,24 +4,23 @@ use chrono::{DateTime, Utc};
 pub struct Item {
     pub id: String,
     pub user_id: String,
-    pub list_id: String,
+    pub parent_item_id: Option<String>,
     pub name: String,
-    pub description: Option<String>,
-    pub goal_date: Option<DateTime<Utc>>,
     pub deadline: Option<DateTime<Utc>>,
     pub complete: bool,
     pub recurrence: Option<String>,
     pub recurrence_basis: Option<String>,
     pub has_due_time: bool,
+    pub has_tasks: bool,
+    pub has_children: bool,
 }
 
 impl Item {
-    pub fn new(user_id: &str, list_id: &str, name: &str) -> Self {
+    pub fn new(user_id: &str, name: &str) -> Self {
         Self {
-            id: String::new(),
             user_id: user_id.to_string(),
-            list_id: list_id.to_string(),
             name: name.to_string(),
+            has_tasks: true,
             ..Self::default()
         }
     }

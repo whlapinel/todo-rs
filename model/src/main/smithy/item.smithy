@@ -2,12 +2,9 @@ $version: "2"
 
 namespace common
 
-string ItemId
-
 resource Item {
     identifiers: {
         itemId: String
-        listId: String
         userId: String
     }
     properties: {
@@ -17,6 +14,9 @@ resource Item {
         recurrence: String
         recurrenceBasis: String
         hasDueTime: Boolean
+        hasTasks: Boolean
+        parentItemId: String
+        hasChildren: Boolean
     }
     read: GetItem
     list: ListItems
@@ -25,16 +25,12 @@ resource Item {
     delete: DeleteItem
 }
 
-@http(method: "POST", uri: "/users/{userId}/lists/{listId}/items")
+@http(method: "POST", uri: "/users/{userId}/items")
 operation CreateItem {
     input := for Item {
         @required
         @httpLabel
         $userId
-
-        @required
-        @httpLabel
-        $listId
 
         @required
         $name
@@ -48,6 +44,13 @@ operation CreateItem {
         $recurrenceBasis
 
         $hasDueTime
+
+        $hasTasks
+
+        $parentItemId
+
+        @notProperty
+        timezoneOffsetMinutes: Integer
     }
 
     output := for Item {
@@ -61,13 +64,9 @@ operation CreateItem {
 }
 
 @readonly
-@http(method: "GET", uri: "/users/{userId}/lists/{listId}/items/{itemId}")
+@http(method: "GET", uri: "/users/{userId}/items/{itemId}")
 operation GetItem {
     input := for Item {
-        @required
-        @httpLabel
-        $listId
-
         @required
         @httpLabel
         $itemId
@@ -88,6 +87,12 @@ operation GetItem {
         $complete
 
         $hasDueTime
+
+        $hasTasks
+
+        $parentItemId
+
+        $hasChildren
     }
 
     errors: [
@@ -96,16 +101,12 @@ operation GetItem {
 }
 
 @idempotent
-@http(method: "PUT", uri: "/users/{userId}/lists/{listId}/items/{itemId}")
+@http(method: "PUT", uri: "/users/{userId}/items/{itemId}")
 operation UpdateItem {
     input := for Item {
         @required
         @httpLabel
         $userId
-
-        @required
-        @httpLabel
-        $listId
 
         @required
         @httpLabel
@@ -124,6 +125,13 @@ operation UpdateItem {
         $recurrenceBasis
 
         $hasDueTime
+
+        $hasTasks
+
+        $parentItemId
+
+        @notProperty
+        timezoneOffsetMinutes: Integer
     }
 
     output := {}
@@ -134,16 +142,12 @@ operation UpdateItem {
 }
 
 @idempotent
-@http(method: "DELETE", uri: "/users/{userId}/lists/{listId}/items/{itemId}")
+@http(method: "DELETE", uri: "/users/{userId}/items/{itemId}")
 operation DeleteItem {
     input := for Item {
         @required
         @httpLabel
         $userId
-
-        @required
-        @httpLabel
-        $listId
 
         @required
         @httpLabel
@@ -169,26 +173,32 @@ structure ItemSummary for Item {
     $recurrence
     $recurrenceBasis
     $hasDueTime
+    $hasTasks
+    $parentItemId
+    $hasChildren
+}
+
+@input
+structure ListItemsInput {
+    @required
+    @httpLabel
+    userId: String
+
+    @httpQuery("parentItemId")
+    parentItemId: String
+}
+
+@output
+structure ListItemsOutput {
+    @required
+    items: Items
 }
 
 @readonly
-@http(method: "GET", uri: "/users/{userId}/lists/{listId}/items")
+@http(method: "GET", uri: "/users/{userId}/items")
 operation ListItems {
-    input := {
-        @required
-        @httpLabel
-        listId: String
-
-        @required
-        @httpLabel
-        userId: String
-    }
-
-    output := {
-        @required
-        items: Items
-    }
-
+    input: ListItemsInput
+    output: ListItemsOutput
     errors: [
         ListeriaError
     ]

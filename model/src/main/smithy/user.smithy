@@ -15,7 +15,7 @@ resource User {
     create: CreateUser
     update: UpdateUser
     resources: [
-        List
+        Item
     ]
     operations: [
         ListItemsDue

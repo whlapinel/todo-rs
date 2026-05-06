@@ -1,8 +1,8 @@
 use async_trait::async_trait;
 use sqlx::{SqlitePool, Row};
 
-use crate::domain::{item::Item, list::List, user::User};
-use crate::storage::{DueItem, ItemRepo, ListRepo, RepoError, UserRepo};
+use crate::domain::{item::Item, user::User};
+use crate::storage::{DueItem, ItemRepo, RepoError, UserRepo};
 
 fn db_err(e: sqlx::Error) -> RepoError {
     RepoError::Internal(e.to_string())
@@ -13,7 +13,6 @@ fn not_found() -> RepoError {
 }
 
 pub struct SqliteUserRepo(pub SqlitePool);
-pub struct SqliteListRepo(pub SqlitePool);
 pub struct SqliteItemRepo(pub SqlitePool);
 
 pub async fn create_pool(url: &str) -> Result<SqlitePool, sqlx::Error> {
@@ -22,43 +21,39 @@ pub async fn create_pool(url: &str) -> Result<SqlitePool, sqlx::Error> {
         "CREATE TABLE IF NOT EXISTS users (
             id TEXT PRIMARY KEY,
             first_name TEXT NOT NULL,
-            last_name TEXT NOT NULL
+            last_name TEXT NOT NULL,
+            email TEXT,
+            google_id TEXT UNIQUE
         )",
     )
     .execute(&pool)
     .await?;
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS lists (
-            id TEXT PRIMARY KEY,
-            user_id TEXT NOT NULL,
-            name TEXT NOT NULL,
-            has_tasks INTEGER NOT NULL DEFAULT 1
-        )",
-    )
-    .execute(&pool)
-    .await?;
-    let _ = sqlx::query("ALTER TABLE lists ADD COLUMN has_tasks INTEGER NOT NULL DEFAULT 1")
+    let _ = sqlx::query("ALTER TABLE users ADD COLUMN email TEXT")
         .execute(&pool)
-        .await; // ignored if column already exists
+        .await;
+    let _ = sqlx::query("ALTER TABLE users ADD COLUMN google_id TEXT UNIQUE")
+        .execute(&pool)
+        .await;
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS items (
             id TEXT PRIMARY KEY,
             user_id TEXT NOT NULL,
-            list_id TEXT NOT NULL,
+            parent_item_id TEXT,
             name TEXT NOT NULL,
             deadline INTEGER,
             complete INTEGER DEFAULT 0,
             recurrence TEXT,
             recurrence_basis TEXT,
-            has_due_time INTEGER NOT NULL DEFAULT 0
+            has_due_time INTEGER NOT NULL DEFAULT 0,
+            has_tasks INTEGER NOT NULL DEFAULT 1
         )",
     )
     .execute(&pool)
     .await?;
-    let _ = sqlx::query("ALTER TABLE items ADD COLUMN has_due_time INTEGER NOT NULL DEFAULT 0")
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_items_user_id ON items (user_id)")
         .execute(&pool)
-        .await;
-    sqlx::query("CREATE INDEX IF NOT EXISTS idx_items_list_id ON items (list_id)")
+        .await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_items_parent_id ON items (parent_item_id)")
         .execute(&pool)
         .await?;
     Ok(pool)
@@ -67,33 +62,21 @@ pub async fn create_pool(url: &str) -> Result<SqlitePool, sqlx::Error> {
 #[async_trait]
 impl UserRepo for SqliteUserRepo {
     async fn get(&self, user_id: &str) -> Result<User, RepoError> {
-        sqlx::query("SELECT id, first_name, last_name FROM users WHERE id = ?")
+        sqlx::query("SELECT id, first_name, last_name, email, google_id FROM users WHERE id = ?")
             .bind(user_id)
             .fetch_optional(&self.0)
             .await
             .map_err(db_err)?
-            .map(|row| User {
-                id: row.get("id"),
-                first_name: row.get("first_name"),
-                last_name: row.get("last_name"),
-            })
+            .map(|row| row_to_user(&row))
             .ok_or_else(not_found)
     }
 
     async fn list(&self) -> Result<Vec<User>, RepoError> {
-        sqlx::query("SELECT id, first_name, last_name FROM users")
+        sqlx::query("SELECT id, first_name, last_name, email, google_id FROM users")
             .fetch_all(&self.0)
             .await
             .map_err(db_err)
-            .map(|rows| {
-                rows.into_iter()
-                    .map(|row| User {
-                        id: row.get("id"),
-                        first_name: row.get("first_name"),
-                        last_name: row.get("last_name"),
-                    })
-                    .collect()
-            })
+            .map(|rows| rows.into_iter().map(|row| row_to_user(&row)).collect())
     }
 
     async fn create(&self, user: &User) -> Result<String, RepoError> {
@@ -131,112 +114,100 @@ impl UserRepo for SqliteUserRepo {
             .rows_affected();
         if rows == 0 { Err(not_found()) } else { Ok(()) }
     }
+
+    async fn get_or_create_by_google_id(
+        &self,
+        google_id: &str,
+        email: &str,
+        first_name: &str,
+        last_name: &str,
+    ) -> Result<User, RepoError> {
+        if let Some(row) = sqlx::query(
+            "SELECT id, first_name, last_name, email, google_id FROM users WHERE google_id = ?",
+        )
+        .bind(google_id)
+        .fetch_optional(&self.0)
+        .await
+        .map_err(db_err)?
+        {
+            return Ok(row_to_user(&row));
+        }
+
+        let id = uuid::Uuid::new_v4().to_string();
+        sqlx::query(
+            "INSERT INTO users (id, first_name, last_name, email, google_id) VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(&id)
+        .bind(first_name)
+        .bind(last_name)
+        .bind(email)
+        .bind(google_id)
+        .execute(&self.0)
+        .await
+        .map_err(db_err)?;
+
+        Ok(User {
+            id,
+            first_name: first_name.to_string(),
+            last_name: last_name.to_string(),
+            email: Some(email.to_string()),
+            google_id: Some(google_id.to_string()),
+        })
+    }
 }
 
+fn row_to_user(row: &sqlx::sqlite::SqliteRow) -> User {
+    User {
+        id: row.get("id"),
+        first_name: row.get("first_name"),
+        last_name: row.get("last_name"),
+        email: row.get("email"),
+        google_id: row.get("google_id"),
+    }
+}
+
+const ITEM_SELECT: &str =
+    "SELECT id, user_id, parent_item_id, name, deadline, complete, recurrence, recurrence_basis, has_due_time, has_tasks,
+            EXISTS(SELECT 1 FROM items c WHERE c.parent_item_id = items.id) AS has_children";
+
 #[async_trait]
-impl ListRepo for SqliteListRepo {
-    async fn get(&self, user_id: &str, list_id: &str) -> Result<List, RepoError> {
-        sqlx::query("SELECT id, user_id, name, has_tasks FROM lists WHERE id = ? AND user_id = ?")
-            .bind(list_id)
+impl ItemRepo for SqliteItemRepo {
+    async fn get(&self, user_id: &str, item_id: &str) -> Result<Item, RepoError> {
+        let q = format!("{ITEM_SELECT} FROM items WHERE id = ? AND user_id = ?");
+        sqlx::query(&q)
+            .bind(item_id)
             .bind(user_id)
             .fetch_optional(&self.0)
             .await
             .map_err(db_err)?
-            .map(|row| List {
-                id: row.get("id"),
-                user_id: row.get("user_id"),
-                name: row.get("name"),
-                has_tasks: row.get::<Option<i64>, _>("has_tasks").unwrap_or(1) != 0,
-            })
+            .map(|row| row_to_item(&row))
             .ok_or_else(not_found)
     }
 
-    async fn list(&self, user_id: &str) -> Result<Vec<List>, RepoError> {
-        sqlx::query("SELECT id, user_id, name, has_tasks FROM lists WHERE user_id = ?")
+    async fn list(&self, user_id: &str) -> Result<Vec<Item>, RepoError> {
+        let q = format!(
+            "{ITEM_SELECT} FROM items WHERE user_id = ? AND parent_item_id IS NULL \
+             ORDER BY COALESCE(deadline, 9999999999999) ASC"
+        );
+        sqlx::query(&q)
             .bind(user_id)
             .fetch_all(&self.0)
             .await
             .map_err(db_err)
-            .map(|rows| {
-                rows.into_iter()
-                    .map(|row| List {
-                        id: row.get("id"),
-                        user_id: row.get("user_id"),
-                        name: row.get("name"),
-                        has_tasks: row.get::<Option<i64>, _>("has_tasks").unwrap_or(1) != 0,
-                    })
-                    .collect()
-            })
+            .map(|rows| rows.iter().map(row_to_item).collect())
     }
 
-    async fn create(&self, list: &List) -> Result<String, RepoError> {
-        let id = uuid::Uuid::new_v4().to_string();
-        let has_tasks: i64 = list.has_tasks as i64;
-        sqlx::query("INSERT INTO lists (id, user_id, name, has_tasks) VALUES (?, ?, ?, ?)")
-            .bind(&id)
-            .bind(&list.user_id)
-            .bind(&list.name)
-            .bind(has_tasks)
-            .execute(&self.0)
+    async fn list_children(&self, parent_item_id: &str) -> Result<Vec<Item>, RepoError> {
+        let q = format!(
+            "{ITEM_SELECT} FROM items WHERE parent_item_id = ? \
+             ORDER BY COALESCE(deadline, 9999999999999) ASC"
+        );
+        sqlx::query(&q)
+            .bind(parent_item_id)
+            .fetch_all(&self.0)
             .await
-            .map_err(db_err)?;
-        Ok(id)
-    }
-
-    async fn update(&self, list: &List) -> Result<(), RepoError> {
-        let has_tasks: i64 = list.has_tasks as i64;
-        let rows = sqlx::query("UPDATE lists SET name = ?, has_tasks = ? WHERE id = ? AND user_id = ?")
-            .bind(&list.name)
-            .bind(has_tasks)
-            .bind(&list.id)
-            .bind(&list.user_id)
-            .execute(&self.0)
-            .await
-            .map_err(db_err)?
-            .rows_affected();
-        if rows == 0 { Err(not_found()) } else { Ok(()) }
-    }
-
-    async fn delete(&self, list_id: &str) -> Result<(), RepoError> {
-        let rows = sqlx::query("DELETE FROM lists WHERE id = ?")
-            .bind(list_id)
-            .execute(&self.0)
-            .await
-            .map_err(db_err)?
-            .rows_affected();
-        if rows == 0 { Err(not_found()) } else { Ok(()) }
-    }
-}
-
-#[async_trait]
-impl ItemRepo for SqliteItemRepo {
-    async fn get(&self, user_id: &str, list_id: &str, item_id: &str) -> Result<Item, RepoError> {
-        sqlx::query(
-            "SELECT id, user_id, list_id, name, deadline, complete, recurrence, recurrence_basis, has_due_time
-             FROM items WHERE id = ? AND list_id = ? AND user_id = ?",
-        )
-        .bind(item_id)
-        .bind(list_id)
-        .bind(user_id)
-        .fetch_optional(&self.0)
-        .await
-        .map_err(db_err)?
-        .map(|row| row_to_item(&row))
-        .ok_or_else(not_found)
-    }
-
-    async fn list(&self, user_id: &str, list_id: &str) -> Result<Vec<Item>, RepoError> {
-        sqlx::query(
-            "SELECT id, user_id, list_id, name, deadline, complete, recurrence, recurrence_basis, has_due_time
-             FROM items WHERE user_id = ? AND list_id = ?
-             ORDER BY COALESCE(deadline, 9999999999999) ASC",
-        )
-        .bind(user_id)
-        .bind(list_id)
-        .fetch_all(&self.0)
-        .await
-        .map_err(db_err)
-        .map(|rows| rows.iter().map(row_to_item).collect())
+            .map_err(db_err)
+            .map(|rows| rows.iter().map(row_to_item).collect())
     }
 
     async fn create(&self, item: &Item) -> Result<String, RepoError> {
@@ -244,18 +215,21 @@ impl ItemRepo for SqliteItemRepo {
         let deadline: Option<i64> = item.deadline.map(|dt| dt.timestamp());
         let complete: i64 = item.complete as i64;
         let has_due_time: i64 = item.has_due_time as i64;
+        let has_tasks: i64 = item.has_tasks as i64;
         sqlx::query(
-            "INSERT INTO items (id, user_id, list_id, name, deadline, complete, recurrence, recurrence_basis, has_due_time) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO items (id, user_id, parent_item_id, name, deadline, complete, recurrence, recurrence_basis, has_due_time, has_tasks)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(&item.user_id)
-        .bind(&item.list_id)
+        .bind(&item.parent_item_id)
         .bind(&item.name)
         .bind(deadline)
         .bind(complete)
         .bind(&item.recurrence)
         .bind(&item.recurrence_basis)
         .bind(has_due_time)
+        .bind(has_tasks)
         .execute(&self.0)
         .await
         .map_err(db_err)?;
@@ -266,8 +240,10 @@ impl ItemRepo for SqliteItemRepo {
         let deadline: Option<i64> = item.deadline.map(|dt| dt.timestamp());
         let complete: i64 = item.complete as i64;
         let has_due_time: i64 = item.has_due_time as i64;
+        let has_tasks: i64 = item.has_tasks as i64;
         let rows = sqlx::query(
-            "UPDATE items SET name = ?, deadline = ?, complete = ?, recurrence = ?, recurrence_basis = ?, has_due_time = ? WHERE id = ? AND user_id = ? AND list_id = ?",
+            "UPDATE items SET name = ?, deadline = ?, complete = ?, recurrence = ?, recurrence_basis = ?, \
+             has_due_time = ?, has_tasks = ?, parent_item_id = ? WHERE id = ? AND user_id = ?",
         )
         .bind(&item.name)
         .bind(deadline)
@@ -275,9 +251,10 @@ impl ItemRepo for SqliteItemRepo {
         .bind(&item.recurrence)
         .bind(&item.recurrence_basis)
         .bind(has_due_time)
+        .bind(has_tasks)
+        .bind(&item.parent_item_id)
         .bind(&item.id)
         .bind(&item.user_id)
-        .bind(&item.list_id)
         .execute(&self.0)
         .await
         .map_err(db_err)?
@@ -295,15 +272,6 @@ impl ItemRepo for SqliteItemRepo {
         if rows == 0 { Err(not_found()) } else { Ok(()) }
     }
 
-    async fn delete_by_list(&self, list_id: &str) -> Result<(), RepoError> {
-        sqlx::query("DELETE FROM items WHERE list_id = ?")
-            .bind(list_id)
-            .execute(&self.0)
-            .await
-            .map_err(db_err)?;
-        Ok(())
-    }
-
     async fn list_due(
         &self,
         user_id: &str,
@@ -311,10 +279,12 @@ impl ItemRepo for SqliteItemRepo {
         deadline_before: Option<i64>,
     ) -> Result<Vec<DueItem>, RepoError> {
         sqlx::query(
-            "SELECT items.id, items.user_id, items.list_id, items.name, items.deadline,
-                    items.complete, items.recurrence, items.recurrence_basis, items.has_due_time,
-                    lists.name AS list_name
-             FROM items JOIN lists ON items.list_id = lists.id
+            "SELECT items.id, items.user_id, items.parent_item_id, items.name, items.deadline,
+                    items.complete, items.recurrence, items.recurrence_basis, items.has_due_time, items.has_tasks,
+                    COALESCE(parent.name, '') AS parent_name,
+                    EXISTS(SELECT 1 FROM items c WHERE c.parent_item_id = items.id) AS has_children
+             FROM items
+             LEFT JOIN items parent ON items.parent_item_id = parent.id
              WHERE items.user_id = ?
                AND (? IS NULL OR items.deadline >= ?)
                AND (? IS NULL OR items.deadline <= ?)
@@ -332,7 +302,7 @@ impl ItemRepo for SqliteItemRepo {
             rows.iter()
                 .map(|row| DueItem {
                     item: row_to_item(row),
-                    list_name: row.get("list_name"),
+                    parent_name: row.get("parent_name"),
                 })
                 .collect()
         })
@@ -345,7 +315,7 @@ fn row_to_item(row: &sqlx::sqlite::SqliteRow) -> Item {
     Item {
         id: row.get("id"),
         user_id: row.get("user_id"),
-        list_id: row.get("list_id"),
+        parent_item_id: row.get("parent_item_id"),
         name: row.get("name"),
         deadline: deadline_secs
             .and_then(|s| chrono::DateTime::from_timestamp(s, 0))
@@ -354,6 +324,7 @@ fn row_to_item(row: &sqlx::sqlite::SqliteRow) -> Item {
         recurrence: row.get("recurrence"),
         recurrence_basis: row.get("recurrence_basis"),
         has_due_time: row.get::<Option<i64>, _>("has_due_time").unwrap_or(0) != 0,
-        ..Item::default()
+        has_tasks: row.get::<Option<i64>, _>("has_tasks").unwrap_or(1) != 0,
+        has_children: row.get::<Option<i64>, _>("has_children").unwrap_or(0) != 0,
     }
 }

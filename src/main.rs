@@ -1,17 +1,20 @@
 use std::{net::SocketAddr, sync::Arc};
+mod auth;
 mod domain;
 mod recurrence;
 mod storage;
 
-use axum::{body::boxed, Extension, Router};
+use axum::{body::boxed, middleware, routing::get, Extension, Router};
 use tower::ServiceBuilder;
+use tower_cookies::CookieManagerLayer;
 use tower_http::services::{ServeDir, ServeFile};
 use todo_server_sdk::{error, input, output, server, types::DateTime as SmithyDateTime, Listeria, ListeriaConfig};
 
-use crate::domain::{item::Item, list::List, user::User};
+use crate::auth::AppState;
+use crate::domain::{item::Item, user::User};
 use crate::storage::{
-    sqlite::{create_pool, SqliteItemRepo, SqliteListRepo, SqliteUserRepo},
-    ItemRepo, ListRepo, RepoError, UserRepo,
+    sqlite::{create_pool, SqliteItemRepo, SqliteUserRepo},
+    ItemRepo, RepoError, UserRepo,
 };
 
 fn internal(msg: impl ToString) -> error::ListeriaError {
@@ -50,7 +53,7 @@ async fn update_user(
     input: input::UpdateUserInput,
     server::Extension(repo): server::Extension<Arc<dyn UserRepo>>,
 ) -> Result<output::UpdateUserOutput, error::UpdateUserError> {
-    let user = User { id: input.user_id, first_name: input.first_name, last_name: input.last_name };
+    let user = User { id: input.user_id, first_name: input.first_name, last_name: input.last_name, email: None, google_id: None };
     repo.update(&user).await.map_err(|e| match e {
         RepoError::NotFound => error::UpdateUserError::from(not_found()),
         _ => error::UpdateUserError::from(internal(format!("{e:?}"))),
@@ -74,83 +77,14 @@ async fn list_users(
     Ok(output::ListUsersOutput { users })
 }
 
-async fn create_list(
-    input: input::CreateListInput,
-    server::Extension(repo): server::Extension<Arc<dyn ListRepo>>,
-) -> Result<output::CreateListOutput, error::CreateListError> {
-    let mut list = List::new(&input.user_id, &input.name);
-    list.has_tasks = input.has_tasks.unwrap_or(true);
-    let list_id = repo.create(&list).await.map_err(|e| internal(format!("{e:?}")))?;
-    Ok(output::CreateListOutput { list_id })
-}
-
-async fn get_list(
-    input: input::GetListInput,
-    server::Extension(repo): server::Extension<Arc<dyn ListRepo>>,
-) -> Result<output::GetListOutput, error::GetListError> {
-    let list = repo.get(&input.user_id, &input.list_id).await.map_err(|e| match e {
-        RepoError::NotFound => error::GetListError::from(not_found()),
-        _ => error::GetListError::from(internal(format!("{e:?}"))),
-    })?;
-    Ok(output::GetListOutput { name: Some(list.name), has_tasks: Some(list.has_tasks) })
-}
-
-async fn list_lists(
-    input: input::ListListsInput,
-    server::Extension(repo): server::Extension<Arc<dyn ListRepo>>,
-) -> Result<output::ListListsOutput, error::ListListsError> {
-    let lists = repo.list(&input.user_id).await.map_err(|e| internal(format!("{e:?}")))?;
-    let lists = lists
-        .into_iter()
-        .map(|l| todo_server_sdk::model::ListSummary {
-            list_id: l.id,
-            user_id: l.user_id,
-            name: l.name,
-            has_tasks: Some(l.has_tasks),
-        })
-        .collect();
-    Ok(output::ListListsOutput { lists })
-}
-
-async fn update_list(
-    input: input::UpdateListInput,
-    server::Extension(repo): server::Extension<Arc<dyn ListRepo>>,
-) -> Result<output::UpdateListOutput, error::UpdateListError> {
-    let list = List {
-        id: input.list_id,
-        user_id: input.user_id,
-        name: input.name,
-        has_tasks: input.has_tasks.unwrap_or(true),
-    };
-    repo.update(&list).await.map_err(|e| match e {
-        RepoError::NotFound => error::UpdateListError::from(not_found()),
-        _ => error::UpdateListError::from(internal(format!("{e:?}"))),
-    })?;
-    Ok(output::UpdateListOutput {})
-}
-
-async fn delete_list(
-    input: input::DeleteListInput,
-    server::Extension(list_repo): server::Extension<Arc<dyn ListRepo>>,
-    server::Extension(item_repo): server::Extension<Arc<dyn ItemRepo>>,
-) -> Result<output::DeleteListOutput, error::DeleteListError> {
-    item_repo.delete_by_list(&input.list_id).await.map_err(|e| internal(format!("{e:?}")))?;
-    list_repo.delete(&input.list_id).await.map_err(|e| match e {
-        RepoError::NotFound => error::DeleteListError::from(not_found()),
-        _ => error::DeleteListError::from(internal(format!("{e:?}"))),
-    })?;
-    Ok(output::DeleteListOutput {})
-}
-
 async fn create_item(
     input: input::CreateItemInput,
     server::Extension(repo): server::Extension<Arc<dyn ItemRepo>>,
 ) -> Result<output::CreateItemOutput, error::CreateItemError> {
-    // Validate recurrence phrase if provided
     if let Some(ref r) = input.recurrence {
         recurrence::parse(r).map_err(|e| internal(e))?;
     }
-    let mut item = Item::new(&input.user_id, &input.list_id, &input.name);
+    let mut item = Item::new(&input.user_id, &input.name);
     if let Some(dt) = input.due_date {
         item.deadline = chrono::DateTime::from_timestamp(dt.secs(), dt.subsec_nanos())
             .map(|d| d.with_timezone(&chrono::Utc));
@@ -159,6 +93,23 @@ async fn create_item(
     item.recurrence = input.recurrence;
     item.recurrence_basis = input.recurrence_basis;
     item.has_due_time = input.has_due_time.unwrap_or(false);
+    item.has_tasks = input.has_tasks.unwrap_or(true);
+    item.parent_item_id = input.parent_item_id;
+
+    if item.deadline.is_none() {
+        if let Some(ref pattern) = item.recurrence {
+            if let Ok(rule) = recurrence::parse(pattern) {
+                let tz_offset = input.timezone_offset_minutes.unwrap_or(0);
+                let mut deadline = recurrence::next_date(&rule, chrono::Utc::now(), tz_offset);
+                if rule.time_override.is_none() {
+                    deadline = recurrence::apply_end_of_day(deadline, tz_offset);
+                } else {
+                    item.has_due_time = true;
+                }
+                item.deadline = Some(deadline);
+            }
+        }
+    }
     let item_id = repo.create(&item).await.map_err(|e| internal(format!("{e:?}")))?;
     Ok(output::CreateItemOutput { item_id })
 }
@@ -167,12 +118,11 @@ async fn update_item(
     input: input::UpdateItemInput,
     server::Extension(repo): server::Extension<Arc<dyn ItemRepo>>,
 ) -> Result<output::UpdateItemOutput, error::UpdateItemError> {
-    // Validate recurrence phrase if provided
     if let Some(ref r) = input.recurrence {
         recurrence::parse(r).map_err(|e| internal(e))?;
     }
 
-    let mut item = Item::new(&input.user_id, &input.list_id, &input.name);
+    let mut item = Item::new(&input.user_id, &input.name);
     item.id = input.item_id.clone();
     item.complete = input.complete;
     if let Some(dt) = input.due_date {
@@ -182,8 +132,9 @@ async fn update_item(
     item.recurrence = input.recurrence.clone();
     item.recurrence_basis = input.recurrence_basis.clone();
     item.has_due_time = input.has_due_time.unwrap_or(false);
+    item.has_tasks = input.has_tasks.unwrap_or(true);
+    item.parent_item_id = input.parent_item_id.clone();
 
-    // If completing a recurring item, spawn the next occurrence and delete this one.
     if item.complete {
         if let Some(ref pattern) = item.recurrence {
             if let Ok(rule) = recurrence::parse(pattern) {
@@ -192,11 +143,14 @@ async fn update_item(
                 } else {
                     item.deadline.unwrap_or_else(chrono::Utc::now)
                 };
-                let next_deadline = recurrence::next_date(&rule, reference);
-                let mut next_item = Item::new(&item.user_id, &item.list_id, &item.name);
+                let tz_offset = input.timezone_offset_minutes.unwrap_or(0);
+                let next_deadline = recurrence::next_date(&rule, reference, tz_offset);
+                let mut next_item = Item::new(&item.user_id, &item.name);
                 next_item.deadline = Some(next_deadline);
                 next_item.recurrence = item.recurrence.clone();
                 next_item.recurrence_basis = item.recurrence_basis.clone();
+                next_item.has_tasks = item.has_tasks;
+                next_item.parent_item_id = item.parent_item_id.clone();
                 next_item.has_due_time = if rule.time_override.is_some() { true } else { item.has_due_time };
                 repo.create(&next_item).await.map_err(|e| internal(format!("{e:?}")))?;
                 repo.delete(&item.id).await.map_err(|e| internal(format!("{e:?}")))?;
@@ -216,6 +170,16 @@ async fn delete_item(
     input: input::DeleteItemInput,
     server::Extension(repo): server::Extension<Arc<dyn ItemRepo>>,
 ) -> Result<output::DeleteItemOutput, error::DeleteItemError> {
+    // BFS cascade-delete all descendants before deleting this item
+    let mut queue = vec![input.item_id.clone()];
+    while let Some(parent_id) = queue.first().cloned() {
+        queue.remove(0);
+        let children = repo.list_children(&parent_id).await.map_err(|e| internal(format!("{e:?}")))?;
+        for child in children {
+            queue.push(child.id.clone());
+            repo.delete(&child.id).await.map_err(|e| internal(format!("{e:?}")))?;
+        }
+    }
     repo.delete(&input.item_id).await.map_err(|e| match e {
         RepoError::NotFound => error::DeleteItemError::from(not_found()),
         _ => error::DeleteItemError::from(internal(format!("{e:?}"))),
@@ -227,18 +191,50 @@ async fn get_item(
     input: input::GetItemInput,
     server::Extension(repo): server::Extension<Arc<dyn ItemRepo>>,
 ) -> Result<output::GetItemOutput, error::GetItemError> {
-    let item = repo
-        .get(&input.user_id, &input.list_id, &input.item_id)
-        .await
-        .map_err(|e| match e {
-            RepoError::NotFound => error::GetItemError::from(not_found()),
-            _ => error::GetItemError::from(internal(format!("{e:?}"))),
-        })?;
+    let item = repo.get(&input.user_id, &input.item_id).await.map_err(|e| match e {
+        RepoError::NotFound => error::GetItemError::from(not_found()),
+        _ => error::GetItemError::from(internal(format!("{e:?}"))),
+    })?;
     let due_date = item
         .deadline
         .map(|dt| SmithyDateTime::from_secs(dt.timestamp()))
         .unwrap_or(SmithyDateTime::from_secs(0));
-    Ok(output::GetItemOutput { name: item.name, due_date, complete: item.complete, has_due_time: Some(item.has_due_time) })
+    Ok(output::GetItemOutput {
+        name: item.name,
+        due_date,
+        complete: item.complete,
+        has_due_time: Some(item.has_due_time),
+        has_tasks: Some(item.has_tasks),
+        parent_item_id: item.parent_item_id,
+        has_children: Some(item.has_children),
+    })
+}
+
+async fn list_items(
+    input: input::ListItemsInput,
+    server::Extension(repo): server::Extension<Arc<dyn ItemRepo>>,
+) -> Result<output::ListItemsOutput, error::ListItemsError> {
+    let items = if let Some(ref parent_id) = input.parent_item_id {
+        repo.list_children(parent_id).await.map_err(|e| internal(format!("{e:?}")))?
+    } else {
+        repo.list(&input.user_id).await.map_err(|e| internal(format!("{e:?}")))?
+    };
+    let items = items
+        .into_iter()
+        .map(|i| todo_server_sdk::model::ItemSummary {
+            item_id: Some(i.id),
+            name: Some(i.name),
+            due_date: i.deadline.map(|dt| SmithyDateTime::from_secs(dt.timestamp())),
+            complete: Some(i.complete),
+            recurrence: i.recurrence,
+            recurrence_basis: i.recurrence_basis,
+            has_due_time: Some(i.has_due_time),
+            has_tasks: Some(i.has_tasks),
+            parent_item_id: i.parent_item_id,
+            has_children: Some(i.has_children),
+        })
+        .collect();
+    Ok(output::ListItemsOutput { items })
 }
 
 async fn list_items_due(
@@ -255,9 +251,8 @@ async fn list_items_due(
         .into_iter()
         .map(|di| todo_server_sdk::model::DueItemSummary {
             item_id: di.item.id,
-            list_id: di.item.list_id,
-            list_name: di.list_name,
             name: di.item.name,
+            parent_name: Some(di.parent_name),
             due_date: di.item.deadline.map(|dt| SmithyDateTime::from_secs(dt.timestamp())),
             complete: Some(di.item.complete),
             recurrence: di.item.recurrence,
@@ -268,29 +263,6 @@ async fn list_items_due(
     Ok(output::ListItemsDueOutput { items })
 }
 
-async fn list_items(
-    input: input::ListItemsInput,
-    server::Extension(repo): server::Extension<Arc<dyn ItemRepo>>,
-) -> Result<output::ListItemsOutput, error::ListItemsError> {
-    let items = repo
-        .list(&input.user_id, &input.list_id)
-        .await
-        .map_err(|e| internal(format!("{e:?}")))?;
-    let items = items
-        .into_iter()
-        .map(|i| todo_server_sdk::model::ItemSummary {
-            item_id: Some(i.id),
-            name: Some(i.name),
-            due_date: i.deadline.map(|dt| SmithyDateTime::from_secs(dt.timestamp())),
-            complete: Some(i.complete),
-            recurrence: i.recurrence,
-            recurrence_basis: i.recurrence_basis,
-            has_due_time: Some(i.has_due_time),
-        })
-        .collect();
-    Ok(output::ListItemsOutput { items })
-}
-
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
@@ -299,8 +271,22 @@ async fn main() {
         .unwrap_or_else(|_| "sqlite://todo.db?mode=rwc".to_string());
     let pool = create_pool(&db_url).await.expect("failed to open database");
     let user_repo = Arc::new(SqliteUserRepo(pool.clone())) as Arc<dyn UserRepo>;
-    let list_repo = Arc::new(SqliteListRepo(pool.clone())) as Arc<dyn ListRepo>;
     let item_repo = Arc::new(SqliteItemRepo(pool)) as Arc<dyn ItemRepo>;
+
+    let google_client_id = std::env::var("GOOGLE_CLIENT_ID").expect("GOOGLE_CLIENT_ID required");
+    let google_client_secret =
+        std::env::var("GOOGLE_CLIENT_SECRET").expect("GOOGLE_CLIENT_SECRET required");
+    let jwt_secret = std::env::var("JWT_SECRET").expect("JWT_SECRET required");
+    let base_url =
+        std::env::var("BASE_URL").unwrap_or_else(|_| "http://localhost:3000".to_string());
+
+    let app_state = Arc::new(AppState::new(
+        google_client_id,
+        google_client_secret,
+        base_url,
+        jwt_secret,
+        user_repo.clone(),
+    ));
 
     let config = ListeriaConfig::builder().build();
     let smithy = Listeria::builder(config)
@@ -308,11 +294,6 @@ async fn main() {
         .get_user(get_user)
         .update_user(update_user)
         .list_users(list_users)
-        .create_list(create_list)
-        .get_list(get_list)
-        .update_list(update_list)
-        .delete_list(delete_list)
-        .list_lists(list_lists)
         .create_item(create_item)
         .get_item(get_item)
         .update_item(update_item)
@@ -323,17 +304,26 @@ async fn main() {
 
     let api = ServiceBuilder::new()
         .layer(Extension(user_repo))
-        .layer(Extension(list_repo))
         .layer(Extension(item_repo))
         .map_response(|res: http::Response<_>| res.map(boxed))
         .service(smithy);
 
+    let auth_router = Router::new()
+        .route("/google", get(auth::auth_login))
+        .route("/callback", get(auth::auth_callback))
+        .route("/logout", get(auth::auth_logout))
+        .route("/me", get(auth::auth_me));
+
     let api_router = Router::new()
         .route_service("/users", api.clone())
-        .route_service("/users/*path", api.clone());
+        .route_service("/users/*path", api.clone())
+        .layer(middleware::from_fn(auth::jwt_auth_middleware));
 
     let app = Router::new()
+        .nest("/auth", auth_router)
         .nest("/api", api_router)
+        .layer(Extension(app_state))
+        .layer(CookieManagerLayer::new())
         .fallback_service(
             ServeDir::new("frontend/dist")
                 .fallback(ServeFile::new("frontend/dist/index.html")),

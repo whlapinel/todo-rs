@@ -1,17 +1,12 @@
 import {
   ListeriaClient,
-  CreateUserCommand,
   GetUserCommand,
   ListUsersCommand,
   UpdateUserCommand,
-  CreateListCommand,
-  GetListCommand,
-  ListListsCommand,
-  UpdateListCommand,
-  DeleteListCommand,
   CreateItemCommand,
   ListItemsCommand,
   ListItemsDueCommand,
+  GetItemCommand,
   UpdateItemCommand,
   DeleteItemCommand,
 } from "@todo/client";
@@ -19,6 +14,53 @@ import {
 const client = new ListeriaClient({ endpoint: `${window.location.origin}/api` });
 
 const app = document.getElementById("app")!;
+
+interface AuthMe {
+  userId: string;
+  firstName: string;
+  lastName: string;
+}
+
+async function checkAuth(): Promise<AuthMe | null> {
+  try {
+    const res = await fetch("/auth/me");
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+function renderLogin() {
+  app.innerHTML = `
+    <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:60vh;gap:1.5rem;">
+      <h1>Todo</h1>
+      <p style="color:#666;">Sign in to continue</p>
+      <a href="/auth/google" style="
+        display:inline-block;
+        padding:0.75rem 1.5rem;
+        background:#fff;
+        color:#333;
+        border:1px solid #ccc;
+        border-radius:4px;
+        text-decoration:none;
+        font-weight:500;
+        font-size:1rem;
+      ">Sign in with Google</a>
+    </div>`;
+}
+
+function addLogoutButton(userName: string) {
+  const header = document.createElement("div");
+  header.style.cssText = "display:flex;justify-content:flex-end;align-items:center;gap:1rem;padding:0.5rem 0;margin-bottom:0.5rem;border-bottom:1px solid #1a3a52;";
+  header.innerHTML = `<span style="color:#666;font-size:0.85rem;">${userName}</span>`;
+  const logoutBtn = document.createElement("a");
+  logoutBtn.href = "/auth/logout";
+  logoutBtn.textContent = "Sign out";
+  logoutBtn.style.cssText = "color:#5aace0;font-size:0.85rem;text-decoration:none;";
+  header.appendChild(logoutBtn);
+  app.prepend(header);
+}
 
 function navigate(path: string) {
   history.pushState(null, "", path);
@@ -60,7 +102,7 @@ function makeEditableText(
     input.type = inputType;
     input.value = currentInput;
     input.style.cssText = "padding:0.2rem;border:1px solid #2a5a78;border-radius:3px;background:#0f1e2a;color:#a8d8f0;";
-span.replaceWith(input);
+    span.replaceWith(input);
     input.focus();
 
     const finish = async () => {
@@ -103,180 +145,56 @@ function renderNotFound(msg: string) {
 
 // ── Views ────────────────────────────────────────────────────────────────────
 
-async function renderUsers() {
+async function renderUsers(currentUserId: string, currentUserName: string) {
   app.innerHTML = `
     <h1>Users</h1>
-    <form id="create-user-form">
-      <input id="first-name" placeholder="First name" required />
-      <input id="last-name" placeholder="Last name" required />
-      <button type="submit">Create User</button>
-    </form>
     <ul id="users"></ul>`;
+
+  addLogoutButton(currentUserName);
 
   const ul = document.getElementById("users")!;
 
-  async function load() {
-    const res = await client.send(new ListUsersCommand({}));
-    ul.innerHTML = "";
-    for (const u of res.users ?? []) {
-      const li = document.createElement("li");
-      li.className = "row";
+  const res = await client.send(new ListUsersCommand({}));
+  for (const u of res.users ?? []) {
+    const li = document.createElement("li");
+    li.className = "row";
 
-      const nameSpan = makeEditableText(
-        `${u.firstName} ${u.lastName}`,
-        async (newVal) => {
-          const [first, ...rest] = newVal.split(" ");
-          await client.send(new UpdateUserCommand({
-            userId: u.userId!,
-            firstName: first,
-            lastName: rest.join(" ") || first,
-          }));
-        }
-      );
-      nameSpan.style.flex = "1";
+    const nameSpan = makeEditableText(
+      `${u.firstName} ${u.lastName}`,
+      async (newVal) => {
+        const [first, ...rest] = newVal.split(" ");
+        await client.send(new UpdateUserCommand({
+          userId: u.userId!,
+          firstName: first,
+          lastName: rest.join(" ") || first,
+        }));
+      }
+    );
+    nameSpan.style.flex = "1";
 
-      const goBtn = document.createElement("button");
-      goBtn.textContent = "Lists →";
-      goBtn.addEventListener("click", () => navigate(`/users/${u.userId}`));
+    const goBtn = document.createElement("button");
+    goBtn.textContent = "Items →";
+    goBtn.addEventListener("click", () => navigate(`/users/${u.userId}`));
 
-      const dashBtn = document.createElement("button");
-      dashBtn.textContent = "Dashboard →";
-      dashBtn.addEventListener("click", () => navigate(`/users/${u.userId}/dashboard`));
+    const dashBtn = document.createElement("button");
+    dashBtn.textContent = "Dashboard →";
+    dashBtn.addEventListener("click", () => navigate(`/users/${u.userId}/dashboard`));
 
-      li.appendChild(nameSpan);
-      li.appendChild(goBtn);
-      li.appendChild(dashBtn);
-      ul.appendChild(li);
-    }
+    li.appendChild(nameSpan);
+    li.appendChild(goBtn);
+    li.appendChild(dashBtn);
+    ul.appendChild(li);
   }
 
-  document.getElementById("create-user-form")!.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    try {
-      await client.send(new CreateUserCommand({
-        firstName: (document.getElementById("first-name") as HTMLInputElement).value.trim(),
-        lastName: (document.getElementById("last-name") as HTMLInputElement).value.trim(),
-      }));
-      (document.getElementById("first-name") as HTMLInputElement).value = "";
-      (document.getElementById("last-name") as HTMLInputElement).value = "";
-      await load();
-    } catch (err) {
-      showError(String(err));
-    }
-  });
-
-  await load();
+  // Auto-navigate to the authenticated user's items
+  navigate(`/users/${currentUserId}`);
 }
 
-async function renderLists(userId: string) {
-  try {
-    await client.send(new GetUserCommand({ userId }));
-  } catch {
-    renderNotFound(`User "${userId}" does not exist.`);
-    return;
-  }
-
-  app.innerHTML = `
-    <p><a href="/" id="back-users">← Users</a></p>
-    <h1>Lists</h1>
-    <form id="create-list-form">
-      <input id="list-name" placeholder="List name" required />
-      <select id="list-type">
-        <option value="tasks">Task list</option>
-        <option value="simple">Simple list</option>
-      </select>
-      <button type="submit">Create List</button>
-    </form>
-    <ul id="lists"></ul>`;
-
-  document.getElementById("back-users")!.addEventListener("click", (e) => {
-    e.preventDefault();
-    navigate("/");
-  });
-
-  const ul = document.getElementById("lists")!;
-
-  async function load() {
-    const res = await client.send(new ListListsCommand({ userId }));
-    ul.innerHTML = "";
-    for (const l of res.lists ?? []) {
-      const li = document.createElement("li");
-      li.className = "row";
-
-      const nameSpan = makeEditableText(l.name ?? "", async (newVal) => {
-        await client.send(new UpdateListCommand({
-          userId,
-          listId: l.listId,
-          name: newVal,
-          hasTasks: l.hasTasks ?? true,
-        }));
-      });
-      nameSpan.style.flex = "1";
-
-      const typeSelect = document.createElement("select");
-      typeSelect.className = "list-type-select";
-      typeSelect.title = "List type";
-      const optTasks = document.createElement("option");
-      optTasks.value = "tasks"; optTasks.textContent = "Tasks";
-      const optSimple = document.createElement("option");
-      optSimple.value = "simple"; optSimple.textContent = "Simple";
-      typeSelect.appendChild(optTasks);
-      typeSelect.appendChild(optSimple);
-      typeSelect.value = (l.hasTasks ?? true) ? "tasks" : "simple";
-      typeSelect.addEventListener("change", async () => {
-        const hasTasks = typeSelect.value === "tasks";
-        try {
-          await client.send(new UpdateListCommand({ userId, listId: l.listId, name: l.name, hasTasks }));
-          l.hasTasks = hasTasks;
-        } catch (err) {
-          showError(String(err));
-          typeSelect.value = (l.hasTasks ?? true) ? "tasks" : "simple";
-        }
-      });
-
-      const goBtn = document.createElement("button");
-      goBtn.textContent = "Items →";
-      goBtn.addEventListener("click", () => navigate(`/users/${userId}/lists/${l.listId}`));
-
-      const deleteBtn = document.createElement("button");
-      deleteBtn.textContent = "✕";
-      deleteBtn.title = "Delete list";
-      deleteBtn.style.color = "#c00";
-      deleteBtn.addEventListener("click", async () => {
-        if (!confirm(`Delete list "${l.name}" and all its items?`)) return;
-        try {
-          await client.send(new DeleteListCommand({ userId, listId: l.listId }));
-          li.remove();
-        } catch (err) {
-          showError(String(err));
-        }
-      });
-
-      li.appendChild(nameSpan);
-      li.appendChild(typeSelect);
-      li.appendChild(goBtn);
-      li.appendChild(deleteBtn);
-      ul.appendChild(li);
-    }
-  }
-
-  document.getElementById("create-list-form")!.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    try {
-      const hasTasks = (document.getElementById("list-type") as HTMLSelectElement).value === "tasks";
-      await client.send(new CreateListCommand({
-        userId,
-        name: (document.getElementById("list-name") as HTMLInputElement).value.trim(),
-        hasTasks,
-      }));
-      (document.getElementById("list-name") as HTMLInputElement).value = "";
-      await load();
-    } catch (err) {
-      showError(String(err));
-    }
-  });
-
-  await load();
+function localDateStr(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
 }
 
 function parseDateTimeInput(dateVal: string, timeVal = ""): { date: Date | undefined; hasDueTime: boolean } {
@@ -289,35 +207,58 @@ function parseDateTimeInput(dateVal: string, timeVal = ""): { date: Date | undef
   return { date: new Date(year, month - 1, day, 23, 59, 59), hasDueTime: false };
 }
 
-async function renderItems(userId: string, listId: string) {
+// parentItemId: when set, we're viewing children of that item
+// parentItemName: display name for the heading
+async function renderItems(userId: string, parentItemId?: string, parentItemName?: string) {
+  // If drilling into a parent item, fetch its hasTasks to control UI
   let hasTasks = true;
-  try {
-    const listInfo = await client.send(new GetListCommand({ userId, listId }));
-    hasTasks = listInfo.hasTasks ?? true;
-  } catch {
-    renderNotFound(`List "${listId}" does not exist.`);
-    return;
+  if (parentItemId) {
+    try {
+      const itemInfo = await client.send(new GetItemCommand({ userId, itemId: parentItemId }));
+      hasTasks = itemInfo.hasTasks ?? true;
+    } catch {
+      renderNotFound(`Item "${parentItemId}" does not exist.`);
+      return;
+    }
   }
 
+  const heading = parentItemName ?? "Items";
+  const backHref = parentItemId ? `/users/${userId}` : `/users/${userId}/dashboard`;
+  const backLabel = parentItemId ? "← Items" : "← Dashboard";
+
   app.innerHTML = `
-    <p><a href="/users/${userId}" id="back-lists">← Lists</a></p>
-    <h1>Items</h1>
+    <p><a href="${backHref}" id="back-link">${backLabel}</a></p>
+    <h1>${heading}</h1>
     <button type="button" id="new-item-btn">+ New Item</button>
     <form id="create-item-form" style="display:none;">
-      <input id="item-name" placeholder="Item name" required style="flex:1;" />
-      <button type="button" id="batch-toggle" title="Switch to batch input mode">Batch</button>
-      <div id="task-fields">
-        <div style="display:flex;gap:0.4rem;flex-wrap:wrap;">
-          <input id="item-due" type="date" title="Due date (optional)" />
-          <input id="item-time" type="time" title="Due time (optional)" />
+      <div class="field-grid">
+        <span class="field-label">Name</span>
+        <div class="field-row">
+          <input id="item-name" placeholder="Item name" required />
+          <button type="button" id="batch-toggle" title="Switch to batch input mode">Batch</button>
         </div>
-        <div style="display:flex;align-items:center;gap:0.4rem;flex-wrap:wrap;">
-          <input id="item-recurrence" placeholder='Recurrence, e.g. "every 3 days"' style="flex:1;" />
-          <select id="item-recurrence-basis" title="Basis for scheduling the next occurrence">
-            <option value="DUE_DATE">Due date basis</option>
-            <option value="COMPLETION_DATE">Completion date basis</option>
+        <div id="task-fields" style="display:contents;">
+          <span class="field-label">Due</span>
+          <div class="field-row">
+            <input id="item-due" type="date" title="Due date (optional)" />
+            <input id="item-time" type="time" title="Due time (optional)" />
+          </div>
+          <span class="field-label">Repeat</span>
+          <div class="field-row">
+            <input id="item-recurrence" placeholder='e.g. "every 3 days"' />
+            <select id="item-recurrence-basis" title="Basis for scheduling the next occurrence">
+              <option value="DUE_DATE">Due date</option>
+              <option value="COMPLETION_DATE">Completion date</option>
+            </select>
+            <span id="recurrence-info" title="Click for help" style="cursor:pointer;color:#5aace0;font-size:1.1rem;user-select:none;">ⓘ</span>
+          </div>
+        </div>
+        <span class="field-label">Type</span>
+        <div class="field-row">
+          <select id="item-has-tasks" title="Item type">
+            <option value="tasks">Task list</option>
+            <option value="simple">Simple list</option>
           </select>
-          <span id="recurrence-info" title="Click for help" style="cursor:pointer;color:#5aace0;font-size:1.1rem;user-select:none;">ⓘ</span>
         </div>
       </div>
       <button type="submit">Add Item</button>
@@ -330,6 +271,11 @@ async function renderItems(userId: string, listId: string) {
   if (!hasTasks) {
     (document.getElementById("task-fields") as HTMLElement).style.display = "none";
   }
+
+  document.getElementById("back-link")!.addEventListener("click", (e) => {
+    e.preventDefault();
+    navigate(backHref);
+  });
 
   const newItemBtn = document.getElementById("new-item-btn")!;
   const createForm = document.getElementById("create-item-form") as HTMLFormElement;
@@ -382,48 +328,65 @@ async function renderItems(userId: string, listId: string) {
     );
   });
 
-  document.getElementById("back-lists")!.addEventListener("click", (e) => {
-    e.preventDefault();
-    navigate(`/users/${userId}`);
-  });
-
   const ul = document.getElementById("items")!;
 
   async function load() {
-    const res = await client.send(new ListItemsCommand({ userId, listId }));
+    const res = await client.send(new ListItemsCommand({ userId, parentItemId }));
     const showComplete = (document.getElementById("show-complete") as HTMLInputElement).checked;
     ul.innerHTML = "";
     for (const item of (res.items ?? []).filter(i => showComplete || !i.complete)) {
       const li = document.createElement("li");
       li.className = "row";
 
-      // Name span (click-to-edit)
-      const nameSpan = makeEditableText(item.name ?? "", async (newVal) => {
-        await client.send(new UpdateItemCommand({
-          userId, listId, itemId: item.itemId!,
-          name: newVal, dueDate: item.dueDate, complete: item.complete ?? false,
-        }));
-        item.name = newVal;
-      });
-      nameSpan.style.flex = "1";
+      // If item has children, name is clickable to drill down; otherwise editable
+      let nameEl: HTMLElement;
+      if (item.hasChildren) {
+        const link = document.createElement("a");
+        link.href = `/users/${userId}/items/${item.itemId}`;
+        link.textContent = "▸ " + (item.name ?? "");
+        link.style.flex = "1";
+        link.addEventListener("click", (e) => {
+          e.preventDefault();
+          navigate(`/users/${userId}/items/${item.itemId}`);
+        });
+        nameEl = link;
+      } else {
+        nameEl = makeEditableText(item.name ?? "", async (newVal) => {
+          await client.send(new UpdateItemCommand({
+            userId, itemId: item.itemId!,
+            name: newVal, dueDate: item.dueDate, complete: item.complete ?? false,
+            parentItemId: item.parentItemId ?? undefined,
+            hasTasks: item.hasTasks ?? true,
+          }));
+          item.name = newVal;
+        });
+        nameEl.style.flex = "1";
+      }
 
-      // Delete button
+      // Always provide a way to navigate into the item to add sub-items
+      const drillBtn = document.createElement("button");
+      drillBtn.textContent = "▸";
+      drillBtn.title = "Open sub-items";
+      drillBtn.style.cssText = "opacity:0.5;padding:0 0.3rem;min-width:unset;";
+      drillBtn.addEventListener("click", () => navigate(`/users/${userId}/items/${item.itemId}`));
+      if (item.hasChildren) drillBtn.style.display = "none";
+
       const deleteBtn = document.createElement("button");
       deleteBtn.textContent = "✕";
       deleteBtn.title = "Delete item";
       deleteBtn.style.color = "#c00";
       deleteBtn.addEventListener("click", async () => {
+        const hasKids = item.hasChildren;
+        if (hasKids && !confirm(`Delete "${item.name}" and all its sub-items?`)) return;
         try {
-          await client.send(new DeleteItemCommand({
-            userId, listId, itemId: item.itemId!,
-          }));
+          await client.send(new DeleteItemCommand({ userId, itemId: item.itemId! }));
           li.remove();
         } catch (err) {
           showError(String(err));
         }
       });
 
-      // Complete toggle button (always present)
+      const thisHasTasks = item.hasTasks ?? true;
       const completeBtn = document.createElement("button");
       completeBtn.textContent = item.complete ? "☑" : "☐";
       completeBtn.title = item.complete ? "Mark incomplete" : "Mark complete";
@@ -431,34 +394,38 @@ async function renderItems(userId: string, listId: string) {
       completeBtn.addEventListener("click", async () => {
         const markingComplete = !item.complete;
         await client.send(new UpdateItemCommand({
-          userId, listId, itemId: item.itemId!,
+          userId, itemId: item.itemId!,
           name: item.name!, dueDate: item.dueDate, complete: !item.complete,
           hasDueTime: item.hasDueTime ?? false,
+          hasTasks: item.hasTasks ?? true,
           recurrence: item.recurrence ?? undefined,
           recurrenceBasis: item.recurrenceBasis ?? undefined,
+          parentItemId: item.parentItemId ?? undefined,
+          timezoneOffsetMinutes: new Date().getTimezoneOffset(),
         }));
         if (markingComplete) {
           showSuccess(item.recurrence ? "✓ Completed — next occurrence scheduled." : "✓ Done!");
         }
         await load();
       });
-      if (item.complete) nameSpan.style.textDecoration = "line-through";
+      if (item.complete) nameEl.style.textDecoration = "line-through";
 
       li.appendChild(completeBtn);
-      li.appendChild(nameSpan);
+      li.appendChild(nameEl);
+      li.appendChild(drillBtn);
 
-      if (hasTasks) {
-
-        // Due date span (click-to-edit)
-        const isoDate = item.dueDate ? item.dueDate.toISOString().slice(0, 10) : "";
+      if (thisHasTasks) {
+        const isoDate = item.dueDate ? localDateStr(item.dueDate) : "";
         const dateSpan = makeEditableText(
           item.dueDate ? item.dueDate.toLocaleDateString() : "no due date",
           async (newVal) => {
-            const { date: d, hasDueTime: hdt } = parseDateTimeInput(newVal);
+            const { date: d } = parseDateTimeInput(newVal);
             await client.send(new UpdateItemCommand({
-              userId, listId, itemId: item.itemId!,
+              userId, itemId: item.itemId!,
               name: item.name!, dueDate: d, complete: item.complete ?? false,
               hasDueTime: newVal ? (item.hasDueTime ?? false) : false,
+              hasTasks: item.hasTasks ?? true,
+              parentItemId: item.parentItemId ?? undefined,
             }));
             item.dueDate = d;
             if (!newVal) item.hasDueTime = false;
@@ -468,7 +435,6 @@ async function renderItems(userId: string, listId: string) {
         dateSpan.style.color = "#666";
         dateSpan.style.fontSize = "0.85rem";
 
-        // Due time span (click-to-edit)
         const isoTime = (item.hasDueTime && item.dueDate)
           ? item.dueDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false }).slice(0, 5)
           : "";
@@ -478,12 +444,14 @@ async function renderItems(userId: string, listId: string) {
         const timeSpan = makeEditableText(
           timeDisplayVal,
           async (newVal) => {
-            const dateStr = item.dueDate ? item.dueDate.toISOString().slice(0, 10) : "";
+            const dateStr = item.dueDate ? localDateStr(item.dueDate) : "";
             const { date: d, hasDueTime: hdt } = parseDateTimeInput(dateStr, newVal);
             await client.send(new UpdateItemCommand({
-              userId, listId, itemId: item.itemId!,
+              userId, itemId: item.itemId!,
               name: item.name!, dueDate: d ?? item.dueDate, complete: item.complete ?? false,
               hasDueTime: hdt,
+              hasTasks: item.hasTasks ?? true,
+              parentItemId: item.parentItemId ?? undefined,
             }));
             item.dueDate = d ?? item.dueDate;
             item.hasDueTime = hdt;
@@ -494,16 +462,17 @@ async function renderItems(userId: string, listId: string) {
         timeSpan.style.fontSize = "0.85rem";
         timeSpan.title = "Click to set due time";
 
-        // Recurrence tag (click-to-edit)
         const basisLabel = item.recurrenceBasis === "COMPLETION_DATE" ? "completion" : "due date";
         const recurrenceSpan = makeEditableText(
           item.recurrence ? `↻ ${item.recurrence} (${basisLabel})` : "↻ add recurrence",
           async (newVal) => {
             await client.send(new UpdateItemCommand({
-              userId, listId, itemId: item.itemId!,
+              userId, itemId: item.itemId!,
               name: item.name!, dueDate: item.dueDate, complete: item.complete ?? false,
               recurrence: newVal || undefined,
               recurrenceBasis: item.recurrenceBasis ?? "DUE_DATE",
+              hasTasks: item.hasTasks ?? true,
+              parentItemId: item.parentItemId ?? undefined,
             }));
             item.recurrence = newVal || undefined;
           },
@@ -527,6 +496,7 @@ async function renderItems(userId: string, listId: string) {
     try {
       const raw = (document.getElementById("item-name") as HTMLInputElement).value;
       const names = raw.split("\n").map(s => s.trim()).filter(Boolean);
+      const itemHasTasks = (document.getElementById("item-has-tasks") as HTMLSelectElement).value === "tasks";
       const { date: dueDate, hasDueTime } = hasTasks
         ? parseDateTimeInput(
             (document.getElementById("item-due") as HTMLInputElement).value,
@@ -536,10 +506,19 @@ async function renderItems(userId: string, listId: string) {
       const recurrence = hasTasks ? ((document.getElementById("item-recurrence") as HTMLInputElement).value.trim() || undefined) : undefined;
       const recurrenceBasis = hasTasks ? ((document.getElementById("item-recurrence-basis") as HTMLSelectElement).value as "DUE_DATE" | "COMPLETION_DATE") : undefined;
       for (const name of names) {
-        await client.send(new CreateItemCommand({ userId, listId, name, dueDate, hasDueTime, recurrence, recurrenceBasis: recurrence ? recurrenceBasis : undefined }));
+        await client.send(new CreateItemCommand({
+          userId,
+          name,
+          dueDate,
+          hasDueTime,
+          recurrence,
+          recurrenceBasis: recurrence ? recurrenceBasis : undefined,
+          hasTasks: itemHasTasks,
+          parentItemId: parentItemId ?? undefined,
+          timezoneOffsetMinutes: new Date().getTimezoneOffset(),
+        }));
       }
       if (batchMode) {
-        // Reset back to single input after batch submit
         batchMode = false;
         const ta = document.getElementById("item-name") as HTMLTextAreaElement;
         const input = document.createElement("input");
@@ -590,7 +569,7 @@ async function renderDashboard(userId: string) {
   }
 
   app.innerHTML = `
-    <p><a href="/" id="back-users">← Users</a></p>
+    <p><a href="/users/${userId}" id="back-users">← Items</a></p>
     <h1>${userName}'s Dashboard</h1>
     <div style="display:flex;align-items:center;gap:0.8rem;margin-bottom:0.5rem;flex-wrap:wrap;">
       <label>View:
@@ -611,7 +590,7 @@ async function renderDashboard(userId: string) {
 
   document.getElementById("back-users")!.addEventListener("click", (e) => {
     e.preventDefault();
-    navigate("/");
+    navigate(`/users/${userId}`);
   });
 
   const ul = document.getElementById("due-items")!;
@@ -648,11 +627,12 @@ async function renderDashboard(userId: string) {
         const markingComplete = !item.complete;
         try {
           await client.send(new UpdateItemCommand({
-            userId, listId: item.listId!, itemId: item.itemId!,
+            userId, itemId: item.itemId!,
             name: item.name!, dueDate: item.dueDate, complete: !item.complete,
             hasDueTime: item.hasDueTime ?? false,
             recurrence: item.recurrence ?? undefined,
             recurrenceBasis: item.recurrenceBasis ?? undefined,
+            timezoneOffsetMinutes: new Date().getTimezoneOffset(),
           }));
           if (markingComplete) {
             showSuccess(item.recurrence ? "✓ Completed — next occurrence scheduled." : "✓ Done!");
@@ -677,10 +657,10 @@ async function renderDashboard(userId: string) {
           : item.dueDate.toLocaleDateString();
       }
 
-      const listBadge = document.createElement("span");
-      listBadge.textContent = `[${item.listName}]`;
-      listBadge.style.cssText = "font-size:0.8rem;color:#5aace0;";
-      listBadge.title = "List";
+      const parentBadge = document.createElement("span");
+      parentBadge.textContent = item.parentName ? `[${item.parentName}]` : "";
+      parentBadge.style.cssText = "font-size:0.8rem;color:#5aace0;";
+      parentBadge.title = "Parent item";
 
       const deleteBtn = document.createElement("button");
       deleteBtn.textContent = "✕";
@@ -688,7 +668,7 @@ async function renderDashboard(userId: string) {
       deleteBtn.style.color = "#c00";
       deleteBtn.addEventListener("click", async () => {
         try {
-          await client.send(new DeleteItemCommand({ userId, listId: item.listId!, itemId: item.itemId! }));
+          await client.send(new DeleteItemCommand({ userId, itemId: item.itemId! }));
           await load();
         } catch (err) {
           showError(String(err));
@@ -698,7 +678,7 @@ async function renderDashboard(userId: string) {
       li.appendChild(completeBtn);
       li.appendChild(nameSpan);
       if (item.dueDate) li.appendChild(dateSpan);
-      li.appendChild(listBadge);
+      if (item.parentName) li.appendChild(parentBadge);
       li.appendChild(deleteBtn);
       ul.appendChild(li);
     }
@@ -712,29 +692,56 @@ async function renderDashboard(userId: string) {
 
 // ── Router ───────────────────────────────────────────────────────────────────
 
+let currentAuth: AuthMe | null = null;
+
 async function route() {
   const path = window.location.pathname;
 
   const dashMatch = path.match(/^\/users\/([^/]+)\/dashboard$/);
   if (dashMatch) {
     await renderDashboard(dashMatch[1]);
+    if (currentAuth) addLogoutButton(`${currentAuth.firstName} ${currentAuth.lastName}`);
     return;
   }
 
-  const itemsMatch = path.match(/^\/users\/([^/]+)\/lists\/([^/]+)$/);
-  if (itemsMatch) {
-    await renderItems(itemsMatch[1], itemsMatch[2]);
+  // /users/:uid/items/:iid — drill into item's children
+  const itemDrillMatch = path.match(/^\/users\/([^/]+)\/items\/([^/]+)$/);
+  if (itemDrillMatch) {
+    const [, uid, iid] = itemDrillMatch;
+    try {
+      const item = await client.send(new GetItemCommand({ userId: uid, itemId: iid }));
+      await renderItems(uid, iid, item.name);
+    } catch {
+      renderNotFound(`Item not found.`);
+    }
+    if (currentAuth) addLogoutButton(`${currentAuth.firstName} ${currentAuth.lastName}`);
     return;
   }
 
-  const listsMatch = path.match(/^\/users\/([^/]+)$/);
-  if (listsMatch) {
-    await renderLists(listsMatch[1]);
+  // /users/:uid — top-level items for user
+  const userMatch = path.match(/^\/users\/([^/]+)$/);
+  if (userMatch) {
+    await renderItems(userMatch[1]);
+    if (currentAuth) addLogoutButton(`${currentAuth.firstName} ${currentAuth.lastName}`);
     return;
   }
 
-  await renderUsers();
+  // Root: redirect to auth user's page
+  if (currentAuth) {
+    navigate(`/users/${currentAuth.userId}`);
+    return;
+  }
+
+  renderLogin();
 }
 
 window.addEventListener("popstate", route);
-route();
+
+(async () => {
+  currentAuth = await checkAuth();
+  if (!currentAuth) {
+    renderLogin();
+    return;
+  }
+  await route();
+})();

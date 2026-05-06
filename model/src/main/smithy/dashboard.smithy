@@ -7,13 +7,9 @@ structure DueItemSummary {
     itemId: String
 
     @required
-    listId: String
-
-    @required
-    listName: String
-
-    @required
     name: String
+
+    parentName: String
 
     dueDate: Timestamp
 
@@ -53,7 +49,7 @@ structure ListItemsDueOutput {
 }
 
 @readonly
-@http(method: "GET", uri: "/users/{userId}/items")
+@http(method: "GET", uri: "/users/{userId}/due-items")
 operation ListItemsDue {
     input: ListItemsDueInput
     output: ListItemsDueOutput
