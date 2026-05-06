@@ -267,18 +267,18 @@ async fn list_items_due(
 async fn main() {
     tracing_subscriber::fmt::init();
 
-    let db_url = std::env::var("DATABASE_URL")
+    let db_url = std::env::var("TODO_DATABASE_URL")
         .unwrap_or_else(|_| "sqlite://todo.db?mode=rwc".to_string());
     let pool = create_pool(&db_url).await.expect("failed to open database");
     let user_repo = Arc::new(SqliteUserRepo(pool.clone())) as Arc<dyn UserRepo>;
     let item_repo = Arc::new(SqliteItemRepo(pool)) as Arc<dyn ItemRepo>;
 
-    let google_client_id = std::env::var("GOOGLE_CLIENT_ID").expect("GOOGLE_CLIENT_ID required");
+    let google_client_id = std::env::var("TODO_GOOGLE_CLIENT_ID").expect("TODO_GOOGLE_CLIENT_ID required");
     let google_client_secret =
-        std::env::var("GOOGLE_CLIENT_SECRET").expect("GOOGLE_CLIENT_SECRET required");
-    let jwt_secret = std::env::var("JWT_SECRET").expect("JWT_SECRET required");
+        std::env::var("TODO_GOOGLE_CLIENT_SECRET").expect("TODO_GOOGLE_CLIENT_SECRET required");
+    let jwt_secret = std::env::var("TODO_JWT_SECRET").expect("TODO_JWT_SECRET required");
     let base_url =
-        std::env::var("BASE_URL").unwrap_or_else(|_| "http://localhost:3000".to_string());
+        std::env::var("TODO_BASE_URL").unwrap_or_else(|_| "http://localhost:3000".to_string());
 
     let app_state = Arc::new(AppState::new(
         google_client_id,
@@ -329,7 +329,7 @@ async fn main() {
                 .fallback(ServeFile::new("frontend/dist/index.html")),
         );
 
-    let bind: SocketAddr = std::env::var("BIND")
+    let bind: SocketAddr = std::env::var("TODO_BIND")
         .unwrap_or_else(|_| "0.0.0.0:3000".to_string())
         .parse()
         .expect("invalid BIND address");
