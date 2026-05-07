@@ -204,6 +204,51 @@ pub async fn auth_logout(cookies: Cookies) -> impl IntoResponse {
     Redirect::to("/")
 }
 
+pub async fn auth_token(
+    Extension(state): Extension<Arc<AppState>>,
+    cookies: Cookies,
+) -> Response {
+    let cookie_token = match cookies.get("todo_auth").map(|c| c.value().to_string()) {
+        Some(t) => t,
+        None => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({"error": "not authenticated"})),
+            )
+                .into_response()
+        }
+    };
+
+    let claims = match decode::<Claims>(
+        &cookie_token,
+        &DecodingKey::from_secret(state.jwt_secret.as_bytes()),
+        &Validation::default(),
+    ) {
+        Ok(d) => d.claims,
+        Err(_) => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({"error": "invalid or expired session"})),
+            )
+                .into_response()
+        }
+    };
+
+    let exp = (chrono::Utc::now() + chrono::Duration::days(365)).timestamp() as usize;
+    let long_lived = Claims { sub: claims.sub, exp };
+    match encode(
+        &Header::default(),
+        &long_lived,
+        &EncodingKey::from_secret(state.jwt_secret.as_bytes()),
+    ) {
+        Ok(token) => Json(serde_json::json!({"token": token})).into_response(),
+        Err(e) => {
+            tracing::error!("JWT encode error: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "failed to create token"}))).into_response()
+        }
+    }
+}
+
 pub async fn auth_me(
     Extension(state): Extension<Arc<AppState>>,
     cookies: Cookies,
@@ -261,13 +306,19 @@ pub async fn jwt_auth_middleware(
 ) -> Response {
     let token = req
         .headers()
-        .get(http::header::COOKIE)
+        .get(http::header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
-        .and_then(|s| {
-            s.split(';').find_map(|part| {
-                let part = part.trim();
-                part.strip_prefix("todo_auth=").map(|v| v.to_string())
-            })
+        .and_then(|s| s.strip_prefix("Bearer ").map(|t| t.to_string()))
+        .or_else(|| {
+            req.headers()
+                .get(http::header::COOKIE)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| {
+                    s.split(';').find_map(|part| {
+                        let part = part.trim();
+                        part.strip_prefix("todo_auth=").map(|v| v.to_string())
+                    })
+                })
         });
 
     match token {

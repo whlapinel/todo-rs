@@ -312,7 +312,8 @@ async fn main() {
         .route("/google", get(auth::auth_login))
         .route("/callback", get(auth::auth_callback))
         .route("/logout", get(auth::auth_logout))
-        .route("/me", get(auth::auth_me));
+        .route("/me", get(auth::auth_me))
+        .route("/token", get(auth::auth_token));
 
     let api_router = Router::new()
         .route_service("/users", api.clone())
