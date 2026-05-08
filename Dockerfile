@@ -35,6 +35,6 @@ WORKDIR /app
 COPY --from=rust-builder /build/target/release/todo ./
 COPY --from=frontend-builder /build/frontend/dist/ ./frontend/dist/
 VOLUME ["/data"]
-ENV DATABASE_URL=sqlite:///data/todo.db?mode=rwc
+ENV TODO_DATABASE_URL=sqlite:///data/todo.db?mode=rwc
 EXPOSE 3000
 CMD ["./todo"]
