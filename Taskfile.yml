@@ -81,3 +81,29 @@ tasks:
       - rm -rf todo-server-sdk
       - rm -rf model/build
       - rm -rf build
+
+  dev:build:
+    desc: Build the dev Docker image
+    cmds:
+      - docker build -f Dockerfile.dev -t todo-dev .
+
+  dev:shell:
+    desc: Open an interactive shell in the dev container (with cached Gradle + Cargo volumes)
+    cmds:
+      - docker run --rm -it
+          -v "{{.PWD}}:/workspace"
+          -v todo-dev-gradle:/root/.gradle
+          -v todo-dev-cargo-registry:/usr/local/cargo/registry
+          -v todo-dev-cargo-git:/usr/local/cargo/git
+          -p 3000:3000
+          todo-dev bash
+
+  dev:check:
+    desc: Run cargo check inside the dev container
+    cmds:
+      - docker run --rm
+          -v "{{.PWD}}:/workspace"
+          -v todo-dev-gradle:/root/.gradle
+          -v todo-dev-cargo-registry:/usr/local/cargo/registry
+          -v todo-dev-cargo-git:/usr/local/cargo/git
+          todo-dev bash -c "task check"
