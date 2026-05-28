@@ -1,12 +1,8 @@
 {
   "mcpServers": {
     "todo": {
-      "command": "node",
-      "args": ["mcp-server/dist/index.js"],
-      "env": {
-        "TODO_API_URL": "http://localhost:3000",
-        "TODO_API_TOKEN": ""
-      }
+      "command": "bash",
+      "args": ["-c", "set -a; source /home/whlapinel/rust-projects/todo/.env; set +a; exec node /home/whlapinel/rust-projects/todo/mcp-server/dist/index.js"]
     }
   }
 }

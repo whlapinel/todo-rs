@@ -70,6 +70,47 @@ Custom English-phrase parser supporting: `every N days/weeks/months/years`, `eve
 
 Single-file TypeScript SPA using the History API for routing (`/`, `/users/:id`, `/users/:id/lists/:id`). Imports the generated `@todo/client` package (symlinked from `todo-typescript-client/`). Built with Vite (content-hashed filenames — hard refresh needed after rebuild during dev).
 
+## MCP Server (`mcp-server/`)
+
+A Claude Code MCP server wrapping the todo API. Registered at `~/rust-projects/todo/.mcp.json` — picked up automatically when Claude Code opens this directory.
+
+**Build:**
+```sh
+cd mcp-server && npm install && npm run build
+```
+Output lands in `mcp-server/dist/index.js`. Must be built before the MCP server works.
+
+**Auth — how to get `TODO_API_TOKEN`:**
+
+The server uses a long-lived JWT issued by the `/auth/token` endpoint. To generate one:
+
+1. Visit `https://todo.lapinel-fam.club/auth/login` in a browser → complete Google OAuth
+2. With the session cookie set, visit `https://todo.lapinel-fam.club/auth/token` in the same browser
+4. Copy the `token` value from the JSON response
+5. Paste it into `.mcp.json` as `TODO_API_TOKEN` — the token is valid for 365 days
+
+**Server env vars** (required to start): `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `JWT_SECRET`. These are stored in `~/home-server` on this machine.
+
+**`.mcp.json` config** (token is loaded from `.env`, which is gitignored):
+```json
+{
+  "mcpServers": {
+    "todo": {
+      "command": "bash",
+      "args": ["-c", "set -a; source /home/whlapinel/rust-projects/todo/.env; set +a; exec node /home/whlapinel/rust-projects/todo/mcp-server/dist/index.js"]
+    }
+  }
+}
+```
+
+**`.env` file** (gitignored — create at project root):
+```
+TODO_API_URL=https://todo.lapinel-fam.club
+TODO_API_TOKEN=<paste JWT here>
+```
+
+---
+
 ## Key Workflows
 
 **Adding/changing a Smithy operation:**

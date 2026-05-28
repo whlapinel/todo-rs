@@ -14,8 +14,8 @@ model/build/
 # Taskfile checksum cache
 .task/
 
-frontend/node_modules/
-frontend/dist/
+*/node_modules/
+*/dist/
 
 *.db
 
