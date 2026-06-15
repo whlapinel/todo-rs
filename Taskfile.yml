@@ -48,6 +48,8 @@ tasks:
       - cargo build
 
   run:
+    dotenv:
+      - .env
     desc: Build and run the server
     cmds:
       - task: codegen

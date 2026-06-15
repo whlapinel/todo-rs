@@ -200,3 +200,9 @@ Every place that must be updated when the Smithy model changes. The generated cr
 ### Docker builds
 
 `todo-server-sdk/` and `todo-typescript-client/` are gitignored (generated). The Dockerfile copies them from the local filesystem, so **`task codegen` must be run before `task docker-build`**. `task docker-build` and `task docker-release` do this automatically.
+
+---
+
+## Known Issues
+
+- **`prl users list` panics** — `todo-cli/src/main.rs:323` calls `.unwrap()` on `.json()` for a response that isn't valid JSON (likely an auth error page or empty body). Fix: check HTTP status code before parsing the body.
