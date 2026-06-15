@@ -23,16 +23,25 @@ tasks {
     val typescriptClientName: String by project
     register<Copy>("copyServerCrate") {
         dependsOn("smithyBuild")
+        outputs.upToDateWhen { false }
+        doFirst {
+            delete("$srcDir/$serverSdkCrateName/src")
+        }
         from(layout.buildDirectory.dir("smithyprojections/model/todo-server-sdk/rust-server-codegen"))
         into("$srcDir/$serverSdkCrateName")
     }
     register<Copy>("copyClientCrate") {
         dependsOn("smithyBuild")
+        outputs.upToDateWhen { false }
+        doFirst {
+            delete("$srcDir/$clientCrateName/src")
+        }
         from(layout.buildDirectory.dir("smithyprojections/model/todo-client/rust-client-codegen"))
         into("$srcDir/$clientCrateName")
     }
     register<Copy>("copyTypescriptClient") {
         dependsOn("smithyBuild")
+        outputs.upToDateWhen { false }
         doFirst {
             delete("$srcDir/$typescriptClientName/src")
         }
