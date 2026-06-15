@@ -8,7 +8,7 @@
             "relativePath": "../smithy-rs/rust-runtime"
           },
           "codegen": {},
-          "service": "common#Listeria",
+          "service": "common#PeoplesRepublicOfLists",
           "module": "todo-server-sdk",
           "moduleVersion": "0.1.0",
           "moduleDescription": "Rust server SDK for todo app",
@@ -23,7 +23,7 @@
         "typescript-client-codegen": {
           "package": "@todo/client",
           "packageVersion": "0.1.0",
-          "service": "common#Listeria"
+          "service": "common#PeoplesRepublicOfLists"
         }
       }
     },
@@ -34,7 +34,7 @@
             "relativePath": "../smithy-rs/rust-runtime"
           },
           "codegen": {},
-          "service": "common#Listeria",
+          "service": "common#PeoplesRepublicOfLists",
           "module": "todo-client",
           "moduleVersion": "0.1.0",
           "moduleDescription": "Rust client for todo app",

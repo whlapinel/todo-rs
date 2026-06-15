@@ -87,6 +87,27 @@ impl UserRepo for InMemoryUserRepo {
         self.users.write().map_err(lock_err)?.insert(id, user.clone());
         Ok(user)
     }
+
+    async fn get_or_create_by_email(&self, email: &str) -> Result<User, RepoError> {
+        let existing = {
+            let map = self.users.read().map_err(lock_err)?;
+            map.values().find(|u| u.email.as_deref() == Some(email)).cloned()
+        };
+        if let Some(user) = existing {
+            return Ok(user);
+        }
+        let id = Uuid::new_v4().to_string();
+        let first_name = email.split('@').next().unwrap_or(email).to_string();
+        let user = User {
+            id: id.clone(),
+            first_name,
+            last_name: String::new(),
+            email: Some(email.to_string()),
+            google_id: None,
+        };
+        self.users.write().map_err(lock_err)?.insert(id, user.clone());
+        Ok(user)
+    }
 }
 
 #[async_trait]

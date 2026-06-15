@@ -299,6 +299,49 @@ pub async fn auth_me(
     }
 }
 
+pub async fn caddy_header_middleware(
+    mut req: Request<Body>,
+    next: Next<Body>,
+) -> Response {
+    let dev_email = std::env::var("TODO_DEV_EMAIL").ok();
+    let header_email = req
+        .headers()
+        .get("x-token-user-email")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+
+    let email = match (dev_email, header_email) {
+        (Some(e), _) => e,
+        (None, Some(e)) => e,
+        (None, None) => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({"error": "authentication required"})),
+            )
+                .into_response()
+        }
+    };
+
+    let repo = match req.extensions().get::<Arc<dyn crate::storage::UserRepo>>().cloned() {
+        Some(r) => r,
+        None => {
+            tracing::error!("UserRepo not found in extensions for caddy middleware");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
+    match repo.get_or_create_by_email(&email).await {
+        Ok(user) => {
+            req.extensions_mut().insert(AuthUser { user_id: user.id });
+            next.run(req).await
+        }
+        Err(e) => {
+            tracing::error!("Failed to resolve user for email {email}: {e:?}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
 pub async fn jwt_auth_middleware(
     Extension(state): Extension<Arc<AppState>>,
     mut req: Request<Body>,

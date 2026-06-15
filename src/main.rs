@@ -8,21 +8,19 @@ use axum::{body::boxed, middleware, routing::get, Extension, Router};
 use tower::ServiceBuilder;
 use tower_cookies::CookieManagerLayer;
 use tower_http::services::{ServeDir, ServeFile};
-use todo_server_sdk::{error, input, output, server, types::DateTime as SmithyDateTime, Listeria, ListeriaConfig};
-
-use crate::auth::AppState;
+use todo_server_sdk::{error, input, output, server, types::DateTime as SmithyDateTime, PeoplesRepublicOfLists, PeoplesRepublicOfListsConfig};
 use crate::domain::{item::Item, user::User};
 use crate::storage::{
     sqlite::{create_pool, SqliteItemRepo, SqliteUserRepo},
     ItemRepo, RepoError, UserRepo,
 };
 
-fn internal(msg: impl ToString) -> error::ListeriaError {
-    error::ListeriaError { message: msg.to_string() }
+fn internal(msg: impl ToString) -> error::PeoplesRepublicOfListsError {
+    error::PeoplesRepublicOfListsError { message: msg.to_string() }
 }
 
-fn not_found() -> error::ListeriaError {
-    error::ListeriaError { message: "not found".to_string() }
+fn not_found() -> error::PeoplesRepublicOfListsError {
+    error::PeoplesRepublicOfListsError { message: "not found".to_string() }
 }
 
 async fn create_user(
@@ -273,23 +271,8 @@ async fn main() {
     let user_repo = Arc::new(SqliteUserRepo(pool.clone())) as Arc<dyn UserRepo>;
     let item_repo = Arc::new(SqliteItemRepo(pool)) as Arc<dyn ItemRepo>;
 
-    let google_client_id = std::env::var("TODO_GOOGLE_CLIENT_ID").expect("TODO_GOOGLE_CLIENT_ID required");
-    let google_client_secret =
-        std::env::var("TODO_GOOGLE_CLIENT_SECRET").expect("TODO_GOOGLE_CLIENT_SECRET required");
-    let jwt_secret = std::env::var("TODO_JWT_SECRET").expect("TODO_JWT_SECRET required");
-    let base_url =
-        std::env::var("TODO_BASE_URL").unwrap_or_else(|_| "http://localhost:3000".to_string());
-
-    let app_state = Arc::new(AppState::new(
-        google_client_id,
-        google_client_secret,
-        base_url,
-        jwt_secret,
-        user_repo.clone(),
-    ));
-
-    let config = ListeriaConfig::builder().build();
-    let smithy = Listeria::builder(config)
+    let config = PeoplesRepublicOfListsConfig::builder().build();
+    let smithy = PeoplesRepublicOfLists::builder(config)
         .create_user(create_user)
         .get_user(get_user)
         .update_user(update_user)
@@ -303,32 +286,67 @@ async fn main() {
         .build_unchecked();
 
     let api = ServiceBuilder::new()
-        .layer(Extension(user_repo))
+        .layer(Extension(user_repo.clone()))
         .layer(Extension(item_repo))
         .map_response(|res: http::Response<_>| res.map(boxed))
         .service(smithy);
 
-    let auth_router = Router::new()
-        .route("/google", get(auth::auth_login))
-        .route("/callback", get(auth::auth_callback))
-        .route("/logout", get(auth::auth_logout))
-        .route("/me", get(auth::auth_me))
-        .route("/token", get(auth::auth_token));
+    let frontend = ServeDir::new("frontend/dist")
+        .fallback(ServeFile::new("frontend/dist/index.html"));
 
-    let api_router = Router::new()
-        .route_service("/users", api.clone())
-        .route_service("/users/*path", api.clone())
-        .layer(middleware::from_fn(auth::jwt_auth_middleware));
+    let auth_mode = std::env::var("TODO_AUTH_MODE").unwrap_or_else(|_| "internal".to_string());
+    tracing::info!(auth_mode, "auth mode");
 
-    let app = Router::new()
-        .nest("/auth", auth_router)
-        .nest("/api", api_router)
-        .layer(Extension(app_state))
-        .layer(CookieManagerLayer::new())
-        .fallback_service(
-            ServeDir::new("frontend/dist")
-                .fallback(ServeFile::new("frontend/dist/index.html")),
-        );
+    let app = match auth_mode.as_str() {
+        "caddy" => {
+            let api_router = Router::new()
+                .route_service("/users", api.clone())
+                .route_service("/users/*path", api.clone())
+                .layer(middleware::from_fn(auth::caddy_header_middleware));
+            Router::new()
+                .nest("/api", api_router)
+                .layer(Extension(user_repo))
+                .layer(CookieManagerLayer::new())
+                .fallback_service(frontend)
+        }
+        _ => {
+            let google_client_id = std::env::var("TODO_GOOGLE_CLIENT_ID")
+                .expect("TODO_GOOGLE_CLIENT_ID required (or set TODO_AUTH_MODE=caddy)");
+            let google_client_secret = std::env::var("TODO_GOOGLE_CLIENT_SECRET")
+                .expect("TODO_GOOGLE_CLIENT_SECRET required (or set TODO_AUTH_MODE=caddy)");
+            let jwt_secret = std::env::var("TODO_JWT_SECRET")
+                .expect("TODO_JWT_SECRET required (or set TODO_AUTH_MODE=caddy)");
+            let base_url = std::env::var("TODO_BASE_URL")
+                .unwrap_or_else(|_| "http://localhost:3000".to_string());
+
+            let app_state = Arc::new(auth::AppState::new(
+                google_client_id,
+                google_client_secret,
+                base_url,
+                jwt_secret,
+                user_repo,
+            ));
+
+            let auth_router = Router::new()
+                .route("/google", get(auth::auth_login))
+                .route("/callback", get(auth::auth_callback))
+                .route("/logout", get(auth::auth_logout))
+                .route("/me", get(auth::auth_me))
+                .route("/token", get(auth::auth_token));
+
+            let api_router = Router::new()
+                .route_service("/users", api.clone())
+                .route_service("/users/*path", api.clone())
+                .layer(middleware::from_fn(auth::jwt_auth_middleware));
+
+            Router::new()
+                .nest("/auth", auth_router)
+                .nest("/api", api_router)
+                .layer(Extension(app_state))
+                .layer(CookieManagerLayer::new())
+                .fallback_service(frontend)
+        }
+    };
 
     let bind: SocketAddr = std::env::var("TODO_BIND")
         .unwrap_or_else(|_| "0.0.0.0:3000".to_string())

@@ -54,6 +54,6 @@ operation ListItemsDue {
     input: ListItemsDueInput
     output: ListItemsDueOutput
     errors: [
-        ListeriaError
+        PeoplesRepublicOfListsError
     ]
 }

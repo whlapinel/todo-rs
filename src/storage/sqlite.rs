@@ -154,6 +154,39 @@ impl UserRepo for SqliteUserRepo {
             google_id: Some(google_id.to_string()),
         })
     }
+
+    async fn get_or_create_by_email(&self, email: &str) -> Result<User, RepoError> {
+        if let Some(row) = sqlx::query(
+            "SELECT id, first_name, last_name, email, google_id FROM users WHERE email = ?",
+        )
+        .bind(email)
+        .fetch_optional(&self.0)
+        .await
+        .map_err(db_err)?
+        {
+            return Ok(row_to_user(&row));
+        }
+
+        let id = uuid::Uuid::new_v4().to_string();
+        let first_name = email.split('@').next().unwrap_or(email);
+        sqlx::query(
+            "INSERT INTO users (id, first_name, last_name, email) VALUES (?, ?, '', ?)",
+        )
+        .bind(&id)
+        .bind(first_name)
+        .bind(email)
+        .execute(&self.0)
+        .await
+        .map_err(db_err)?;
+
+        Ok(User {
+            id,
+            first_name: first_name.to_string(),
+            last_name: String::new(),
+            email: Some(email.to_string()),
+            google_id: None,
+        })
+    }
 }
 
 fn row_to_user(row: &sqlx::sqlite::SqliteRow) -> User {

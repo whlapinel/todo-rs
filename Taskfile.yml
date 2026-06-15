@@ -74,6 +74,22 @@ tasks:
       - task: docker-build
       - task: docker-push
 
+  cli-build:
+    desc: Build the prl CLI binary
+    dir: todo-cli
+    cmds:
+      - cargo build --release
+    sources:
+      - src/**/*.rs
+    generates:
+      - target/release/prl
+
+  cli-install:
+    desc: Install the prl CLI to ~/.cargo/bin
+    dir: todo-cli
+    cmds:
+      - cargo install --path .
+
   clean:
     desc: Remove all build artifacts
     cmds:

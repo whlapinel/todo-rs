@@ -11,6 +11,8 @@ task build         # codegen + frontend build + cargo build
 task check         # codegen + cargo check (fastest Rust verify)
 task frontend      # Build the TypeScript frontend only (outputs to frontend/dist/)
 task client        # Build the generated TypeScript client package only
+task cli-build     # Build the prl CLI binary (todo-cli/)
+task cli-install   # Install prl to ~/.cargo/bin
 cargo test         # Run all Rust tests
 ```
 
@@ -29,38 +31,53 @@ model/src/main/smithy/*.smithy
         │  (task codegen / ./gradlew :model:assemble)
         ▼
 todo-server-sdk/          ← generated Rust crate (DO NOT EDIT)
+todo-client/              ← generated Rust client crate (DO NOT EDIT)
 todo-typescript-client/   ← generated TS client (DO NOT EDIT)
         │
         ▼
 src/main.rs               ← handler implementations, axum server wiring
 frontend/src/main.ts      ← TypeScript SPA, imports from @todo/client
+todo-cli/src/main.rs      ← prl CLI (standalone crate, uses reqwest directly)
 ```
 
 ### Smithy Model → Generated Code
 
-The `.smithy` files in `model/src/main/smithy/` define the full API contract. The resource hierarchy is `User → List → Item` — child resources inherit parent identifiers, so item operations require `userId + listId + itemId`.
+The `.smithy` files in `model/src/main/smithy/` define the full API contract. The resource hierarchy is `User → Item` — item operations require `userId + itemId`. Items support nesting via `parentItemId`.
 
 smithy-rs (a Gradle composite build via the `smithy-rs/` git submodule) generates:
 
 - `todo_server_sdk::input::*` / `output::*` / `error::*` — typed structs per operation
-- `Listeria` — the tower `Service` (HTTP routing + serde handled automatically)
-- `ListeriaBuilder` — wires async handler functions to operations
+- `PeoplesRepublicOfLists` — the tower `Service` (HTTP routing + serde handled automatically)
+- `PeoplesRepublicOfListsBuilder` — wires async handler functions to operations
 
 Handler signature: `async fn op_name(input: input::OpInput, server::Extension(repo): server::Extension<Arc<dyn Repo>>) -> Result<output::OpOutput, error::OpError>`
 
 ### Server (`src/main.rs`)
 
-Handlers receive dependencies via `server::Extension` (injected via `tower::ServiceBuilder` layers). All three repos (`UserRepo`, `ListRepo`, `ItemRepo`) are mounted as extensions. The smithy service is nested under `/api`; static frontend assets are served from `frontend/dist/` via axum's `ServeDir`.
+Handlers receive dependencies via `server::Extension` (injected via `tower::ServiceBuilder` layers). The smithy service is nested under `/api`; static frontend assets are served from `frontend/dist/` via axum's `ServeDir`.
+
+Auth mode is selected at startup via `TODO_AUTH_MODE` (see Auth section below).
+
+### Auth (`src/auth.rs`)
+
+Two modes, selected by the `TODO_AUTH_MODE` env var:
+
+- **`internal`** (default) — full Google OAuth + JWT flow. Requires `TODO_GOOGLE_CLIENT_ID`, `TODO_GOOGLE_CLIENT_SECRET`, `TODO_JWT_SECRET`. Mounts `/auth/google`, `/auth/callback`, `/auth/logout`, `/auth/me`, `/auth/token` routes. The `/auth/token` endpoint issues a long-lived JWT for use by CLI/MCP clients.
+- **`caddy`** — trusts the `x-token-user-email` header injected by caddy-security upstream. No OAuth env vars needed. The `/auth/*` routes are not mounted. Set `TODO_DEV_EMAIL=you@example.com` to bypass the header check for local dev without Caddy in front.
+
+In both modes, `AuthUser { user_id }` is injected into request extensions by the respective middleware and is available to handlers.
 
 ### Storage Layer (`src/storage/`)
 
-`mod.rs` defines `UserRepo`, `ListRepo`, `ItemRepo` traits (annotated with `mockall::automock` for testing). Three implementations: `sqlite.rs` (active), `memory.rs`, `dynamo.rs`.
+`mod.rs` defines `UserRepo` and `ItemRepo` traits (annotated with `mockall::automock` for testing). Three implementations: `sqlite.rs` (active), `memory.rs`, `dynamo.rs`.
+
+`UserRepo` methods include `get_or_create_by_google_id` (used by internal OAuth flow) and `get_or_create_by_email` (used by caddy middleware — looks up by email, creates a record if none exists).
 
 SQLite schema is created/migrated inline in `create_pool()`. Additive schema migrations use `ALTER TABLE ... ADD COLUMN` with the error ignored (handles existing DBs where the column already exists).
 
 ### Domain Models (`src/domain/`)
 
-Plain Rust structs (`User`, `List`, `Item`) — no framework coupling. `Item` stores `deadline` as `Option<DateTime<Utc>>`, `recurrence` as a raw English string, `recurrence_basis` as `Option<String>` (`"DUE_DATE"` or `"COMPLETION_DATE"`).
+Plain Rust structs (`User`, `Item`) — no framework coupling. `Item` stores `deadline` as `Option<DateTime<Utc>>`, `recurrence` as a raw English string, `recurrence_basis` as `Option<String>` (`"DUE_DATE"` or `"COMPLETION_DATE"`).
 
 ### Recurrence (`src/recurrence.rs`)
 
@@ -68,7 +85,13 @@ Custom English-phrase parser supporting: `every N days/weeks/months/years`, `eve
 
 ### Frontend (`frontend/src/main.ts`)
 
-Single-file TypeScript SPA using the History API for routing (`/`, `/users/:id`, `/users/:id/lists/:id`). Imports the generated `@todo/client` package (symlinked from `todo-typescript-client/`). Built with Vite (content-hashed filenames — hard refresh needed after rebuild during dev).
+Single-file TypeScript SPA using the History API for routing (`/`, `/users/:id`, `/users/:id/items/:id`). Imports the generated `@todo/client` package (symlinked from `todo-typescript-client/`). Built with Vite (content-hashed filenames — hard refresh needed after rebuild during dev).
+
+### CLI (`todo-cli/`)
+
+A standalone Rust crate that builds the `prl` binary. Uses `reqwest::blocking` to call the REST API directly (not the generated Smithy client). Config stored at `~/.config/prl/config.toml`. See `docs/prl-user-guide.md` for usage.
+
+Build/install separately from the main server (`cargo` commands run from `todo-cli/` or via `task cli-build` / `task cli-install`).
 
 ## MCP Server (`mcp-server/`)
 
@@ -82,14 +105,12 @@ Output lands in `mcp-server/dist/index.js`. Must be built before the MCP server 
 
 **Auth — how to get `TODO_API_TOKEN`:**
 
-The server uses a long-lived JWT issued by the `/auth/token` endpoint. To generate one:
+The MCP server authenticates with a long-lived JWT. This requires the server to be running in `internal` auth mode (the default before caddy-security was added). If running in `caddy` mode, obtain the token while the server is temporarily set to `internal` mode, or configure caddy-security API key support.
 
 1. Visit `https://todo.lapinel-fam.club/auth/login` in a browser → complete Google OAuth
 2. With the session cookie set, visit `https://todo.lapinel-fam.club/auth/token` in the same browser
-4. Copy the `token` value from the JSON response
-5. Paste it into `.mcp.json` as `TODO_API_TOKEN` — the token is valid for 365 days
-
-**Server env vars** (required to start): `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `JWT_SECRET`. These are stored in `~/home-server` on this machine.
+3. Copy the `token` value from the JSON response
+4. Paste it into `.mcp.json` as `TODO_API_TOKEN` — the token is valid for 365 days
 
 **`.mcp.json` config** (token is loaded from `.env`, which is gitignored):
 ```json
@@ -118,7 +139,7 @@ TODO_API_TOKEN=<paste JWT here>
 1. Edit `.smithy` file
 2. `task codegen`
 3. Fix Rust compile errors (the generated types changed)
-4. Add/update handler in `src/main.rs` and wire into `Listeria::builder(...)`
+4. Add/update handler in `src/main.rs` and wire into `PeoplesRepublicOfLists::builder(...)`
 
 **Adding a DB column:**
 
@@ -129,3 +150,9 @@ TODO_API_TOKEN=<paste JWT here>
 **Frontend-only change:**
 
 - Edit `frontend/src/main.ts` → `cd frontend && npm run build` — no codegen or cargo needed
+
+**Switching auth modes:**
+
+- Set `TODO_AUTH_MODE=caddy` to trust caddy-security headers (no Google/JWT env vars needed)
+- Set `TODO_AUTH_MODE=internal` (or unset) to use the built-in OAuth flow
+- For local dev in caddy mode without Caddy: set `TODO_DEV_EMAIL=you@example.com`

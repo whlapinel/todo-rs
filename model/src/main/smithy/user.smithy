@@ -53,7 +53,7 @@ operation CreateUser {
     }
 
     errors: [
-        ListeriaError
+        PeoplesRepublicOfListsError
     ]
 }
 
@@ -78,7 +78,7 @@ operation GetUser {
     }
 
     errors: [
-        ListeriaError
+        PeoplesRepublicOfListsError
     ]
 }
 
@@ -100,7 +100,7 @@ operation UpdateUser {
     output := {}
 
     errors: [
-        ListeriaError
+        PeoplesRepublicOfListsError
     ]
 }
 
@@ -115,6 +115,6 @@ operation ListUsers {
     }
 
     errors: [
-        ListeriaError
+        PeoplesRepublicOfListsError
     ]
 }

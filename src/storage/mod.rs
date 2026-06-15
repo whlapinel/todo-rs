@@ -31,6 +31,7 @@ pub trait UserRepo: Send + Sync {
         first_name: &str,
         last_name: &str,
     ) -> Result<User, RepoError>;
+    async fn get_or_create_by_email(&self, email: &str) -> Result<User, RepoError>;
 }
 
 #[cfg_attr(test, mockall::automock)]

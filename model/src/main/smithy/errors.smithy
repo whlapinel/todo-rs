@@ -3,7 +3,7 @@ $version: "2"
 namespace common
 
 @error("client")
-structure ListeriaError {
+structure PeoplesRepublicOfListsError {
     @required
     message: String
 }

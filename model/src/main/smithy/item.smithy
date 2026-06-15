@@ -59,7 +59,7 @@ operation CreateItem {
     }
 
     errors: [
-        ListeriaError
+        PeoplesRepublicOfListsError
     ]
 }
 
@@ -96,7 +96,7 @@ operation GetItem {
     }
 
     errors: [
-        ListeriaError
+        PeoplesRepublicOfListsError
     ]
 }
 
@@ -137,7 +137,7 @@ operation UpdateItem {
     output := {}
 
     errors: [
-        ListeriaError
+        PeoplesRepublicOfListsError
     ]
 }
 
@@ -157,7 +157,7 @@ operation DeleteItem {
     output := {}
 
     errors: [
-        ListeriaError
+        PeoplesRepublicOfListsError
     ]
 }
 
@@ -200,6 +200,6 @@ operation ListItems {
     input: ListItemsInput
     output: ListItemsOutput
     errors: [
-        ListeriaError
+        PeoplesRepublicOfListsError
     ]
 }

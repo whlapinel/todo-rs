@@ -5,7 +5,7 @@ namespace common
 use aws.protocols#restJson1
 
 @restJson1
-service Listeria {
+service PeoplesRepublicOfLists {
     version: "2026-04-14"
     resources: [
         User
