@@ -775,10 +775,57 @@ async function renderChecklists(userId: string) {
     for (const item of res.items) {
       const li = document.createElement("li");
       li.className = "row";
+      li.style.flexWrap = "wrap";
 
       const nameSpan = document.createElement("span");
       nameSpan.textContent = item.name ?? "";
       nameSpan.style.flex = "1";
+
+      const useBtn = document.createElement("button");
+      useBtn.textContent = "Use";
+      useBtn.title = "Create an item from this checklist";
+
+      // Inline use-form, hidden until "Use" is clicked
+      const useForm = document.createElement("form");
+      useForm.style.cssText = "display:none;width:100%;margin-top:0.4rem;display:none;gap:0.4rem;align-items:center;flex-wrap:wrap;";
+      useForm.innerHTML = `
+        <input class="use-name" placeholder="Name" value="${(item.name ?? "").replace(/"/g, "&quot;")}" required style="flex:1;min-width:8rem;" />
+        <input class="use-due" type="date" title="Due date (optional)" />
+        <button type="submit">Add to items</button>
+        <button type="button" class="use-cancel">Cancel</button>`;
+
+      useBtn.addEventListener("click", () => {
+        useForm.style.display = "flex";
+        useBtn.style.display = "none";
+        (useForm.querySelector(".use-name") as HTMLInputElement).focus();
+      });
+
+      useForm.querySelector(".use-cancel")!.addEventListener("click", () => {
+        useForm.style.display = "none";
+        useBtn.style.display = "";
+      });
+
+      useForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const name = (useForm.querySelector(".use-name") as HTMLInputElement).value.trim();
+        const dateVal = (useForm.querySelector(".use-due") as HTMLInputElement).value;
+        const { date: dueDate, hasDueTime } = parseDateTimeInput(dateVal);
+        try {
+          await client.send(new CreateItemCommand({
+            userId,
+            name,
+            dueDate,
+            hasDueTime,
+            hasTasks: item.hasTasks ?? true,
+            timezoneOffsetMinutes: new Date().getTimezoneOffset(),
+          }));
+          showSuccess(`"${name}" added to items.`);
+          useForm.style.display = "none";
+          useBtn.style.display = "";
+        } catch (err) {
+          showError(String(err));
+        }
+      });
 
       const deleteBtn = document.createElement("button");
       deleteBtn.textContent = "✕";
@@ -795,7 +842,9 @@ async function renderChecklists(userId: string) {
       });
 
       li.appendChild(nameSpan);
+      li.appendChild(useBtn);
       li.appendChild(deleteBtn);
+      li.appendChild(useForm);
       ul.appendChild(li);
     }
   }
