@@ -21,8 +21,17 @@ pub async fn create_item(
     item.recurrence_basis = input.recurrence_basis;
     item.has_due_time = input.has_due_time.unwrap_or(false);
     item.has_tasks = input.has_tasks.unwrap_or(true);
-    item.parent_item_id = input.parent_item_id;
+    item.parent_item_id = input.parent_item_id.clone();
     item.due_offset_days = input.due_offset_days;
+
+    // Child items of a template automatically become template items
+    if let Some(ref parent_id) = input.parent_item_id {
+        if let Ok(parent) = repo.get(&input.user_id, parent_id).await {
+            if parent.is_template {
+                item.is_template = true;
+            }
+        }
+    }
 
     if item.deadline.is_none() {
         if let Some(ref pattern) = item.recurrence {

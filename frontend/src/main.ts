@@ -777,9 +777,14 @@ async function renderChecklists(userId: string) {
       li.className = "row";
       li.style.flexWrap = "wrap";
 
-      const nameSpan = document.createElement("span");
+      const nameSpan = document.createElement("a");
       nameSpan.textContent = item.name ?? "";
+      nameSpan.href = `/users/${userId}/checklists/${item.itemId}`;
       nameSpan.style.flex = "1";
+      nameSpan.addEventListener("click", (e) => {
+        e.preventDefault();
+        navigate(`/users/${userId}/checklists/${item.itemId}`);
+      });
 
       const useBtn = document.createElement("button");
       useBtn.textContent = "Use";
@@ -852,12 +857,151 @@ async function renderChecklists(userId: string) {
   await load();
 }
 
+async function renderChecklistDetail(userId: string, checklistId: string, checklistName: string) {
+  app.innerHTML = `
+    <p><a href="/users/${userId}/checklists" id="back-checklists">← Checklists</a></p>
+    <h1>${checklistName}</h1>
+    <button type="button" id="new-child-btn">+ Add Item</button>
+    <form id="create-child-form" style="display:none;margin-bottom:1rem;">
+      <div class="field-grid">
+        <span class="field-label">Name</span>
+        <input id="child-name" placeholder="Item name" required />
+        <span class="field-label">Offset days</span>
+        <input id="child-offset" type="number" placeholder="Days from due date (optional)" title="Positive = after due date, negative = before" />
+      </div>
+      <button type="submit">Add</button>
+      <button type="button" id="cancel-child-btn">Cancel</button>
+    </form>
+    <ul id="child-items"></ul>`;
+
+  document.getElementById("back-checklists")!.addEventListener("click", (e) => {
+    e.preventDefault();
+    navigate(`/users/${userId}/checklists`);
+  });
+
+  const newChildBtn = document.getElementById("new-child-btn")!;
+  const createForm = document.getElementById("create-child-form") as HTMLFormElement;
+
+  newChildBtn.addEventListener("click", () => {
+    createForm.style.display = "";
+    newChildBtn.style.display = "none";
+    (document.getElementById("child-name") as HTMLInputElement).focus();
+  });
+
+  document.getElementById("cancel-child-btn")!.addEventListener("click", () => {
+    createForm.style.display = "none";
+    newChildBtn.style.display = "";
+  });
+
+  createForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const name = (document.getElementById("child-name") as HTMLInputElement).value.trim();
+    const offsetRaw = (document.getElementById("child-offset") as HTMLInputElement).value;
+    const dueOffsetDays = offsetRaw !== "" ? parseInt(offsetRaw, 10) : undefined;
+    if (!name) return;
+    try {
+      await client.send(new CreateItemCommand({
+        userId,
+        name,
+        parentItemId: checklistId,
+        dueOffsetDays,
+        hasTasks: false,
+      }));
+      (document.getElementById("child-name") as HTMLInputElement).value = "";
+      (document.getElementById("child-offset") as HTMLInputElement).value = "";
+      createForm.style.display = "none";
+      newChildBtn.style.display = "";
+      await load();
+    } catch (err) {
+      showError(String(err));
+    }
+  });
+
+  const ul = document.getElementById("child-items")!;
+
+  async function load() {
+    const res = await client.send(new ListItemsCommand({ userId, parentItemId: checklistId }));
+    ul.innerHTML = "";
+    if (!res.items?.length) {
+      ul.innerHTML = `<li style="color:#666;">No items yet. Use "+ Add Item" to build this checklist.</li>`;
+      return;
+    }
+    for (const item of res.items ?? []) {
+      const li = document.createElement("li");
+      li.className = "row";
+
+      const nameEl = makeEditableText(item.name ?? "", async (newVal) => {
+        await client.send(new UpdateItemCommand({
+          userId, itemId: item.itemId!,
+          name: newVal, complete: false,
+          hasTasks: item.hasTasks ?? false,
+          parentItemId: checklistId,
+          dueOffsetDays: item.dueOffsetDays ?? undefined,
+        }));
+        item.name = newVal;
+      });
+      nameEl.style.flex = "1";
+
+      const offsetVal = item.dueOffsetDays ?? null;
+      const offsetLabel = offsetVal === null ? "no offset"
+        : offsetVal === 0 ? "on due date"
+        : offsetVal > 0 ? `+${offsetVal}d` : `${offsetVal}d`;
+      const offsetEl = makeEditableText(offsetLabel, async (newVal) => {
+        const parsed = newVal === "" ? undefined : parseInt(newVal, 10);
+        await client.send(new UpdateItemCommand({
+          userId, itemId: item.itemId!,
+          name: item.name!, complete: false,
+          hasTasks: item.hasTasks ?? false,
+          parentItemId: checklistId,
+          dueOffsetDays: isNaN(parsed as number) ? undefined : parsed,
+        }));
+        item.dueOffsetDays = isNaN(parsed as number) ? undefined : parsed;
+      }, { inputType: "number", inputValue: offsetVal !== null ? String(offsetVal) : "" });
+      offsetEl.style.cssText = "color:#666;font-size:0.85rem;";
+      offsetEl.title = "Click to edit offset days from due date";
+
+      const deleteBtn = document.createElement("button");
+      deleteBtn.textContent = "✕";
+      deleteBtn.title = "Remove from checklist";
+      deleteBtn.style.color = "#c00";
+      deleteBtn.addEventListener("click", async () => {
+        try {
+          await client.send(new DeleteItemCommand({ userId, itemId: item.itemId! }));
+          li.remove();
+        } catch (err) {
+          showError(String(err));
+        }
+      });
+
+      li.appendChild(nameEl);
+      li.appendChild(offsetEl);
+      li.appendChild(deleteBtn);
+      ul.appendChild(li);
+    }
+  }
+
+  await load();
+}
+
 // ── Router ───────────────────────────────────────────────────────────────────
 
 let currentAuth: AuthMe | null = null;
 
 async function route() {
   const path = window.location.pathname;
+
+  const checklistDetailMatch = path.match(/^\/users\/([^/]+)\/checklists\/([^/]+)$/);
+  if (checklistDetailMatch) {
+    const [, uid, cid] = checklistDetailMatch;
+    try {
+      const item = await client.send(new GetItemCommand({ userId: uid, itemId: cid }));
+      await renderChecklistDetail(uid, cid, item.name ?? "Checklist");
+    } catch {
+      renderNotFound(`Checklist not found.`);
+    }
+    if (currentAuth) addLogoutButton(`${currentAuth.firstName} ${currentAuth.lastName}`);
+    return;
+  }
 
   const checklistsMatch = path.match(/^\/users\/([^/]+)\/checklists$/);
   if (checklistsMatch) {

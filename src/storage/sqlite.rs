@@ -360,7 +360,7 @@ impl ItemRepo for SqliteItemRepo {
 
     async fn list_templates(&self, user_id: &str) -> Result<Vec<Item>, RepoError> {
         let q = format!(
-            "{ITEM_SELECT} FROM items WHERE user_id = ? AND is_template = 1 \
+            "{ITEM_SELECT} FROM items WHERE user_id = ? AND is_template = 1 AND parent_item_id IS NULL \
              ORDER BY name ASC"
         );
         sqlx::query(&q)
