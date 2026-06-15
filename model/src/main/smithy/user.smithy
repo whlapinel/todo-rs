@@ -18,6 +18,8 @@ resource User {
     ]
     operations: [
         ListItemsDue
+        CreateTemplate
+        ListTemplates
     ]
 }
 

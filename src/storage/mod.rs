@@ -49,4 +49,5 @@ pub trait ItemRepo: Send + Sync {
         deadline_after: Option<i64>,
         deadline_before: Option<i64>,
     ) -> Result<Vec<DueItem>, RepoError>;
+    async fn list_templates(&self, user_id: &str) -> Result<Vec<Item>, RepoError>;
 }

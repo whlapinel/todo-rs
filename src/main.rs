@@ -10,7 +10,8 @@ use crate::storage::{
 };
 use axum::{Extension, Router, body::boxed, middleware, routing::get};
 use handlers::items::{
-    create_item, delete_item, get_item, list_items, list_items_due, update_item,
+    create_item, create_template, delete_item, get_item, list_items, list_items_due,
+    list_templates, update_item,
 };
 use handlers::users::{get_user, list_users, update_user};
 use todo_server_sdk::{PeoplesRepublicOfLists, PeoplesRepublicOfListsConfig};
@@ -39,6 +40,8 @@ async fn main() {
         .delete_item(delete_item)
         .list_items(list_items)
         .list_items_due(list_items_due)
+        .create_template(create_template)
+        .list_templates(list_templates)
         .build_unchecked();
 
     let api = ServiceBuilder::new()

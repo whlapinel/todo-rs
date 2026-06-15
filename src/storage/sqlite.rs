@@ -45,11 +45,19 @@ pub async fn create_pool(url: &str) -> Result<SqlitePool, sqlx::Error> {
             recurrence TEXT,
             recurrence_basis TEXT,
             has_due_time INTEGER NOT NULL DEFAULT 0,
-            has_tasks INTEGER NOT NULL DEFAULT 1
+            has_tasks INTEGER NOT NULL DEFAULT 1,
+            is_template INTEGER NOT NULL DEFAULT 0,
+            due_offset_days INTEGER
         )",
     )
     .execute(&pool)
     .await?;
+    let _ = sqlx::query("ALTER TABLE items ADD COLUMN is_template INTEGER NOT NULL DEFAULT 0")
+        .execute(&pool)
+        .await;
+    let _ = sqlx::query("ALTER TABLE items ADD COLUMN due_offset_days INTEGER")
+        .execute(&pool)
+        .await;
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_items_user_id ON items (user_id)")
         .execute(&pool)
         .await?;
@@ -201,6 +209,7 @@ fn row_to_user(row: &sqlx::sqlite::SqliteRow) -> User {
 
 const ITEM_SELECT: &str =
     "SELECT id, user_id, parent_item_id, name, deadline, complete, recurrence, recurrence_basis, has_due_time, has_tasks,
+            is_template, due_offset_days,
             EXISTS(SELECT 1 FROM items c WHERE c.parent_item_id = items.id) AS has_children";
 
 #[async_trait]
@@ -219,7 +228,7 @@ impl ItemRepo for SqliteItemRepo {
 
     async fn list(&self, user_id: &str) -> Result<Vec<Item>, RepoError> {
         let q = format!(
-            "{ITEM_SELECT} FROM items WHERE user_id = ? AND parent_item_id IS NULL \
+            "{ITEM_SELECT} FROM items WHERE user_id = ? AND parent_item_id IS NULL AND is_template = 0 \
              ORDER BY COALESCE(deadline, 9999999999999) ASC"
         );
         sqlx::query(&q)
@@ -249,9 +258,10 @@ impl ItemRepo for SqliteItemRepo {
         let complete: i64 = item.complete as i64;
         let has_due_time: i64 = item.has_due_time as i64;
         let has_tasks: i64 = item.has_tasks as i64;
+        let is_template: i64 = item.is_template as i64;
         sqlx::query(
-            "INSERT INTO items (id, user_id, parent_item_id, name, deadline, complete, recurrence, recurrence_basis, has_due_time, has_tasks)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO items (id, user_id, parent_item_id, name, deadline, complete, recurrence, recurrence_basis, has_due_time, has_tasks, is_template, due_offset_days)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(&item.user_id)
@@ -263,6 +273,8 @@ impl ItemRepo for SqliteItemRepo {
         .bind(&item.recurrence_basis)
         .bind(has_due_time)
         .bind(has_tasks)
+        .bind(is_template)
+        .bind(item.due_offset_days)
         .execute(&self.0)
         .await
         .map_err(db_err)?;
@@ -274,9 +286,11 @@ impl ItemRepo for SqliteItemRepo {
         let complete: i64 = item.complete as i64;
         let has_due_time: i64 = item.has_due_time as i64;
         let has_tasks: i64 = item.has_tasks as i64;
+        let is_template: i64 = item.is_template as i64;
         let rows = sqlx::query(
             "UPDATE items SET name = ?, deadline = ?, complete = ?, recurrence = ?, recurrence_basis = ?, \
-             has_due_time = ?, has_tasks = ?, parent_item_id = ? WHERE id = ? AND user_id = ?",
+             has_due_time = ?, has_tasks = ?, parent_item_id = ?, is_template = ?, due_offset_days = ? \
+             WHERE id = ? AND user_id = ?",
         )
         .bind(&item.name)
         .bind(deadline)
@@ -286,6 +300,8 @@ impl ItemRepo for SqliteItemRepo {
         .bind(has_due_time)
         .bind(has_tasks)
         .bind(&item.parent_item_id)
+        .bind(is_template)
+        .bind(item.due_offset_days)
         .bind(&item.id)
         .bind(&item.user_id)
         .execute(&self.0)
@@ -314,6 +330,7 @@ impl ItemRepo for SqliteItemRepo {
         sqlx::query(
             "SELECT items.id, items.user_id, items.parent_item_id, items.name, items.deadline,
                     items.complete, items.recurrence, items.recurrence_basis, items.has_due_time, items.has_tasks,
+                    items.is_template, items.due_offset_days,
                     COALESCE(parent.name, '') AS parent_name,
                     EXISTS(SELECT 1 FROM items c WHERE c.parent_item_id = items.id) AS has_children
              FROM items
@@ -340,6 +357,19 @@ impl ItemRepo for SqliteItemRepo {
                 .collect()
         })
     }
+
+    async fn list_templates(&self, user_id: &str) -> Result<Vec<Item>, RepoError> {
+        let q = format!(
+            "{ITEM_SELECT} FROM items WHERE user_id = ? AND is_template = 1 \
+             ORDER BY name ASC"
+        );
+        sqlx::query(&q)
+            .bind(user_id)
+            .fetch_all(&self.0)
+            .await
+            .map_err(db_err)
+            .map(|rows| rows.iter().map(row_to_item).collect())
+    }
 }
 
 fn row_to_item(row: &sqlx::sqlite::SqliteRow) -> Item {
@@ -359,5 +389,7 @@ fn row_to_item(row: &sqlx::sqlite::SqliteRow) -> Item {
         has_due_time: row.get::<Option<i64>, _>("has_due_time").unwrap_or(0) != 0,
         has_tasks: row.get::<Option<i64>, _>("has_tasks").unwrap_or(1) != 0,
         has_children: row.get::<Option<i64>, _>("has_children").unwrap_or(0) != 0,
+        is_template: row.get::<Option<i64>, _>("is_template").unwrap_or(0) != 0,
+        due_offset_days: row.get("due_offset_days"),
     }
 }

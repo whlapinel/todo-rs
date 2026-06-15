@@ -13,6 +13,8 @@ pub struct Item {
     pub has_due_time: bool,
     pub has_tasks: bool,
     pub has_children: bool,
+    pub is_template: bool,
+    pub due_offset_days: Option<i32>,
 }
 
 impl Item {

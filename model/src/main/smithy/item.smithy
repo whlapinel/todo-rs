@@ -17,6 +17,8 @@ resource Item {
         hasTasks: Boolean
         parentItemId: String
         hasChildren: Boolean
+        isTemplate: Boolean
+        dueOffsetDays: Integer
     }
     read: GetItem
     list: ListItems
@@ -48,6 +50,8 @@ operation CreateItem {
         $hasTasks
 
         $parentItemId
+
+        $dueOffsetDays
 
         @notProperty
         timezoneOffsetMinutes: Integer
@@ -93,6 +97,10 @@ operation GetItem {
         $parentItemId
 
         $hasChildren
+
+        $isTemplate
+
+        $dueOffsetDays
     }
 
     errors: [
@@ -129,6 +137,8 @@ operation UpdateItem {
         $hasTasks
 
         $parentItemId
+
+        $dueOffsetDays
 
         @notProperty
         timezoneOffsetMinutes: Integer
@@ -176,6 +186,8 @@ structure ItemSummary for Item {
     $hasTasks
     $parentItemId
     $hasChildren
+    $isTemplate
+    $dueOffsetDays
 }
 
 @input
@@ -199,6 +211,52 @@ structure ListItemsOutput {
 operation ListItems {
     input: ListItemsInput
     output: ListItemsOutput
+    errors: [
+        PeoplesRepublicOfListsError
+    ]
+}
+
+@http(method: "POST", uri: "/users/{userId}/templates")
+operation CreateTemplate {
+    input := {
+        @required
+        @httpLabel
+        userId: String
+
+        @required
+        @notProperty
+        name: String
+
+        @notProperty
+        sourceItemId: String
+    }
+
+    output := {
+        @required
+        @notProperty
+        templateId: String
+    }
+
+    errors: [
+        PeoplesRepublicOfListsError
+    ]
+}
+
+@readonly
+@http(method: "GET", uri: "/users/{userId}/templates")
+operation ListTemplates {
+    input := {
+        @required
+        @httpLabel
+        userId: String
+    }
+
+    output := {
+        @required
+        @notProperty
+        items: Items
+    }
+
     errors: [
         PeoplesRepublicOfListsError
     ]

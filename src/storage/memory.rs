@@ -167,4 +167,8 @@ impl ItemRepo for InMemoryItemRepo {
     ) -> Result<Vec<DueItem>, RepoError> {
         Ok(vec![])
     }
+
+    async fn list_templates(&self, _user_id: &str) -> Result<Vec<Item>, RepoError> {
+        Ok(vec![])
+    }
 }
