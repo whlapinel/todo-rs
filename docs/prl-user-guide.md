@@ -36,6 +36,8 @@ prl config set-token eyJhbGci...
 
 **3. Find and save your user ID**
 
+Your user record is created automatically the first time you sign in via the web app. Find your ID with:
+
 ```sh
 prl users list
 ```
@@ -138,12 +140,6 @@ Output includes the parent item name so you can see context at a glance.
 
 ```sh
 prl users list
-```
-
-### Create a user
-
-```sh
-prl users create Jane Doe
 ```
 
 ### Get user details

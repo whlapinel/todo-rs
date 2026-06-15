@@ -23,15 +23,6 @@ fn not_found() -> error::PeoplesRepublicOfListsError {
     error::PeoplesRepublicOfListsError { message: "not found".to_string() }
 }
 
-async fn create_user(
-    input: input::CreateUserInput,
-    server::Extension(repo): server::Extension<Arc<dyn UserRepo>>,
-) -> Result<output::CreateUserOutput, error::CreateUserError> {
-    let user = User::new(&input.first_name, &input.last_name);
-    let user_id = repo.create(&user).await.map_err(|e| internal(format!("{e:?}")))?;
-    Ok(output::CreateUserOutput { user_id })
-}
-
 async fn get_user(
     input: input::GetUserInput,
     server::Extension(repo): server::Extension<Arc<dyn UserRepo>>,
@@ -273,7 +264,6 @@ async fn main() {
 
     let config = PeoplesRepublicOfListsConfig::builder().build();
     let smithy = PeoplesRepublicOfLists::builder(config)
-        .create_user(create_user)
         .get_user(get_user)
         .update_user(update_user)
         .list_users(list_users)

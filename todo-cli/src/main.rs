@@ -76,8 +76,6 @@ enum ItemsCommand {
 enum UsersCommand {
     /// List all users
     List,
-    /// Create a user
-    Create { first_name: String, last_name: String },
     /// Show a user (defaults to configured user)
     Get { user_id: Option<String> },
 }
@@ -179,12 +177,6 @@ struct ListUsersOutput {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct CreateUserOutput {
-    user_id: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct ItemSummary {
     item_id: Option<String>,
     name: Option<String>,
@@ -236,13 +228,6 @@ struct ListItemsDueOutput {
 }
 
 // --- API request types ---
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CreateUserBody {
-    first_name: String,
-    last_name: String,
-}
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -325,14 +310,6 @@ fn cmd_users(api: &Api, cmd: UsersCommand, default_user: Option<String>) {
             for u in out.users {
                 println!("{:<36}  {} {}", u.user_id, u.first_name, u.last_name);
             }
-        }
-        UsersCommand::Create { first_name, last_name } => {
-            let body = check(
-                api.post("/users", &CreateUserBody { first_name, last_name }).unwrap(),
-                "create user",
-            );
-            let out: CreateUserOutput = serde_json::from_str(&body).unwrap();
-            println!("created user {}", out.user_id);
         }
         UsersCommand::Get { user_id } => {
             let id = user_id.or(default_user);

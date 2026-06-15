@@ -12,7 +12,6 @@ resource User {
     }
     read: GetUser
     list: ListUsers
-    create: CreateUser
     update: UpdateUser
     resources: [
         Item
@@ -35,26 +34,6 @@ structure UserSummary for User {
 
 list Users {
     member: UserSummary
-}
-
-@http(method: "POST", uri: "/users")
-operation CreateUser {
-    input := for User {
-        @required
-        $firstName
-
-        @required
-        $lastName
-    }
-
-    output := for User {
-        @required
-        $userId
-    }
-
-    errors: [
-        PeoplesRepublicOfListsError
-    ]
 }
 
 @readonly
