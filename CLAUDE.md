@@ -141,6 +141,8 @@ TODO_API_TOKEN=<paste JWT here>
 3. Fix Rust compile errors (the generated types changed)
 4. Add/update handler in `src/main.rs` and wire into `PeoplesRepublicOfLists::builder(...)`
 
+See the touch-point checklist below for all files that may need updating.
+
 **Adding a DB column:**
 
 1. Add the column to `CREATE TABLE IF NOT EXISTS` in `create_pool()` (sqlite.rs)
@@ -156,3 +158,45 @@ TODO_API_TOKEN=<paste JWT here>
 - Set `TODO_AUTH_MODE=caddy` to trust caddy-security headers (no Google/JWT env vars needed)
 - Set `TODO_AUTH_MODE=internal` (or unset) to use the built-in OAuth flow
 - For local dev in caddy mode without Caddy: set `TODO_DEV_EMAIL=you@example.com`
+
+---
+
+## Touch-Point Checklist
+
+Every place that must be updated when the Smithy model changes. The generated crates (`todo-server-sdk/`, `todo-client/`, `todo-typescript-client/`) update themselves via `task codegen` — everything else is hand-written and must be updated manually.
+
+### Adding or removing an operation
+
+| File | What to do |
+|------|-----------|
+| `model/src/main/smithy/*.smithy` | Add/remove the operation definition |
+| *(run `task codegen`)* | Regenerates all three SDKs |
+| `src/main.rs` | Add/remove the handler function; wire/unwire from `PeoplesRepublicOfLists::builder(...)` |
+| `frontend/src/main.ts` | Import/remove the generated `*Command`; add/remove UI for it |
+| `mcp-server/src/index.ts` | Add/remove tool definition in the tools list; add/remove `case` in the switch |
+| `todo-cli/src/main.rs` | Add/remove subcommand variant and match arm in the relevant `cmd_*` function |
+| `docs/prl-user-guide.md` | Document the new command or remove it |
+
+### Renaming the service
+
+| File | What to change |
+|------|---------------|
+| `model/src/main/smithy/service.smithy` | `service OldName {` → `service NewName {` |
+| `model/smithy-build.json` | All `"service": "common#OldName"` → `"service": "common#NewName"` |
+| *(run `task codegen`)* | |
+| `src/main.rs` | `OldName`, `OldNameConfig` imports and usage |
+| `frontend/src/main.ts` | `OldNameClient` import and `new OldNameClient(...)` instantiation |
+
+### Renaming an error type
+
+| File | What to change |
+|------|---------------|
+| `model/src/main/smithy/errors.smithy` | Rename the `structure` |
+| All other `.smithy` files | Update references in `errors: [...]` lists |
+| `model/smithy-build.json` | No change needed (errors aren't referenced here) |
+| *(run `task codegen`)* | |
+| `src/main.rs` | `error::OldErrorName` usage in handler return types and `internal()`/`not_found()` helpers |
+
+### Docker builds
+
+`todo-server-sdk/` and `todo-typescript-client/` are gitignored (generated). The Dockerfile copies them from the local filesystem, so **`task codegen` must be run before `task docker-build`**. `task docker-build` and `task docker-release` do this automatically.
