@@ -9,6 +9,8 @@ import {
   GetItemCommand,
   UpdateItemCommand,
   DeleteItemCommand,
+  CreateTemplateCommand,
+  ListTemplatesCommand,
   type ItemSummary,
   type DueItemSummary,
 } from "@todo/client";
@@ -232,6 +234,7 @@ async function renderItems(userId: string, parentItemId?: string, parentItemName
     <p><a href="${backHref}" id="back-link">${backLabel}</a></p>
     <h1>${heading}</h1>
     <button type="button" id="new-item-btn">+ New Item</button>
+    <button type="button" id="checklists-btn">Checklists</button>
     <form id="create-item-form" style="display:none;">
       <div class="field-grid">
         <span class="field-label">Name</span>
@@ -277,6 +280,10 @@ async function renderItems(userId: string, parentItemId?: string, parentItemName
   document.getElementById("back-link")!.addEventListener("click", (e) => {
     e.preventDefault();
     navigate(backHref);
+  });
+
+  document.getElementById("checklists-btn")!.addEventListener("click", () => {
+    navigate(`/users/${userId}/checklists`);
   });
 
   const newItemBtn = document.getElementById("new-item-btn")!;
@@ -372,6 +379,23 @@ async function renderItems(userId: string, parentItemId?: string, parentItemName
       drillBtn.style.cssText = "opacity:0.5;padding:0 0.3rem;min-width:unset;";
       drillBtn.addEventListener("click", () => navigate(`/users/${userId}/items/${item.itemId}`));
       if (item.hasChildren) drillBtn.style.display = "none";
+
+      const saveAsChecklistBtn = document.createElement("button");
+      saveAsChecklistBtn.textContent = "Save as checklist";
+      saveAsChecklistBtn.title = "Create a reusable checklist from this item";
+      saveAsChecklistBtn.style.cssText = "font-size:0.78rem;opacity:0.7;";
+      saveAsChecklistBtn.addEventListener("click", async () => {
+        try {
+          await client.send(new CreateTemplateCommand({
+            userId,
+            name: item.name!,
+            sourceItemId: item.itemId!,
+          }));
+          showSuccess(`Checklist "${item.name}" created.`);
+        } catch (err) {
+          showError(String(err));
+        }
+      });
 
       const deleteBtn = document.createElement("button");
       deleteBtn.textContent = "✕";
@@ -488,6 +512,7 @@ async function renderItems(userId: string, parentItemId?: string, parentItemName
         li.appendChild(recurrenceSpan);
       }
 
+      li.appendChild(saveAsChecklistBtn);
       li.appendChild(deleteBtn);
       ul.appendChild(li);
     }
@@ -692,12 +717,105 @@ async function renderDashboard(userId: string) {
   await load();
 }
 
+async function renderChecklists(userId: string) {
+  app.innerHTML = `
+    <p><a href="/users/${userId}" id="back-items">← Items</a></p>
+    <h1>Checklists</h1>
+    <button type="button" id="new-checklist-btn">+ New Checklist</button>
+    <form id="create-checklist-form" style="display:none;margin-bottom:1rem;">
+      <input id="checklist-name" placeholder="Checklist name" required style="margin-right:0.5rem;" />
+      <button type="submit">Create</button>
+      <button type="button" id="cancel-checklist-btn">Cancel</button>
+    </form>
+    <ul id="checklists"></ul>`;
+
+  document.getElementById("back-items")!.addEventListener("click", (e) => {
+    e.preventDefault();
+    navigate(`/users/${userId}`);
+  });
+
+  const newBtn = document.getElementById("new-checklist-btn")!;
+  const form = document.getElementById("create-checklist-form") as HTMLFormElement;
+
+  newBtn.addEventListener("click", () => {
+    form.style.display = "";
+    newBtn.style.display = "none";
+    (document.getElementById("checklist-name") as HTMLInputElement).focus();
+  });
+
+  document.getElementById("cancel-checklist-btn")!.addEventListener("click", () => {
+    form.style.display = "none";
+    newBtn.style.display = "";
+  });
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const name = (document.getElementById("checklist-name") as HTMLInputElement).value.trim();
+    if (!name) return;
+    try {
+      await client.send(new CreateTemplateCommand({ userId, name }));
+      (document.getElementById("checklist-name") as HTMLInputElement).value = "";
+      form.style.display = "none";
+      newBtn.style.display = "";
+      await load();
+    } catch (err) {
+      showError(String(err));
+    }
+  });
+
+  const ul = document.getElementById("checklists")!;
+
+  async function load() {
+    const res = await client.send(new ListTemplatesCommand({ userId }));
+    ul.innerHTML = "";
+    if (!res.items?.length) {
+      ul.innerHTML = `<li style="color:#666;">No checklists yet. Create one from an item or use "+ New Checklist".</li>`;
+      return;
+    }
+    for (const item of res.items) {
+      const li = document.createElement("li");
+      li.className = "row";
+
+      const nameSpan = document.createElement("span");
+      nameSpan.textContent = item.name ?? "";
+      nameSpan.style.flex = "1";
+
+      const deleteBtn = document.createElement("button");
+      deleteBtn.textContent = "✕";
+      deleteBtn.title = "Delete checklist";
+      deleteBtn.style.color = "#c00";
+      deleteBtn.addEventListener("click", async () => {
+        if (!confirm(`Delete checklist "${item.name}"?`)) return;
+        try {
+          await client.send(new DeleteItemCommand({ userId, itemId: item.itemId! }));
+          await load();
+        } catch (err) {
+          showError(String(err));
+        }
+      });
+
+      li.appendChild(nameSpan);
+      li.appendChild(deleteBtn);
+      ul.appendChild(li);
+    }
+  }
+
+  await load();
+}
+
 // ── Router ───────────────────────────────────────────────────────────────────
 
 let currentAuth: AuthMe | null = null;
 
 async function route() {
   const path = window.location.pathname;
+
+  const checklistsMatch = path.match(/^\/users\/([^/]+)\/checklists$/);
+  if (checklistsMatch) {
+    await renderChecklists(checklistsMatch[1]);
+    if (currentAuth) addLogoutButton(`${currentAuth.firstName} ${currentAuth.lastName}`);
+    return;
+  }
 
   const dashMatch = path.match(/^\/users\/([^/]+)\/dashboard$/);
   if (dashMatch) {
