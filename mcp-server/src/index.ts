@@ -59,18 +59,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
-      name: "create_user",
-      description: "Create a new user.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          firstName: { type: "string" },
-          lastName: { type: "string" },
-        },
-        required: ["firstName", "lastName"],
-      },
-    },
-    {
       name: "update_user",
       description: "Update a user's name.",
       inputSchema: {
@@ -228,13 +216,6 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
 
       case "get_user":
         result = await api("GET", `/users/${args.userId}`);
-        break;
-
-      case "create_user":
-        result = await api("POST", "/users", {
-          firstName: args.firstName,
-          lastName: args.lastName,
-        });
         break;
 
       case "update_user":
