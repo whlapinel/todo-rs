@@ -1,5 +1,5 @@
 import {
-  ListeriaClient,
+  PeoplesRepublicOfListsClient,
   GetUserCommand,
   ListUsersCommand,
   UpdateUserCommand,
@@ -9,9 +9,11 @@ import {
   GetItemCommand,
   UpdateItemCommand,
   DeleteItemCommand,
+  type ItemSummary,
+  type DueItemSummary,
 } from "@todo/client";
 
-const client = new ListeriaClient({ endpoint: `${window.location.origin}/api` });
+const client = new PeoplesRepublicOfListsClient({ endpoint: `${window.location.origin}/api` });
 
 const app = document.getElementById("app")!;
 
@@ -334,7 +336,7 @@ async function renderItems(userId: string, parentItemId?: string, parentItemName
     const res = await client.send(new ListItemsCommand({ userId, parentItemId }));
     const showComplete = (document.getElementById("show-complete") as HTMLInputElement).checked;
     ul.innerHTML = "";
-    for (const item of (res.items ?? []).filter(i => showComplete || !i.complete)) {
+    for (const item of (res.items ?? []).filter((i: ItemSummary) => showComplete || !i.complete)) {
       const li = document.createElement("li");
       li.className = "row";
 
@@ -608,8 +610,8 @@ async function renderDashboard(userId: string) {
 
     ul.innerHTML = "";
     const items = (res.items ?? [])
-      .filter(i => showComplete || !i.complete)
-      .filter(i => preset !== "All with due date" || i.dueDate != null);
+      .filter((i: DueItemSummary) => showComplete || !i.complete)
+      .filter((i: DueItemSummary) => preset !== "All with due date" || i.dueDate != null);
     if (items.length === 0) {
       ul.innerHTML = `<li style="color:#666;">No items.</li>`;
       return;
