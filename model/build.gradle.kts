@@ -21,32 +21,20 @@ tasks {
     val serverSdkCrateName: String by project
     val clientCrateName: String by project
     val typescriptClientName: String by project
-    register<Copy>("copyServerCrate") {
+    register<Sync>("copyServerCrate") {
         dependsOn("smithyBuild")
-        outputs.upToDateWhen { false }
-        doFirst {
-            delete("$srcDir/$serverSdkCrateName/src")
-        }
-        from(layout.buildDirectory.dir("smithyprojections/model/todo-server-sdk/rust-server-codegen"))
-        into("$srcDir/$serverSdkCrateName")
+        from(layout.buildDirectory.dir("smithyprojections/model/todo-server-sdk/rust-server-codegen/src"))
+        into("$srcDir/$serverSdkCrateName/src")
     }
-    register<Copy>("copyClientCrate") {
+    register<Sync>("copyClientCrate") {
         dependsOn("smithyBuild")
-        outputs.upToDateWhen { false }
-        doFirst {
-            delete("$srcDir/$clientCrateName/src")
-        }
-        from(layout.buildDirectory.dir("smithyprojections/model/todo-client/rust-client-codegen"))
-        into("$srcDir/$clientCrateName")
+        from(layout.buildDirectory.dir("smithyprojections/model/todo-client/rust-client-codegen/src"))
+        into("$srcDir/$clientCrateName/src")
     }
-    register<Copy>("copyTypescriptClient") {
+    register<Sync>("copyTypescriptClient") {
         dependsOn("smithyBuild")
-        outputs.upToDateWhen { false }
-        doFirst {
-            delete("$srcDir/$typescriptClientName/src")
-        }
-        from(layout.buildDirectory.dir("smithyprojections/model/todo-typescript-client/typescript-client-codegen"))
-        into("$srcDir/$typescriptClientName")
+        from(layout.buildDirectory.dir("smithyprojections/model/todo-typescript-client/typescript-client-codegen/src"))
+        into("$srcDir/$typescriptClientName/src")
     }
     named("assemble") {
         dependsOn("smithyBuild")

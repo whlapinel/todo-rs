@@ -42,14 +42,16 @@ tasks:
 
   build:
     desc: Build everything (codegen + frontend + server)
-    deps: [codegen, frontend]
     cmds:
+      - task: codegen
+      - task: frontend
       - cargo build
 
   run:
     desc: Build and run the server
-    deps: [codegen, frontend]
     cmds:
+      - task: codegen
+      - task: frontend
       - cargo run
 
   check:
