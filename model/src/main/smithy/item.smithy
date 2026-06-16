@@ -19,6 +19,7 @@ resource Item {
         hasChildren: Boolean
         isTemplate: Boolean
         dueOffsetDays: Integer
+        assignedToUserId: String
     }
     read: GetItem
     list: ListItems
@@ -52,6 +53,8 @@ operation CreateItem {
         $parentItemId
 
         $dueOffsetDays
+
+        $assignedToUserId
 
         @notProperty
         timezoneOffsetMinutes: Integer
@@ -105,6 +108,8 @@ operation GetItem {
         $isTemplate
 
         $dueOffsetDays
+
+        $assignedToUserId
     }
 
     errors: [
@@ -143,6 +148,8 @@ operation UpdateItem {
         $parentItemId
 
         $dueOffsetDays
+
+        $assignedToUserId
 
         @notProperty
         timezoneOffsetMinutes: Integer
@@ -192,6 +199,7 @@ structure ItemSummary for Item {
     $hasChildren
     $isTemplate
     $dueOffsetDays
+    $assignedToUserId
 }
 
 @input

@@ -33,6 +33,11 @@ enum Command {
         #[command(subcommand)]
         command: UsersCommand,
     },
+    /// Manage teams
+    Teams {
+        #[command(subcommand)]
+        command: TeamsCommand,
+    },
     /// Configure prl
     Config {
         #[command(subcommand)]
@@ -56,6 +61,8 @@ enum ItemsCommand {
         parent: Option<String>,
         #[arg(long, help = "Recurrence pattern, e.g. 'every week'")]
         recurrence: Option<String>,
+        #[arg(long, help = "Assign to a fellow active team member's user ID")]
+        assign: Option<String>,
     },
     /// Mark an item complete
     Done { item_id: String },
@@ -70,6 +77,12 @@ enum ItemsCommand {
         #[arg(long, help = "Only items due before this date (YYYY-MM-DD)")]
         before: Option<String>,
     },
+    /// Assign an item to a fellow active team member
+    Assign { item_id: String, user_id: String },
+    /// Remove an item's assignee
+    Unassign { item_id: String },
+    /// List items assigned to you by other team members
+    Assigned,
 }
 
 #[derive(Subcommand)]
@@ -78,6 +91,22 @@ enum UsersCommand {
     List,
     /// Show a user (defaults to configured user)
     Get { user_id: Option<String> },
+}
+
+#[derive(Subcommand)]
+enum TeamsCommand {
+    /// List your teams, including pending invites
+    List,
+    /// Create a new team (you become its first member)
+    Create { name: String },
+    /// List a team's members
+    Members { team_id: String },
+    /// Invite an existing user to a team
+    Invite { team_id: String, invitee_user_id: String },
+    /// Accept a pending team invite
+    Accept { team_id: String },
+    /// Leave a team (or decline a pending invite)
+    Leave { team_id: String },
 }
 
 #[derive(Subcommand)]
@@ -203,6 +232,7 @@ struct GetItemOutput {
     has_due_time: Option<bool>,
     parent_item_id: Option<String>,
     has_children: Option<bool>,
+    assigned_to_user_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -227,6 +257,56 @@ struct ListItemsDueOutput {
     items: Vec<DueItemSummary>,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TeamSummary {
+    team_id: String,
+    name: String,
+    status: String,
+    invited_by_name: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ListTeamsOutput {
+    teams: Vec<TeamSummary>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AssignedItemSummary {
+    item_id: String,
+    name: String,
+    owner_user_id: String,
+    due_date: Option<f64>,
+    complete: Option<bool>,
+    recurrence: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ListAssignedItemsOutput {
+    items: Vec<AssignedItemSummary>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TeamMemberSummary {
+    user_id: String,
+    first_name: String,
+    last_name: String,
+    status: String,
+}
+
+#[derive(Deserialize)]
+struct ListTeamMembersOutput {
+    members: Vec<TeamMemberSummary>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateTeamOutput {
+    team_id: String,
+}
+
 // --- API request types ---
 
 #[derive(Serialize)]
@@ -239,6 +319,8 @@ struct CreateItemBody {
     parent_item_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     recurrence: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    assigned_to_user_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -256,6 +338,19 @@ struct UpdateItemBody {
     has_due_time: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     parent_item_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    assigned_to_user_id: Option<String>,
+}
+
+#[derive(Serialize)]
+struct CreateTeamBody {
+    name: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InviteTeamMemberBody {
+    invitee_user_id: String,
 }
 
 // --- Helpers ---
@@ -346,7 +441,7 @@ fn cmd_items(api: &Api, cmd: ItemsCommand, user_id: Option<String>) {
                 println!("{:<36}  {:<4}  {:<12}  {}{}", id, done, due, name, suffix);
             }
         }
-        ItemsCommand::Add { name, due, parent, recurrence } => {
+        ItemsCommand::Add { name, due, parent, recurrence, assign } => {
             let uid = require_user(user_id);
             let due_date = match due {
                 Some(ref s) => Some(parse_date(s).unwrap_or_else(|e| { eprintln!("{e}"); std::process::exit(1); })),
@@ -355,7 +450,7 @@ fn cmd_items(api: &Api, cmd: ItemsCommand, user_id: Option<String>) {
             let body = check(
                 api.post(
                     &format!("/users/{uid}/items"),
-                    &CreateItemBody { name, due_date, parent_item_id: parent, recurrence },
+                    &CreateItemBody { name, due_date, parent_item_id: parent, recurrence, assigned_to_user_id: assign },
                 )
                 .unwrap(),
                 "add item",
@@ -375,9 +470,59 @@ fn cmd_items(api: &Api, cmd: ItemsCommand, user_id: Option<String>) {
                 recurrence_basis: None,
                 has_due_time: item.has_due_time,
                 parent_item_id: item.parent_item_id,
+                assigned_to_user_id: item.assigned_to_user_id,
             };
             check(api.put(&format!("/users/{uid}/items/{item_id}"), &update).unwrap(), "mark done");
             println!("marked {item_id} complete");
+        }
+        ItemsCommand::Assign { item_id, user_id: assignee } => {
+            let uid = require_user(user_id);
+            let body = check(api.get(&format!("/users/{uid}/items/{item_id}")).unwrap(), "get item");
+            let item: GetItemOutput = serde_json::from_str(&body).unwrap();
+            let update = UpdateItemBody {
+                name: item.name,
+                complete: item.complete,
+                due_date: item.due_date,
+                recurrence: item.recurrence,
+                recurrence_basis: None,
+                has_due_time: item.has_due_time,
+                parent_item_id: item.parent_item_id,
+                assigned_to_user_id: Some(assignee),
+            };
+            check(api.put(&format!("/users/{uid}/items/{item_id}"), &update).unwrap(), "assign item");
+            println!("assigned {item_id}");
+        }
+        ItemsCommand::Unassign { item_id } => {
+            let uid = require_user(user_id);
+            let body = check(api.get(&format!("/users/{uid}/items/{item_id}")).unwrap(), "get item");
+            let item: GetItemOutput = serde_json::from_str(&body).unwrap();
+            let update = UpdateItemBody {
+                name: item.name,
+                complete: item.complete,
+                due_date: item.due_date,
+                recurrence: item.recurrence,
+                recurrence_basis: None,
+                has_due_time: item.has_due_time,
+                parent_item_id: item.parent_item_id,
+                assigned_to_user_id: None,
+            };
+            check(api.put(&format!("/users/{uid}/items/{item_id}"), &update).unwrap(), "unassign item");
+            println!("unassigned {item_id}");
+        }
+        ItemsCommand::Assigned => {
+            let uid = require_user(user_id);
+            let body = check(api.get(&format!("/users/{uid}/assigned-items")).unwrap(), "list assigned items");
+            let out: ListAssignedItemsOutput = serde_json::from_str(&body).unwrap();
+            if out.items.is_empty() {
+                println!("(nothing assigned to you)");
+                return;
+            }
+            println!("{:<36}  {:<4}  {:<12}  {:<36}  {}", "ID", "DONE", "DUE", "OWNER", "NAME");
+            for i in out.items {
+                let done = if i.complete.unwrap_or(false) { "✓" } else { " " };
+                let due = i.due_date.map(fmt_date).unwrap_or_else(|| "-".into());
+                println!("{:<36}  {:<4}  {:<12}  {:<36}  {}", i.item_id, done, due, i.owner_user_id, i.name);
+            }
         }
         ItemsCommand::Delete { item_id } => {
             let uid = require_user(user_id);
@@ -394,6 +539,7 @@ fn cmd_items(api: &Api, cmd: ItemsCommand, user_id: Option<String>) {
             println!("due:        {}", item.due_date.map(fmt_date).unwrap_or_else(|| "-".into()));
             println!("recurrence: {}", item.recurrence.as_deref().unwrap_or("-"));
             println!("children:   {}", item.has_children.unwrap_or(false));
+            println!("assigned:   {}", item.assigned_to_user_id.as_deref().unwrap_or("-"));
         }
         ItemsCommand::Due { after, before } => {
             let uid = require_user(user_id);
@@ -420,6 +566,81 @@ fn cmd_items(api: &Api, cmd: ItemsCommand, user_id: Option<String>) {
                 let parent = i.parent_name.as_deref().unwrap_or("-");
                 println!("{:<36}  {:<4}  {:<12}  {:<24}  {}", i.item_id, done, due, parent, i.name);
             }
+        }
+    }
+}
+
+fn cmd_teams(api: &Api, cmd: TeamsCommand, user_id: Option<String>) {
+    match cmd {
+        TeamsCommand::List => {
+            let uid = require_user(user_id);
+            let body = check(api.get(&format!("/users/{uid}/teams")).unwrap(), "list teams");
+            let out: ListTeamsOutput = serde_json::from_str(&body).unwrap();
+            if out.teams.is_empty() {
+                println!("(no teams)");
+                return;
+            }
+            println!("{:<36}  {:<8}  {}", "ID", "STATUS", "NAME");
+            for t in out.teams {
+                let suffix = t
+                    .invited_by_name
+                    .map(|n| format!("  (invited by {n})"))
+                    .unwrap_or_default();
+                println!("{:<36}  {:<8}  {}{}", t.team_id, t.status, t.name, suffix);
+            }
+        }
+        TeamsCommand::Create { name } => {
+            let uid = require_user(user_id);
+            let body = check(
+                api.post(&format!("/users/{uid}/teams"), &CreateTeamBody { name }).unwrap(),
+                "create team",
+            );
+            let out: CreateTeamOutput = serde_json::from_str(&body).unwrap();
+            println!("created team {}", out.team_id);
+        }
+        TeamsCommand::Members { team_id } => {
+            let uid = require_user(user_id);
+            let body = check(
+                api.get(&format!("/users/{uid}/teams/{team_id}/members")).unwrap(),
+                "list team members",
+            );
+            let out: ListTeamMembersOutput = serde_json::from_str(&body).unwrap();
+            println!("{:<36}  {:<8}  {}", "USER ID", "STATUS", "NAME");
+            for m in out.members {
+                println!(
+                    "{:<36}  {:<8}  {} {}",
+                    m.user_id, m.status, m.first_name, m.last_name
+                );
+            }
+        }
+        TeamsCommand::Invite { team_id, invitee_user_id } => {
+            let uid = require_user(user_id);
+            check(
+                api.post(
+                    &format!("/users/{uid}/teams/{team_id}/invites"),
+                    &InviteTeamMemberBody { invitee_user_id: invitee_user_id.clone() },
+                )
+                .unwrap(),
+                "invite team member",
+            );
+            println!("invited {invitee_user_id} to team {team_id}");
+        }
+        TeamsCommand::Accept { team_id } => {
+            let uid = require_user(user_id);
+            check(
+                api.put(&format!("/users/{uid}/teams/{team_id}/accept"), &serde_json::json!({}))
+                    .unwrap(),
+                "accept team invite",
+            );
+            println!("joined team {team_id}");
+        }
+        TeamsCommand::Leave { team_id } => {
+            let uid = require_user(user_id);
+            check(
+                api.delete(&format!("/users/{uid}/teams/{team_id}/membership")).unwrap(),
+                "leave team",
+            );
+            println!("left team {team_id}");
         }
     }
 }
@@ -489,6 +710,18 @@ fn main() {
             });
             let api = Api::new(&url, &token);
             cmd_items(&api, command, user);
+        }
+        Command::Teams { command } => {
+            let url = url.unwrap_or_else(|| {
+                eprintln!("error: no URL — run `prl config set-url <url>` or pass --url");
+                std::process::exit(1);
+            });
+            let token = token.unwrap_or_else(|| {
+                eprintln!("error: no token — run `prl config set-token <token>` or pass --token");
+                std::process::exit(1);
+            });
+            let api = Api::new(&url, &token);
+            cmd_teams(&api, command, user);
         }
     }
 }

@@ -1,6 +1,7 @@
 pub mod items;
 pub mod users;
 pub mod templates;
+pub mod teams;
 use todo_server_sdk::error;
 
 fn internal(msg: impl ToString) -> error::PeoplesRepublicOfListsError {

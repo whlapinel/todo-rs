@@ -18,8 +18,16 @@ resource User {
     ]
     operations: [
         ListItemsDue
+        ListAssignedItems
         CreateTemplate
         ListTemplates
+        CreateTeam
+        GetTeam
+        ListTeams
+        ListTeamMembers
+        InviteTeamMember
+        AcceptTeamInvite
+        LeaveTeam
     ]
 }
 

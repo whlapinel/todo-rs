@@ -139,6 +139,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: "number",
             description: "Client timezone offset in minutes (e.g. -300 for EST)",
           },
+          assignedToUserId: {
+            type: "string",
+            description:
+              "ID of a fellow active team member to assign this item to. Must share an active team with the creating user.",
+          },
         },
         required: ["userId", "name"],
       },
@@ -164,6 +169,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           hasTasks: { type: "boolean" },
           parentItemId: { type: "string" },
           timezoneOffsetMinutes: { type: "number" },
+          assignedToUserId: {
+            type: "string",
+            description:
+              "ID of a fellow active team member to assign this item to (must share an active team with userId). Like the other optional fields on this operation, omitting it clears any existing assignment — pass the item's current assignedToUserId (from get_item) back if you want to leave it as-is.",
+          },
         },
         required: ["userId", "itemId", "name", "complete"],
       },
@@ -198,6 +208,106 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           },
         },
         required: ["userId"],
+      },
+    },
+    {
+      name: "list_assigned_items",
+      description:
+        "List items assigned to this user by other team members (across all owners), regardless of due date.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          userId: { type: "string" },
+        },
+        required: ["userId"],
+      },
+    },
+    {
+      name: "list_teams",
+      description:
+        "List the teams a user belongs to, including pending invites awaiting their acceptance (status PENDING or ACTIVE).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          userId: { type: "string" },
+        },
+        required: ["userId"],
+      },
+    },
+    {
+      name: "get_team",
+      description: "Get a team by ID (name only — use list_team_members for membership).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          userId: { type: "string" },
+          teamId: { type: "string" },
+        },
+        required: ["userId", "teamId"],
+      },
+    },
+    {
+      name: "create_team",
+      description: "Create a new team. The creating user becomes its first active member.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          userId: { type: "string", description: "The creating user's ID" },
+          name: { type: "string", description: "Team name" },
+        },
+        required: ["userId", "name"],
+      },
+    },
+    {
+      name: "list_team_members",
+      description:
+        "List a team's members and their status (PENDING or ACTIVE). The caller must already be a member.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          userId: { type: "string", description: "The caller's user ID" },
+          teamId: { type: "string" },
+        },
+        required: ["userId", "teamId"],
+      },
+    },
+    {
+      name: "invite_team_member",
+      description:
+        "Invite an existing user to a team. The inviter must be an active member of the team; the invite is PENDING until accepted.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          userId: { type: "string", description: "The inviting user's ID" },
+          teamId: { type: "string" },
+          inviteeUserId: { type: "string", description: "ID of the user being invited" },
+        },
+        required: ["userId", "teamId", "inviteeUserId"],
+      },
+    },
+    {
+      name: "accept_team_invite",
+      description: "Accept a pending team invite, becoming an active member.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          userId: { type: "string" },
+          teamId: { type: "string" },
+        },
+        required: ["userId", "teamId"],
+      },
+    },
+    {
+      name: "leave_team",
+      description:
+        "Leave a team (or decline a pending invite). If this removes the last member, the team itself is deleted.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          userId: { type: "string" },
+          teamId: { type: "string" },
+        },
+        required: ["userId", "teamId"],
       },
     },
   ],
@@ -248,6 +358,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         if (args.parentItemId) body.parentItemId = args.parentItemId;
         if (args.timezoneOffsetMinutes !== undefined)
           body.timezoneOffsetMinutes = args.timezoneOffsetMinutes;
+        if (args.assignedToUserId) body.assignedToUserId = args.assignedToUserId;
         result = await api("POST", `/users/${args.userId}/items`, body);
         break;
       }
@@ -265,6 +376,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         if (args.parentItemId) body.parentItemId = args.parentItemId;
         if (args.timezoneOffsetMinutes !== undefined)
           body.timezoneOffsetMinutes = args.timezoneOffsetMinutes;
+        if (args.assignedToUserId) body.assignedToUserId = args.assignedToUserId;
         result = await api(
           "PUT",
           `/users/${args.userId}/items/${args.itemId}`,
@@ -290,6 +402,43 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         result = await api("GET", `/users/${args.userId}/due-items${qs}`);
         break;
       }
+
+      case "list_assigned_items":
+        result = await api("GET", `/users/${args.userId}/assigned-items`);
+        break;
+
+      case "list_teams":
+        result = await api("GET", `/users/${args.userId}/teams`);
+        break;
+
+      case "get_team":
+        result = await api("GET", `/users/${args.userId}/teams/${args.teamId}`);
+        break;
+
+      case "create_team":
+        result = await api("POST", `/users/${args.userId}/teams`, { name: args.name });
+        break;
+
+      case "list_team_members":
+        result = await api("GET", `/users/${args.userId}/teams/${args.teamId}/members`);
+        break;
+
+      case "invite_team_member":
+        result = await api("POST", `/users/${args.userId}/teams/${args.teamId}/invites`, {
+          inviteeUserId: args.inviteeUserId,
+        });
+        break;
+
+      case "accept_team_invite":
+        result = await api("PUT", `/users/${args.userId}/teams/${args.teamId}/accept`, {});
+        break;
+
+      case "leave_team":
+        result = await api(
+          "DELETE",
+          `/users/${args.userId}/teams/${args.teamId}/membership`
+        );
+        break;
 
       default:
         return {

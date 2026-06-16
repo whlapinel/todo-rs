@@ -1,12 +1,34 @@
 use super::{internal, not_found};
 use crate::domain::{item::Item, recurrence};
-use crate::storage::{ItemRepo, RepoError};
+use crate::storage::{ItemRepo, RepoError, TeamRepo};
 use std::sync::Arc;
 use todo_server_sdk::{error, input, output, server, types::DateTime as SmithyDateTime};
+
+async fn resolve_assignee(
+    teams: &Arc<dyn TeamRepo>,
+    owner_id: &str,
+    assignee_id: Option<String>,
+) -> Result<Option<String>, String> {
+    let Some(assignee_id) = assignee_id else {
+        return Ok(None);
+    };
+    if assignee_id == owner_id {
+        return Ok(None);
+    }
+    let shared = teams
+        .share_active_team(owner_id, &assignee_id)
+        .await
+        .map_err(|e| format!("{e:?}"))?;
+    if !shared {
+        return Err("you can only assign items to a fellow active team member".to_string());
+    }
+    Ok(Some(assignee_id))
+}
 
 pub async fn create_item(
     input: input::CreateItemInput,
     server::Extension(repo): server::Extension<Arc<dyn ItemRepo>>,
+    server::Extension(teams): server::Extension<Arc<dyn TeamRepo>>,
 ) -> Result<output::CreateItemOutput, error::CreateItemError> {
     if let Some(ref r) = input.recurrence {
         recurrence::parse(r).map_err(internal)?;
@@ -23,6 +45,9 @@ pub async fn create_item(
     item.has_tasks = input.has_tasks.unwrap_or(true);
     item.parent_item_id = input.parent_item_id.clone();
     item.due_offset_days = input.due_offset_days;
+    item.assigned_to_user_id = resolve_assignee(&teams, &input.user_id, input.assigned_to_user_id)
+        .await
+        .map_err(internal)?;
 
     // Child items of a template automatically become template items
     if let Some(ref parent_id) = input.parent_item_id {
@@ -57,10 +82,19 @@ pub async fn create_item(
 pub async fn update_item(
     input: input::UpdateItemInput,
     server::Extension(repo): server::Extension<Arc<dyn ItemRepo>>,
+    server::Extension(teams): server::Extension<Arc<dyn TeamRepo>>,
 ) -> Result<output::UpdateItemOutput, error::UpdateItemError> {
     if let Some(ref r) = input.recurrence {
         recurrence::parse(r).map_err(internal)?;
     }
+
+    let current = repo
+        .get(&input.user_id, &input.item_id)
+        .await
+        .map_err(|e| match e {
+            RepoError::NotFound => error::UpdateItemError::from(not_found()),
+            _ => error::UpdateItemError::from(internal(format!("{e:?}"))),
+        })?;
 
     let mut item = Item::new(&input.user_id, &input.name);
     item.id = input.item_id.clone();
@@ -75,6 +109,13 @@ pub async fn update_item(
     item.has_tasks = input.has_tasks.unwrap_or(true);
     item.parent_item_id = input.parent_item_id.clone();
     item.due_offset_days = input.due_offset_days;
+    item.assigned_to_user_id = if input.assigned_to_user_id == current.assigned_to_user_id {
+        current.assigned_to_user_id.clone()
+    } else {
+        resolve_assignee(&teams, &input.user_id, input.assigned_to_user_id)
+            .await
+            .map_err(internal)?
+    };
 
     if item.complete {
         if let Some(ref pattern) = item.recurrence {
@@ -92,6 +133,7 @@ pub async fn update_item(
                 next_item.recurrence_basis = item.recurrence_basis.clone();
                 next_item.has_tasks = item.has_tasks;
                 next_item.parent_item_id = item.parent_item_id.clone();
+                next_item.assigned_to_user_id = item.assigned_to_user_id.clone();
                 next_item.has_due_time = if rule.time_override.is_some() {
                     true
                 } else {
@@ -168,6 +210,7 @@ pub async fn get_item(
         has_children: Some(item.has_children),
         is_template: Some(item.is_template),
         due_offset_days: item.due_offset_days,
+        assigned_to_user_id: item.assigned_to_user_id,
     })
 }
 
@@ -201,6 +244,7 @@ pub async fn list_items(
             has_children: Some(i.has_children),
             is_template: Some(i.is_template),
             due_offset_days: i.due_offset_days,
+            assigned_to_user_id: i.assigned_to_user_id,
         })
         .collect();
     Ok(output::ListItemsOutput { items })
@@ -221,6 +265,8 @@ pub async fn list_items_due(
         .map(|di| todo_server_sdk::model::DueItemSummary {
             item_id: di.item.id,
             name: di.item.name,
+            owner_user_id: di.item.user_id,
+            assigned_to_user_id: di.item.assigned_to_user_id,
             parent_name: Some(di.parent_name),
             due_date: di
                 .item
@@ -233,5 +279,31 @@ pub async fn list_items_due(
         })
         .collect();
     Ok(output::ListItemsDueOutput { items })
+}
+
+pub async fn list_assigned_items(
+    input: input::ListAssignedItemsInput,
+    server::Extension(repo): server::Extension<Arc<dyn ItemRepo>>,
+) -> Result<output::ListAssignedItemsOutput, error::ListAssignedItemsError> {
+    let items = repo
+        .list_assigned(&input.user_id)
+        .await
+        .map_err(|e| internal(format!("{e:?}")))?;
+    let items = items
+        .into_iter()
+        .map(|i| todo_server_sdk::model::AssignedItemSummary {
+            item_id: i.id,
+            name: i.name,
+            owner_user_id: i.user_id,
+            due_date: i
+                .deadline
+                .map(|dt| SmithyDateTime::from_secs(dt.timestamp())),
+            complete: Some(i.complete),
+            recurrence: i.recurrence,
+            recurrence_basis: i.recurrence_basis,
+            has_due_time: Some(i.has_due_time),
+        })
+        .collect();
+    Ok(output::ListAssignedItemsOutput { items })
 }
 

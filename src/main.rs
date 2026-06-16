@@ -5,12 +5,17 @@ mod handlers;
 mod storage;
 
 use crate::storage::{
-    ItemRepo, UserRepo,
-    sqlite::{SqliteItemRepo, SqliteUserRepo, create_pool},
+    ItemRepo, TeamRepo, UserRepo,
+    sqlite::{SqliteItemRepo, SqliteTeamRepo, SqliteUserRepo, create_pool},
 };
 use axum::{Extension, Router, body::boxed, middleware, routing::get};
 use handlers::items::{
-    create_item, delete_item, get_item, list_items, list_items_due, update_item,
+    create_item, delete_item, get_item, list_assigned_items, list_items, list_items_due,
+    update_item,
+};
+use handlers::teams::{
+    accept_team_invite, create_team, get_team, invite_team_member, leave_team,
+    list_team_members, list_teams,
 };
 use handlers::templates::{create_template, list_templates};
 use handlers::users::{get_user, list_users, update_user};
@@ -27,7 +32,8 @@ async fn main() {
         .unwrap_or_else(|_| "sqlite://todo.db?mode=rwc".to_string());
     let pool = create_pool(&db_url).await.expect("failed to open database");
     let user_repo = Arc::new(SqliteUserRepo(pool.clone())) as Arc<dyn UserRepo>;
-    let item_repo = Arc::new(SqliteItemRepo(pool)) as Arc<dyn ItemRepo>;
+    let item_repo = Arc::new(SqliteItemRepo(pool.clone())) as Arc<dyn ItemRepo>;
+    let team_repo = Arc::new(SqliteTeamRepo(pool)) as Arc<dyn TeamRepo>;
 
     let config = PeoplesRepublicOfListsConfig::builder().build();
     let smithy = PeoplesRepublicOfLists::builder(config)
@@ -40,13 +46,22 @@ async fn main() {
         .delete_item(delete_item)
         .list_items(list_items)
         .list_items_due(list_items_due)
+        .list_assigned_items(list_assigned_items)
         .create_template(create_template)
         .list_templates(list_templates)
+        .create_team(create_team)
+        .get_team(get_team)
+        .list_teams(list_teams)
+        .list_team_members(list_team_members)
+        .invite_team_member(invite_team_member)
+        .accept_team_invite(accept_team_invite)
+        .leave_team(leave_team)
         .build_unchecked();
 
     let api = ServiceBuilder::new()
         .layer(Extension(user_repo.clone()))
         .layer(Extension(item_repo))
+        .layer(Extension(team_repo))
         .map_response(|res: http::Response<_>| res.map(boxed))
         .service(smithy);
 

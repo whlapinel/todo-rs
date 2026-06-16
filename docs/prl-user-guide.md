@@ -97,9 +97,12 @@ prl items add "Buy groceries"
 prl items add "Submit report" --due 2026-06-20
 prl items add "Water plants" --recurrence "every week"
 prl items add "Chapter notes" --parent <parent-item-id>
+prl items add "Mow the lawn" --assign <teammate-user-id>
 ```
 
-`--due` accepts `YYYY-MM-DD` or a Unix timestamp.
+`--due` accepts `YYYY-MM-DD` or a Unix timestamp. `--assign` requires the
+target user to be a fellow active member of one of your teams (see
+[Teams](#teams)).
 
 ### Mark complete
 
@@ -132,6 +135,26 @@ prl items due --after 2026-06-01 --before 2026-06-30
 
 Output includes the parent item name so you can see context at a glance.
 
+### Assign an item
+
+```sh
+prl items assign <item-id> <teammate-user-id>
+prl items unassign <item-id>
+```
+
+The assignee must be a fellow active member of one of your teams. Assigning
+doesn't change who owns the item — it stays in your list — but it also shows
+up for the assignee (see below).
+
+### List items assigned to you
+
+```sh
+prl items assigned
+```
+
+Shows items other team members have assigned to you, across all owners,
+regardless of due date.
+
 ---
 
 ## Users
@@ -147,6 +170,63 @@ prl users list
 ```sh
 prl users get              # uses configured default user
 prl users get <user-id>    # explicit user
+```
+
+---
+
+## Teams
+
+Teams group users together so they can eventually assign tasks to one
+another. Joining requires mutual agreement: one member invites an existing
+user, and that user must accept before they become an active member. Anyone
+can invite others; you can only remove yourself (decline an invite or leave
+a team you're in) — there's no admin role.
+
+### List your teams
+
+Shows teams you're an active member of, plus any pending invites.
+
+```sh
+prl teams list
+```
+
+### Create a team
+
+You become its first (active) member.
+
+```sh
+prl teams create "Family"
+```
+
+### List a team's members
+
+You must already be a member (pending or active) of the team.
+
+```sh
+prl teams members <team-id>
+```
+
+### Invite an existing user
+
+You must be an active member of the team. The invitee shows up with status
+`PENDING` until they accept.
+
+```sh
+prl teams invite <team-id> <invitee-user-id>
+```
+
+### Accept a pending invite
+
+```sh
+prl teams accept <team-id>
+```
+
+### Leave a team (or decline an invite)
+
+If this removes the last member, the team itself is deleted.
+
+```sh
+prl teams leave <team-id>
 ```
 
 ---

@@ -15,6 +15,7 @@ pub struct Item {
     pub has_children: bool,
     pub is_template: bool,
     pub due_offset_days: Option<i32>,
+    pub assigned_to_user_id: Option<String>,
 }
 
 impl Item {

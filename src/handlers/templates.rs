@@ -58,6 +58,7 @@ pub async fn list_templates(
             has_children: Some(i.has_children),
             is_template: Some(true),
             due_offset_days: i.due_offset_days,
+            assigned_to_user_id: None,
         })
         .collect();
     Ok(output::ListTemplatesOutput { items })

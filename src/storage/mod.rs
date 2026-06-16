@@ -3,11 +3,22 @@ pub mod sqlite;
 use async_trait::async_trait;
 pub mod dynamo;
 
-use crate::domain::{item::Item, user::User};
+use crate::domain::{item::Item, team::Team, user::User};
 
 pub struct DueItem {
     pub item: Item,
     pub parent_name: String,
+}
+
+pub struct TeamWithStatus {
+    pub team: Team,
+    pub status: String,
+    pub invited_by_name: Option<String>,
+}
+
+pub struct TeamMemberInfo {
+    pub user: User,
+    pub status: String,
 }
 
 #[derive(Debug)]
@@ -50,4 +61,28 @@ pub trait ItemRepo: Send + Sync {
         deadline_before: Option<i64>,
     ) -> Result<Vec<DueItem>, RepoError>;
     async fn list_templates(&self, user_id: &str) -> Result<Vec<Item>, RepoError>;
+    async fn list_assigned(&self, user_id: &str) -> Result<Vec<Item>, RepoError>;
+}
+
+#[cfg_attr(test, mockall::automock)]
+#[async_trait]
+pub trait TeamRepo: Send + Sync {
+    async fn create(&self, name: &str, creator_user_id: &str) -> Result<String, RepoError>;
+    async fn get(&self, team_id: &str) -> Result<Team, RepoError>;
+    async fn list_for_user(&self, user_id: &str) -> Result<Vec<TeamWithStatus>, RepoError>;
+    async fn list_members(&self, team_id: &str) -> Result<Vec<TeamMemberInfo>, RepoError>;
+    async fn member_status(
+        &self,
+        team_id: &str,
+        user_id: &str,
+    ) -> Result<Option<String>, RepoError>;
+    async fn invite(
+        &self,
+        team_id: &str,
+        invitee_user_id: &str,
+        invited_by: &str,
+    ) -> Result<(), RepoError>;
+    async fn accept(&self, team_id: &str, user_id: &str) -> Result<(), RepoError>;
+    async fn remove_member(&self, team_id: &str, user_id: &str) -> Result<(), RepoError>;
+    async fn share_active_team(&self, user_a: &str, user_b: &str) -> Result<bool, RepoError>;
 }
