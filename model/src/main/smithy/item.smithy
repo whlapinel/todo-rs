@@ -90,6 +90,10 @@ operation GetItem {
         @required
         $complete
 
+        $recurrence
+
+        $recurrenceBasis
+
         $hasDueTime
 
         $hasTasks

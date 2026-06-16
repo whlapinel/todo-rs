@@ -10,9 +10,9 @@ use crate::storage::{
 };
 use axum::{Extension, Router, body::boxed, middleware, routing::get};
 use handlers::items::{
-    create_item, create_template, delete_item, get_item, list_items, list_items_due,
-    list_templates, update_item,
+    create_item, delete_item, get_item, list_items, list_items_due, update_item,
 };
+use handlers::templates::{create_template, list_templates};
 use handlers::users::{get_user, list_users, update_user};
 use todo_server_sdk::{PeoplesRepublicOfLists, PeoplesRepublicOfListsConfig};
 use tower::ServiceBuilder;

@@ -13,6 +13,7 @@ import {
   ListTemplatesCommand,
   type ItemSummary,
   type DueItemSummary,
+  type GetItemCommandOutput,
 } from "@todo/client";
 
 const client = new PeoplesRepublicOfListsClient({ endpoint: `${window.location.origin}/api` });
@@ -214,12 +215,13 @@ function parseDateTimeInput(dateVal: string, timeVal = ""): { date: Date | undef
 // parentItemId: when set, we're viewing children of that item
 // parentItemName: display name for the heading
 async function renderItems(userId: string, parentItemId?: string, parentItemName?: string) {
-  // If drilling into a parent item, fetch its hasTasks to control UI
+  // If drilling into a parent item, fetch its full details (for the Edit form and to control UI)
   let hasTasks = true;
+  let parentItem: GetItemCommandOutput | undefined;
   if (parentItemId) {
     try {
-      const itemInfo = await client.send(new GetItemCommand({ userId, itemId: parentItemId }));
-      hasTasks = itemInfo.hasTasks ?? true;
+      parentItem = await client.send(new GetItemCommand({ userId, itemId: parentItemId }));
+      hasTasks = parentItem.hasTasks ?? true;
     } catch {
       renderNotFound(`Item "${parentItemId}" does not exist.`);
       return;
@@ -232,7 +234,34 @@ async function renderItems(userId: string, parentItemId?: string, parentItemName
 
   app.innerHTML = `
     <p><a href="${backHref}" id="back-link">${backLabel}</a></p>
-    <h1>${heading}</h1>
+    <div style="display:flex;align-items:center;gap:0.6rem;">
+      <h1 style="margin:0;">${heading}</h1>
+      ${parentItemId ? '<button type="button" id="edit-parent-btn">Edit</button>' : ""}
+    </div>
+    ${parentItemId ? `
+    <form id="edit-parent-form" style="display:none;margin:0.5rem 0 1rem;">
+      <div class="field-grid">
+        <span class="field-label">Name</span>
+        <input id="edit-parent-name" placeholder="Item name" required />
+        <div id="edit-parent-task-fields" style="display:contents;">
+          <span class="field-label">Due</span>
+          <div class="field-row">
+            <input id="edit-parent-due" type="date" title="Due date (optional)" />
+            <input id="edit-parent-time" type="time" title="Due time (optional)" />
+          </div>
+          <span class="field-label">Repeat</span>
+          <div class="field-row">
+            <input id="edit-parent-recurrence" placeholder='e.g. "every 3 days"' />
+            <select id="edit-parent-recurrence-basis" title="Basis for scheduling the next occurrence">
+              <option value="DUE_DATE">Due date</option>
+              <option value="COMPLETION_DATE">Completion date</option>
+            </select>
+          </div>
+        </div>
+      </div>
+      <button type="submit">Save</button>
+      <button type="button" id="cancel-edit-parent-btn">Cancel</button>
+    </form>` : ""}
     <button type="button" id="new-item-btn">+ New Item</button>
     <button type="button" id="checklists-btn">Checklists</button>
     <form id="create-item-form" style="display:none;">
@@ -275,6 +304,7 @@ async function renderItems(userId: string, parentItemId?: string, parentItemName
 
   if (!hasTasks) {
     (document.getElementById("task-fields") as HTMLElement).style.display = "none";
+    document.getElementById("edit-parent-task-fields")?.style.setProperty("display", "none");
   }
 
   document.getElementById("back-link")!.addEventListener("click", (e) => {
@@ -285,6 +315,64 @@ async function renderItems(userId: string, parentItemId?: string, parentItemName
   document.getElementById("checklists-btn")!.addEventListener("click", () => {
     navigate(`/users/${userId}/checklists`);
   });
+
+  if (parentItemId && parentItem) {
+    const editBtn = document.getElementById("edit-parent-btn")!;
+    const editForm = document.getElementById("edit-parent-form") as HTMLFormElement;
+
+    editBtn.addEventListener("click", () => {
+      (document.getElementById("edit-parent-name") as HTMLInputElement).value = parentItem!.name ?? "";
+      (document.getElementById("edit-parent-due") as HTMLInputElement).value =
+        parentItem!.dueDate ? localDateStr(parentItem!.dueDate) : "";
+      (document.getElementById("edit-parent-time") as HTMLInputElement).value =
+        (parentItem!.hasDueTime && parentItem!.dueDate)
+          ? parentItem!.dueDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false }).slice(0, 5)
+          : "";
+      (document.getElementById("edit-parent-recurrence") as HTMLInputElement).value = parentItem!.recurrence ?? "";
+      (document.getElementById("edit-parent-recurrence-basis") as HTMLSelectElement).value =
+        parentItem!.recurrenceBasis ?? "DUE_DATE";
+      editForm.style.display = "";
+      editBtn.style.display = "none";
+    });
+
+    document.getElementById("cancel-edit-parent-btn")!.addEventListener("click", () => {
+      editForm.style.display = "none";
+      editBtn.style.display = "";
+    });
+
+    editForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const name = (document.getElementById("edit-parent-name") as HTMLInputElement).value.trim();
+      if (!name) return;
+      const { date: dueDate, hasDueTime } = hasTasks
+        ? parseDateTimeInput(
+            (document.getElementById("edit-parent-due") as HTMLInputElement).value,
+            (document.getElementById("edit-parent-time") as HTMLInputElement).value,
+          )
+        : { date: parentItem!.dueDate, hasDueTime: parentItem!.hasDueTime ?? false };
+      const recurrence = hasTasks
+        ? ((document.getElementById("edit-parent-recurrence") as HTMLInputElement).value.trim() || undefined)
+        : parentItem!.recurrence;
+      const recurrenceBasis = hasTasks
+        ? ((document.getElementById("edit-parent-recurrence-basis") as HTMLSelectElement).value as "DUE_DATE" | "COMPLETION_DATE")
+        : parentItem!.recurrenceBasis;
+      try {
+        await client.send(new UpdateItemCommand({
+          userId, itemId: parentItemId,
+          name, dueDate, complete: parentItem!.complete ?? false,
+          hasDueTime,
+          recurrence,
+          recurrenceBasis: recurrence ? recurrenceBasis : undefined,
+          hasTasks: parentItem!.hasTasks ?? true,
+          parentItemId: parentItem!.parentItemId ?? undefined,
+          timezoneOffsetMinutes: new Date().getTimezoneOffset(),
+        }));
+        await renderItems(userId, parentItemId, name);
+      } catch (err) {
+        showError(String(err));
+      }
+    });
+  }
 
   const newItemBtn = document.getElementById("new-item-btn")!;
   const createForm = document.getElementById("create-item-form") as HTMLFormElement;
@@ -347,38 +435,15 @@ async function renderItems(userId: string, parentItemId?: string, parentItemName
       const li = document.createElement("li");
       li.className = "row";
 
-      // If item has children, name is clickable to drill down; otherwise editable
-      let nameEl: HTMLElement;
-      if (item.hasChildren) {
-        const link = document.createElement("a");
-        link.href = `/users/${userId}/items/${item.itemId}`;
-        link.textContent = "▸ " + (item.name ?? "");
-        link.style.flex = "1";
-        link.addEventListener("click", (e) => {
-          e.preventDefault();
-          navigate(`/users/${userId}/items/${item.itemId}`);
-        });
-        nameEl = link;
-      } else {
-        nameEl = makeEditableText(item.name ?? "", async (newVal) => {
-          await client.send(new UpdateItemCommand({
-            userId, itemId: item.itemId!,
-            name: newVal, dueDate: item.dueDate, complete: item.complete ?? false,
-            parentItemId: item.parentItemId ?? undefined,
-            hasTasks: item.hasTasks ?? true,
-          }));
-          item.name = newVal;
-        });
-        nameEl.style.flex = "1";
-      }
-
-      // Always provide a way to navigate into the item to add sub-items
-      const drillBtn = document.createElement("button");
-      drillBtn.textContent = "▸";
-      drillBtn.title = "Open sub-items";
-      drillBtn.style.cssText = "opacity:0.5;padding:0 0.3rem;min-width:unset;";
-      drillBtn.addEventListener("click", () => navigate(`/users/${userId}/items/${item.itemId}`));
-      if (item.hasChildren) drillBtn.style.display = "none";
+      // Clicking the name navigates to the item's own screen (its sub-items + an Edit button)
+      const nameEl = document.createElement("a");
+      nameEl.href = `/users/${userId}/items/${item.itemId}`;
+      nameEl.textContent = (item.hasChildren ? "▸ " : "") + (item.name ?? "");
+      nameEl.style.flex = "1";
+      nameEl.addEventListener("click", (e) => {
+        e.preventDefault();
+        navigate(`/users/${userId}/items/${item.itemId}`);
+      });
 
       const saveAsChecklistBtn = document.createElement("button");
       saveAsChecklistBtn.textContent = "Save as checklist";
@@ -438,78 +503,29 @@ async function renderItems(userId: string, parentItemId?: string, parentItemName
 
       li.appendChild(completeBtn);
       li.appendChild(nameEl);
-      li.appendChild(drillBtn);
 
       if (thisHasTasks) {
-        const isoDate = item.dueDate ? localDateStr(item.dueDate) : "";
-        const dateSpan = makeEditableText(
-          item.dueDate ? item.dueDate.toLocaleDateString() : "no due date",
-          async (newVal) => {
-            const { date: d } = parseDateTimeInput(newVal);
-            await client.send(new UpdateItemCommand({
-              userId, itemId: item.itemId!,
-              name: item.name!, dueDate: d, complete: item.complete ?? false,
-              hasDueTime: newVal ? (item.hasDueTime ?? false) : false,
-              hasTasks: item.hasTasks ?? true,
-              parentItemId: item.parentItemId ?? undefined,
-            }));
-            item.dueDate = d;
-            if (!newVal) item.hasDueTime = false;
-          },
-          { inputType: "date", inputValue: isoDate }
-        );
+        const dateSpan = document.createElement("span");
+        dateSpan.textContent = item.dueDate ? item.dueDate.toLocaleDateString() : "no due date";
         dateSpan.style.color = "#666";
         dateSpan.style.fontSize = "0.85rem";
-
-        const isoTime = (item.hasDueTime && item.dueDate)
-          ? item.dueDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false }).slice(0, 5)
-          : "";
-        const timeDisplayVal = (item.hasDueTime && item.dueDate)
-          ? item.dueDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-          : "no time";
-        const timeSpan = makeEditableText(
-          timeDisplayVal,
-          async (newVal) => {
-            const dateStr = item.dueDate ? localDateStr(item.dueDate) : "";
-            const { date: d, hasDueTime: hdt } = parseDateTimeInput(dateStr, newVal);
-            await client.send(new UpdateItemCommand({
-              userId, itemId: item.itemId!,
-              name: item.name!, dueDate: d ?? item.dueDate, complete: item.complete ?? false,
-              hasDueTime: hdt,
-              hasTasks: item.hasTasks ?? true,
-              parentItemId: item.parentItemId ?? undefined,
-            }));
-            item.dueDate = d ?? item.dueDate;
-            item.hasDueTime = hdt;
-          },
-          { inputType: "time", inputValue: isoTime }
-        );
-        timeSpan.style.color = "#666";
-        timeSpan.style.fontSize = "0.85rem";
-        timeSpan.title = "Click to set due time";
-
-        const basisLabel = item.recurrenceBasis === "COMPLETION_DATE" ? "completion" : "due date";
-        const recurrenceSpan = makeEditableText(
-          item.recurrence ? `↻ ${item.recurrence} (${basisLabel})` : "↻ add recurrence",
-          async (newVal) => {
-            await client.send(new UpdateItemCommand({
-              userId, itemId: item.itemId!,
-              name: item.name!, dueDate: item.dueDate, complete: item.complete ?? false,
-              recurrence: newVal || undefined,
-              recurrenceBasis: item.recurrenceBasis ?? "DUE_DATE",
-              hasTasks: item.hasTasks ?? true,
-              parentItemId: item.parentItemId ?? undefined,
-            }));
-            item.recurrence = newVal || undefined;
-          },
-          { inputValue: item.recurrence ?? "" }
-        );
-        recurrenceSpan.className = "recurrence-tag";
-        recurrenceSpan.title = "Click to edit recurrence";
-
         li.appendChild(dateSpan);
-        li.appendChild(timeSpan);
-        li.appendChild(recurrenceSpan);
+
+        if (item.hasDueTime && item.dueDate) {
+          const timeSpan = document.createElement("span");
+          timeSpan.textContent = item.dueDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+          timeSpan.style.color = "#666";
+          timeSpan.style.fontSize = "0.85rem";
+          li.appendChild(timeSpan);
+        }
+
+        if (item.recurrence) {
+          const basisLabel = item.recurrenceBasis === "COMPLETION_DATE" ? "completion" : "due date";
+          const recurrenceSpan = document.createElement("span");
+          recurrenceSpan.textContent = `↻ ${item.recurrence} (${basisLabel})`;
+          recurrenceSpan.className = "recurrence-tag";
+          li.appendChild(recurrenceSpan);
+        }
       }
 
       li.appendChild(saveAsChecklistBtn);
