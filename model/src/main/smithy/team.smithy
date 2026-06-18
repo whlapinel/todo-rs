@@ -2,6 +2,228 @@ $version: "2"
 
 namespace common
 
+resource TeamItem {
+    identifiers: {
+        teamId: String
+        itemId: String
+    }
+    properties: {
+        name: String
+        dueDate: Timestamp
+        complete: Boolean
+        recurrence: String
+        recurrenceBasis: String
+        hasDueTime: Boolean
+        hasTasks: Boolean
+        parentItemId: String
+        hasChildren: Boolean
+        dueOffsetDays: Integer
+        assignedToUserId: String
+    }
+    read: GetTeamItem
+    list: ListTeamItems
+    create: CreateTeamItem
+    update: UpdateTeamItem
+    delete: DeleteTeamItem
+}
+
+@http(method: "POST", uri: "/teams/{teamId}/items")
+operation CreateTeamItem {
+    input := for TeamItem {
+        @required
+        @httpLabel
+        $teamId
+
+        @required
+        $name
+
+        $dueDate
+
+        $complete
+
+        $recurrence
+
+        $recurrenceBasis
+
+        $hasDueTime
+
+        $hasTasks
+
+        $parentItemId
+
+        $dueOffsetDays
+
+        $assignedToUserId
+
+        @notProperty
+        timezoneOffsetMinutes: Integer
+    }
+
+    output := for TeamItem {
+        @required
+        $itemId
+    }
+
+    errors: [
+        PeoplesRepublicOfListsError
+    ]
+}
+
+@readonly
+@http(method: "GET", uri: "/teams/{teamId}/items/{itemId}")
+operation GetTeamItem {
+    input := for TeamItem {
+        @required
+        @httpLabel
+        $teamId
+
+        @required
+        @httpLabel
+        $itemId
+    }
+
+    output := for TeamItem {
+        @required
+        $name
+
+        @required
+        $dueDate
+
+        @required
+        $complete
+
+        $recurrence
+
+        $recurrenceBasis
+
+        $hasDueTime
+
+        $hasTasks
+
+        $parentItemId
+
+        $hasChildren
+
+        $dueOffsetDays
+
+        $assignedToUserId
+    }
+
+    errors: [
+        PeoplesRepublicOfListsError
+    ]
+}
+
+@idempotent
+@http(method: "PUT", uri: "/teams/{teamId}/items/{itemId}")
+operation UpdateTeamItem {
+    input := for TeamItem {
+        @required
+        @httpLabel
+        $teamId
+
+        @required
+        @httpLabel
+        $itemId
+
+        @required
+        $name
+
+        $dueDate
+
+        @required
+        $complete
+
+        $recurrence
+
+        $recurrenceBasis
+
+        $hasDueTime
+
+        $hasTasks
+
+        $parentItemId
+
+        $dueOffsetDays
+
+        $assignedToUserId
+
+        @notProperty
+        timezoneOffsetMinutes: Integer
+    }
+
+    output := {}
+
+    errors: [
+        PeoplesRepublicOfListsError
+    ]
+}
+
+@idempotent
+@http(method: "DELETE", uri: "/teams/{teamId}/items/{itemId}")
+operation DeleteTeamItem {
+    input := for TeamItem {
+        @required
+        @httpLabel
+        $teamId
+
+        @required
+        @httpLabel
+        $itemId
+    }
+
+    output := {}
+
+    errors: [
+        PeoplesRepublicOfListsError
+    ]
+}
+
+list TeamItems {
+    member: TeamItemSummary
+}
+
+structure TeamItemSummary for TeamItem {
+    $itemId
+    $name
+    $dueDate
+    $complete
+    $recurrence
+    $recurrenceBasis
+    $hasDueTime
+    $hasTasks
+    $parentItemId
+    $hasChildren
+    $dueOffsetDays
+    $assignedToUserId
+}
+
+@input
+structure ListTeamItemsInput {
+    @required
+    @httpLabel
+    teamId: String
+
+    @httpQuery("parentItemId")
+    parentItemId: String
+}
+
+@output
+structure ListTeamItemsOutput {
+    @required
+    items: TeamItems
+}
+
+@readonly
+@http(method: "GET", uri: "/teams/{teamId}/items")
+operation ListTeamItems {
+    input: ListTeamItemsInput
+    output: ListTeamItemsOutput
+    errors: [
+        PeoplesRepublicOfListsError
+    ]
+}
+
 structure TeamMemberSummary {
     @required
     userId: String

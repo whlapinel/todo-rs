@@ -10,4 +10,11 @@ service PeoplesRepublicOfLists {
     resources: [
         User
     ]
+    operations: [
+        CreateTeamItem
+        GetTeamItem
+        UpdateTeamItem
+        DeleteTeamItem
+        ListTeamItems
+    ]
 }

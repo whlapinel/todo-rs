@@ -13,6 +13,9 @@ use handlers::items::{
     create_item, delete_item, get_item, list_assigned_items, list_items, list_items_due,
     update_item,
 };
+use handlers::team_items::{
+    create_team_item, delete_team_item, get_team_item, list_team_items, update_team_item,
+};
 use handlers::teams::{
     accept_team_invite, create_team, get_team, invite_team_member, leave_team,
     list_team_members, list_teams,
@@ -56,6 +59,11 @@ async fn main() {
         .invite_team_member(invite_team_member)
         .accept_team_invite(accept_team_invite)
         .leave_team(leave_team)
+        .create_team_item(create_team_item)
+        .get_team_item(get_team_item)
+        .update_team_item(update_team_item)
+        .delete_team_item(delete_team_item)
+        .list_team_items(list_team_items)
         .build_unchecked();
 
     let api = ServiceBuilder::new()
@@ -76,6 +84,8 @@ async fn main() {
             let api_router = Router::new()
                 .route_service("/users", api.clone())
                 .route_service("/users/*path", api.clone())
+                .route_service("/teams", api.clone())
+                .route_service("/teams/*path", api.clone())
                 .layer(middleware::from_fn(auth::caddy_header_middleware));
             Router::new()
                 .nest("/api", api_router)
@@ -111,6 +121,8 @@ async fn main() {
             let api_router = Router::new()
                 .route_service("/users", api.clone())
                 .route_service("/users/*path", api.clone())
+                .route_service("/teams", api.clone())
+                .route_service("/teams/*path", api.clone())
                 .layer(middleware::from_fn(auth::jwt_auth_middleware));
 
             Router::new()

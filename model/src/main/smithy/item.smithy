@@ -54,8 +54,6 @@ operation CreateItem {
 
         $dueOffsetDays
 
-        $assignedToUserId
-
         @notProperty
         timezoneOffsetMinutes: Integer
     }
@@ -148,8 +146,6 @@ operation UpdateItem {
         $parentItemId
 
         $dueOffsetDays
-
-        $assignedToUserId
 
         @notProperty
         timezoneOffsetMinutes: Integer

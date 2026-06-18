@@ -8,7 +8,7 @@ pub async fn create_template(
     input: input::CreateTemplateInput,
     server::Extension(repo): server::Extension<Arc<dyn ItemRepo>>,
 ) -> Result<output::CreateTemplateOutput, error::CreateTemplateError> {
-    let mut item = Item::new(&input.user_id, &input.name);
+    let mut item = Item::new_user_item(&input.user_id, &input.name);
     item.is_template = true;
 
     if let Some(source_id) = input.source_item_id {

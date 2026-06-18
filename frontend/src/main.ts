@@ -19,10 +19,17 @@ import {
   InviteTeamMemberCommand,
   AcceptTeamInviteCommand,
   LeaveTeamCommand,
+  CreateTeamItemCommand,
+  GetTeamItemCommand,
+  UpdateTeamItemCommand,
+  DeleteTeamItemCommand,
+  ListTeamItemsCommand,
   type ItemSummary,
   type DueItemSummary,
   type GetItemCommandOutput,
   type TeamSummary,
+  type TeamItemSummary,
+  type GetTeamItemCommandOutput,
 } from "@todo/client";
 
 const client = new PeoplesRepublicOfListsClient({ endpoint: `${window.location.origin}/api` });
@@ -425,7 +432,6 @@ async function renderItems(userId: string, parentItemId?: string, parentItemName
           recurrenceBasis: recurrence ? recurrenceBasis : undefined,
           hasTasks: parentItem!.hasTasks ?? true,
           parentItemId: parentItem!.parentItemId ?? undefined,
-          assignedToUserId,
           timezoneOffsetMinutes: new Date().getTimezoneOffset(),
         }));
         await renderItems(userId, parentItemId, name);
@@ -553,7 +559,6 @@ async function renderItems(userId: string, parentItemId?: string, parentItemName
           recurrence: item.recurrence ?? undefined,
           recurrenceBasis: item.recurrenceBasis ?? undefined,
           parentItemId: item.parentItemId ?? undefined,
-          assignedToUserId: item.assignedToUserId ?? undefined,
           timezoneOffsetMinutes: new Date().getTimezoneOffset(),
         }));
         if (markingComplete) {
@@ -628,7 +633,6 @@ async function renderItems(userId: string, parentItemId?: string, parentItemName
           recurrenceBasis: recurrence ? recurrenceBasis : undefined,
           hasTasks: itemHasTasks,
           parentItemId: parentItemId ?? undefined,
-          assignedToUserId,
           timezoneOffsetMinutes: new Date().getTimezoneOffset(),
         }));
       }
@@ -749,7 +753,6 @@ async function renderDashboard(userId: string) {
             hasDueTime: item.hasDueTime ?? false,
             recurrence: item.recurrence ?? undefined,
             recurrenceBasis: item.recurrenceBasis ?? undefined,
-            assignedToUserId: item.assignedToUserId ?? undefined,
             timezoneOffsetMinutes: new Date().getTimezoneOffset(),
           }));
           if (markingComplete) {
@@ -1209,6 +1212,9 @@ async function renderTeamDetail(userId: string, teamId: string, teamName: string
   app.innerHTML = `
     <p><a href="/users/${userId}/teams" id="back-teams">← Teams</a></p>
     <h1>${teamName}</h1>
+    <div style="margin-bottom:1rem;">
+      <a href="/teams/${teamId}" id="tasks-link" style="margin-right:1rem;">📋 Tasks</a>
+    </div>
     <button type="button" id="invite-btn">+ Invite</button>
     <form id="invite-form" style="display:none;margin-bottom:1rem;">
       <select id="invite-user-select" style="margin-right:0.5rem;"></select>
@@ -1221,6 +1227,11 @@ async function renderTeamDetail(userId: string, teamId: string, teamName: string
   document.getElementById("back-teams")!.addEventListener("click", (e) => {
     e.preventDefault();
     navigate(`/users/${userId}/teams`);
+  });
+
+  document.getElementById("tasks-link")!.addEventListener("click", (e) => {
+    e.preventDefault();
+    navigate(`/teams/${teamId}`);
   });
 
   const inviteBtn = document.getElementById("invite-btn")!;
@@ -1345,7 +1356,6 @@ async function renderAssignedItems(userId: string) {
           hasDueTime: item.hasDueTime ?? false,
           recurrence: item.recurrence ?? undefined,
           recurrenceBasis: item.recurrenceBasis ?? undefined,
-          assignedToUserId: userId,
           timezoneOffsetMinutes: new Date().getTimezoneOffset(),
         }));
         await renderAssignedItems(userId);
@@ -1387,12 +1397,256 @@ async function renderAssignedItems(userId: string) {
   }
 }
 
+async function renderTeamItems(teamId: string, parentItemId?: string, parentName?: string) {
+  const teamName = parentName ?? teamId;
+  const backHref = parentItemId ? `/teams/${teamId}` : `/users/${currentAuth?.userId}/teams`;
+  const backLabel = parentItemId ? `← ${teamName}` : `← Teams`;
+
+  app.innerHTML = `
+    <p><a href="${backHref}" id="back-link">${backLabel}</a></p>
+    <h1>${parentName ?? "Team Tasks"}</h1>
+    <button type="button" id="new-item-btn">+ New task</button>
+    <form id="create-form" style="display:none;margin-bottom:1rem;">
+      <input id="item-name" placeholder="Task name" required style="margin-right:0.5rem;" />
+      <button type="submit">Add</button>
+      <button type="button" id="cancel-btn">Cancel</button>
+    </form>
+    <ul id="items-list"></ul>`;
+
+  document.getElementById("back-link")!.addEventListener("click", (e) => {
+    e.preventDefault();
+    if (parentItemId) navigate(`/teams/${teamId}`);
+    else if (currentAuth) navigate(`/users/${currentAuth.userId}/teams`);
+  });
+
+  const newBtn = document.getElementById("new-item-btn")!;
+  const form = document.getElementById("create-form") as HTMLFormElement;
+
+  newBtn.addEventListener("click", () => {
+    form.style.display = "";
+    newBtn.style.display = "none";
+    (document.getElementById("item-name") as HTMLInputElement).focus();
+  });
+
+  document.getElementById("cancel-btn")!.addEventListener("click", () => {
+    form.style.display = "none";
+    newBtn.style.display = "";
+  });
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const name = (document.getElementById("item-name") as HTMLInputElement).value.trim();
+    if (!name) return;
+    try {
+      await client.send(new CreateTeamItemCommand({ teamId, name, parentItemId }));
+      (document.getElementById("item-name") as HTMLInputElement).value = "";
+      form.style.display = "none";
+      newBtn.style.display = "";
+      await load();
+    } catch (err) {
+      showError(String(err));
+    }
+  });
+
+  const ul = document.getElementById("items-list")!;
+
+  async function load() {
+    const res = await client.send(new ListTeamItemsCommand({ teamId, parentItemId }));
+    const items: TeamItemSummary[] = res.items ?? [];
+    ul.innerHTML = "";
+    if (!items.length) {
+      ul.innerHTML = `<li style="color:#666;">No tasks yet.</li>`;
+      return;
+    }
+    for (const item of items) {
+      const li = document.createElement("li");
+      li.className = "row";
+
+      const completeBtn = document.createElement("button");
+      completeBtn.textContent = item.complete ? "☑" : "☐";
+      completeBtn.title = item.complete ? "Mark incomplete" : "Mark complete";
+      completeBtn.style.color = item.complete ? "#2a9d2a" : "#a8d8f0";
+      completeBtn.addEventListener("click", async () => {
+        try {
+          await client.send(new UpdateTeamItemCommand({
+            teamId, itemId: item.itemId!,
+            name: item.name!, complete: !item.complete,
+            hasDueTime: item.hasDueTime ?? false,
+            dueDate: item.dueDate,
+            recurrence: item.recurrence ?? undefined,
+            recurrenceBasis: item.recurrenceBasis ?? undefined,
+            timezoneOffsetMinutes: new Date().getTimezoneOffset(),
+          }));
+          await load();
+        } catch (err) {
+          showError(String(err));
+        }
+      });
+
+      const nameLink = document.createElement("a");
+      nameLink.href = `/teams/${teamId}/items/${item.itemId}`;
+      nameLink.textContent = item.name ?? "";
+      nameLink.style.flex = "1";
+      nameLink.addEventListener("click", (e) => {
+        e.preventDefault();
+        navigate(`/teams/${teamId}/items/${item.itemId}`);
+      });
+      if (item.complete) nameLink.style.textDecoration = "line-through";
+
+      const deleteBtn = document.createElement("button");
+      deleteBtn.textContent = "✕";
+      deleteBtn.style.color = "#c00";
+      deleteBtn.addEventListener("click", async () => {
+        if (!confirm(`Delete "${item.name}"?`)) return;
+        try {
+          await client.send(new DeleteTeamItemCommand({ teamId, itemId: item.itemId! }));
+          await load();
+        } catch (err) {
+          showError(String(err));
+        }
+      });
+
+      if (item.assignedToUserId) {
+        const badge = document.createElement("span");
+        badge.style.cssText = "font-size:0.78rem;color:#5aace0;";
+        badge.textContent = `→ ${item.assignedToUserId}`;
+        li.appendChild(completeBtn);
+        li.appendChild(nameLink);
+        li.appendChild(badge);
+        li.appendChild(deleteBtn);
+      } else {
+        li.appendChild(completeBtn);
+        li.appendChild(nameLink);
+        li.appendChild(deleteBtn);
+      }
+
+      ul.appendChild(li);
+    }
+  }
+
+  await load();
+}
+
+async function renderTeamItemDetail(teamId: string, itemId: string) {
+  let item: GetTeamItemCommandOutput;
+  try {
+    item = await client.send(new GetTeamItemCommand({ teamId, itemId }));
+  } catch {
+    renderNotFound("Team item not found.");
+    return;
+  }
+
+  app.innerHTML = `
+    <p><a href="/teams/${teamId}" id="back-team">← Team Tasks</a></p>
+    <h1 id="item-title">${item.name ?? ""}</h1>
+    <ul id="subitems"></ul>
+    <button type="button" id="new-sub-btn">+ Add subtask</button>
+    <form id="sub-form" style="display:none;margin-top:0.5rem;">
+      <input id="sub-name" placeholder="Subtask name" required style="margin-right:0.5rem;" />
+      <button type="submit">Add</button>
+      <button type="button" id="cancel-sub-btn">Cancel</button>
+    </form>`;
+
+  document.getElementById("back-team")!.addEventListener("click", (e) => {
+    e.preventDefault();
+    navigate(`/teams/${teamId}`);
+  });
+
+  const newSubBtn = document.getElementById("new-sub-btn")!;
+  const subForm = document.getElementById("sub-form") as HTMLFormElement;
+  const ul = document.getElementById("subitems")!;
+
+  newSubBtn.addEventListener("click", () => {
+    subForm.style.display = "";
+    newSubBtn.style.display = "none";
+    (document.getElementById("sub-name") as HTMLInputElement).focus();
+  });
+
+  document.getElementById("cancel-sub-btn")!.addEventListener("click", () => {
+    subForm.style.display = "none";
+    newSubBtn.style.display = "";
+  });
+
+  subForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const name = (document.getElementById("sub-name") as HTMLInputElement).value.trim();
+    if (!name) return;
+    try {
+      await client.send(new CreateTeamItemCommand({ teamId, name, parentItemId: itemId }));
+      (document.getElementById("sub-name") as HTMLInputElement).value = "";
+      subForm.style.display = "none";
+      newSubBtn.style.display = "";
+      await loadSubs();
+    } catch (err) {
+      showError(String(err));
+    }
+  });
+
+  async function loadSubs() {
+    const res = await client.send(new ListTeamItemsCommand({ teamId, parentItemId: itemId }));
+    const subs: TeamItemSummary[] = res.items ?? [];
+    ul.innerHTML = "";
+    if (!subs.length) {
+      ul.innerHTML = `<li style="color:#666;">No subtasks.</li>`;
+      return;
+    }
+    for (const sub of subs) {
+      const li = document.createElement("li");
+      li.className = "row";
+
+      const completeBtn = document.createElement("button");
+      completeBtn.textContent = sub.complete ? "☑" : "☐";
+      completeBtn.style.color = sub.complete ? "#2a9d2a" : "#a8d8f0";
+      completeBtn.addEventListener("click", async () => {
+        try {
+          await client.send(new UpdateTeamItemCommand({
+            teamId, itemId: sub.itemId!,
+            name: sub.name!, complete: !sub.complete,
+            hasDueTime: sub.hasDueTime ?? false,
+            timezoneOffsetMinutes: new Date().getTimezoneOffset(),
+          }));
+          await loadSubs();
+        } catch (err) {
+          showError(String(err));
+        }
+      });
+
+      const nameSpan = document.createElement("span");
+      nameSpan.textContent = sub.name ?? "";
+      nameSpan.style.flex = "1";
+      if (sub.complete) nameSpan.style.textDecoration = "line-through";
+
+      li.appendChild(completeBtn);
+      li.appendChild(nameSpan);
+      ul.appendChild(li);
+    }
+  }
+
+  await loadSubs();
+}
+
 // ── Router ───────────────────────────────────────────────────────────────────
 
 let currentAuth: AuthMe | null = null;
 
 async function route() {
   const path = window.location.pathname;
+
+  const teamItemDetailMatch = path.match(/^\/teams\/([^/]+)\/items\/([^/]+)$/);
+  if (teamItemDetailMatch) {
+    const [, tid, iid] = teamItemDetailMatch;
+    await renderTeamItemDetail(tid, iid);
+    if (currentAuth) addLogoutButton(`${currentAuth.firstName} ${currentAuth.lastName}`);
+    return;
+  }
+
+  const teamItemsMatch = path.match(/^\/teams\/([^/]+)$/);
+  if (teamItemsMatch) {
+    const tid = teamItemsMatch[1];
+    await renderTeamItems(tid);
+    if (currentAuth) addLogoutButton(`${currentAuth.firstName} ${currentAuth.lastName}`);
+    return;
+  }
 
   const checklistDetailMatch = path.match(/^\/users\/([^/]+)\/checklists\/([^/]+)$/);
   if (checklistDetailMatch) {

@@ -49,10 +49,17 @@ pub trait UserRepo: Send + Sync {
 #[async_trait]
 pub trait ItemRepo: Send + Sync {
     async fn get(&self, user_id: &str, item_id: &str) -> Result<Item, RepoError>;
+    async fn get_team_item(&self, team_id: &str, item_id: &str) -> Result<Item, RepoError>;
     async fn list(&self, user_id: &str) -> Result<Vec<Item>, RepoError>;
+    async fn list_team_items(
+        &self,
+        team_id: &str,
+        parent_item_id: Option<String>,
+    ) -> Result<Vec<Item>, RepoError>;
     async fn list_children(&self, parent_item_id: &str) -> Result<Vec<Item>, RepoError>;
     async fn create(&self, item: &Item) -> Result<String, RepoError>;
     async fn update(&self, item: &Item) -> Result<(), RepoError>;
+    async fn update_team_item(&self, item: &Item) -> Result<(), RepoError>;
     async fn delete(&self, item_id: &str) -> Result<(), RepoError>;
     async fn list_due(
         &self,

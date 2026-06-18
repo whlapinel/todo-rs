@@ -1,39 +1,17 @@
 use super::{internal, not_found};
 use crate::domain::{item::Item, recurrence};
-use crate::storage::{ItemRepo, RepoError, TeamRepo};
+use crate::storage::{ItemRepo, RepoError};
 use std::sync::Arc;
 use todo_server_sdk::{error, input, output, server, types::DateTime as SmithyDateTime};
-
-async fn resolve_assignee(
-    teams: &Arc<dyn TeamRepo>,
-    owner_id: &str,
-    assignee_id: Option<String>,
-) -> Result<Option<String>, String> {
-    let Some(assignee_id) = assignee_id else {
-        return Ok(None);
-    };
-    if assignee_id == owner_id {
-        return Ok(None);
-    }
-    let shared = teams
-        .share_active_team(owner_id, &assignee_id)
-        .await
-        .map_err(|e| format!("{e:?}"))?;
-    if !shared {
-        return Err("you can only assign items to a fellow active team member".to_string());
-    }
-    Ok(Some(assignee_id))
-}
 
 pub async fn create_item(
     input: input::CreateItemInput,
     server::Extension(repo): server::Extension<Arc<dyn ItemRepo>>,
-    server::Extension(teams): server::Extension<Arc<dyn TeamRepo>>,
 ) -> Result<output::CreateItemOutput, error::CreateItemError> {
     if let Some(ref r) = input.recurrence {
         recurrence::parse(r).map_err(internal)?;
     }
-    let mut item = Item::new(&input.user_id, &input.name);
+    let mut item = Item::new_user_item(&input.user_id, &input.name);
     if let Some(dt) = input.due_date {
         item.deadline = chrono::DateTime::from_timestamp(dt.secs(), dt.subsec_nanos())
             .map(|d| d.with_timezone(&chrono::Utc));
@@ -45,9 +23,6 @@ pub async fn create_item(
     item.has_tasks = input.has_tasks.unwrap_or(true);
     item.parent_item_id = input.parent_item_id.clone();
     item.due_offset_days = input.due_offset_days;
-    item.assigned_to_user_id = resolve_assignee(&teams, &input.user_id, input.assigned_to_user_id)
-        .await
-        .map_err(internal)?;
 
     // Child items of a template automatically become template items
     if let Some(ref parent_id) = input.parent_item_id {
@@ -82,7 +57,6 @@ pub async fn create_item(
 pub async fn update_item(
     input: input::UpdateItemInput,
     server::Extension(repo): server::Extension<Arc<dyn ItemRepo>>,
-    server::Extension(teams): server::Extension<Arc<dyn TeamRepo>>,
 ) -> Result<output::UpdateItemOutput, error::UpdateItemError> {
     if let Some(ref r) = input.recurrence {
         recurrence::parse(r).map_err(internal)?;
@@ -96,7 +70,7 @@ pub async fn update_item(
             _ => error::UpdateItemError::from(internal(format!("{e:?}"))),
         })?;
 
-    let mut item = Item::new(&input.user_id, &input.name);
+    let mut item = Item::new_user_item(&input.user_id, &input.name);
     item.id = input.item_id.clone();
     item.complete = input.complete;
     if let Some(dt) = input.due_date {
@@ -109,13 +83,7 @@ pub async fn update_item(
     item.has_tasks = input.has_tasks.unwrap_or(true);
     item.parent_item_id = input.parent_item_id.clone();
     item.due_offset_days = input.due_offset_days;
-    item.assigned_to_user_id = if input.assigned_to_user_id == current.assigned_to_user_id {
-        current.assigned_to_user_id.clone()
-    } else {
-        resolve_assignee(&teams, &input.user_id, input.assigned_to_user_id)
-            .await
-            .map_err(internal)?
-    };
+    item.assigned_to_user_id = current.assigned_to_user_id.clone();
 
     if item.complete {
         if let Some(ref pattern) = item.recurrence {
@@ -127,13 +95,13 @@ pub async fn update_item(
                 };
                 let tz_offset = input.timezone_offset_minutes.unwrap_or(0);
                 let next_deadline = recurrence::next_date(&rule, reference, tz_offset);
-                let mut next_item = Item::new(&item.user_id, &item.name);
+                let user_id = item.user_id.clone().unwrap_or_default();
+                let mut next_item = Item::new_user_item(&user_id, &item.name);
                 next_item.deadline = Some(next_deadline);
                 next_item.recurrence = item.recurrence.clone();
                 next_item.recurrence_basis = item.recurrence_basis.clone();
                 next_item.has_tasks = item.has_tasks;
                 next_item.parent_item_id = item.parent_item_id.clone();
-                next_item.assigned_to_user_id = item.assigned_to_user_id.clone();
                 next_item.has_due_time = if rule.time_override.is_some() {
                     true
                 } else {
@@ -161,7 +129,6 @@ pub async fn delete_item(
     input: input::DeleteItemInput,
     server::Extension(repo): server::Extension<Arc<dyn ItemRepo>>,
 ) -> Result<output::DeleteItemOutput, error::DeleteItemError> {
-    // BFS cascade-delete all descendants before deleting this item
     let mut queue = vec![input.item_id.clone()];
     while let Some(parent_id) = queue.first().cloned() {
         queue.remove(0);
@@ -265,7 +232,7 @@ pub async fn list_items_due(
         .map(|di| todo_server_sdk::model::DueItemSummary {
             item_id: di.item.id,
             name: di.item.name,
-            owner_user_id: di.item.user_id,
+            owner_user_id: di.item.user_id.or(di.item.team_id).unwrap_or_default(),
             assigned_to_user_id: di.item.assigned_to_user_id,
             parent_name: Some(di.parent_name),
             due_date: di
@@ -294,7 +261,7 @@ pub async fn list_assigned_items(
         .map(|i| todo_server_sdk::model::AssignedItemSummary {
             item_id: i.id,
             name: i.name,
-            owner_user_id: i.user_id,
+            owner_user_id: i.user_id.or(i.team_id).unwrap_or_default(),
             due_date: i
                 .deadline
                 .map(|dt| SmithyDateTime::from_secs(dt.timestamp())),
@@ -306,4 +273,3 @@ pub async fn list_assigned_items(
         .collect();
     Ok(output::ListAssignedItemsOutput { items })
 }
-

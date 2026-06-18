@@ -1,4 +1,5 @@
 pub mod items;
+pub mod team_items;
 pub mod users;
 pub mod templates;
 pub mod teams;

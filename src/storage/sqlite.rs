@@ -40,7 +40,8 @@ pub async fn create_pool(url: &str) -> Result<SqlitePool, sqlx::Error> {
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS items (
             id TEXT PRIMARY KEY,
-            user_id TEXT NOT NULL,
+            user_id TEXT,
+            team_id TEXT,
             parent_item_id TEXT,
             name TEXT NOT NULL,
             deadline INTEGER,
@@ -63,6 +64,9 @@ pub async fn create_pool(url: &str) -> Result<SqlitePool, sqlx::Error> {
         .execute(&pool)
         .await;
     let _ = sqlx::query("ALTER TABLE items ADD COLUMN assigned_to_user_id TEXT")
+        .execute(&pool)
+        .await;
+    let _ = sqlx::query("ALTER TABLE items ADD COLUMN team_id TEXT")
         .execute(&pool)
         .await;
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_items_user_id ON items (user_id)")
@@ -240,7 +244,7 @@ fn row_to_user(row: &sqlx::sqlite::SqliteRow) -> User {
 }
 
 const ITEM_SELECT: &str =
-    "SELECT id, user_id, parent_item_id, name, deadline, complete, recurrence, recurrence_basis, has_due_time, has_tasks,
+    "SELECT id, user_id, team_id, parent_item_id, name, deadline, complete, recurrence, recurrence_basis, has_due_time, has_tasks,
             is_template, due_offset_days, assigned_to_user_id,
             EXISTS(SELECT 1 FROM items c WHERE c.parent_item_id = items.id) AS has_children";
 
@@ -284,6 +288,47 @@ impl ItemRepo for SqliteItemRepo {
             .map(|rows| rows.iter().map(row_to_item).collect())
     }
 
+    async fn get_team_item(&self, team_id: &str, item_id: &str) -> Result<Item, RepoError> {
+        let q = format!("{ITEM_SELECT} FROM items WHERE id = ? AND team_id = ?");
+        sqlx::query(&q)
+            .bind(item_id)
+            .bind(team_id)
+            .fetch_optional(&self.0)
+            .await
+            .map_err(db_err)?
+            .map(|row| row_to_item(&row))
+            .ok_or_else(not_found)
+    }
+
+    async fn list_team_items(
+        &self,
+        team_id: &str,
+        parent_item_id: Option<String>,
+    ) -> Result<Vec<Item>, RepoError> {
+        let q = if parent_item_id.is_some() {
+            format!(
+                "{ITEM_SELECT} FROM items WHERE team_id = ? AND parent_item_id = ? \
+                 ORDER BY COALESCE(deadline, 9999999999999) ASC"
+            )
+        } else {
+            format!(
+                "{ITEM_SELECT} FROM items WHERE team_id = ? AND parent_item_id IS NULL \
+                 ORDER BY COALESCE(deadline, 9999999999999) ASC"
+            )
+        };
+        let query = sqlx::query(&q).bind(team_id);
+        let query = if let Some(pid) = parent_item_id {
+            query.bind(pid)
+        } else {
+            query
+        };
+        query
+            .fetch_all(&self.0)
+            .await
+            .map_err(db_err)
+            .map(|rows| rows.iter().map(row_to_item).collect())
+    }
+
     async fn create(&self, item: &Item) -> Result<String, RepoError> {
         let id = uuid::Uuid::new_v4().to_string();
         let deadline: Option<i64> = item.deadline.map(|dt| dt.timestamp());
@@ -292,11 +337,12 @@ impl ItemRepo for SqliteItemRepo {
         let has_tasks: i64 = item.has_tasks as i64;
         let is_template: i64 = item.is_template as i64;
         sqlx::query(
-            "INSERT INTO items (id, user_id, parent_item_id, name, deadline, complete, recurrence, recurrence_basis, has_due_time, has_tasks, is_template, due_offset_days, assigned_to_user_id)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO items (id, user_id, team_id, parent_item_id, name, deadline, complete, recurrence, recurrence_basis, has_due_time, has_tasks, is_template, due_offset_days, assigned_to_user_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(&item.user_id)
+        .bind(&item.team_id)
         .bind(&item.parent_item_id)
         .bind(&item.name)
         .bind(deadline)
@@ -345,6 +391,37 @@ impl ItemRepo for SqliteItemRepo {
         if rows == 0 { Err(not_found()) } else { Ok(()) }
     }
 
+    async fn update_team_item(&self, item: &Item) -> Result<(), RepoError> {
+        let deadline: Option<i64> = item.deadline.map(|dt| dt.timestamp());
+        let complete: i64 = item.complete as i64;
+        let has_due_time: i64 = item.has_due_time as i64;
+        let has_tasks: i64 = item.has_tasks as i64;
+        let is_template: i64 = item.is_template as i64;
+        let rows = sqlx::query(
+            "UPDATE items SET name = ?, deadline = ?, complete = ?, recurrence = ?, recurrence_basis = ?, \
+             has_due_time = ?, has_tasks = ?, parent_item_id = ?, is_template = ?, due_offset_days = ?, assigned_to_user_id = ? \
+             WHERE id = ? AND team_id = ?",
+        )
+        .bind(&item.name)
+        .bind(deadline)
+        .bind(complete)
+        .bind(&item.recurrence)
+        .bind(&item.recurrence_basis)
+        .bind(has_due_time)
+        .bind(has_tasks)
+        .bind(&item.parent_item_id)
+        .bind(is_template)
+        .bind(item.due_offset_days)
+        .bind(&item.assigned_to_user_id)
+        .bind(&item.id)
+        .bind(&item.team_id)
+        .execute(&self.0)
+        .await
+        .map_err(db_err)?
+        .rows_affected();
+        if rows == 0 { Err(not_found()) } else { Ok(()) }
+    }
+
     async fn delete(&self, item_id: &str) -> Result<(), RepoError> {
         let rows = sqlx::query("DELETE FROM items WHERE id = ?")
             .bind(item_id)
@@ -362,7 +439,7 @@ impl ItemRepo for SqliteItemRepo {
         deadline_before: Option<i64>,
     ) -> Result<Vec<DueItem>, RepoError> {
         sqlx::query(
-            "SELECT items.id, items.user_id, items.parent_item_id, items.name, items.deadline,
+            "SELECT items.id, items.user_id, items.team_id, items.parent_item_id, items.name, items.deadline,
                     items.complete, items.recurrence, items.recurrence_basis, items.has_due_time, items.has_tasks,
                     items.is_template, items.due_offset_days, items.assigned_to_user_id,
                     COALESCE(parent.name, '') AS parent_name,
@@ -602,6 +679,7 @@ fn row_to_item(row: &sqlx::sqlite::SqliteRow) -> Item {
     Item {
         id: row.get("id"),
         user_id: row.get("user_id"),
+        team_id: row.get("team_id"),
         parent_item_id: row.get("parent_item_id"),
         name: row.get("name"),
         deadline: deadline_secs
