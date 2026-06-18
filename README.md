@@ -43,6 +43,8 @@ Smithy is an interface definition language (IDL) from AWS. You describe your API
 
 It is similar in spirit to Protobuf or OpenAPI, but more expressive about service semantics (resources, lifecycles, constraints).
 
+> **Note:** The service in this project is called `PeoplesRepublicOfLists`. All generated types and builder references use that name (`PeoplesRepublicOfListsConfig`, `PeoplesRepublicOfLists::builder(...)`, etc.). The code snippets below use a simplified placeholder name for readability.
+
 ---
 
 ## What Is smithy-rs?
@@ -79,15 +81,28 @@ todo/
 │   ├── src/main/smithy/           # Your .smithy source files
 │   ├── smithy-build.json          # Codegen configuration
 │   └── build.gradle.kts           # Gradle build for the model subproject
-├── todo-server-sdk/               # Generated Rust crate (do not edit)
+├── todo-server-sdk/               # Generated Rust server crate (do not edit)
+├── todo-typescript-client/        # Generated TS client (do not edit)
+├── frontend/                      # TypeScript SPA (Vite, imports @todo/client)
+│   └── src/main.ts
+├── mcp-server/                    # Claude Code MCP server wrapping the API
+│   └── src/index.ts
+├── todo-cli/                      # prl CLI binary (standalone Rust crate)
+│   └── src/main.rs
+├── scripts/                       # Utility scripts
+│   └── smoke-test.sh              # Live-server smoke test for team item API
 ├── src/
-│   └── main.rs                    # Your server implementation
-├── Cargo.toml                     # Your Rust package
-├── build.gradle.kts               # Root Gradle build (minimal)
-├── settings.gradle.kts            # Gradle project settings
-├── gradle.properties              # Gradle properties / version pins
-├── gradlew / gradlew.bat          # Gradle wrapper scripts
-└── gradle/wrapper/                # Gradle wrapper configuration
+│   ├── main.rs                    # Server entry point — handler wiring
+│   ├── auth.rs                    # Google OAuth + JWT middleware
+│   ├── domain/                    # Plain domain structs (Item, Team, User)
+│   ├── handlers/                  # Handler implementations
+│   └── storage/                   # Repo traits + SQLite / memory impls
+├── Cargo.toml
+├── build.gradle.kts
+├── settings.gradle.kts
+├── gradle.properties
+├── gradlew / gradlew.bat
+└── gradle/wrapper/
 ```
 
 ---
@@ -326,27 +341,34 @@ The framework handles HTTP parsing, routing, deserialization of the request, and
 
 ### Resource Hierarchy
 
-The model follows a `User → List → Item` hierarchy:
+The model has two parallel owner hierarchies:
 
 ```
 User (userId)
-└── List (userId, listId)
-    └── Item (userId, listId, itemId)
+└── Item (userId, itemId)       — personal items, owned by a user
+
+Team (teamId)                   — team items, owned by a team
+└── TeamItem (teamId, itemId)   — assignable to any active team member
 ```
 
-Child resources inherit parent identifiers. An `Item` requires all three IDs because:
+`Item` and `TeamItem` share a single `items` table in SQLite (with nullable
+`user_id` / `team_id` columns), but are separate Smithy resources with
+distinct operation sets and authorization rules.
 
-- `itemId` alone is not globally unique
-- An item always belongs to a specific list belonging to a specific user
-
-### Operations and HTTP Bindings
+### Operations and HTTP Bindings (key endpoints)
 
 | Operation | HTTP | Path |
 |-----------|------|------|
-| `GetList` | GET | `/users/{userId}/lists/{listId}` |
-| `ListLists` | GET | `/users/{userId}/lists` |
-| `GetItem` | GET | `/users/{userId}/lists/{listId}/items/{itemId}` |
-| `ListItems` | GET | `/users/{userId}/lists/{listId}/items` |
+| `GetItem` | GET | `/users/{userId}/items/{itemId}` |
+| `ListItems` | GET | `/users/{userId}/items` |
+| `CreateItem` | POST | `/users/{userId}/items` |
+| `UpdateItem` | PUT | `/users/{userId}/items/{itemId}` |
+| `DeleteItem` | DELETE | `/users/{userId}/items/{itemId}` |
+| `CreateTeamItem` | POST | `/teams/{teamId}/items` |
+| `GetTeamItem` | GET | `/teams/{teamId}/items/{itemId}` |
+| `ListTeamItems` | GET | `/teams/{teamId}/items` |
+| `UpdateTeamItem` | PUT | `/teams/{teamId}/items/{itemId}` |
+| `DeleteTeamItem` | DELETE | `/teams/{teamId}/items/{itemId}` |
 
 Path parameters are marked with `@httpLabel` in the input shape. The generated code handles extracting them from the URL automatically.
 

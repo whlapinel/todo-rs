@@ -97,12 +97,13 @@ prl items add "Buy groceries"
 prl items add "Submit report" --due 2026-06-20
 prl items add "Water plants" --recurrence "every week"
 prl items add "Chapter notes" --parent <parent-item-id>
-prl items add "Mow the lawn" --assign <teammate-user-id>
 ```
 
-`--due` accepts `YYYY-MM-DD` or a Unix timestamp. `--assign` requires the
-target user to be a fellow active member of one of your teams (see
-[Teams](#teams)).
+`--due` accepts `YYYY-MM-DD` or a Unix timestamp.
+
+> **Note:** Assignment is no longer supported on personal items. To create an
+> assignable task, use the web UI to create a team item under a team you
+> belong to (see [Teams](#teams)).
 
 ### Mark complete
 
@@ -135,25 +136,18 @@ prl items due --after 2026-06-01 --before 2026-06-30
 
 Output includes the parent item name so you can see context at a glance.
 
-### Assign an item
-
-```sh
-prl items assign <item-id> <teammate-user-id>
-prl items unassign <item-id>
-```
-
-The assignee must be a fellow active member of one of your teams. Assigning
-doesn't change who owns the item — it stays in your list — but it also shows
-up for the assignee (see below).
-
 ### List items assigned to you
 
 ```sh
 prl items assigned
 ```
 
-Shows items other team members have assigned to you, across all owners,
+Shows team items other members have assigned to you, across all teams,
 regardless of due date.
+
+> **Note:** `prl items assign` / `prl items unassign` have been removed.
+> Assignment is now a team-item-only concept and is managed via the web UI or
+> MCP server. CLI support for team items is planned.
 
 ---
 

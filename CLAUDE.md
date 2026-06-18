@@ -16,6 +16,12 @@ task cli-install   # Install prl to ~/.cargo/bin
 cargo test         # Run all Rust tests
 ```
 
+Live-server smoke test (requires `TODO_API_URL` + `TODO_API_TOKEN`):
+
+```sh
+set -a; source .env; set +a; ./scripts/smoke-test.sh
+```
+
 For frontend-only changes (no Smithy or backend changes): `cd frontend && npm run build`
 
 For TS client-only changes: `cd todo-typescript-client && npm run build`
@@ -42,7 +48,12 @@ todo-cli/src/main.rs      ← prl CLI (standalone crate, uses reqwest directly)
 
 ### Smithy Model → Generated Code
 
-The `.smithy` files in `model/src/main/smithy/` define the full API contract. The resource hierarchy is `User → Item` — item operations require `userId + itemId`. Items support nesting via `parentItemId`.
+The `.smithy` files in `model/src/main/smithy/` define the full API contract. There are two parallel owner hierarchies:
+
+- **`User → Item`** — personal items at `/users/{userId}/items/{itemId}`
+- **`Team → TeamItem`** — team-scoped items at `/teams/{teamId}/items/{itemId}`; assignment (`assignedToUserId`) is only valid here, checked against the specific team's active membership
+
+Both hierarchies share the `items` SQLite table (nullable `user_id` / `team_id`). Items support nesting via `parentItemId`.
 
 smithy-rs (a Gradle composite build via the `smithy-rs/` git submodule) generates:
 
@@ -206,3 +217,5 @@ Every place that must be updated when the Smithy model changes. The generated cr
 ## Known Issues
 
 - **`prl users list` panics** — `todo-cli/src/main.rs:323` calls `.unwrap()` on `.json()` for a response that isn't valid JSON (likely an auth error page or empty body). Fix: check HTTP status code before parsing the body.
+
+- **CLI has no team item support** — `todo-cli/` was not updated when team items were added. Team items are accessible via the web UI and MCP server only. The `prl items assign` / `prl items unassign` subcommands have also been removed from the Smithy model (assignment is now a team-item-only concept). The CLI still sends `assignedToUserId` in `CreateItem` / `UpdateItem` requests, but the server ignores it.
