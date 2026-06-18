@@ -3,10 +3,17 @@
 # Requires: curl, jq
 #
 # Usage:
-#   API_URL=https://todo.lapinel-fam.club TOKEN=<jwt> ./scripts/smoke-test.sh
-#
-# Or source your .env first:
 #   set -a; source .env; set +a; ./scripts/smoke-test.sh
+#
+# The server must be running in internal auth mode (TODO_AUTH_MODE=internal),
+# which validates the Bearer JWT directly. The caddy-fronted live server uses
+# session cookies and will redirect this script to the auth portal.
+#
+# To test against a local instance:
+#   TODO_API_URL=http://localhost:3000 TODO_API_TOKEN=<jwt> ./scripts/smoke-test.sh
+#
+# Get a token from a running internal-mode server:
+#   Sign in via browser → visit /auth/token → copy the token value.
 #
 # The script creates a team, creates/gets/updates/deletes a team item, then
 # cleans up. It exits non-zero if any assertion fails.
@@ -18,6 +25,14 @@ TOKEN="${TODO_API_TOKEN:-}"
 
 if [[ -z "$TOKEN" ]]; then
   echo "ERROR: TODO_API_TOKEN is not set" >&2
+  exit 1
+fi
+
+# Extract user ID from JWT payload (base64url-encoded middle segment).
+JWT_PAYLOAD=$(echo "$TOKEN" | cut -d'.' -f2 | tr '_-' '/+' | base64 -d 2>/dev/null)
+USER_ID=$(echo "$JWT_PAYLOAD" | jq -r '.sub')
+if [[ -z "$USER_ID" || "$USER_ID" == "null" ]]; then
+  echo "ERROR: could not extract user ID from token" >&2
   exit 1
 fi
 
@@ -36,11 +51,11 @@ api() {
     "$@"
 }
 
-echo "=== Team item smoke test against $API_URL ==="
+echo "=== Team item smoke test against $API_URL (user: $USER_ID) ==="
 echo
 
 # ── Create a team ─────────────────────────────────────────────────────────────
-TEAM=$(api POST "$API_URL/api/teams" -d '{"name":"smoke-test-team"}')
+TEAM=$(api POST "$API_URL/api/users/$USER_ID/teams" -d '{"name":"smoke-test-team"}')
 TEAM_ID=$(echo "$TEAM" | jq -r '.teamId')
 [[ -n "$TEAM_ID" && "$TEAM_ID" != "null" ]] || fail "create team — no teamId in response"
 pass "create team ($TEAM_ID)"
@@ -50,7 +65,7 @@ cleanup() {
   if [[ -n "${ITEM_ID:-}" ]]; then
     api DELETE "$API_URL/api/teams/$TEAM_ID/items/$ITEM_ID" > /dev/null 2>&1 || true
   fi
-  api POST "$API_URL/api/teams/$TEAM_ID/leave" -d '{}' > /dev/null 2>&1 || true
+  api DELETE "$API_URL/api/users/$USER_ID/teams/$TEAM_ID/membership" > /dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
