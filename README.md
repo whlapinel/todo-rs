@@ -341,19 +341,20 @@ The framework handles HTTP parsing, routing, deserialization of the request, and
 
 ### Resource Hierarchy
 
-The model has two parallel owner hierarchies:
+The model has two Smithy resources that own items:
 
 ```
 User (userId)
-└── Item (userId, itemId)       — personal items, owned by a user
+└── Item (userId, itemId)         — personal items
 
-Team (teamId)                   — team items, owned by a team
-└── TeamItem (teamId, itemId)   — assignable to any active team member
+TeamItem (teamId, itemId)         — team-scoped items, assignable to members
 ```
 
-`Item` and `TeamItem` share a single `items` table in SQLite (with nullable
-`user_id` / `team_id` columns), but are separate Smithy resources with
-distinct operation sets and authorization rules.
+`Team` is **not** a Smithy resource — team CRUD operations (`CreateTeam`,
+`GetTeam`, etc.) are plain service-level operations scoped under
+`/users/{userId}/teams`. `Item` and `TeamItem` share a single `items` table
+in SQLite (nullable `user_id` / `team_id`), but are separate Smithy resources
+with distinct operation sets and authorization rules.
 
 ### Operations and HTTP Bindings (key endpoints)
 

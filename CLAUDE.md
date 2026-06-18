@@ -48,12 +48,12 @@ todo-cli/src/main.rs      ← prl CLI (standalone crate, uses reqwest directly)
 
 ### Smithy Model → Generated Code
 
-The `.smithy` files in `model/src/main/smithy/` define the full API contract. There are two parallel owner hierarchies:
+The `.smithy` files in `model/src/main/smithy/` define the full API contract. Two Smithy resources own items:
 
 - **`User → Item`** — personal items at `/users/{userId}/items/{itemId}`
-- **`Team → TeamItem`** — team-scoped items at `/teams/{teamId}/items/{itemId}`; assignment (`assignedToUserId`) is only valid here, checked against the specific team's active membership
+- **`TeamItem`** — team-scoped resource with identifiers `{teamId, itemId}`, at `/teams/{teamId}/items/{itemId}`; assignment (`assignedToUserId`) is only valid here, checked against the specific team's active membership
 
-Both hierarchies share the `items` SQLite table (nullable `user_id` / `team_id`). Items support nesting via `parentItemId`.
+`Team` itself is not a Smithy resource — team CRUD operations (`CreateTeam`, `GetTeam`, etc.) are plain service operations scoped under `/users/{userId}/teams`. Both item types share the `items` SQLite table (nullable `user_id` / `team_id`). Items support nesting via `parentItemId`.
 
 smithy-rs (a Gradle composite build via the `smithy-rs/` git submodule) generates:
 
