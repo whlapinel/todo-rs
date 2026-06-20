@@ -87,8 +87,11 @@ async fn main() {
                 .route_service("/teams", api.clone())
                 .route_service("/teams/*path", api.clone())
                 .layer(middleware::from_fn(auth::caddy_header_middleware));
+            let auth_router = Router::new()
+                .route("/me", get(auth::caddy_auth_me));
             Router::new()
                 .nest("/api", api_router)
+                .nest("/auth", auth_router)
                 .layer(Extension(user_repo))
                 .layer(CookieManagerLayer::new())
                 .fallback_service(frontend)

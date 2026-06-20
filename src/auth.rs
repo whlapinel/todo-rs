@@ -15,7 +15,7 @@ use oauth2::{
     TokenUrl,
 };
 use serde::{Deserialize, Serialize};
-use tower_cookies::{Cookie, Cookies};
+use tower_cookies::{Cookie, Cookies, cookie::SameSite};
 
 use crate::storage::{RepoError, UserRepo};
 
@@ -76,11 +76,15 @@ pub async fn auth_login(
     let mut state_cookie = Cookie::new("oauth_state", csrf_token.secret().clone());
     state_cookie.set_http_only(true);
     state_cookie.set_path("/");
+    state_cookie.set_same_site(Some(SameSite::Lax));
+    state_cookie.set_secure(Some(true));
     cookies.add(state_cookie);
 
     let mut pkce_cookie = Cookie::new("oauth_pkce_verifier", pkce_verifier.secret().clone());
     pkce_cookie.set_http_only(true);
     pkce_cookie.set_path("/");
+    pkce_cookie.set_same_site(Some(SameSite::Lax));
+    pkce_cookie.set_secure(Some(true));
     cookies.add(pkce_cookie);
 
     Redirect::to(auth_url.as_str())
@@ -107,15 +111,22 @@ pub async fn auth_callback(
 ) -> Response {
     let stored_state = match cookies.get("oauth_state") {
         Some(c) => c.value().to_string(),
-        None => return (StatusCode::BAD_REQUEST, "Missing state cookie").into_response(),
+        None => {
+            tracing::warn!("auth_callback: oauth_state cookie missing; cookies present: oauth_pkce_verifier={}", cookies.get("oauth_pkce_verifier").is_some());
+            return (StatusCode::BAD_REQUEST, "Missing state cookie").into_response();
+        }
     };
     if stored_state != params.state {
+        tracing::warn!("auth_callback: CSRF state mismatch (stored != returned)");
         return (StatusCode::BAD_REQUEST, "State mismatch").into_response();
     }
 
     let pkce_secret = match cookies.get("oauth_pkce_verifier") {
         Some(c) => c.value().to_string(),
-        None => return (StatusCode::BAD_REQUEST, "Missing PKCE cookie").into_response(),
+        None => {
+            tracing::warn!("auth_callback: oauth_pkce_verifier cookie missing");
+            return (StatusCode::BAD_REQUEST, "Missing PKCE cookie").into_response();
+        }
     };
     let pkce_verifier = PkceCodeVerifier::new(pkce_secret);
 
@@ -299,6 +310,40 @@ pub async fn auth_me(
     }
 }
 
+pub async fn caddy_auth_me(
+    Extension(repo): Extension<Arc<dyn UserRepo>>,
+    req: Request<Body>,
+) -> Response {
+    let dev_email = std::env::var("TODO_DEV_EMAIL").ok();
+    let header_email = req
+        .headers()
+        .get("x-token-user-email")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+
+    let email = match (dev_email, header_email) {
+        (Some(e), _) => e,
+        (None, Some(e)) => e,
+        (None, None) => {
+            tracing::warn!("caddy /auth/me: x-token-user-email header absent and TODO_DEV_EMAIL not set — user not authenticated");
+            return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error": "not authenticated"}))).into_response();
+        }
+    };
+
+    match repo.get_or_create_by_email(&email).await {
+        Ok(user) => Json(serde_json::json!({
+            "userId": user.id,
+            "firstName": user.first_name,
+            "lastName": user.last_name,
+        }))
+        .into_response(),
+        Err(e) => {
+            tracing::error!("caddy /auth/me: failed to resolve user for {email}: {e:?}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
 pub async fn caddy_header_middleware(
     mut req: Request<Body>,
     next: Next<Body>,
@@ -314,6 +359,10 @@ pub async fn caddy_header_middleware(
         (Some(e), _) => e,
         (None, Some(e)) => e,
         (None, None) => {
+            tracing::warn!(
+                path = %req.uri().path(),
+                "caddy_header_middleware: x-token-user-email header absent and TODO_DEV_EMAIL not set"
+            );
             return (
                 StatusCode::UNAUTHORIZED,
                 Json(serde_json::json!({"error": "authentication required"})),
@@ -374,16 +423,22 @@ pub async fn jwt_auth_middleware(
                 req.extensions_mut().insert(AuthUser { user_id: data.claims.sub });
                 next.run(req).await
             }
-            Err(_) => (
-                StatusCode::UNAUTHORIZED,
-                Json(serde_json::json!({"error": "invalid or expired token"})),
-            )
-                .into_response(),
+            Err(e) => {
+                tracing::warn!(path = %req.uri().path(), error = %e, "jwt_auth_middleware: token present but invalid or expired");
+                (
+                    StatusCode::UNAUTHORIZED,
+                    Json(serde_json::json!({"error": "invalid or expired token"})),
+                )
+                    .into_response()
+            }
         },
-        None => (
-            StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({"error": "authentication required"})),
-        )
-            .into_response(),
+        None => {
+            tracing::warn!(path = %req.uri().path(), "jwt_auth_middleware: no Bearer token and no todo_auth cookie");
+            (
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({"error": "authentication required"})),
+            )
+                .into_response()
+        }
     }
 }
