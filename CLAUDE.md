@@ -185,10 +185,13 @@ Every place that must be updated when the Smithy model changes. The generated cr
 | File | What to do |
 |------|-----------|
 | `model/src/main/smithy/*.smithy` | Add/remove the operation definition |
-| *(run `task codegen`)* | Regenerates all three SDKs |
+| *(run `task codegen`)* | Regenerates Rust SDKs + TS client source |
+| *(run `task client`)* | Compiles the TS client source → `dist/`; required before the frontend build picks up new commands. Skippable if you use `task frontend` or `task build` (both depend on `client` automatically) |
 | `src/main.rs` | Add/remove the handler function; wire/unwire from `PeoplesRepublicOfLists::builder(...)` |
+| `src/handlers/mod.rs` | If creating a new handler file, add `pub mod <module>;` here |
 | `frontend/src/main.ts` | Import/remove the generated `*Command`; add/remove UI for it |
 | `mcp-server/src/index.ts` | Add/remove tool definition in the tools list; add/remove `case` in the switch |
+| *(run `cd mcp-server && npm run build`)* | Recompile the MCP server source → `dist/index.js`; changes are not live until this runs |
 | `todo-cli/src/main.rs` | Add/remove subcommand variant and match arm in the relevant `cmd_*` function |
 | `docs/prl-user-guide.md` | Document the new command or remove it |
 

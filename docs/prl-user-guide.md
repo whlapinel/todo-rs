@@ -166,6 +166,16 @@ prl users get              # uses configured default user
 prl users get <user-id>    # explicit user
 ```
 
+### Send an app invite
+
+Sends an email to the given address with a link to the app. The invite appears to come from your name (as shown in the app) via the shared SMTP account. The recipient must sign up via the web UI to get an account before they can be added to a team.
+
+```sh
+prl users invite someone@example.com
+```
+
+Requires SMTP to be configured on the server (`TODO_SMTP_USER` and `TODO_SMTP_PASSWORD`).
+
 ---
 
 ## Teams
