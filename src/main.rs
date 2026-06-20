@@ -9,7 +9,7 @@ use crate::storage::{
     ItemRepo, TeamRepo, UserRepo,
     sqlite::{SqliteItemRepo, SqliteTeamRepo, SqliteUserRepo, create_pool},
 };
-use axum::{Extension, Router, body::boxed, middleware, routing::{get, post}};
+use axum::{Extension, Router, body::boxed, middleware, routing::get};
 use handlers::items::{
     create_item, delete_item, get_item, list_assigned_items, list_items, list_items_due,
     update_item,
@@ -60,6 +60,7 @@ async fn main() {
         .invite_team_member(invite_team_member)
         .accept_team_invite(accept_team_invite)
         .leave_team(leave_team)
+        .send_app_invite(handlers::invites::send_app_invite)
         .create_team_item(create_team_item)
         .get_team_item(get_team_item)
         .update_team_item(update_team_item)
@@ -83,7 +84,6 @@ async fn main() {
     let app = match auth_mode.as_str() {
         "caddy" => {
             let api_router = Router::new()
-                .route("/app-invite", post(handlers::invites::send_app_invite))
                 .route_service("/users", api.clone())
                 .route_service("/users/*path", api.clone())
                 .route_service("/teams", api.clone())
@@ -124,7 +124,6 @@ async fn main() {
                 .route("/token", get(auth::auth_token));
 
             let api_router = Router::new()
-                .route("/app-invite", post(handlers::invites::send_app_invite))
                 .route_service("/users", api.clone())
                 .route_service("/users/*path", api.clone())
                 .route_service("/teams", api.clone())

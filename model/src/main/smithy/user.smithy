@@ -28,6 +28,7 @@ resource User {
         InviteTeamMember
         AcceptTeamInvite
         LeaveTeam
+        SendAppInvite
     ]
 }
 
@@ -84,6 +85,25 @@ operation UpdateUser {
 
         @required
         $lastName
+    }
+
+    output := {}
+
+    errors: [
+        PeoplesRepublicOfListsError
+    ]
+}
+
+@http(method: "POST", uri: "/users/{userId}/app-invites")
+operation SendAppInvite {
+    input := {
+        @required
+        @httpLabel
+        userId: String
+
+        @required
+        @notProperty
+        email: String
     }
 
     output := {}
