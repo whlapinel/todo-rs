@@ -91,6 +91,8 @@ enum UsersCommand {
     List,
     /// Show a user (defaults to configured user)
     Get { user_id: Option<String> },
+    /// Send an app invite email
+    Invite { email: String },
 }
 
 #[derive(Subcommand)]
@@ -348,6 +350,11 @@ struct CreateTeamBody {
 }
 
 #[derive(Serialize)]
+struct SendAppInviteBody {
+    email: String,
+}
+
+#[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct InviteTeamMemberBody {
     invitee_user_id: String,
@@ -413,6 +420,14 @@ fn cmd_users(api: &Api, cmd: UsersCommand, default_user: Option<String>) {
             let out: UserSummary = serde_json::from_str(&body).unwrap();
             println!("id:   {}", out.user_id);
             println!("name: {} {}", out.first_name, out.last_name);
+        }
+        UsersCommand::Invite { email } => {
+            let uid = require_user(default_user);
+            check(
+                api.post(&format!("/users/{uid}/app-invites"), &SendAppInviteBody { email: email.clone() }).unwrap(),
+                "send app invite",
+            );
+            println!("invite sent to {email}");
         }
     }
 }

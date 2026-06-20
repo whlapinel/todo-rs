@@ -379,6 +379,18 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ["teamId", "itemId"],
       },
     },
+    {
+      name: "send_app_invite",
+      description: "Send an email invite to join the todo app. The invite is sent from the authenticated user's name (as display name) via the configured SMTP account.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          userId: { type: "string", description: "The inviting user's ID" },
+          email: { type: "string", description: "Recipient email address" },
+        },
+        required: ["userId", "email"],
+      },
+    },
   ],
 }));
 
@@ -555,6 +567,10 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
 
       case "delete_team_item":
         result = await api("DELETE", `/teams/${args.teamId}/items/${args.itemId}`);
+        break;
+
+      case "send_app_invite":
+        result = await api("POST", `/users/${args.userId}/app-invites`, { email: args.email });
         break;
 
       default:

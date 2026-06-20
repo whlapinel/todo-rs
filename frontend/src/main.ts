@@ -24,6 +24,7 @@ import {
   UpdateTeamItemCommand,
   DeleteTeamItemCommand,
   ListTeamItemsCommand,
+  SendAppInviteCommand,
   type ItemSummary,
   type DueItemSummary,
   type GetItemCommandOutput,
@@ -316,6 +317,12 @@ async function renderItems(userId: string, parentItemId?: string, parentItemName
     <button type="button" id="checklists-btn">Checklists</button>
     <button type="button" id="teams-btn">Teams</button>
     <button type="button" id="assigned-btn">Assigned to me</button>
+    <button type="button" id="invite-app-btn">Invite someone</button>
+    <form id="invite-app-form" style="display:none;margin-bottom:0.5rem;">
+      <input id="invite-app-email" type="email" placeholder="Email address" required style="margin-right:0.5rem;" />
+      <button type="submit">Send invite</button>
+      <button type="button" id="cancel-invite-app-btn">Cancel</button>
+    </form>
     <form id="create-item-form" style="display:none;">
       <div class="field-grid">
         <span class="field-label">Name</span>
@@ -378,6 +385,35 @@ async function renderItems(userId: string, parentItemId?: string, parentItemName
 
   document.getElementById("assigned-btn")!.addEventListener("click", () => {
     navigate(`/users/${userId}/assigned-items`);
+  });
+
+  const inviteAppBtn = document.getElementById("invite-app-btn")!;
+  const inviteAppForm = document.getElementById("invite-app-form") as HTMLFormElement;
+
+  inviteAppBtn.addEventListener("click", () => {
+    inviteAppForm.style.display = "";
+    inviteAppBtn.style.display = "none";
+    (document.getElementById("invite-app-email") as HTMLInputElement).focus();
+  });
+
+  document.getElementById("cancel-invite-app-btn")!.addEventListener("click", () => {
+    inviteAppForm.style.display = "none";
+    inviteAppBtn.style.display = "";
+  });
+
+  inviteAppForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const email = (document.getElementById("invite-app-email") as HTMLInputElement).value.trim();
+    if (!email) return;
+    try {
+      await client.send(new SendAppInviteCommand({ userId, email }));
+      showSuccess(`Invite sent to ${email}.`);
+      (document.getElementById("invite-app-email") as HTMLInputElement).value = "";
+      inviteAppForm.style.display = "none";
+      inviteAppBtn.style.display = "";
+    } catch (err) {
+      showError(String(err));
+    }
   });
 
   if (parentItemId && parentItem) {
