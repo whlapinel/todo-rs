@@ -21,25 +21,46 @@ tasks {
     val serverSdkCrateName: String by project
     val clientCrateName: String by project
     val typescriptClientName: String by project
-    register<Sync>("copyServerCrate") {
+    register<Sync>("copyServerCrateSrc") {
         dependsOn("smithyBuild")
         from(layout.buildDirectory.dir("smithyprojections/model/todo-server-sdk/rust-server-codegen/src"))
         into("$srcDir/$serverSdkCrateName/src")
     }
-    register<Sync>("copyClientCrate") {
+    register<Copy>("copyServerCrateRoot") {
+        dependsOn("smithyBuild")
+        from(layout.buildDirectory.dir("smithyprojections/model/todo-server-sdk/rust-server-codegen"))
+        include("Cargo.toml")
+        into("$srcDir/$serverSdkCrateName")
+    }
+    register<Sync>("copyClientCrateSrc") {
         dependsOn("smithyBuild")
         from(layout.buildDirectory.dir("smithyprojections/model/todo-client/rust-client-codegen/src"))
         into("$srcDir/$clientCrateName/src")
     }
-    register<Sync>("copyTypescriptClient") {
+    register<Copy>("copyClientCrateRoot") {
+        dependsOn("smithyBuild")
+        from(layout.buildDirectory.dir("smithyprojections/model/todo-client/rust-client-codegen"))
+        include("Cargo.toml")
+        into("$srcDir/$clientCrateName")
+    }
+    register<Sync>("copyTypescriptClientSrc") {
         dependsOn("smithyBuild")
         from(layout.buildDirectory.dir("smithyprojections/model/todo-typescript-client/typescript-client-codegen/src"))
         into("$srcDir/$typescriptClientName/src")
     }
+    register<Copy>("copyTypescriptClientRoot") {
+        dependsOn("smithyBuild")
+        from(layout.buildDirectory.dir("smithyprojections/model/todo-typescript-client/typescript-client-codegen"))
+        include("package.json", "tsconfig*.json", "api-extractor.json")
+        into("$srcDir/$typescriptClientName")
+    }
     named("assemble") {
         dependsOn("smithyBuild")
-        finalizedBy("copyServerCrate")
-        finalizedBy("copyClientCrate")
-        finalizedBy("copyTypescriptClient")
+        finalizedBy("copyServerCrateSrc")
+        finalizedBy("copyServerCrateRoot")
+        finalizedBy("copyClientCrateSrc")
+        finalizedBy("copyClientCrateRoot")
+        finalizedBy("copyTypescriptClientSrc")
+        finalizedBy("copyTypescriptClientRoot")
     }
 }
