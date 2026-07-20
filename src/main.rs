@@ -18,8 +18,8 @@ use handlers::team_items::{
     create_team_item, delete_team_item, get_team_item, list_team_items, update_team_item,
 };
 use handlers::teams::{
-    accept_team_invite, create_team, get_team, invite_team_member, leave_team,
-    list_team_members, list_teams,
+    accept_team_invite, create_team, get_team, invite_team_member, leave_team, list_team_members,
+    list_teams,
 };
 use handlers::templates::{create_template, list_templates};
 use handlers::users::{get_user, list_users, update_user};
@@ -89,8 +89,7 @@ async fn main() {
                 .route_service("/teams", api.clone())
                 .route_service("/teams/*path", api.clone())
                 .layer(middleware::from_fn(auth::caddy_header_middleware));
-            let auth_router = Router::new()
-                .route("/me", get(auth::caddy_auth_me));
+            let auth_router = Router::new().route("/me", get(auth::caddy_auth_me));
             Router::new()
                 .nest("/api", api_router)
                 .nest("/auth", auth_router)
@@ -105,8 +104,7 @@ async fn main() {
                 .expect("TODO_GOOGLE_CLIENT_SECRET required (or set TODO_AUTH_MODE=caddy)");
             let jwt_secret = std::env::var("TODO_JWT_SECRET")
                 .expect("TODO_JWT_SECRET required (or set TODO_AUTH_MODE=caddy)");
-            let base_url = std::env::var("TODO_BASE_URL")
-                .unwrap_or_else(|_| "http://localhost:3000".to_string());
+            let base_url = std::env::var("TODO_BASE_URL").expect("TODO_BASE_URL required");
 
             let app_state = Arc::new(auth::AppState::new(
                 google_client_id,
@@ -140,7 +138,7 @@ async fn main() {
     };
 
     let bind: SocketAddr = std::env::var("TODO_BIND")
-        .unwrap_or_else(|_| "0.0.0.0:3000".to_string())
+        .expect("TODO_BIND required")
         .parse()
         .expect("invalid BIND address");
     tracing::info!("listening on {}", bind);
