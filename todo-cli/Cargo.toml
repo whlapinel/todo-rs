@@ -8,10 +8,10 @@ name = "prl"
 path = "src/main.rs"
 
 [dependencies]
+todo-client = { path = "../todo-client" }
 clap = { version = "4", features = ["derive", "env"] }
-reqwest = { version = "0.11", default-features = false, features = ["json", "blocking", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
 toml = "0.8"
 dirs = "5"
 chrono = "0.4"
+tokio = { version = "1.53.0", features = ["macros", "rt-multi-thread"] }
