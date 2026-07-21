@@ -296,13 +296,25 @@ async function renderItems(userId: string, parentItemId?: string, parentItemName
             <input id="edit-parent-due" type="date" title="Due date (optional)" />
             <input id="edit-parent-time" type="time" title="Due time (optional)" />
           </div>
-          <span class="field-label">Repeat</span>
-          <div class="field-row">
-            <input id="edit-parent-recurrence" placeholder='e.g. "every 3 days"' />
-            <select id="edit-parent-recurrence-basis" title="Basis for scheduling the next occurrence">
-              <option value="DUE_DATE">Due date</option>
-              <option value="COMPLETION_DATE">Completion date</option>
-            </select>
+          ${parentItem?.parentItemId ? `
+          <div id="edit-parent-due-hint" style="grid-column:2;font-size:0.78rem;color:#888;margin:-0.3rem 0 0.3rem;">
+            If the top-level item recurs, this due date is recalculated from the offset below — manual edits here won't persist across recurrences.
+          </div>` : ""}
+          <div id="edit-parent-repeat-row" style="display:${parentItem?.parentItemId ? "none" : "contents"};">
+            <span class="field-label">Repeat</span>
+            <div class="field-row">
+              <input id="edit-parent-recurrence" placeholder='e.g. "every 3 days"' />
+              <select id="edit-parent-recurrence-basis" title="Basis for scheduling the next occurrence">
+                <option value="DUE_DATE">Due date</option>
+                <option value="COMPLETION_DATE">Completion date</option>
+              </select>
+            </div>
+          </div>
+          <div id="edit-parent-offset-row" style="display:${parentItem?.parentItemId ? "contents" : "none"};">
+            <span class="field-label">Offset days</span>
+            <div class="field-row">
+              <input id="edit-parent-offset" type="number" placeholder="e.g. -2" title="Days from the top-level item's due date (negative = before, positive = after). Only takes effect if some ancestor item recurs." />
+            </div>
           </div>
         </div>
         <span class="field-label">Assign to</span>
@@ -336,14 +348,26 @@ async function renderItems(userId: string, parentItemId?: string, parentItemName
             <input id="item-due" type="date" title="Due date (optional)" />
             <input id="item-time" type="time" title="Due time (optional)" />
           </div>
-          <span class="field-label">Repeat</span>
-          <div class="field-row">
-            <input id="item-recurrence" placeholder='e.g. "every 3 days"' />
-            <select id="item-recurrence-basis" title="Basis for scheduling the next occurrence">
-              <option value="DUE_DATE">Due date</option>
-              <option value="COMPLETION_DATE">Completion date</option>
-            </select>
-            <span id="recurrence-info" title="Click for help" style="cursor:pointer;color:#5aace0;font-size:1.1rem;user-select:none;">ⓘ</span>
+          ${parentItemId ? `
+          <div id="item-due-hint" style="grid-column:2;font-size:0.78rem;color:#888;margin:-0.3rem 0 0.3rem;">
+            If the top-level item recurs, this due date is recalculated from the offset below — manual edits here won't persist across recurrences.
+          </div>` : ""}
+          <div id="item-repeat-row" style="display:${parentItemId ? "none" : "contents"};">
+            <span class="field-label">Repeat</span>
+            <div class="field-row">
+              <input id="item-recurrence" placeholder='e.g. "every 3 days"' />
+              <select id="item-recurrence-basis" title="Basis for scheduling the next occurrence">
+                <option value="DUE_DATE">Due date</option>
+                <option value="COMPLETION_DATE">Completion date</option>
+              </select>
+              <span id="recurrence-info" title="Click for help" style="cursor:pointer;color:#5aace0;font-size:1.1rem;user-select:none;">ⓘ</span>
+            </div>
+          </div>
+          <div id="item-offset-row" style="display:${parentItemId ? "contents" : "none"};">
+            <span class="field-label">Offset days</span>
+            <div class="field-row">
+              <input id="item-offset" type="number" placeholder="e.g. -2" title="Days from the top-level item's due date (negative = before, positive = after). Only takes effect if some ancestor item recurs." />
+            </div>
           </div>
         </div>
         <span class="field-label">Type</span>
@@ -431,6 +455,8 @@ async function renderItems(userId: string, parentItemId?: string, parentItemName
       (document.getElementById("edit-parent-recurrence") as HTMLInputElement).value = parentItem!.recurrence ?? "";
       (document.getElementById("edit-parent-recurrence-basis") as HTMLSelectElement).value =
         parentItem!.recurrenceBasis ?? "DUE_DATE";
+      (document.getElementById("edit-parent-offset") as HTMLInputElement).value =
+        parentItem!.dueOffsetDays != null ? String(parentItem!.dueOffsetDays) : "";
       (document.getElementById("edit-parent-assignee") as HTMLSelectElement).value =
         parentItem!.assignedToUserId ?? "";
       editForm.style.display = "";
@@ -452,12 +478,22 @@ async function renderItems(userId: string, parentItemId?: string, parentItemName
             (document.getElementById("edit-parent-time") as HTMLInputElement).value,
           )
         : { date: parentItem!.dueDate, hasDueTime: parentItem!.hasDueTime ?? false };
-      const recurrence = hasTasks
-        ? ((document.getElementById("edit-parent-recurrence") as HTMLInputElement).value.trim() || undefined)
-        : parentItem!.recurrence;
-      const recurrenceBasis = hasTasks
-        ? ((document.getElementById("edit-parent-recurrence-basis") as HTMLSelectElement).value as "DUE_DATE" | "COMPLETION_DATE")
-        : parentItem!.recurrenceBasis;
+      // Children can't carry their own recurrence (offset drives their deadline instead) —
+      // force this to undefined rather than trusting the hidden field, so a legacy record
+      // that predates this rule gets cleared on save instead of perpetually re-rejected.
+      const isChild = !!parentItem!.parentItemId;
+      const recurrence = isChild
+        ? undefined
+        : hasTasks
+          ? ((document.getElementById("edit-parent-recurrence") as HTMLInputElement).value.trim() || undefined)
+          : parentItem!.recurrence;
+      const recurrenceBasis = isChild
+        ? undefined
+        : hasTasks
+          ? ((document.getElementById("edit-parent-recurrence-basis") as HTMLSelectElement).value as "DUE_DATE" | "COMPLETION_DATE")
+          : parentItem!.recurrenceBasis;
+      const offsetRaw = (document.getElementById("edit-parent-offset") as HTMLInputElement).value;
+      const dueOffsetDays = offsetRaw !== "" ? parseInt(offsetRaw, 10) : undefined;
       const assignedToUserId = (document.getElementById("edit-parent-assignee") as HTMLSelectElement).value || undefined;
       try {
         await client.send(new UpdateItemCommand({
@@ -468,6 +504,7 @@ async function renderItems(userId: string, parentItemId?: string, parentItemName
           recurrenceBasis: recurrence ? recurrenceBasis : undefined,
           hasTasks: parentItem!.hasTasks ?? true,
           parentItemId: parentItem!.parentItemId ?? undefined,
+          dueOffsetDays,
           timezoneOffsetMinutes: new Date().getTimezoneOffset(),
         }));
         await renderItems(userId, parentItemId, name);
@@ -595,6 +632,7 @@ async function renderItems(userId: string, parentItemId?: string, parentItemName
           recurrence: item.recurrence ?? undefined,
           recurrenceBasis: item.recurrenceBasis ?? undefined,
           parentItemId: item.parentItemId ?? undefined,
+          dueOffsetDays: item.dueOffsetDays ?? undefined,
           timezoneOffsetMinutes: new Date().getTimezoneOffset(),
         }));
         if (markingComplete) {
@@ -619,6 +657,9 @@ async function renderItems(userId: string, parentItemId?: string, parentItemName
         dateSpan.textContent = item.dueDate ? item.dueDate.toLocaleDateString() : "no due date";
         dateSpan.style.color = "#666";
         dateSpan.style.fontSize = "0.85rem";
+        if (parentItemId) {
+          dateSpan.title = "Recalculated from the offset whenever the top-level item recurs — manual edits here won't persist across recurrences.";
+        }
         li.appendChild(dateSpan);
 
         if (item.hasDueTime && item.dueDate) {
@@ -627,6 +668,30 @@ async function renderItems(userId: string, parentItemId?: string, parentItemName
           timeSpan.style.color = "#666";
           timeSpan.style.fontSize = "0.85rem";
           li.appendChild(timeSpan);
+        }
+
+        if (parentItemId) {
+          const offsetVal = item.dueOffsetDays ?? null;
+          const offsetLabel = offsetVal === null ? "no offset"
+            : offsetVal === 0 ? "on due date"
+            : offsetVal > 0 ? `+${offsetVal}d` : `${offsetVal}d`;
+          const offsetEl = makeEditableText(offsetLabel, async (newVal) => {
+            const parsed = newVal === "" ? undefined : parseInt(newVal, 10);
+            await client.send(new UpdateItemCommand({
+              userId, itemId: item.itemId!,
+              name: item.name!, complete: item.complete ?? false,
+              dueDate: item.dueDate,
+              hasDueTime: item.hasDueTime ?? false,
+              hasTasks: item.hasTasks ?? true,
+              parentItemId: item.parentItemId ?? undefined,
+              dueOffsetDays: isNaN(parsed as number) ? undefined : parsed,
+              timezoneOffsetMinutes: new Date().getTimezoneOffset(),
+            }));
+            item.dueOffsetDays = isNaN(parsed as number) ? undefined : parsed;
+          }, { inputType: "number", inputValue: offsetVal !== null ? String(offsetVal) : "" });
+          offsetEl.style.cssText = "color:#666;font-size:0.85rem;";
+          offsetEl.title = "Click to edit offset days from the top-level item's due date";
+          li.appendChild(offsetEl);
         }
 
         if (item.recurrence) {
@@ -656,8 +721,10 @@ async function renderItems(userId: string, parentItemId?: string, parentItemName
             (document.getElementById("item-time") as HTMLInputElement).value,
           )
         : { date: undefined, hasDueTime: false };
-      const recurrence = hasTasks ? ((document.getElementById("item-recurrence") as HTMLInputElement).value.trim() || undefined) : undefined;
+      const recurrence = hasTasks && !parentItemId ? ((document.getElementById("item-recurrence") as HTMLInputElement).value.trim() || undefined) : undefined;
       const recurrenceBasis = hasTasks ? ((document.getElementById("item-recurrence-basis") as HTMLSelectElement).value as "DUE_DATE" | "COMPLETION_DATE") : undefined;
+      const offsetRaw = (document.getElementById("item-offset") as HTMLInputElement).value;
+      const dueOffsetDays = offsetRaw !== "" ? parseInt(offsetRaw, 10) : undefined;
       const assignedToUserId = (document.getElementById("item-assignee") as HTMLSelectElement).value || undefined;
       for (const name of names) {
         await client.send(new CreateItemCommand({
@@ -669,6 +736,7 @@ async function renderItems(userId: string, parentItemId?: string, parentItemName
           recurrenceBasis: recurrence ? recurrenceBasis : undefined,
           hasTasks: itemHasTasks,
           parentItemId: parentItemId ?? undefined,
+          dueOffsetDays,
           timezoneOffsetMinutes: new Date().getTimezoneOffset(),
         }));
       }
@@ -688,6 +756,7 @@ async function renderItems(userId: string, parentItemId?: string, parentItemName
         (document.getElementById("item-due") as HTMLInputElement).value = "";
         (document.getElementById("item-time") as HTMLInputElement).value = "";
         (document.getElementById("item-recurrence") as HTMLInputElement).value = "";
+        (document.getElementById("item-offset") as HTMLInputElement).value = "";
       }
       await load();
       createForm.style.display = "none";

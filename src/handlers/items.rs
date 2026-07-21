@@ -1,4 +1,4 @@
-use super::{internal, not_found};
+use super::{clone_children, internal, not_found};
 use crate::domain::{item::Item, recurrence};
 use crate::storage::{ItemRepo, RepoError};
 use std::sync::Arc;
@@ -10,6 +10,9 @@ pub async fn create_item(
 ) -> Result<output::CreateItemOutput, error::CreateItemError> {
     if let Some(ref r) = input.recurrence {
         recurrence::parse(r).map_err(internal)?;
+    }
+    if input.recurrence.is_some() && input.parent_item_id.is_some() {
+        return Err(internal("child items cannot have their own recurrence; set dueOffsetDays instead").into());
     }
     let mut item = Item::new_user_item(&input.user_id, &input.name);
     if let Some(dt) = input.due_date {
@@ -61,6 +64,9 @@ pub async fn update_item(
     if let Some(ref r) = input.recurrence {
         recurrence::parse(r).map_err(internal)?;
     }
+    if input.recurrence.is_some() && input.parent_item_id.is_some() {
+        return Err(internal("child items cannot have their own recurrence; set dueOffsetDays instead").into());
+    }
 
     let current = repo
         .get(&input.user_id, &input.item_id)
@@ -85,37 +91,20 @@ pub async fn update_item(
     item.due_offset_days = input.due_offset_days;
     item.assigned_to_user_id = current.assigned_to_user_id.clone();
 
-    if item.complete {
-        if let Some(ref pattern) = item.recurrence {
-            if let Ok(rule) = recurrence::parse(pattern) {
-                let reference = if item.recurrence_basis.as_deref() == Some("COMPLETION_DATE") {
-                    chrono::Utc::now()
-                } else {
-                    item.deadline.unwrap_or_else(chrono::Utc::now)
-                };
-                let tz_offset = input.timezone_offset_minutes.unwrap_or(0);
-                let next_deadline = recurrence::next_date(&rule, reference, tz_offset);
-                let user_id = item.user_id.clone().unwrap_or_default();
-                let mut next_item = Item::new_user_item(&user_id, &item.name);
-                next_item.deadline = Some(next_deadline);
-                next_item.recurrence = item.recurrence.clone();
-                next_item.recurrence_basis = item.recurrence_basis.clone();
-                next_item.has_tasks = item.has_tasks;
-                next_item.parent_item_id = item.parent_item_id.clone();
-                next_item.has_due_time = if rule.time_override.is_some() {
-                    true
-                } else {
-                    item.has_due_time
-                };
-                repo.create(&next_item)
-                    .await
-                    .map_err(|e| internal(format!("{e:?}")))?;
-                repo.delete(&item.id)
-                    .await
-                    .map_err(|e| internal(format!("{e:?}")))?;
-                return Ok(output::UpdateItemOutput {});
-            }
-        }
+    let tz_offset = input.timezone_offset_minutes.unwrap_or(0);
+    if let Some(next_item) = item.next_recurrence(chrono::Utc::now(), tz_offset) {
+        let next_deadline = next_item.deadline.expect("next_recurrence always sets a deadline");
+        let next_id = repo
+            .create(&next_item)
+            .await
+            .map_err(|e| internal(format!("{e:?}")))?;
+        clone_children(&repo, &item.id, &next_id, next_deadline, tz_offset)
+            .await
+            .map_err(|e| internal(format!("{e:?}")))?;
+        repo.delete(&item.id)
+            .await
+            .map_err(|e| internal(format!("{e:?}")))?;
+        return Ok(output::UpdateItemOutput {});
     }
 
     repo.update(&item).await.map_err(|e| match e {
@@ -272,4 +261,158 @@ pub async fn list_assigned_items(
         })
         .collect();
     Ok(output::ListAssignedItemsOutput { items })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::memory::InMemoryItemRepo;
+
+    fn update_input(item_id: &str, name: &str, complete: bool) -> input::UpdateItemInput {
+        input::UpdateItemInput {
+            user_id: "u1".to_string(),
+            item_id: item_id.to_string(),
+            name: name.to_string(),
+            due_date: None,
+            complete,
+            recurrence: None,
+            recurrence_basis: None,
+            has_due_time: None,
+            has_tasks: None,
+            parent_item_id: None,
+            due_offset_days: None,
+            timezone_offset_minutes: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn completing_recurring_item_carries_children_to_next_instance() {
+        let item_repo = Arc::new(InMemoryItemRepo::new());
+        let mut parent = Item::new_user_item("u1", "Weekly review");
+        parent.recurrence = Some("every 7 days".to_string());
+        let parent_id = item_repo.create(&parent).await.unwrap();
+
+        let mut child = Item::new_user_item("u1", "Check inbox");
+        child.parent_item_id = Some(parent_id.clone());
+        let child_id = item_repo.create(&child).await.unwrap();
+
+        let items: Arc<dyn ItemRepo> = item_repo.clone();
+        let mut input = update_input(&parent_id, "Weekly review", true);
+        input.recurrence = Some("every 7 days".to_string());
+
+        update_item(input, server::Extension(items.clone()))
+            .await
+            .unwrap();
+
+        // Old parent is gone, and its old id is no longer a valid parent.
+        assert!(items.get("u1", &parent_id).await.is_err());
+
+        let remaining = item_repo
+            .list("u1")
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|i| i.name == "Weekly review")
+            .expect("next occurrence should exist");
+        assert_ne!(remaining.id, parent_id);
+        assert!(!remaining.complete);
+
+        let new_children = items.list_children(&remaining.id).await.unwrap();
+        assert_eq!(new_children.len(), 1);
+        assert_eq!(new_children[0].name, "Check inbox");
+        assert_ne!(new_children[0].id, child_id);
+        assert!(!new_children[0].complete);
+
+        // The old child row was cleaned up, not left dangling on the deleted parent.
+        assert!(items.list_children(&parent_id).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn recurrence_carries_deadline_to_children_via_offset() {
+        let item_repo = Arc::new(InMemoryItemRepo::new());
+        let mut parent = Item::new_user_item("u1", "Weekly review");
+        parent.recurrence = Some("every 7 days".to_string());
+        parent.deadline = Some(chrono::Utc::now());
+        let parent_id = item_repo.create(&parent).await.unwrap();
+
+        let mut with_offset = Item::new_user_item("u1", "Prep agenda");
+        with_offset.parent_item_id = Some(parent_id.clone());
+        with_offset.due_offset_days = Some(-2);
+        with_offset.deadline = Some(chrono::DateTime::parse_from_rfc3339("2020-01-01T00:00:00Z").unwrap().with_timezone(&chrono::Utc));
+        item_repo.create(&with_offset).await.unwrap();
+
+        let mut without_offset = Item::new_user_item("u1", "Miscellaneous note");
+        without_offset.parent_item_id = Some(parent_id.clone());
+        item_repo.create(&without_offset).await.unwrap();
+
+        let items: Arc<dyn ItemRepo> = item_repo.clone();
+        let mut input = update_input(&parent_id, "Weekly review", true);
+        input.recurrence = Some("every 7 days".to_string());
+
+        update_item(input, server::Extension(items.clone()))
+            .await
+            .unwrap();
+
+        let remaining = item_repo
+            .list("u1")
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|i| i.name == "Weekly review")
+            .unwrap();
+        let new_children = items.list_children(&remaining.id).await.unwrap();
+
+        let prepped = new_children.iter().find(|c| c.name == "Prep agenda").unwrap();
+        let root_deadline = remaining.deadline.unwrap();
+        assert_eq!(
+            prepped.deadline.unwrap().date_naive(),
+            (root_deadline - chrono::Duration::days(2)).date_naive()
+        );
+
+        let misc = new_children.iter().find(|c| c.name == "Miscellaneous note").unwrap();
+        assert!(misc.deadline.is_none());
+    }
+
+    #[tokio::test]
+    async fn create_item_rejects_recurrence_on_child() {
+        let item_repo = Arc::new(InMemoryItemRepo::new());
+        let items: Arc<dyn ItemRepo> = item_repo;
+
+        let result = create_item(
+            input::CreateItemInput {
+                user_id: "u1".to_string(),
+                name: "Subtask".to_string(),
+                due_date: None,
+                complete: None,
+                recurrence: Some("every day".to_string()),
+                recurrence_basis: None,
+                has_due_time: None,
+                has_tasks: None,
+                parent_item_id: Some("parent1".to_string()),
+                due_offset_days: None,
+                timezone_offset_minutes: None,
+            },
+            server::Extension(items),
+        )
+        .await;
+
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn update_item_rejects_recurrence_on_child() {
+        let item_repo = Arc::new(InMemoryItemRepo::new());
+        let mut child = Item::new_user_item("u1", "Subtask");
+        child.parent_item_id = Some("parent1".to_string());
+        let child_id = item_repo.create(&child).await.unwrap();
+        let items: Arc<dyn ItemRepo> = item_repo;
+
+        let mut input = update_input(&child_id, "Subtask", false);
+        input.recurrence = Some("every day".to_string());
+        input.parent_item_id = Some("parent1".to_string());
+
+        let result = update_item(input, server::Extension(items)).await;
+
+        assert!(result.is_err());
+    }
 }

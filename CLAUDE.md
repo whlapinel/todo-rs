@@ -96,21 +96,36 @@ SQLite schema is created/migrated inline in `create_pool()`. Additive schema mig
 
 ### Domain Models (`src/domain/`)
 
-Plain Rust structs (`User`, `Item`) — no framework coupling. `Item` stores `deadline` as `Option<DateTime<Utc>>`, `recurrence` as a raw English string, `recurrence_basis` as `Option<String>` (`"DUE_DATE"` or `"COMPLETION_DATE"`).
+Plain Rust structs (`User`, `Item`) — no framework coupling. `Item` stores `deadline` as `Option<DateTime<Utc>>`, `recurrence` as a raw English string, `recurrence_basis` as `Option<String>` (`"DUE_DATE"` or `"COMPLETION_DATE"`), and `due_offset_days` as `Option<i32>` (see Recurrence below).
 
-### Recurrence (`src/recurrence.rs`)
+`Item::next_recurrence(now, tz_offset_minutes)` (`src/domain/item.rs`) is the domain-level decision of whether a completed item should recur and what its successor looks like: returns `None` unless `complete` and `recurrence` are both set and the pattern parses, otherwise a fresh (`id` cleared, `complete: false`) clone with `deadline` advanced via `recurrence::next_date`. `Item::deadline_from_offset(root_deadline, tz_offset_minutes)` is the analogous decision for a child: `due_offset_days.map(|n| end_of_day(root_deadline + n days))`, `None` if no offset is set. Both are pure and unit-tested in isolation from the handlers that call them.
 
-Custom English-phrase parser supporting: `every N days/weeks/months/years`, `every month on the Nth`, `every [weekday]`. `parse()` returns a `RecurrenceRule`; `next_date()` computes the next UTC datetime (advancing past the present if cycles were missed). When a recurring item is marked complete in `update_item`, the handler spawns a new item with the next deadline and deletes the completed one.
+### Recurrence (`src/domain/recurrence.rs`)
+
+Custom English-phrase parser supporting: `every N days/weeks/months/years`, `every month on the Nth`, `every [weekday]`. `parse()` returns a `RecurrenceRule`; `next_date()` computes the next UTC datetime (advancing past the present if cycles were missed).
+
+**Only top-level items (no `parentItemId`) can have a `recurrence`.** `create_item`/`update_item`/`create_team_item`/`update_team_item` reject any request that sets both `recurrence` and `parentItemId`. Child items instead carry a `dueOffsetDays: Option<i32>` — days from the top-level item's due date (negative = before, positive = after).
+
+When a recurring item is marked complete in `update_item`/`update_team_item`, the handler calls `Item::next_recurrence` to build the successor, persists it, then calls `clone_children` (`src/handlers/mod.rs`) to recursively re-parent the entire old subtree onto the new item's id — every descendant gets a fresh id, `complete: false`, and a deadline recomputed as `deadline_from_offset(new_root_deadline, tz_offset)` (or `None` if it has no offset). The old subtree (parent and all descendants) is then deleted. Two things worth remembering:
+
+- The offset reference is always the item that actually recurred (the root of this clone operation), not each descendant's immediate parent — a grandchild's offset is measured from the same root a direct child's is, not chained through an intermediate parent's own (offset-derived) deadline.
+- A child's *prior* deadline (however it got there — manual edit, a previous offset computation) is never read during this recompute; it's offset-or-`None`, full stop. The frontend surfaces this as a warning near due-date fields on child items: manual edits don't survive the next recurrence of an ancestor.
 
 ### Frontend (`frontend/src/main.ts`)
 
 Single-file TypeScript SPA using the History API for routing (`/`, `/users/:id`, `/users/:id/items/:id`). Imports the generated `@todo/client` package (symlinked from `todo-typescript-client/`). Built with Vite (content-hashed filenames — hard refresh needed after rebuild during dev).
+
+`renderItems` handles both the top-level item list and, when passed a `parentItemId`, that item's children — the same create/edit forms are reused for both, toggling which fields show based on nesting: a "Repeat" field for top-level items, an "Offset days" field instead for children (mirroring the constraint in the Recurrence section above). Per-child rows show an editable offset label (`+2d`/`-3d`/`on due date`/`no offset`) next to the due date, and the due-date field carries a warning that it's recalculated from the offset whenever an ancestor recurs — manual edits to a child's due date don't survive that. The Checklists screen (`renderChecklistDetail`, reached via `/users/:id/checklists`) is a separate, parallel feature for building `isTemplate` checklists and setting offsets on their items; those items never carry real dates (templates have no dates — see `create_template`), so the deadline-recalculation concern doesn't apply there. Note the "Use" button on that screen only creates the single top-level item today — it does not copy the template's children over, so a checklist's structure and offsets aren't actually applied anywhere yet.
+
+Team items (`renderTeamItems`/`renderTeamItemDetail`) have no due-date, recurrence, or offset UI at all currently — those forms only expose a name field, even though the backend (`create_team_item`/`update_team_item`) fully supports all three. Setting them for a team item today requires the MCP server or a direct API call.
 
 ### CLI (`todo-cli/`)
 
 A standalone Rust crate that builds the `prl` binary. Async (`#[tokio::main]`), uses the generated `todo-client` crate directly rather than hand-rolled `reqwest`/JSON structs. `client.rs` builds a `todo_client::Client` via `Config::builder().endpoint_url(...).bearer_token(Token::new(token, None)).build()` — the `@httpBearerAuth` trait (see Smithy section above) generates that `bearer_token` method, so there's no hand-written request interceptor. Config stored at `~/.config/prl/config.toml`. See `docs/prl-user-guide.md` for usage.
 
 No `prl items assign`/`unassign` — the generated `CreateItemInput`/`UpdateItemInput` builders have no `assigned_to_user_id` setter (assignment is a team-item-only concept, not exposed via these operations), so the CLI can't send it at all.
+
+`prl items add --parent <id> --recurrence <pattern>` is accepted by the CLI's argument parser but now rejected by the server (recurrence is top-level-only — see Recurrence above). The CLI has no `--due-offset-days` flag, so there's currently no CLI way to give a child item an offset at all.
 
 Build/install separately from the main server (`cargo` commands run from `todo-cli/` or via `task cli-build` / `task cli-install`).
 
@@ -230,3 +245,6 @@ Every place that must be updated when the Smithy model changes. The generated cr
 ## Known Issues
 
 - **CLI has no team item support** — `todo-cli/` was not updated when team items were added. Team items (create/list/update/delete under `/teams/{teamId}/items`) are accessible via the web UI and MCP server only; `todo-cli/src/teams.rs` only covers team CRUD/membership, not team items.
+- **Team items have no due-date/recurrence/offset UI** — the web UI's team item screens only expose a name field; the backend fully supports `dueDate`/`recurrence`/`dueOffsetDays` on team items (and the MCP server exposes all three), but there's no frontend surface to set them short of a direct API call.
+- **Checklist templates don't carry their children when applied** — the Checklists screen's "Use" button (`renderChecklistDetail` in `frontend/src/main.ts`) only creates the single top-level item via `CreateItemCommand`; it never copies the template's child items (or their offsets) onto the new item. Building a checklist with sub-items today has no way to actually apply that structure to a real task.
+- **`prl` CLI's `--parent`/`--recurrence` combo is now server-rejected** — `prl items add` never validated that combination client-side, and the server now rejects it (recurrence is top-level-only, see Recurrence section). The CLI also has no `--due-offset-days` flag, so it can't set a child's offset either; those items need the web UI or MCP server.

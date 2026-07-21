@@ -105,13 +105,18 @@ prl items add "Chapter notes" --parent <parent-item-id>
 > assignable task, use the web UI to create a team item under a team you
 > belong to (see [Teams](#teams)).
 
+> **Note:** `--recurrence` only works on items with no `--parent` — the server
+> rejects a recurrence set on a child item. Child items instead use an offset
+> (days from the top-level item's due date), which the CLI has no flag for
+> yet; set it via the web UI or the MCP server.
+
 ### Mark complete
 
 ```sh
 prl items done <item-id>
 ```
 
-If the item has a recurrence rule, completing it automatically spawns the next occurrence with an updated due date.
+If the item has a recurrence rule, completing it automatically spawns the next occurrence with an updated due date, and any child items are carried over to the new occurrence — with their own due dates recalculated from their offset (or cleared, if they have none). A child's due date is always recalculated this way when its top-level ancestor recurs; manually setting one in the meantime won't survive the next recurrence.
 
 ### Get item details
 
@@ -249,6 +254,8 @@ When adding an item with `--recurrence`, the system understands natural English 
 | Day of week | `every monday` |
 
 When a recurring item is marked done, it is replaced by a new item with the next computed due date. The recurrence basis (due date vs. completion date) controls how that date is calculated and must be set via the web app.
+
+Recurrence only applies to top-level items — a child item (created with `--parent`) can't have its own recurrence. Instead, a child can have an offset (days from its top-level item's due date), which the web app sets and which is used to recompute the child's due date whenever the top-level item recurs.
 
 ---
 

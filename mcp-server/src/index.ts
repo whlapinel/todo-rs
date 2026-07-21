@@ -102,7 +102,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "create_item",
       description:
-        "Create a new todo item. Supports due dates, recurrence rules (e.g. 'every Monday', 'every 2 weeks'), and nesting under a parent item.",
+        "Create a new todo item. Supports due dates, recurrence rules (e.g. 'every Monday', 'every 2 weeks'), and nesting under a parent item. " +
+        "Recurrence is only valid on top-level items (no parentItemId) — child items use dueOffsetDays instead, and setting both recurrence and parentItemId is rejected.",
       inputSchema: {
         type: "object",
         properties: {
@@ -116,7 +117,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           recurrence: {
             type: "string",
             description:
-              "English recurrence rule, e.g. 'every day', 'every Monday', 'every 2 weeks', 'every month on the 1st'",
+              "English recurrence rule, e.g. 'every day', 'every Monday', 'every 2 weeks', 'every month on the 1st'. Only valid when parentItemId is not set.",
           },
           recurrenceBasis: {
             type: "string",
@@ -135,6 +136,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: "string",
             description: "ID of the parent item (for sub-tasks)",
           },
+          dueOffsetDays: {
+            type: "number",
+            description:
+              "For a child item only: days from the top-level item's due date (negative = before, positive = after). " +
+              "Whenever the top-level item recurs, this child's due date is recalculated from the offset — any manually-set due date on the child does not persist across recurrences.",
+          },
           timezoneOffsetMinutes: {
             type: "number",
             description: "Client timezone offset in minutes (e.g. -300 for EST)",
@@ -146,7 +153,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "update_item",
       description:
-        "Update a todo item. Marking a recurring item as complete will auto-create the next occurrence.",
+        "Update a todo item. Marking a recurring item as complete will auto-create the next occurrence, carrying its child items over with deadlines recomputed from their dueOffsetDays.",
       inputSchema: {
         type: "object",
         properties: {
@@ -155,7 +162,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           name: { type: "string" },
           complete: { type: "boolean" },
           dueDate: { type: "string", description: "ISO 8601 date/time string" },
-          recurrence: { type: "string" },
+          recurrence: { type: "string", description: "Only valid when parentItemId is not set." },
           recurrenceBasis: {
             type: "string",
             enum: ["DUE_DATE", "COMPLETION_DATE"],
@@ -163,6 +170,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           hasDueTime: { type: "boolean" },
           hasTasks: { type: "boolean" },
           parentItemId: { type: "string" },
+          dueOffsetDays: {
+            type: "number",
+            description: "For a child item only: days from the top-level item's due date (negative = before, positive = after).",
+          },
           timezoneOffsetMinutes: { type: "number" },
         },
         required: ["userId", "itemId", "name", "complete"],
@@ -326,7 +337,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "create_team_item",
-      description: "Create a new item owned by a team. The caller must be an active team member. Supports assignment to any active team member.",
+      description: "Create a new item owned by a team. The caller must be an active team member. Supports assignment to any active team member. " +
+        "Recurrence is only valid on top-level items (no parentItemId) — child items use dueOffsetDays instead, and setting both recurrence and parentItemId is rejected.",
       inputSchema: {
         type: "object",
         properties: {
@@ -334,11 +346,17 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           name: { type: "string" },
           dueDate: { type: "string", description: "ISO 8601 date/time string" },
           complete: { type: "boolean" },
-          recurrence: { type: "string" },
+          recurrence: { type: "string", description: "Only valid when parentItemId is not set." },
           recurrenceBasis: { type: "string", enum: ["DUE_DATE", "COMPLETION_DATE"] },
           hasDueTime: { type: "boolean" },
           hasTasks: { type: "boolean" },
           parentItemId: { type: "string" },
+          dueOffsetDays: {
+            type: "number",
+            description:
+              "For a child item only: days from the top-level item's due date (negative = before, positive = after). " +
+              "Whenever the top-level item recurs, this child's due date is recalculated from the offset — any manually-set due date on the child does not persist across recurrences.",
+          },
           assignedToUserId: { type: "string", description: "Active team member to assign this item to" },
           timezoneOffsetMinutes: { type: "number" },
         },
@@ -347,7 +365,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "update_team_item",
-      description: "Update a team item. The caller must be an active team member. Marking a recurring item complete will auto-create the next occurrence.",
+      description: "Update a team item. The caller must be an active team member. Marking a recurring item complete will auto-create the next occurrence, carrying its child items over with deadlines recomputed from their dueOffsetDays.",
       inputSchema: {
         type: "object",
         properties: {
@@ -356,11 +374,15 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           name: { type: "string" },
           complete: { type: "boolean" },
           dueDate: { type: "string", description: "ISO 8601 date/time string" },
-          recurrence: { type: "string" },
+          recurrence: { type: "string", description: "Only valid when parentItemId is not set." },
           recurrenceBasis: { type: "string", enum: ["DUE_DATE", "COMPLETION_DATE"] },
           hasDueTime: { type: "boolean" },
           hasTasks: { type: "boolean" },
           parentItemId: { type: "string" },
+          dueOffsetDays: {
+            type: "number",
+            description: "For a child item only: days from the top-level item's due date (negative = before, positive = after).",
+          },
           assignedToUserId: { type: "string", description: "Active team member to assign this item to" },
           timezoneOffsetMinutes: { type: "number" },
         },
@@ -437,6 +459,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         if (args.hasDueTime !== undefined) body.hasDueTime = args.hasDueTime;
         if (args.hasTasks !== undefined) body.hasTasks = args.hasTasks;
         if (args.parentItemId) body.parentItemId = args.parentItemId;
+        if (args.dueOffsetDays !== undefined) body.dueOffsetDays = args.dueOffsetDays;
         if (args.timezoneOffsetMinutes !== undefined)
           body.timezoneOffsetMinutes = args.timezoneOffsetMinutes;
         result = await api("POST", `/users/${args.userId}/items`, body);
@@ -454,6 +477,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         if (args.hasDueTime !== undefined) body.hasDueTime = args.hasDueTime;
         if (args.hasTasks !== undefined) body.hasTasks = args.hasTasks;
         if (args.parentItemId) body.parentItemId = args.parentItemId;
+        if (args.dueOffsetDays !== undefined) body.dueOffsetDays = args.dueOffsetDays;
         if (args.timezoneOffsetMinutes !== undefined)
           body.timezoneOffsetMinutes = args.timezoneOffsetMinutes;
         result = await api(
@@ -540,6 +564,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         if (args.hasDueTime !== undefined) body.hasDueTime = args.hasDueTime;
         if (args.hasTasks !== undefined) body.hasTasks = args.hasTasks;
         if (args.parentItemId) body.parentItemId = args.parentItemId;
+        if (args.dueOffsetDays !== undefined) body.dueOffsetDays = args.dueOffsetDays;
         if (args.assignedToUserId) body.assignedToUserId = args.assignedToUserId;
         if (args.timezoneOffsetMinutes !== undefined)
           body.timezoneOffsetMinutes = args.timezoneOffsetMinutes;
@@ -558,6 +583,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         if (args.hasDueTime !== undefined) body.hasDueTime = args.hasDueTime;
         if (args.hasTasks !== undefined) body.hasTasks = args.hasTasks;
         if (args.parentItemId) body.parentItemId = args.parentItemId;
+        if (args.dueOffsetDays !== undefined) body.dueOffsetDays = args.dueOffsetDays;
         if (args.assignedToUserId) body.assignedToUserId = args.assignedToUserId;
         if (args.timezoneOffsetMinutes !== undefined)
           body.timezoneOffsetMinutes = args.timezoneOffsetMinutes;
