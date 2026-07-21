@@ -5,6 +5,7 @@ namespace common
 use aws.protocols#restJson1
 
 @restJson1
+@httpBearerAuth
 service PeoplesRepublicOfLists {
     version: "2026-04-14"
     resources: [

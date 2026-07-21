@@ -83,17 +83,22 @@ async fn main() {
 
     let app = match auth_mode.as_str() {
         "caddy" => {
+            let jwt_secret = std::env::var("TODO_JWT_SECRET")
+                .expect("TODO_JWT_SECRET required (used to verify Bearer tokens from the CLI/MCP)");
             let api_router = Router::new()
                 .route_service("/users", api.clone())
                 .route_service("/users/*path", api.clone())
                 .route_service("/teams", api.clone())
                 .route_service("/teams/*path", api.clone())
                 .layer(middleware::from_fn(auth::caddy_header_middleware));
-            let auth_router = Router::new().route("/me", get(auth::caddy_auth_me));
+            let auth_router = Router::new()
+                .route("/me", get(auth::caddy_auth_me))
+                .route("/token", get(auth::caddy_auth_token));
             Router::new()
                 .nest("/api", api_router)
                 .nest("/auth", auth_router)
                 .layer(Extension(user_repo))
+                .layer(Extension(Arc::new(jwt_secret)))
                 .layer(CookieManagerLayer::new())
                 .fallback_service(frontend)
         }

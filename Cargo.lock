@@ -2536,6 +2536,7 @@ dependencies = [
  "hyper",
  "jsonwebtoken",
  "lettre",
+ "libsqlite3-sys",
  "mockall",
  "oauth2",
  "reqwest",

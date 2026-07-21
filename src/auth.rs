@@ -344,9 +344,10 @@ pub async fn caddy_auth_me(
     }
 }
 
-pub async fn caddy_header_middleware(
-    mut req: Request<Body>,
-    next: Next<Body>,
+pub async fn caddy_auth_token(
+    Extension(jwt_secret): Extension<Arc<String>>,
+    Extension(repo): Extension<Arc<dyn UserRepo>>,
+    req: Request<Body>,
 ) -> Response {
     let dev_email = std::env::var("TODO_DEV_EMAIL").ok();
     let header_email = req
@@ -359,36 +360,113 @@ pub async fn caddy_header_middleware(
         (Some(e), _) => e,
         (None, Some(e)) => e,
         (None, None) => {
-            tracing::warn!(
-                path = %req.uri().path(),
-                "caddy_header_middleware: x-token-user-email header absent and TODO_DEV_EMAIL not set"
-            );
+            tracing::warn!("caddy /auth/token: x-token-user-email header absent and TODO_DEV_EMAIL not set — user not authenticated");
             return (
                 StatusCode::UNAUTHORIZED,
-                Json(serde_json::json!({"error": "authentication required"})),
+                Json(serde_json::json!({"error": "not authenticated"})),
             )
-                .into_response()
+                .into_response();
         }
     };
 
-    let repo = match req.extensions().get::<Arc<dyn crate::storage::UserRepo>>().cloned() {
-        Some(r) => r,
-        None => {
-            tracing::error!("UserRepo not found in extensions for caddy middleware");
+    let user = match repo.get_or_create_by_email(&email).await {
+        Ok(u) => u,
+        Err(e) => {
+            tracing::error!("caddy /auth/token: failed to resolve user for {email}: {e:?}");
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     };
 
-    match repo.get_or_create_by_email(&email).await {
-        Ok(user) => {
-            req.extensions_mut().insert(AuthUser { user_id: user.id });
-            next.run(req).await
-        }
+    let exp = (chrono::Utc::now() + chrono::Duration::days(365)).timestamp() as usize;
+    let claims = Claims { sub: user.id, exp };
+    match encode(
+        &Header::default(),
+        &claims,
+        &EncodingKey::from_secret(jwt_secret.as_bytes()),
+    ) {
+        Ok(token) => Json(serde_json::json!({"token": token})).into_response(),
         Err(e) => {
-            tracing::error!("Failed to resolve user for email {email}: {e:?}");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+            tracing::error!("JWT encode error: {e}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "failed to create token"})),
+            )
+                .into_response()
         }
     }
+}
+
+pub async fn caddy_header_middleware(
+    Extension(jwt_secret): Extension<Arc<String>>,
+    mut req: Request<Body>,
+    next: Next<Body>,
+) -> Response {
+    let dev_email = std::env::var("TODO_DEV_EMAIL").ok();
+    let header_email = req
+        .headers()
+        .get("x-token-user-email")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+
+    let email = match (dev_email, header_email) {
+        (Some(e), _) => Some(e),
+        (None, Some(e)) => Some(e),
+        (None, None) => None,
+    };
+
+    // Caddy-security authenticates browser sessions and injects x-token-user-email
+    // itself; it never sees CLI/MCP requests bearing our own long-lived JWTs (those
+    // are exempted from the portal at the edge — see the Caddyfile). For those, we
+    // fall back to verifying the token the same way jwt_auth_middleware does.
+    let auth_user = if let Some(email) = email {
+        let repo = match req.extensions().get::<Arc<dyn crate::storage::UserRepo>>().cloned() {
+            Some(r) => r,
+            None => {
+                tracing::error!("UserRepo not found in extensions for caddy middleware");
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
+        };
+        match repo.get_or_create_by_email(&email).await {
+            Ok(user) => AuthUser { user_id: user.id },
+            Err(e) => {
+                tracing::error!("Failed to resolve user for email {email}: {e:?}");
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
+        }
+    } else {
+        let bearer_token = req
+            .headers()
+            .get(http::header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.strip_prefix("Bearer "));
+
+        let claims = bearer_token.and_then(|t| {
+            decode::<Claims>(
+                t,
+                &DecodingKey::from_secret(jwt_secret.as_bytes()),
+                &Validation::default(),
+            )
+            .ok()
+        });
+
+        match claims {
+            Some(data) => AuthUser { user_id: data.claims.sub },
+            None => {
+                tracing::warn!(
+                    path = %req.uri().path(),
+                    "caddy_header_middleware: no x-token-user-email header, TODO_DEV_EMAIL unset, and no valid Bearer token"
+                );
+                return (
+                    StatusCode::UNAUTHORIZED,
+                    Json(serde_json::json!({"error": "authentication required"})),
+                )
+                    .into_response();
+            }
+        }
+    };
+
+    req.extensions_mut().insert(auth_user);
+    next.run(req).await
 }
 
 pub async fn jwt_auth_middleware(

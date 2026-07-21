@@ -47,7 +47,7 @@ todo-typescript-client/   ← generated TS client (DO NOT EDIT)
         ▼
 src/main.rs               ← handler implementations, axum server wiring
 frontend/src/main.ts      ← TypeScript SPA, imports from @todo/client
-todo-cli/src/main.rs      ← prl CLI (standalone crate, uses reqwest directly)
+todo-cli/src/client.rs    ← prl CLI (standalone crate, uses generated todo-client)
 ```
 
 ### Smithy Model → Generated Code
@@ -67,6 +67,8 @@ smithy-rs (a Gradle composite build via the `smithy-rs/` git submodule) generate
 
 Handler signature: `async fn op_name(input: input::OpInput, server::Extension(repo): server::Extension<Arc<dyn Repo>>) -> Result<output::OpOutput, error::OpError>`
 
+The service is also annotated `@httpBearerAuth`. This only affects **client** codegen (generic smithy-rs `codegen-client`, not AWS-specific) — it generates a `Config::builder().bearer_token(Token::new(...))` method and a `BearerAuthScheme` that auto-attaches the `Authorization: Bearer` header on `todo-client`. Server-side codegen (`codegen-server`, → `todo-server-sdk`) has no handling for HTTP auth traits at all — adding/removing this trait never changes generated server code. Actual token verification is, and must remain, hand-written in `src/auth.rs`; the trait only standardizes how the client carries the credential, not how the server validates it.
+
 ### Server (`src/main.rs`)
 
 Handlers receive dependencies via `server::Extension` (injected via `tower::ServiceBuilder` layers). The smithy service is nested under `/api`; static frontend assets are served from `frontend/dist/` via axum's `ServeDir`.
@@ -78,7 +80,9 @@ Auth mode is selected at startup via `TODO_AUTH_MODE` (see Auth section below).
 Two modes, selected by the `TODO_AUTH_MODE` env var:
 
 - **`internal`** (default) — full Google OAuth + JWT flow. Requires `TODO_GOOGLE_CLIENT_ID`, `TODO_GOOGLE_CLIENT_SECRET`, `TODO_JWT_SECRET`. Mounts `/auth/google`, `/auth/callback`, `/auth/logout`, `/auth/me`, `/auth/token` routes. The `/auth/token` endpoint issues a long-lived JWT for use by CLI/MCP clients.
-- **`caddy`** — trusts the `x-token-user-email` header injected by caddy-security upstream. No OAuth env vars needed. The `/auth/*` routes are not mounted. Set `TODO_DEV_EMAIL=you@example.com` to bypass the header check for local dev without Caddy in front.
+- **`caddy`** — also requires `TODO_JWT_SECRET` now (used to verify Bearer tokens, see below). Mounts `/auth/me` and `/auth/token`. `caddy_header_middleware` accepts identity two ways: (1) the `x-token-user-email` header injected by caddy-security for browser sessions — trusted as-is, no signature check, because only caddy-security can set it; or (2) an `Authorization: Bearer <jwt>` header for CLI/MCP requests, verified via `jsonwebtoken::decode` against `TODO_JWT_SECRET` — same check `jwt_auth_middleware` does for `internal` mode. `caddy_auth_token` mints tokens the same way `auth_token` does in `internal` mode, but resolves identity from `x-token-user-email` instead of a session cookie. Set `TODO_DEV_EMAIL=you@example.com` to bypass the header check for local dev without Caddy in front.
+
+  **Cross-repo dependency:** for a Bearer-token request to ever reach path (2) above, the edge reverse proxy must not intercept it first. In production this is caddy-security sitting in front of everything — its `authorize with mypolicy` directive would otherwise 302-redirect *any* unauthenticated request (including ones carrying our own JWT, which caddy-security doesn't recognize) to its login portal before it ever reaches this app. The home-server repo's `Caddyfile.local` gives `todo.lapinel-fam.club` its own dedicated site block with a matcher that skips `authorize` specifically for requests carrying `Authorization: Bearer`, letting them fall through to this middleware instead. See that repo's `CLAUDE.md` for the Caddyfile side of this. If that Caddyfile change is ever reverted, path (2) becomes unreachable in production even though the app code still supports it.
 
 In both modes, `AuthUser { user_id }` is injected into request extensions by the respective middleware and is available to handlers.
 
@@ -104,7 +108,9 @@ Single-file TypeScript SPA using the History API for routing (`/`, `/users/:id`,
 
 ### CLI (`todo-cli/`)
 
-A standalone Rust crate that builds the `prl` binary. Uses `reqwest::blocking` to call the REST API directly (not the generated Smithy client). Config stored at `~/.config/prl/config.toml`. See `docs/prl-user-guide.md` for usage.
+A standalone Rust crate that builds the `prl` binary. Async (`#[tokio::main]`), uses the generated `todo-client` crate directly rather than hand-rolled `reqwest`/JSON structs. `client.rs` builds a `todo_client::Client` via `Config::builder().endpoint_url(...).bearer_token(Token::new(token, None)).build()` — the `@httpBearerAuth` trait (see Smithy section above) generates that `bearer_token` method, so there's no hand-written request interceptor. Config stored at `~/.config/prl/config.toml`. See `docs/prl-user-guide.md` for usage.
+
+No `prl items assign`/`unassign` — the generated `CreateItemInput`/`UpdateItemInput` builders have no `assigned_to_user_id` setter (assignment is a team-item-only concept, not exposed via these operations), so the CLI can't send it at all.
 
 Build/install separately from the main server (`cargo` commands run from `todo-cli/` or via `task cli-build` / `task cli-install`).
 
@@ -120,10 +126,10 @@ Output lands in `mcp-server/dist/index.js`. Must be built before the MCP server 
 
 **Auth — how to get `TODO_API_TOKEN`:**
 
-The MCP server authenticates with a long-lived JWT. This requires the server to be running in `internal` auth mode (the default before caddy-security was added). If running in `caddy` mode, obtain the token while the server is temporarily set to `internal` mode, or configure caddy-security API key support.
+The MCP server authenticates with a long-lived JWT, minted by `/auth/token`. This now works directly in either auth mode — no more temporarily flipping `TODO_AUTH_MODE` to `internal` to mint one.
 
-1. Visit `https://todo.lapinel-fam.club/auth/login` in a browser → complete Google OAuth
-2. With the session cookie set, visit `https://todo.lapinel-fam.club/auth/token` in the same browser
+1. Log in through the browser: `https://todo.lapinel-fam.club/auth/google` in `internal` mode, or just load the site in `caddy` mode (caddy-security's own Google OAuth portal handles it)
+2. With the session established, visit `https://todo.lapinel-fam.club/auth/token` in the same browser
 3. Copy the `token` value from the JSON response
 4. Paste it into `.mcp.json` as `TODO_API_TOKEN` — the token is valid for 365 days
 
@@ -223,6 +229,4 @@ Every place that must be updated when the Smithy model changes. The generated cr
 
 ## Known Issues
 
-- **`prl users list` panics** — `todo-cli/src/main.rs:323` calls `.unwrap()` on `.json()` for a response that isn't valid JSON (likely an auth error page or empty body). Fix: check HTTP status code before parsing the body.
-
-- **CLI has no team item support** — `todo-cli/` was not updated when team items were added. Team items are accessible via the web UI and MCP server only. The `prl items assign` / `prl items unassign` subcommands have also been removed from the Smithy model (assignment is now a team-item-only concept). The CLI still sends `assignedToUserId` in `CreateItem` / `UpdateItem` requests, but the server ignores it.
+- **CLI has no team item support** — `todo-cli/` was not updated when team items were added. Team items (create/list/update/delete under `/teams/{teamId}/items`) are accessible via the web UI and MCP server only; `todo-cli/src/teams.rs` only covers team CRUD/membership, not team items.
