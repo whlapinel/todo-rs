@@ -10,6 +10,7 @@ resource TeamItem {
     properties: {
         name: String
         dueDate: Timestamp
+        scheduledDate: Timestamp
         complete: Boolean
         recurrence: String
         recurrenceBasis: String
@@ -38,6 +39,8 @@ operation CreateTeamItem {
         $name
 
         $dueDate
+
+        $scheduledDate
 
         $complete
 
@@ -86,8 +89,9 @@ operation GetTeamItem {
         @required
         $name
 
-        @required
         $dueDate
+
+        $scheduledDate
 
         @required
         $complete
@@ -130,6 +134,8 @@ operation UpdateTeamItem {
         $name
 
         $dueDate
+
+        $scheduledDate
 
         @required
         $complete
@@ -187,6 +193,7 @@ structure TeamItemSummary for TeamItem {
     $itemId
     $name
     $dueDate
+    $scheduledDate
     $complete
     $recurrence
     $recurrenceBasis

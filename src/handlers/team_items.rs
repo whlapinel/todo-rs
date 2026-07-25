@@ -52,7 +52,10 @@ pub async fn create_team_item(
         recurrence::parse(r).map_err(internal)?;
     }
     if input.recurrence.is_some() && input.parent_item_id.is_some() {
-        return Err(internal("child items cannot have their own recurrence; set dueOffsetDays instead").into());
+        return Err(internal(
+            "child items cannot have their own recurrence; set dueOffsetDays instead",
+        )
+        .into());
     }
     let mut item = Item::new_team_item(&input.team_id, &input.name);
     if let Some(dt) = input.due_date {
@@ -70,19 +73,18 @@ pub async fn create_team_item(
         .await
         .map_err(internal)?;
 
-    if item.due_date.is_none() {
-        if let Some(ref pattern) = item.recurrence {
-            if let Ok(rule) = recurrence::parse(pattern) {
-                let tz_offset = input.timezone_offset_minutes.unwrap_or(0);
-                let mut deadline = recurrence::next_date(&rule, chrono::Utc::now(), tz_offset);
-                if rule.time_override.is_none() {
-                    deadline = recurrence::apply_end_of_day(deadline, tz_offset);
-                } else {
-                    item.has_due_time = true;
-                }
-                item.due_date = Some(deadline);
-            }
+    if item.due_date.is_none()
+        && let Some(ref pattern) = item.recurrence
+        && let Ok(rule) = recurrence::parse(pattern)
+    {
+        let tz_offset = input.timezone_offset_minutes.unwrap_or(0);
+        let mut deadline = recurrence::next_date(&rule, chrono::Utc::now(), tz_offset);
+        if rule.time_override.is_none() {
+            deadline = recurrence::apply_end_of_day(deadline, tz_offset);
+        } else {
+            item.has_due_time = true;
         }
+        item.due_date = Some(deadline);
     }
     let item_id = repo
         .create(&item)
@@ -109,11 +111,14 @@ pub async fn get_team_item(
         })?;
     let due_date = item
         .due_date
-        .map(|dt| SmithyDateTime::from_secs(dt.timestamp()))
-        .unwrap_or(SmithyDateTime::from_secs(0));
+        .map(|dt| SmithyDateTime::from_secs(dt.timestamp()));
+    let scheduled_date = item
+        .scheduled_date
+        .map(|dt| SmithyDateTime::from_secs(dt.timestamp()));
     Ok(output::GetTeamItemOutput {
         name: item.name,
         due_date,
+        scheduled_date,
         complete: item.complete,
         recurrence: item.recurrence,
         recurrence_basis: item.recurrence_basis,
@@ -139,7 +144,10 @@ pub async fn update_team_item(
         recurrence::parse(r).map_err(internal)?;
     }
     if input.recurrence.is_some() && input.parent_item_id.is_some() {
-        return Err(internal("child items cannot have their own recurrence; set dueOffsetDays instead").into());
+        return Err(internal(
+            "child items cannot have their own recurrence; set dueOffsetDays instead",
+        )
+        .into());
     }
     let current = repo
         .get_team_item(&input.team_id, &input.item_id)
@@ -172,7 +180,9 @@ pub async fn update_team_item(
 
     let tz_offset = input.timezone_offset_minutes.unwrap_or(0);
     if let Some(next_item) = item.next_recurrence(chrono::Utc::now(), tz_offset) {
-        let next_deadline = next_item.due_date.expect("next_recurrence always sets a deadline");
+        let next_deadline = next_item
+            .due_date
+            .expect("next_recurrence always sets a deadline");
         let next_id = repo
             .create(&next_item)
             .await
@@ -244,6 +254,9 @@ pub async fn list_team_items(
             due_date: i
                 .due_date
                 .map(|dt| SmithyDateTime::from_secs(dt.timestamp())),
+            scheduled_date: i
+                .scheduled_date
+                .map(|dt| SmithyDateTime::from_secs(dt.timestamp())),
             complete: Some(i.complete),
             recurrence: i.recurrence,
             recurrence_basis: i.recurrence_basis,
@@ -261,5 +274,4 @@ pub async fn list_team_items(
 #[cfg(test)]
 mod tests {
     use super::*;
-
 }

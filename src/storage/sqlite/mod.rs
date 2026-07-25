@@ -98,15 +98,15 @@ pub trait TeamRepo: Send + Sync {
     async fn share_active_team(&self, user_a: &str, user_b: &str) -> Result<bool, RepoError>;
 }
 
-pub fn db_err(e: sqlx::Error) -> RepoError {
+fn db_err(e: sqlx::Error) -> RepoError {
     RepoError::Internal(e.to_string())
 }
 
-pub fn not_found() -> RepoError {
+fn not_found() -> RepoError {
     RepoError::NotFound
 }
 
-pub fn row_to_user(row: &sqlx::sqlite::SqliteRow) -> User {
+fn row_to_user(row: &sqlx::sqlite::SqliteRow) -> User {
     User {
         id: row.get("id"),
         first_name: row.get("first_name"),
