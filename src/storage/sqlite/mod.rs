@@ -158,12 +158,6 @@ pub async fn create_pool(url: &str) -> Result<SqlitePool, sqlx::Error> {
     )
     .execute(&pool)
     .await?;
-    let _ = sqlx::query("ALTER TABLE users ADD COLUMN email TEXT")
-        .execute(&pool)
-        .await;
-    let _ = sqlx::query("ALTER TABLE users ADD COLUMN google_id TEXT UNIQUE")
-        .execute(&pool)
-        .await;
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS items (
             id TEXT PRIMARY KEY,
