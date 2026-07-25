@@ -18,3 +18,16 @@ impl User {
         }
     }
 }
+
+/// Splits a display name like "Will Lapinel" into ("Will", "Lapinel").
+/// A name with no space becomes (name, ""); an empty/whitespace-only name is None.
+pub fn split_display_name(name: &str) -> Option<(String, String)> {
+    let name = name.trim();
+    if name.is_empty() {
+        return None;
+    }
+    match name.split_once(' ') {
+        Some((first, rest)) => Some((first.to_string(), rest.trim().to_string())),
+        None => Some((name.to_string(), String::new())),
+    }
+}

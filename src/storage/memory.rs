@@ -88,7 +88,7 @@ impl UserRepo for InMemoryUserRepo {
         Ok(user)
     }
 
-    async fn get_or_create_by_email(&self, email: &str) -> Result<User, RepoError> {
+    async fn get_or_create_by_email<'a>(&'a self, email: &'a str, name: Option<&'a str>) -> Result<User, RepoError> {
         let existing = {
             let map = self.users.read().map_err(lock_err)?;
             map.values().find(|u| u.email.as_deref() == Some(email)).cloned()
@@ -97,11 +97,13 @@ impl UserRepo for InMemoryUserRepo {
             return Ok(user);
         }
         let id = Uuid::new_v4().to_string();
-        let first_name = email.split('@').next().unwrap_or(email).to_string();
+        let (first_name, last_name) = name
+            .and_then(crate::domain::user::split_display_name)
+            .unwrap_or_else(|| (email.split('@').next().unwrap_or(email).to_string(), String::new()));
         let user = User {
             id: id.clone(),
             first_name,
-            last_name: String::new(),
+            last_name,
             email: Some(email.to_string()),
             google_id: None,
         };

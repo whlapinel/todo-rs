@@ -97,6 +97,7 @@ prl items add "Buy groceries"
 prl items add "Submit report" --due 2026-06-20
 prl items add "Water plants" --recurrence "every week"
 prl items add "Chapter notes" --parent <parent-item-id>
+prl items add "Pack bag" --parent <parent-item-id> --due-offset-days -1
 ```
 
 `--due` accepts `YYYY-MM-DD` or a Unix timestamp.
@@ -105,10 +106,12 @@ prl items add "Chapter notes" --parent <parent-item-id>
 > assignable task, use the web UI to create a team item under a team you
 > belong to (see [Teams](#teams)).
 
-> **Note:** `--recurrence` only works on items with no `--parent` — the server
-> rejects a recurrence set on a child item. Child items instead use an offset
-> (days from the top-level item's due date), which the CLI has no flag for
-> yet; set it via the web UI or the MCP server.
+> **Note:** `--recurrence` only works on items with no `--parent` — child
+> items can't have their own recurrence, and `prl` rejects the combination
+> before it ever reaches the server. Use `--due-offset-days` on a child
+> instead (days from the top-level item's due date, negative = before,
+> positive = after) — the offset is what actually sets the child's due date
+> whenever the top-level item recurs.
 
 ### Mark complete
 
@@ -255,7 +258,7 @@ When adding an item with `--recurrence`, the system understands natural English 
 
 When a recurring item is marked done, it is replaced by a new item with the next computed due date. The recurrence basis (due date vs. completion date) controls how that date is calculated and must be set via the web app.
 
-Recurrence only applies to top-level items — a child item (created with `--parent`) can't have its own recurrence. Instead, a child can have an offset (days from its top-level item's due date), which the web app sets and which is used to recompute the child's due date whenever the top-level item recurs.
+Recurrence only applies to top-level items — a child item (created with `--parent`) can't have its own recurrence. Instead, a child can have an offset (days from its top-level item's due date, set with `--due-offset-days`), which is used to recompute the child's due date whenever the top-level item recurs.
 
 ---
 

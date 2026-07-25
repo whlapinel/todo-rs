@@ -33,7 +33,25 @@ import {
   type GetTeamItemCommandOutput,
 } from "@todo/client";
 
-const client = new PeoplesRepublicOfListsClient({ endpoint: `${window.location.origin}/api` });
+// The generated client refuses to send any request unless every declared auth scheme
+// ("smithy.api#httpBearerAuth", added service-wide for CLI/MCP bearer-token auth — see
+// CLAUDE.md's Auth section) has a configured identity, even though the browser SPA never
+// uses a bearer token: it's authenticated via a cookie (internal mode) or an edge-injected
+// header (caddy mode), both handled entirely server-side. Without this override, every
+// request throws "did not have an IdentityProvider configured" before it's ever sent.
+// This stubs out that scheme with a no-op identity/signer so the client proceeds and lets
+// the browser's normal same-origin credentials do the actual auth, unchanged from before
+// the trait was added.
+const client = new PeoplesRepublicOfListsClient({
+  endpoint: `${window.location.origin}/api`,
+  httpAuthSchemes: [
+    {
+      schemeId: "smithy.api#httpBearerAuth",
+      identityProvider: () => async () => ({}),
+      signer: { sign: async (request) => request },
+    },
+  ],
+});
 
 const app = document.getElementById("app")!;
 
@@ -253,6 +271,15 @@ async function loadTeammates(userId: string): Promise<{ id: string; name: string
     }
   }
   return [...seen.entries()].map(([id, name]) => ({ id, name }));
+}
+
+async function loadTeamMembers(userId: string, teamId: string): Promise<Map<string, string>> {
+  const res = await client.send(new ListTeamMembersCommand({ userId, teamId }));
+  const map = new Map<string, string>();
+  for (const m of res.members ?? []) {
+    if (m.status === "ACTIVE") map.set(m.userId!, `${m.firstName} ${m.lastName}`);
+  }
+  return map;
 }
 
 // parentItemId: when set, we're viewing children of that item
@@ -550,7 +577,7 @@ async function renderItems(userId: string, parentItemId?: string, parentItemName
 
   document.getElementById("recurrence-info")?.addEventListener("click", () => {
     alert(
-      "Recurrence schedules the next task automatically when you mark this one complete.\n\n" +
+      "Recurrence schedules the next item automatically when you mark this one complete.\n\n" +
       "Supported phrases:\n" +
       "  every day / every N days\n" +
       "  every week / every N weeks\n" +
@@ -558,9 +585,9 @@ async function renderItems(userId: string, parentItemId?: string, parentItemName
       "  every year / every N years\n" +
       "  every month on the Nth  (e.g. \"every month on the 15th\")\n" +
       "  every [weekday]  (e.g. \"every Monday\")\n\n" +
-      "Due date basis: the next task is scheduled relative to the original\n" +
+      "Due date basis: the next item is scheduled relative to the original\n" +
       "due date, keeping a fixed calendar rhythm even if you complete early or late.\n\n" +
-      "Completion date basis: the next task is scheduled relative to when\n" +
+      "Completion date basis: the next item is scheduled relative to when\n" +
       "you actually complete this one."
     );
   });
@@ -926,6 +953,43 @@ async function renderDashboard(userId: string) {
   await load();
 }
 
+// End-of-day local date `days` after `rootDate`, matching the same convention
+// domain::Item::deadline_from_offset uses server-side for recurrence.
+function dateFromOffset(rootDate: Date, days: number): Date {
+  const base = new Date(rootDate.getFullYear(), rootDate.getMonth(), rootDate.getDate());
+  base.setDate(base.getDate() + days);
+  return new Date(base.getFullYear(), base.getMonth(), base.getDate(), 23, 59, 59);
+}
+
+// Recursively copies a template's children onto a newly created item, computing each
+// child's initial due date from its dueOffsetDays against `rootDueDate` — the same fixed
+// reference point used for every descendant, not chained through intermediate parents
+// (mirrors clone_children's semantics for recurrence). No root due date means no child
+// due dates either, since there's nothing for an offset to be measured from.
+async function copyTemplateChildren(
+  userId: string,
+  templateParentId: string,
+  newParentId: string,
+  rootDueDate: Date | undefined,
+): Promise<void> {
+  const res = await client.send(new ListItemsCommand({ userId, parentItemId: templateParentId }));
+  for (const child of res.items ?? []) {
+    const dueDate = (rootDueDate && child.dueOffsetDays != null)
+      ? dateFromOffset(rootDueDate, child.dueOffsetDays)
+      : undefined;
+    const created = await client.send(new CreateItemCommand({
+      userId,
+      name: child.name!,
+      parentItemId: newParentId,
+      dueOffsetDays: child.dueOffsetDays ?? undefined,
+      hasTasks: child.hasTasks ?? true,
+      dueDate,
+      hasDueTime: false,
+    }));
+    await copyTemplateChildren(userId, child.itemId!, created.itemId!, rootDueDate);
+  }
+}
+
 async function renderChecklists(userId: string) {
   app.innerHTML = `
     <p><a href="/users/${userId}" id="back-items">← Items</a></p>
@@ -1025,14 +1089,21 @@ async function renderChecklists(userId: string) {
         const dateVal = (useForm.querySelector(".use-due") as HTMLInputElement).value;
         const { date: dueDate, hasDueTime } = parseDateTimeInput(dateVal);
         try {
-          await client.send(new CreateItemCommand({
+          const created = await client.send(new CreateItemCommand({
             userId,
             name,
             dueDate,
             hasDueTime,
             hasTasks: item.hasTasks ?? true,
+            recurrence: item.recurrence ?? undefined,
+            recurrenceBasis: item.recurrence ? (item.recurrenceBasis ?? undefined) : undefined,
             timezoneOffsetMinutes: new Date().getTimezoneOffset(),
           }));
+          // Re-fetch: if the template carries its own recurrence and no due date was
+          // typed here, create_item auto-computes an initial deadline server-side —
+          // the offset root for children must reflect that, not the blank local input.
+          const createdItem = await client.send(new GetItemCommand({ userId, itemId: created.itemId! }));
+          await copyTemplateChildren(userId, item.itemId!, created.itemId!, createdItem.dueDate);
           showSuccess(`"${name}" added to items.`);
           useForm.style.display = "none";
           useBtn.style.display = "";
@@ -1318,7 +1389,7 @@ async function renderTeamDetail(userId: string, teamId: string, teamName: string
     <p><a href="/users/${userId}/teams" id="back-teams">← Teams</a></p>
     <h1>${teamName}</h1>
     <div style="margin-bottom:1rem;">
-      <a href="/teams/${teamId}" id="tasks-link" style="margin-right:1rem;">📋 Tasks</a>
+      <a href="/teams/${teamId}" id="items-link" style="margin-right:1rem;">📋 Items</a>
     </div>
     <button type="button" id="invite-btn">+ Invite</button>
     <form id="invite-form" style="display:none;margin-bottom:1rem;">
@@ -1334,7 +1405,7 @@ async function renderTeamDetail(userId: string, teamId: string, teamName: string
     navigate(`/users/${userId}/teams`);
   });
 
-  document.getElementById("tasks-link")!.addEventListener("click", (e) => {
+  document.getElementById("items-link")!.addEventListener("click", (e) => {
     e.preventDefault();
     navigate(`/teams/${teamId}`);
   });
@@ -1502,65 +1573,262 @@ async function renderAssignedItems(userId: string) {
   }
 }
 
-async function renderTeamItems(teamId: string, parentItemId?: string, parentName?: string) {
-  const teamName = parentName ?? teamId;
-  const backHref = parentItemId ? `/teams/${teamId}` : `/users/${currentAuth?.userId}/teams`;
-  const backLabel = parentItemId ? `← ${teamName}` : `← Teams`;
+async function renderTeamItems(teamId: string, parentItemId?: string, parentItemName?: string) {
+  const userId = currentAuth!.userId;
+
+  // If drilling into a parent item, fetch its full details (for the Edit form and to control UI)
+  let hasTasks = true;
+  let parentItem: GetTeamItemCommandOutput | undefined;
+  if (parentItemId) {
+    try {
+      parentItem = await client.send(new GetTeamItemCommand({ teamId, itemId: parentItemId }));
+      hasTasks = parentItem.hasTasks ?? true;
+    } catch {
+      renderNotFound(`Item "${parentItemId}" does not exist.`);
+      return;
+    }
+  }
+
+  const heading = parentItemName ?? "Team Items";
+  const backHref = parentItemId ? `/teams/${teamId}` : `/users/${userId}/teams`;
+  const backLabel = parentItemId ? "← Team Items" : "← Teams";
+
+  const members = await loadTeamMembers(userId, teamId);
+  const assigneeOptions = `<option value="">-- unassigned --</option>` +
+    [...members.entries()].map(([id, name]) => `<option value="${id}">${name}</option>`).join("");
 
   app.innerHTML = `
     <p><a href="${backHref}" id="back-link">${backLabel}</a></p>
-    <h1>${parentName ?? "Team Tasks"}</h1>
-    <button type="button" id="new-item-btn">+ New task</button>
-    <form id="create-form" style="display:none;margin-bottom:1rem;">
-      <input id="item-name" placeholder="Task name" required style="margin-right:0.5rem;" />
-      <button type="submit">Add</button>
+    <div style="display:flex;align-items:center;gap:0.6rem;">
+      <h1 style="margin:0;">${heading}</h1>
+      ${parentItemId ? '<button type="button" id="edit-parent-btn">Edit</button>' : ""}
+    </div>
+    ${parentItemId ? `
+    <form id="edit-parent-form" style="display:none;margin:0.5rem 0 1rem;">
+      <div class="field-grid">
+        <span class="field-label">Name</span>
+        <input id="edit-parent-name" placeholder="Item name" required />
+        <div id="edit-parent-task-fields" style="display:contents;">
+          <span class="field-label">Due</span>
+          <div class="field-row">
+            <input id="edit-parent-due" type="date" title="Due date (optional)" />
+            <input id="edit-parent-time" type="time" title="Due time (optional)" />
+          </div>
+          ${parentItem?.parentItemId ? `
+          <div id="edit-parent-due-hint" style="grid-column:2;font-size:0.78rem;color:#888;margin:-0.3rem 0 0.3rem;">
+            If the top-level item recurs, this due date is recalculated from the offset below — manual edits here won't persist across recurrences.
+          </div>` : ""}
+          <div id="edit-parent-repeat-row" style="display:${parentItem?.parentItemId ? "none" : "contents"};">
+            <span class="field-label">Repeat</span>
+            <div class="field-row">
+              <input id="edit-parent-recurrence" placeholder='e.g. "every 3 days"' />
+              <select id="edit-parent-recurrence-basis" title="Basis for scheduling the next occurrence">
+                <option value="DUE_DATE">Due date</option>
+                <option value="COMPLETION_DATE">Completion date</option>
+              </select>
+            </div>
+          </div>
+          <div id="edit-parent-offset-row" style="display:${parentItem?.parentItemId ? "contents" : "none"};">
+            <span class="field-label">Offset days</span>
+            <div class="field-row">
+              <input id="edit-parent-offset" type="number" placeholder="e.g. -2" title="Days from the top-level item's due date (negative = before, positive = after). Only takes effect if some ancestor item recurs." />
+            </div>
+          </div>
+        </div>
+        <span class="field-label">Assign to</span>
+        <div class="field-row">
+          <select id="edit-parent-assignee">${assigneeOptions}</select>
+        </div>
+      </div>
+      <button type="submit">Save</button>
+      <button type="button" id="cancel-edit-parent-btn">Cancel</button>
+    </form>` : ""}
+    <button type="button" id="new-item-btn">+ New Item</button>
+    <form id="create-item-form" style="display:none;">
+      <div class="field-grid">
+        <span class="field-label">Name</span>
+        <div class="field-row">
+          <input id="item-name" placeholder="Item name" required />
+          <button type="button" id="batch-toggle" title="Switch to batch input mode">Batch</button>
+        </div>
+        <div id="task-fields" style="display:contents;">
+          <span class="field-label">Due</span>
+          <div class="field-row">
+            <input id="item-due" type="date" title="Due date (optional)" />
+            <input id="item-time" type="time" title="Due time (optional)" />
+          </div>
+          ${parentItemId ? `
+          <div id="item-due-hint" style="grid-column:2;font-size:0.78rem;color:#888;margin:-0.3rem 0 0.3rem;">
+            If the top-level item recurs, this due date is recalculated from the offset below — manual edits here won't persist across recurrences.
+          </div>` : ""}
+          <div id="item-repeat-row" style="display:${parentItemId ? "none" : "contents"};">
+            <span class="field-label">Repeat</span>
+            <div class="field-row">
+              <input id="item-recurrence" placeholder='e.g. "every 3 days"' />
+              <select id="item-recurrence-basis" title="Basis for scheduling the next occurrence">
+                <option value="DUE_DATE">Due date</option>
+                <option value="COMPLETION_DATE">Completion date</option>
+              </select>
+            </div>
+          </div>
+          <div id="item-offset-row" style="display:${parentItemId ? "contents" : "none"};">
+            <span class="field-label">Offset days</span>
+            <div class="field-row">
+              <input id="item-offset" type="number" placeholder="e.g. -2" title="Days from the top-level item's due date (negative = before, positive = after). Only takes effect if some ancestor item recurs." />
+            </div>
+          </div>
+        </div>
+        <span class="field-label">Type</span>
+        <div class="field-row">
+          <select id="item-has-tasks" title="Item type">
+            <option value="tasks">Task list</option>
+            <option value="simple">Simple list</option>
+          </select>
+        </div>
+        <span class="field-label">Assign to</span>
+        <div class="field-row">
+          <select id="item-assignee">${assigneeOptions}</select>
+        </div>
+      </div>
+      <button type="submit">Add Item</button>
       <button type="button" id="cancel-btn">Cancel</button>
     </form>
+    <label style="display:flex;align-items:center;gap:0.4rem;margin-bottom:0.5rem;cursor:pointer;">
+      <input type="checkbox" id="show-complete" /> Show completed
+    </label>
     <ul id="items-list"></ul>`;
+
+  if (!hasTasks) {
+    (document.getElementById("task-fields") as HTMLElement).style.display = "none";
+    document.getElementById("edit-parent-task-fields")?.style.setProperty("display", "none");
+  }
 
   document.getElementById("back-link")!.addEventListener("click", (e) => {
     e.preventDefault();
     if (parentItemId) navigate(`/teams/${teamId}`);
-    else if (currentAuth) navigate(`/users/${currentAuth.userId}/teams`);
+    else navigate(`/users/${userId}/teams`);
   });
 
-  const newBtn = document.getElementById("new-item-btn")!;
-  const form = document.getElementById("create-form") as HTMLFormElement;
+  if (parentItemId && parentItem) {
+    const editBtn = document.getElementById("edit-parent-btn")!;
+    const editForm = document.getElementById("edit-parent-form") as HTMLFormElement;
 
-  newBtn.addEventListener("click", () => {
-    form.style.display = "";
-    newBtn.style.display = "none";
+    editBtn.addEventListener("click", () => {
+      (document.getElementById("edit-parent-name") as HTMLInputElement).value = parentItem!.name ?? "";
+      (document.getElementById("edit-parent-due") as HTMLInputElement).value =
+        parentItem!.dueDate ? localDateStr(parentItem!.dueDate) : "";
+      (document.getElementById("edit-parent-time") as HTMLInputElement).value =
+        (parentItem!.hasDueTime && parentItem!.dueDate)
+          ? parentItem!.dueDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false }).slice(0, 5)
+          : "";
+      (document.getElementById("edit-parent-recurrence") as HTMLInputElement).value = parentItem!.recurrence ?? "";
+      (document.getElementById("edit-parent-recurrence-basis") as HTMLSelectElement).value =
+        parentItem!.recurrenceBasis ?? "DUE_DATE";
+      (document.getElementById("edit-parent-offset") as HTMLInputElement).value =
+        parentItem!.dueOffsetDays != null ? String(parentItem!.dueOffsetDays) : "";
+      (document.getElementById("edit-parent-assignee") as HTMLSelectElement).value =
+        parentItem!.assignedToUserId ?? "";
+      editForm.style.display = "";
+      editBtn.style.display = "none";
+    });
+
+    document.getElementById("cancel-edit-parent-btn")!.addEventListener("click", () => {
+      editForm.style.display = "none";
+      editBtn.style.display = "";
+    });
+
+    editForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const name = (document.getElementById("edit-parent-name") as HTMLInputElement).value.trim();
+      if (!name) return;
+      const { date: dueDate, hasDueTime } = hasTasks
+        ? parseDateTimeInput(
+            (document.getElementById("edit-parent-due") as HTMLInputElement).value,
+            (document.getElementById("edit-parent-time") as HTMLInputElement).value,
+          )
+        : { date: parentItem!.dueDate, hasDueTime: parentItem!.hasDueTime ?? false };
+      // Children can't carry their own recurrence (offset drives their deadline instead) —
+      // force this to undefined rather than trusting the hidden field, so a legacy record
+      // that predates this rule gets cleared on save instead of perpetually re-rejected.
+      const isChild = !!parentItem!.parentItemId;
+      const recurrence = isChild
+        ? undefined
+        : hasTasks
+          ? ((document.getElementById("edit-parent-recurrence") as HTMLInputElement).value.trim() || undefined)
+          : parentItem!.recurrence;
+      const recurrenceBasis = isChild
+        ? undefined
+        : hasTasks
+          ? ((document.getElementById("edit-parent-recurrence-basis") as HTMLSelectElement).value as "DUE_DATE" | "COMPLETION_DATE")
+          : parentItem!.recurrenceBasis;
+      const offsetRaw = (document.getElementById("edit-parent-offset") as HTMLInputElement).value;
+      const dueOffsetDays = offsetRaw !== "" ? parseInt(offsetRaw, 10) : undefined;
+      const assignedToUserId = (document.getElementById("edit-parent-assignee") as HTMLSelectElement).value || undefined;
+      try {
+        await client.send(new UpdateTeamItemCommand({
+          teamId, itemId: parentItemId,
+          name, dueDate, complete: parentItem!.complete ?? false,
+          hasDueTime,
+          recurrence,
+          recurrenceBasis: recurrence ? recurrenceBasis : undefined,
+          hasTasks: parentItem!.hasTasks ?? true,
+          parentItemId: parentItem!.parentItemId ?? undefined,
+          dueOffsetDays,
+          assignedToUserId,
+          timezoneOffsetMinutes: new Date().getTimezoneOffset(),
+        }));
+        await renderTeamItems(teamId, parentItemId, name);
+      } catch (err) {
+        showError(String(err));
+      }
+    });
+  }
+
+  const newItemBtn = document.getElementById("new-item-btn")!;
+  const createForm = document.getElementById("create-item-form") as HTMLFormElement;
+  newItemBtn.addEventListener("click", () => {
+    createForm.style.display = "";
+    newItemBtn.style.display = "none";
     (document.getElementById("item-name") as HTMLInputElement).focus();
   });
 
   document.getElementById("cancel-btn")!.addEventListener("click", () => {
-    form.style.display = "none";
-    newBtn.style.display = "";
+    createForm.style.display = "none";
+    newItemBtn.style.display = "";
   });
 
-  form.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const name = (document.getElementById("item-name") as HTMLInputElement).value.trim();
-    if (!name) return;
-    try {
-      await client.send(new CreateTeamItemCommand({ teamId, name, parentItemId }));
-      (document.getElementById("item-name") as HTMLInputElement).value = "";
-      form.style.display = "none";
-      newBtn.style.display = "";
-      await load();
-    } catch (err) {
-      showError(String(err));
-    }
+  document.getElementById("show-complete")!.addEventListener("change", load);
+
+  let batchMode = false;
+  document.getElementById("batch-toggle")!.addEventListener("click", () => {
+    batchMode = !batchMode;
+    const current = document.getElementById("item-name") as HTMLInputElement | HTMLTextAreaElement;
+    const val = current.value;
+    const next = batchMode ? document.createElement("textarea") : document.createElement("input");
+    next.id = "item-name";
+    next.required = true;
+    next.style.flex = "1";
+    if (!batchMode) (next as HTMLInputElement).type = "text";
+    if (batchMode) (next as HTMLTextAreaElement).rows = 3;
+    next.placeholder = batchMode ? "Item name (one per line)" : "Item name";
+    next.value = val;
+    current.replaceWith(next);
+    const btn = document.getElementById("batch-toggle")!;
+    btn.textContent = batchMode ? "Single" : "Batch";
+    btn.style.background = batchMode ? "#1a3a52" : "";
+    btn.style.borderColor = batchMode ? "#5aace0" : "";
+    next.focus();
   });
 
   const ul = document.getElementById("items-list")!;
 
   async function load() {
     const res = await client.send(new ListTeamItemsCommand({ teamId, parentItemId }));
-    const items: TeamItemSummary[] = res.items ?? [];
+    const showComplete = (document.getElementById("show-complete") as HTMLInputElement).checked;
+    const items: TeamItemSummary[] = (res.items ?? []).filter((i) => showComplete || !i.complete);
     ul.innerHTML = "";
     if (!items.length) {
-      ul.innerHTML = `<li style="color:#666;">No tasks yet.</li>`;
+      ul.innerHTML = `<li style="color:#666;">No items yet.</li>`;
       return;
     }
     for (const item of items) {
@@ -1572,16 +1840,23 @@ async function renderTeamItems(teamId: string, parentItemId?: string, parentName
       completeBtn.title = item.complete ? "Mark incomplete" : "Mark complete";
       completeBtn.style.color = item.complete ? "#2a9d2a" : "#a8d8f0";
       completeBtn.addEventListener("click", async () => {
+        const markingComplete = !item.complete;
         try {
           await client.send(new UpdateTeamItemCommand({
             teamId, itemId: item.itemId!,
-            name: item.name!, complete: !item.complete,
+            name: item.name!, dueDate: item.dueDate, complete: !item.complete,
             hasDueTime: item.hasDueTime ?? false,
-            dueDate: item.dueDate,
+            hasTasks: item.hasTasks ?? true,
             recurrence: item.recurrence ?? undefined,
             recurrenceBasis: item.recurrenceBasis ?? undefined,
+            parentItemId: item.parentItemId ?? undefined,
+            dueOffsetDays: item.dueOffsetDays ?? undefined,
+            assignedToUserId: item.assignedToUserId ?? undefined,
             timezoneOffsetMinutes: new Date().getTimezoneOffset(),
           }));
+          if (markingComplete) {
+            showSuccess(item.recurrence ? "✓ Completed — next occurrence scheduled." : "✓ Done!");
+          }
           await load();
         } catch (err) {
           showError(String(err));
@@ -1590,7 +1865,7 @@ async function renderTeamItems(teamId: string, parentItemId?: string, parentName
 
       const nameLink = document.createElement("a");
       nameLink.href = `/teams/${teamId}/items/${item.itemId}`;
-      nameLink.textContent = item.name ?? "";
+      nameLink.textContent = (item.hasChildren ? "▸ " : "") + (item.name ?? "");
       nameLink.style.flex = "1";
       nameLink.addEventListener("click", (e) => {
         e.preventDefault();
@@ -1600,9 +1875,10 @@ async function renderTeamItems(teamId: string, parentItemId?: string, parentName
 
       const deleteBtn = document.createElement("button");
       deleteBtn.textContent = "✕";
+      deleteBtn.title = "Delete item";
       deleteBtn.style.color = "#c00";
       deleteBtn.addEventListener("click", async () => {
-        if (!confirm(`Delete "${item.name}"?`)) return;
+        if (item.hasChildren && !confirm(`Delete "${item.name}" and all its sub-items?`)) return;
         try {
           await client.send(new DeleteTeamItemCommand({ teamId, itemId: item.itemId! }));
           await load();
@@ -1611,123 +1887,133 @@ async function renderTeamItems(teamId: string, parentItemId?: string, parentName
         }
       });
 
+      li.appendChild(completeBtn);
+      li.appendChild(nameLink);
+
       if (item.assignedToUserId) {
-        const badge = document.createElement("span");
-        badge.style.cssText = "font-size:0.78rem;color:#5aace0;";
-        badge.textContent = `→ ${item.assignedToUserId}`;
-        li.appendChild(completeBtn);
-        li.appendChild(nameLink);
-        li.appendChild(badge);
-        li.appendChild(deleteBtn);
-      } else {
-        li.appendChild(completeBtn);
-        li.appendChild(nameLink);
-        li.appendChild(deleteBtn);
+        const assigneeTag = document.createElement("span");
+        assigneeTag.textContent = `→ ${members.get(item.assignedToUserId) ?? "?"}`;
+        assigneeTag.style.cssText = "font-size:0.8rem;color:#5aace0;";
+        li.appendChild(assigneeTag);
       }
 
+      const thisHasTasks = item.hasTasks ?? true;
+      if (thisHasTasks) {
+        const dateSpan = document.createElement("span");
+        dateSpan.textContent = item.dueDate ? item.dueDate.toLocaleDateString() : "no due date";
+        dateSpan.style.color = "#666";
+        dateSpan.style.fontSize = "0.85rem";
+        if (parentItemId) {
+          dateSpan.title = "Recalculated from the offset whenever the top-level item recurs — manual edits here won't persist across recurrences.";
+        }
+        li.appendChild(dateSpan);
+
+        if (item.hasDueTime && item.dueDate) {
+          const timeSpan = document.createElement("span");
+          timeSpan.textContent = item.dueDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+          timeSpan.style.color = "#666";
+          timeSpan.style.fontSize = "0.85rem";
+          li.appendChild(timeSpan);
+        }
+
+        if (parentItemId) {
+          const offsetVal = item.dueOffsetDays ?? null;
+          const offsetLabel = offsetVal === null ? "no offset"
+            : offsetVal === 0 ? "on due date"
+            : offsetVal > 0 ? `+${offsetVal}d` : `${offsetVal}d`;
+          const offsetEl = makeEditableText(offsetLabel, async (newVal) => {
+            const parsed = newVal === "" ? undefined : parseInt(newVal, 10);
+            await client.send(new UpdateTeamItemCommand({
+              teamId, itemId: item.itemId!,
+              name: item.name!, complete: item.complete ?? false,
+              dueDate: item.dueDate,
+              hasDueTime: item.hasDueTime ?? false,
+              hasTasks: item.hasTasks ?? true,
+              parentItemId: item.parentItemId ?? undefined,
+              dueOffsetDays: isNaN(parsed as number) ? undefined : parsed,
+              assignedToUserId: item.assignedToUserId ?? undefined,
+              timezoneOffsetMinutes: new Date().getTimezoneOffset(),
+            }));
+            item.dueOffsetDays = isNaN(parsed as number) ? undefined : parsed;
+          }, { inputType: "number", inputValue: offsetVal !== null ? String(offsetVal) : "" });
+          offsetEl.style.cssText = "color:#666;font-size:0.85rem;";
+          offsetEl.title = "Click to edit offset days from the top-level item's due date";
+          li.appendChild(offsetEl);
+        }
+
+        if (item.recurrence) {
+          const basisLabel = item.recurrenceBasis === "COMPLETION_DATE" ? "completion" : "due date";
+          const recurrenceSpan = document.createElement("span");
+          recurrenceSpan.textContent = `↻ ${item.recurrence} (${basisLabel})`;
+          recurrenceSpan.className = "recurrence-tag";
+          li.appendChild(recurrenceSpan);
+        }
+      }
+
+      li.appendChild(deleteBtn);
       ul.appendChild(li);
     }
   }
 
-  await load();
-}
-
-async function renderTeamItemDetail(teamId: string, itemId: string) {
-  let item: GetTeamItemCommandOutput;
-  try {
-    item = await client.send(new GetTeamItemCommand({ teamId, itemId }));
-  } catch {
-    renderNotFound("Team item not found.");
-    return;
-  }
-
-  app.innerHTML = `
-    <p><a href="/teams/${teamId}" id="back-team">← Team Tasks</a></p>
-    <h1 id="item-title">${item.name ?? ""}</h1>
-    <ul id="subitems"></ul>
-    <button type="button" id="new-sub-btn">+ Add subtask</button>
-    <form id="sub-form" style="display:none;margin-top:0.5rem;">
-      <input id="sub-name" placeholder="Subtask name" required style="margin-right:0.5rem;" />
-      <button type="submit">Add</button>
-      <button type="button" id="cancel-sub-btn">Cancel</button>
-    </form>`;
-
-  document.getElementById("back-team")!.addEventListener("click", (e) => {
+  createForm.addEventListener("submit", async (e) => {
     e.preventDefault();
-    navigate(`/teams/${teamId}`);
-  });
-
-  const newSubBtn = document.getElementById("new-sub-btn")!;
-  const subForm = document.getElementById("sub-form") as HTMLFormElement;
-  const ul = document.getElementById("subitems")!;
-
-  newSubBtn.addEventListener("click", () => {
-    subForm.style.display = "";
-    newSubBtn.style.display = "none";
-    (document.getElementById("sub-name") as HTMLInputElement).focus();
-  });
-
-  document.getElementById("cancel-sub-btn")!.addEventListener("click", () => {
-    subForm.style.display = "none";
-    newSubBtn.style.display = "";
-  });
-
-  subForm.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const name = (document.getElementById("sub-name") as HTMLInputElement).value.trim();
-    if (!name) return;
     try {
-      await client.send(new CreateTeamItemCommand({ teamId, name, parentItemId: itemId }));
-      (document.getElementById("sub-name") as HTMLInputElement).value = "";
-      subForm.style.display = "none";
-      newSubBtn.style.display = "";
-      await loadSubs();
+      const raw = (document.getElementById("item-name") as HTMLInputElement).value;
+      const names = raw.split("\n").map(s => s.trim()).filter(Boolean);
+      const itemHasTasks = (document.getElementById("item-has-tasks") as HTMLSelectElement).value === "tasks";
+      const { date: dueDate, hasDueTime } = hasTasks
+        ? parseDateTimeInput(
+            (document.getElementById("item-due") as HTMLInputElement).value,
+            (document.getElementById("item-time") as HTMLInputElement).value,
+          )
+        : { date: undefined, hasDueTime: false };
+      const recurrence = hasTasks && !parentItemId ? ((document.getElementById("item-recurrence") as HTMLInputElement).value.trim() || undefined) : undefined;
+      const recurrenceBasis = hasTasks ? ((document.getElementById("item-recurrence-basis") as HTMLSelectElement).value as "DUE_DATE" | "COMPLETION_DATE") : undefined;
+      const offsetRaw = (document.getElementById("item-offset") as HTMLInputElement).value;
+      const dueOffsetDays = offsetRaw !== "" ? parseInt(offsetRaw, 10) : undefined;
+      const assignedToUserId = (document.getElementById("item-assignee") as HTMLSelectElement).value || undefined;
+      for (const name of names) {
+        await client.send(new CreateTeamItemCommand({
+          teamId,
+          name,
+          dueDate,
+          hasDueTime,
+          recurrence,
+          recurrenceBasis: recurrence ? recurrenceBasis : undefined,
+          hasTasks: itemHasTasks,
+          parentItemId: parentItemId ?? undefined,
+          dueOffsetDays,
+          assignedToUserId,
+          timezoneOffsetMinutes: new Date().getTimezoneOffset(),
+        }));
+      }
+      if (batchMode) {
+        batchMode = false;
+        const ta = document.getElementById("item-name") as HTMLTextAreaElement;
+        const input = document.createElement("input");
+        input.id = "item-name"; input.type = "text";
+        input.placeholder = "Item name"; input.required = true; input.style.flex = "1";
+        ta.replaceWith(input);
+        const btn = document.getElementById("batch-toggle")!;
+        btn.textContent = "Batch"; btn.style.background = ""; btn.style.borderColor = "";
+      } else {
+        (document.getElementById("item-name") as HTMLInputElement).value = "";
+      }
+      if (hasTasks) {
+        (document.getElementById("item-due") as HTMLInputElement).value = "";
+        (document.getElementById("item-time") as HTMLInputElement).value = "";
+        (document.getElementById("item-recurrence") as HTMLInputElement).value = "";
+        (document.getElementById("item-offset") as HTMLInputElement).value = "";
+      }
+      await load();
+      createForm.style.display = "none";
+      newItemBtn.style.display = "";
     } catch (err) {
       showError(String(err));
     }
   });
 
-  async function loadSubs() {
-    const res = await client.send(new ListTeamItemsCommand({ teamId, parentItemId: itemId }));
-    const subs: TeamItemSummary[] = res.items ?? [];
-    ul.innerHTML = "";
-    if (!subs.length) {
-      ul.innerHTML = `<li style="color:#666;">No subtasks.</li>`;
-      return;
-    }
-    for (const sub of subs) {
-      const li = document.createElement("li");
-      li.className = "row";
-
-      const completeBtn = document.createElement("button");
-      completeBtn.textContent = sub.complete ? "☑" : "☐";
-      completeBtn.style.color = sub.complete ? "#2a9d2a" : "#a8d8f0";
-      completeBtn.addEventListener("click", async () => {
-        try {
-          await client.send(new UpdateTeamItemCommand({
-            teamId, itemId: sub.itemId!,
-            name: sub.name!, complete: !sub.complete,
-            hasDueTime: sub.hasDueTime ?? false,
-            timezoneOffsetMinutes: new Date().getTimezoneOffset(),
-          }));
-          await loadSubs();
-        } catch (err) {
-          showError(String(err));
-        }
-      });
-
-      const nameSpan = document.createElement("span");
-      nameSpan.textContent = sub.name ?? "";
-      nameSpan.style.flex = "1";
-      if (sub.complete) nameSpan.style.textDecoration = "line-through";
-
-      li.appendChild(completeBtn);
-      li.appendChild(nameSpan);
-      ul.appendChild(li);
-    }
-  }
-
-  await loadSubs();
+  await load();
 }
 
 // ── Router ───────────────────────────────────────────────────────────────────
@@ -1740,7 +2026,12 @@ async function route() {
   const teamItemDetailMatch = path.match(/^\/teams\/([^/]+)\/items\/([^/]+)$/);
   if (teamItemDetailMatch) {
     const [, tid, iid] = teamItemDetailMatch;
-    await renderTeamItemDetail(tid, iid);
+    try {
+      const item = await client.send(new GetTeamItemCommand({ teamId: tid, itemId: iid }));
+      await renderTeamItems(tid, iid, item.name);
+    } catch {
+      renderNotFound(`Team item not found.`);
+    }
     if (currentAuth) addLogoutButton(`${currentAuth.firstName} ${currentAuth.lastName}`);
     return;
   }

@@ -1,21 +1,22 @@
 use std::sync::Arc;
 
 use axum::{
+    Extension, Json,
     body::Body,
     extract::Query,
     http::{self, Request, StatusCode},
     middleware::Next,
     response::{IntoResponse, Redirect, Response},
-    Extension, Json,
 };
-use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
+use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use oauth2::{
-    basic::BasicClient, reqwest::async_http_client, AuthUrl, AuthorizationCode, ClientId,
-    ClientSecret, CsrfToken, PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, Scope, TokenResponse,
-    TokenUrl,
+    AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, PkceCodeChallenge,
+    PkceCodeVerifier, RedirectUrl, Scope, TokenResponse, TokenUrl, basic::BasicClient,
+    reqwest::async_http_client,
 };
 use serde::{Deserialize, Serialize};
 use tower_cookies::{Cookie, Cookies, cookie::SameSite};
+use tracing::info;
 
 use crate::storage::{RepoError, UserRepo};
 
@@ -38,13 +39,15 @@ impl AppState {
             ClientId::new(google_client_id),
             Some(ClientSecret::new(google_client_secret)),
             AuthUrl::new("https://accounts.google.com/o/oauth2/v2/auth".to_string()).unwrap(),
-            Some(
-                TokenUrl::new("https://www.googleapis.com/oauth2/v4/token".to_string()).unwrap(),
-            ),
+            Some(TokenUrl::new("https://www.googleapis.com/oauth2/v4/token".to_string()).unwrap()),
         )
         .set_redirect_uri(RedirectUrl::new(format!("{base_url}/auth/callback")).unwrap());
 
-        Self { oauth_client, jwt_secret, user_repo }
+        Self {
+            oauth_client,
+            jwt_secret,
+            user_repo,
+        }
     }
 }
 
@@ -112,7 +115,10 @@ pub async fn auth_callback(
     let stored_state = match cookies.get("oauth_state") {
         Some(c) => c.value().to_string(),
         None => {
-            tracing::warn!("auth_callback: oauth_state cookie missing; cookies present: oauth_pkce_verifier={}", cookies.get("oauth_pkce_verifier").is_some());
+            tracing::warn!(
+                "auth_callback: oauth_state cookie missing; cookies present: oauth_pkce_verifier={}",
+                cookies.get("oauth_pkce_verifier").is_some()
+            );
             return (StatusCode::BAD_REQUEST, "Missing state cookie").into_response();
         }
     };
@@ -159,13 +165,19 @@ pub async fn auth_callback(
             Ok(u) => u,
             Err(e) => {
                 tracing::error!("Failed to parse user info: {e}");
-                return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to parse user info")
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Failed to parse user info",
+                )
                     .into_response();
             }
         },
         Err(e) => {
             tracing::error!("Failed to fetch user info: {e}");
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to fetch user info")
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to fetch user info",
+            )
                 .into_response();
         }
     };
@@ -188,7 +200,10 @@ pub async fn auth_callback(
     };
 
     let exp = (chrono::Utc::now() + chrono::Duration::days(7)).timestamp() as usize;
-    let claims = Claims { sub: user.id.clone(), exp };
+    let claims = Claims {
+        sub: user.id.clone(),
+        exp,
+    };
     let jwt = match encode(
         &Header::default(),
         &claims,
@@ -197,7 +212,10 @@ pub async fn auth_callback(
         Ok(t) => t,
         Err(e) => {
             tracing::error!("JWT encode error: {e}");
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to create session")
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to create session",
+            )
                 .into_response();
         }
     };
@@ -215,10 +233,7 @@ pub async fn auth_logout(cookies: Cookies) -> impl IntoResponse {
     Redirect::to("/")
 }
 
-pub async fn auth_token(
-    Extension(state): Extension<Arc<AppState>>,
-    cookies: Cookies,
-) -> Response {
+pub async fn auth_token(Extension(state): Extension<Arc<AppState>>, cookies: Cookies) -> Response {
     let cookie_token = match cookies.get("todo_auth").map(|c| c.value().to_string()) {
         Some(t) => t,
         None => {
@@ -226,7 +241,7 @@ pub async fn auth_token(
                 StatusCode::UNAUTHORIZED,
                 Json(serde_json::json!({"error": "not authenticated"})),
             )
-                .into_response()
+                .into_response();
         }
     };
 
@@ -241,12 +256,15 @@ pub async fn auth_token(
                 StatusCode::UNAUTHORIZED,
                 Json(serde_json::json!({"error": "invalid or expired session"})),
             )
-                .into_response()
+                .into_response();
         }
     };
 
     let exp = (chrono::Utc::now() + chrono::Duration::days(365)).timestamp() as usize;
-    let long_lived = Claims { sub: claims.sub, exp };
+    let long_lived = Claims {
+        sub: claims.sub,
+        exp,
+    };
     match encode(
         &Header::default(),
         &long_lived,
@@ -255,15 +273,16 @@ pub async fn auth_token(
         Ok(token) => Json(serde_json::json!({"token": token})).into_response(),
         Err(e) => {
             tracing::error!("JWT encode error: {e}");
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "failed to create token"}))).into_response()
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "failed to create token"})),
+            )
+                .into_response()
         }
     }
 }
 
-pub async fn auth_me(
-    Extension(state): Extension<Arc<AppState>>,
-    cookies: Cookies,
-) -> Response {
+pub async fn auth_me(Extension(state): Extension<Arc<AppState>>, cookies: Cookies) -> Response {
     let token = match cookies.get("todo_auth").map(|c| c.value().to_string()) {
         Some(t) => t,
         None => {
@@ -271,7 +290,7 @@ pub async fn auth_me(
                 StatusCode::UNAUTHORIZED,
                 Json(serde_json::json!({"error": "not authenticated"})),
             )
-                .into_response()
+                .into_response();
         }
     };
 
@@ -286,7 +305,7 @@ pub async fn auth_me(
                 StatusCode::UNAUTHORIZED,
                 Json(serde_json::json!({"error": "invalid token"})),
             )
-                .into_response()
+                .into_response();
         }
     };
 
@@ -314,6 +333,7 @@ pub async fn caddy_auth_me(
     Extension(repo): Extension<Arc<dyn UserRepo>>,
     req: Request<Body>,
 ) -> Response {
+    info!("caddy security injected headers: {:?}", req.headers());
     let dev_email = std::env::var("TODO_DEV_EMAIL").ok();
     let header_email = req
         .headers()
@@ -321,16 +341,28 @@ pub async fn caddy_auth_me(
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string());
 
+    let header_username = req
+        .headers()
+        .get("x-token-user-name")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+
     let email = match (dev_email, header_email) {
         (Some(e), _) => e,
         (None, Some(e)) => e,
         (None, None) => {
-            tracing::warn!("caddy /auth/me: x-token-user-email header absent and TODO_DEV_EMAIL not set — user not authenticated");
-            return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error": "not authenticated"}))).into_response();
+            tracing::warn!(
+                "caddy /auth/me: x-token-user-email header absent and TODO_DEV_EMAIL not set — user not authenticated"
+            );
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({"error": "not authenticated"})),
+            )
+                .into_response();
         }
     };
 
-    match repo.get_or_create_by_email(&email).await {
+    match repo.get_or_create_by_email(&email, header_username.as_deref()).await {
         Ok(user) => Json(serde_json::json!({
             "userId": user.id,
             "firstName": user.first_name,
@@ -356,11 +388,19 @@ pub async fn caddy_auth_token(
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string());
 
+    let header_username = req
+        .headers()
+        .get("x-token-user-name")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+
     let email = match (dev_email, header_email) {
         (Some(e), _) => e,
         (None, Some(e)) => e,
         (None, None) => {
-            tracing::warn!("caddy /auth/token: x-token-user-email header absent and TODO_DEV_EMAIL not set — user not authenticated");
+            tracing::warn!(
+                "caddy /auth/token: x-token-user-email header absent and TODO_DEV_EMAIL not set — user not authenticated"
+            );
             return (
                 StatusCode::UNAUTHORIZED,
                 Json(serde_json::json!({"error": "not authenticated"})),
@@ -369,7 +409,7 @@ pub async fn caddy_auth_token(
         }
     };
 
-    let user = match repo.get_or_create_by_email(&email).await {
+    let user = match repo.get_or_create_by_email(&email, header_username.as_deref()).await {
         Ok(u) => u,
         Err(e) => {
             tracing::error!("caddy /auth/token: failed to resolve user for {email}: {e:?}");
@@ -408,6 +448,12 @@ pub async fn caddy_header_middleware(
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string());
 
+    let header_username = req
+        .headers()
+        .get("x-token-user-name")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+
     let email = match (dev_email, header_email) {
         (Some(e), _) => Some(e),
         (None, Some(e)) => Some(e),
@@ -419,14 +465,18 @@ pub async fn caddy_header_middleware(
     // are exempted from the portal at the edge — see the Caddyfile). For those, we
     // fall back to verifying the token the same way jwt_auth_middleware does.
     let auth_user = if let Some(email) = email {
-        let repo = match req.extensions().get::<Arc<dyn crate::storage::UserRepo>>().cloned() {
+        let repo = match req
+            .extensions()
+            .get::<Arc<dyn crate::storage::UserRepo>>()
+            .cloned()
+        {
             Some(r) => r,
             None => {
                 tracing::error!("UserRepo not found in extensions for caddy middleware");
                 return StatusCode::INTERNAL_SERVER_ERROR.into_response();
             }
         };
-        match repo.get_or_create_by_email(&email).await {
+        match repo.get_or_create_by_email(&email, header_username.as_deref()).await {
             Ok(user) => AuthUser { user_id: user.id },
             Err(e) => {
                 tracing::error!("Failed to resolve user for email {email}: {e:?}");
@@ -450,7 +500,9 @@ pub async fn caddy_header_middleware(
         });
 
         match claims {
-            Some(data) => AuthUser { user_id: data.claims.sub },
+            Some(data) => AuthUser {
+                user_id: data.claims.sub,
+            },
             None => {
                 tracing::warn!(
                     path = %req.uri().path(),
@@ -498,7 +550,9 @@ pub async fn jwt_auth_middleware(
             &Validation::default(),
         ) {
             Ok(data) => {
-                req.extensions_mut().insert(AuthUser { user_id: data.claims.sub });
+                req.extensions_mut().insert(AuthUser {
+                    user_id: data.claims.sub,
+                });
                 next.run(req).await
             }
             Err(e) => {

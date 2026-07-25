@@ -199,7 +199,7 @@ impl UserRepo for SqliteUserRepo {
         })
     }
 
-    async fn get_or_create_by_email(&self, email: &str) -> Result<User, RepoError> {
+    async fn get_or_create_by_email<'a>(&'a self, email: &'a str, name: Option<&'a str>) -> Result<User, RepoError> {
         if let Some(row) = sqlx::query(
             "SELECT id, first_name, last_name, email, google_id FROM users WHERE email = ?",
         )
@@ -212,12 +212,15 @@ impl UserRepo for SqliteUserRepo {
         }
 
         let id = uuid::Uuid::new_v4().to_string();
-        let first_name = email.split('@').next().unwrap_or(email);
+        let (first_name, last_name) = name
+            .and_then(crate::domain::user::split_display_name)
+            .unwrap_or_else(|| (email.split('@').next().unwrap_or(email).to_string(), String::new()));
         sqlx::query(
-            "INSERT INTO users (id, first_name, last_name, email) VALUES (?, ?, '', ?)",
+            "INSERT INTO users (id, first_name, last_name, email) VALUES (?, ?, ?, ?)",
         )
         .bind(&id)
-        .bind(first_name)
+        .bind(&first_name)
+        .bind(&last_name)
         .bind(email)
         .execute(&self.0)
         .await
@@ -225,8 +228,8 @@ impl UserRepo for SqliteUserRepo {
 
         Ok(User {
             id,
-            first_name: first_name.to_string(),
-            last_name: String::new(),
+            first_name,
+            last_name,
             email: Some(email.to_string()),
             google_id: None,
         })

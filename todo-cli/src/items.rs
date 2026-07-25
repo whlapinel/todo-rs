@@ -16,8 +16,13 @@ pub enum ItemsCommand {
         due: Option<String>,
         #[arg(long, help = "Parent item ID")]
         parent: Option<String>,
-        #[arg(long, help = "Recurrence pattern, e.g. 'every week'")]
+        #[arg(long, help = "Recurrence pattern, e.g. 'every week' (top-level items only)")]
         recurrence: Option<String>,
+        #[arg(
+            long,
+            help = "Days from the top-level item's due date (child items only; negative = before, positive = after)"
+        )]
+        due_offset_days: Option<i32>,
     },
     /// Mark an item complete
     Done { item_id: String },
@@ -64,7 +69,14 @@ pub async fn cmd_items(client: &Client, cmd: ItemsCommand, user_id: Option<Strin
             due,
             parent,
             recurrence,
+            due_offset_days,
         } => {
+            if parent.is_some() && recurrence.is_some() {
+                eprintln!(
+                    "error: --recurrence can't be combined with --parent — child items can't have their own recurrence; use --due-offset-days instead"
+                );
+                std::process::exit(1);
+            }
             let uid = require_user(user_id);
             let mut req = client.create_item().user_id(uid).name(name);
             if let Some(ref s) = due {
@@ -79,6 +91,9 @@ pub async fn cmd_items(client: &Client, cmd: ItemsCommand, user_id: Option<Strin
             }
             if let Some(r) = recurrence {
                 req = req.recurrence(r);
+            }
+            if let Some(o) = due_offset_days {
+                req = req.due_offset_days(o);
             }
             let out = unwrap_or_exit(req.send().await, "add item");
             println!("created item {}", out.item_id());
@@ -112,6 +127,9 @@ pub async fn cmd_items(client: &Client, cmd: ItemsCommand, user_id: Option<Strin
             }
             if let Some(p) = item.parent_item_id() {
                 req = req.parent_item_id(p);
+            }
+            if let Some(o) = item.due_offset_days() {
+                req = req.due_offset_days(o);
             }
             unwrap_or_exit(req.send().await, "mark done");
             println!("marked {item_id} complete");
@@ -168,6 +186,12 @@ pub async fn cmd_items(client: &Client, cmd: ItemsCommand, user_id: Option<Strin
             println!("complete:   {}", item.complete());
             println!("due:        {}", fmt_date(item.due_date()));
             println!("recurrence: {}", item.recurrence().unwrap_or("-"));
+            println!(
+                "offset:     {}",
+                item.due_offset_days()
+                    .map(|d| d.to_string())
+                    .unwrap_or_else(|| "-".to_string())
+            );
             println!("children:   {}", item.has_children().unwrap_or(false));
             println!("assigned:   {}", item.assigned_to_user_id().unwrap_or("-"));
         }
