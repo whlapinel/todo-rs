@@ -1,6 +1,6 @@
 use super::{internal, not_found};
 use crate::domain::item::Item;
-use crate::storage::{ItemRepo, RepoError};
+use crate::storage::sqlite::{ItemRepo, RepoError};
 use std::sync::Arc;
 use todo_server_sdk::{error, input, output, server};
 
@@ -49,6 +49,7 @@ pub async fn list_templates(
             item_id: Some(i.id),
             name: Some(i.name),
             due_date: None,
+            scheduled_date: None,
             complete: Some(i.complete),
             recurrence: i.recurrence,
             recurrence_basis: i.recurrence_basis,

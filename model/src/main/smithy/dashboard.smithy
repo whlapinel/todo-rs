@@ -18,6 +18,8 @@ structure DueItemSummary {
 
     dueDate: Timestamp
 
+    scheduledDate: Timestamp
+
     complete: Boolean
 
     recurrence: String
@@ -74,6 +76,8 @@ structure AssignedItemSummary {
     ownerUserId: String
 
     dueDate: Timestamp
+
+    scheduledDate: Timestamp
 
     complete: Boolean
 

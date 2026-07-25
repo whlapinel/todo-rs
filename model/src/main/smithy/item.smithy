@@ -10,6 +10,7 @@ resource Item {
     properties: {
         name: String
         dueDate: Timestamp
+        scheduledDate: Timestamp
         complete: Boolean
         recurrence: String
         recurrenceBasis: String
@@ -39,6 +40,8 @@ operation CreateItem {
         $name
 
         $dueDate
+
+        $scheduledDate
 
         $complete
 
@@ -85,8 +88,9 @@ operation GetItem {
         @required
         $name
 
-        @required
         $dueDate
+
+        $scheduledDate
 
         @required
         $complete
@@ -131,6 +135,8 @@ operation UpdateItem {
         $name
 
         $dueDate
+
+        $scheduledDate
 
         @required
         $complete
@@ -186,6 +192,7 @@ structure ItemSummary for Item {
     $itemId
     $name
     $dueDate
+    $scheduledDate
     $complete
     $recurrence
     $recurrenceBasis

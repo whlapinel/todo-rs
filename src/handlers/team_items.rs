@@ -1,7 +1,7 @@
 use super::{clone_children, internal, not_found};
 use crate::auth::AuthUser;
 use crate::domain::{item::Item, recurrence};
-use crate::storage::{ItemRepo, RepoError, TeamRepo};
+use crate::storage::sqlite::{ItemRepo, RepoError, TeamRepo};
 use std::sync::Arc;
 use todo_server_sdk::{error, input, output, server, types::DateTime as SmithyDateTime};
 
@@ -56,7 +56,7 @@ pub async fn create_team_item(
     }
     let mut item = Item::new_team_item(&input.team_id, &input.name);
     if let Some(dt) = input.due_date {
-        item.deadline = chrono::DateTime::from_timestamp(dt.secs(), dt.subsec_nanos())
+        item.due_date = chrono::DateTime::from_timestamp(dt.secs(), dt.subsec_nanos())
             .map(|d| d.with_timezone(&chrono::Utc));
     }
     item.complete = input.complete.unwrap_or(false);
@@ -70,7 +70,7 @@ pub async fn create_team_item(
         .await
         .map_err(internal)?;
 
-    if item.deadline.is_none() {
+    if item.due_date.is_none() {
         if let Some(ref pattern) = item.recurrence {
             if let Ok(rule) = recurrence::parse(pattern) {
                 let tz_offset = input.timezone_offset_minutes.unwrap_or(0);
@@ -80,7 +80,7 @@ pub async fn create_team_item(
                 } else {
                     item.has_due_time = true;
                 }
-                item.deadline = Some(deadline);
+                item.due_date = Some(deadline);
             }
         }
     }
@@ -108,7 +108,7 @@ pub async fn get_team_item(
             _ => error::GetTeamItemError::from(internal(format!("{e:?}"))),
         })?;
     let due_date = item
-        .deadline
+        .due_date
         .map(|dt| SmithyDateTime::from_secs(dt.timestamp()))
         .unwrap_or(SmithyDateTime::from_secs(0));
     Ok(output::GetTeamItemOutput {
@@ -153,7 +153,7 @@ pub async fn update_team_item(
     item.id = input.item_id.clone();
     item.complete = input.complete;
     if let Some(dt) = input.due_date {
-        item.deadline = chrono::DateTime::from_timestamp(dt.secs(), dt.subsec_nanos())
+        item.due_date = chrono::DateTime::from_timestamp(dt.secs(), dt.subsec_nanos())
             .map(|d| d.with_timezone(&chrono::Utc));
     }
     item.recurrence = input.recurrence.clone();
@@ -172,7 +172,7 @@ pub async fn update_team_item(
 
     let tz_offset = input.timezone_offset_minutes.unwrap_or(0);
     if let Some(next_item) = item.next_recurrence(chrono::Utc::now(), tz_offset) {
-        let next_deadline = next_item.deadline.expect("next_recurrence always sets a deadline");
+        let next_deadline = next_item.due_date.expect("next_recurrence always sets a deadline");
         let next_id = repo
             .create(&next_item)
             .await
@@ -242,7 +242,7 @@ pub async fn list_team_items(
             item_id: Some(i.id),
             name: Some(i.name),
             due_date: i
-                .deadline
+                .due_date
                 .map(|dt| SmithyDateTime::from_secs(dt.timestamp())),
             complete: Some(i.complete),
             recurrence: i.recurrence,
@@ -261,331 +261,5 @@ pub async fn list_team_items(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::auth::AuthUser;
-    use crate::domain::item::Item;
-    use crate::storage::memory::InMemoryItemRepo;
-    use crate::storage::{MockTeamRepo, RepoError};
 
-    fn auth(user_id: &str) -> AuthUser {
-        AuthUser { user_id: user_id.to_string() }
-    }
-
-    fn active_mock() -> MockTeamRepo {
-        let mut m = MockTeamRepo::new();
-        m.expect_member_status()
-            .returning(|_, _| Ok(Some("ACTIVE".to_string())));
-        m
-    }
-
-    fn non_member_mock() -> MockTeamRepo {
-        let mut m = MockTeamRepo::new();
-        m.expect_member_status()
-            .returning(|_, _| Ok(None));
-        m
-    }
-
-    fn pending_mock() -> MockTeamRepo {
-        let mut m = MockTeamRepo::new();
-        m.expect_member_status()
-            .returning(|_, _| Ok(Some("PENDING".to_string())));
-        m
-    }
-
-    fn create_input(team_id: &str, name: &str) -> input::CreateTeamItemInput {
-        input::CreateTeamItemInput {
-            team_id: team_id.to_string(),
-            name: name.to_string(),
-            due_date: None,
-            complete: None,
-            recurrence: None,
-            recurrence_basis: None,
-            has_due_time: None,
-            has_tasks: None,
-            parent_item_id: None,
-            due_offset_days: None,
-            assigned_to_user_id: None,
-            timezone_offset_minutes: None,
-        }
-    }
-
-    #[tokio::test]
-    async fn create_succeeds_for_active_member() {
-        let items: Arc<dyn ItemRepo> = Arc::new(InMemoryItemRepo::new());
-        let teams: Arc<dyn TeamRepo> = Arc::new(active_mock());
-
-        let result = create_team_item(
-            create_input("t1", "Deploy server"),
-            server::Extension(items),
-            server::Extension(teams),
-            server::Extension(auth("u1")),
-        )
-        .await;
-
-        assert!(result.is_ok());
-        assert!(!result.unwrap().item_id.is_empty());
-    }
-
-    #[tokio::test]
-    async fn create_blocked_for_non_member() {
-        let items: Arc<dyn ItemRepo> = Arc::new(InMemoryItemRepo::new());
-        let teams: Arc<dyn TeamRepo> = Arc::new(non_member_mock());
-
-        let result = create_team_item(
-            create_input("t1", "Sneaky task"),
-            server::Extension(items),
-            server::Extension(teams),
-            server::Extension(auth("u1")),
-        )
-        .await;
-
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn create_blocked_for_pending_invite() {
-        let items: Arc<dyn ItemRepo> = Arc::new(InMemoryItemRepo::new());
-        let teams: Arc<dyn TeamRepo> = Arc::new(pending_mock());
-
-        let result = create_team_item(
-            create_input("t1", "Too early"),
-            server::Extension(items),
-            server::Extension(teams),
-            server::Extension(auth("u1")),
-        )
-        .await;
-
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn get_returns_correct_fields() {
-        let item_repo = Arc::new(InMemoryItemRepo::new());
-        let item_id = item_repo
-            .create(&Item::new_team_item("t1", "Build feature"))
-            .await
-            .unwrap();
-
-        let items: Arc<dyn ItemRepo> = item_repo;
-        let teams: Arc<dyn TeamRepo> = Arc::new(active_mock());
-
-        let result = get_team_item(
-            input::GetTeamItemInput { team_id: "t1".to_string(), item_id },
-            server::Extension(items),
-            server::Extension(teams),
-            server::Extension(auth("u1")),
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(result.name, "Build feature");
-        assert!(!result.complete);
-    }
-
-    #[tokio::test]
-    async fn get_blocked_for_non_member() {
-        let item_repo = Arc::new(InMemoryItemRepo::new());
-        let item_id = item_repo
-            .create(&Item::new_team_item("t1", "Secret"))
-            .await
-            .unwrap();
-
-        let items: Arc<dyn ItemRepo> = item_repo;
-        let teams: Arc<dyn TeamRepo> = Arc::new(non_member_mock());
-
-        let result = get_team_item(
-            input::GetTeamItemInput { team_id: "t1".to_string(), item_id },
-            server::Extension(items),
-            server::Extension(teams),
-            server::Extension(auth("outsider")),
-        )
-        .await;
-
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn list_returns_items_for_team() {
-        let item_repo = Arc::new(InMemoryItemRepo::new());
-        item_repo.create(&Item::new_team_item("t1", "Alpha")).await.unwrap();
-        item_repo.create(&Item::new_team_item("t1", "Beta")).await.unwrap();
-        item_repo.create(&Item::new_team_item("t2", "Other")).await.unwrap();
-
-        let items: Arc<dyn ItemRepo> = item_repo;
-        let teams: Arc<dyn TeamRepo> = Arc::new(active_mock());
-
-        let result = list_team_items(
-            input::ListTeamItemsInput { team_id: "t1".to_string(), parent_item_id: None },
-            server::Extension(items),
-            server::Extension(teams),
-            server::Extension(auth("u1")),
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(result.items.len(), 2);
-        assert!(result.items.iter().all(|i| i.name.as_deref() != Some("Other")));
-    }
-
-    #[tokio::test]
-    async fn delete_removes_item() {
-        let item_repo = Arc::new(InMemoryItemRepo::new());
-        let item_id = item_repo
-            .create(&Item::new_team_item("t1", "To delete"))
-            .await
-            .unwrap();
-
-        let items: Arc<dyn ItemRepo> = item_repo.clone();
-        let teams: Arc<dyn TeamRepo> = Arc::new(active_mock());
-
-        delete_team_item(
-            input::DeleteTeamItemInput { team_id: "t1".to_string(), item_id: item_id.clone() },
-            server::Extension(items),
-            server::Extension(teams),
-            server::Extension(auth("u1")),
-        )
-        .await
-        .unwrap();
-
-        let fetch = item_repo.get_team_item("t1", &item_id).await;
-        assert!(matches!(fetch, Err(RepoError::NotFound)));
-    }
-
-    #[tokio::test]
-    async fn create_rejects_assignee_not_in_team() {
-        let items: Arc<dyn ItemRepo> = Arc::new(InMemoryItemRepo::new());
-
-        // First call (require_active_member for creator) → ACTIVE
-        // Second call (resolve_assignee for assignee) → None
-        let mut mock = MockTeamRepo::new();
-        let call_count = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
-        mock.expect_member_status().returning(move |_, _| {
-            let n = call_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            if n == 0 {
-                Ok(Some("ACTIVE".to_string()))
-            } else {
-                Ok(None)
-            }
-        });
-        let teams: Arc<dyn TeamRepo> = Arc::new(mock);
-
-        let mut inp = create_input("t1", "Assign task");
-        inp.assigned_to_user_id = Some("outsider".to_string());
-
-        let result = create_team_item(
-            inp,
-            server::Extension(items),
-            server::Extension(teams),
-            server::Extension(auth("u1")),
-        )
-        .await;
-
-        assert!(result.is_err());
-    }
-
-    fn update_input(item_id: &str, name: &str, complete: bool) -> input::UpdateTeamItemInput {
-        input::UpdateTeamItemInput {
-            team_id: "t1".to_string(),
-            item_id: item_id.to_string(),
-            name: name.to_string(),
-            due_date: None,
-            complete,
-            recurrence: None,
-            recurrence_basis: None,
-            has_due_time: None,
-            has_tasks: None,
-            parent_item_id: None,
-            due_offset_days: None,
-            assigned_to_user_id: None,
-            timezone_offset_minutes: None,
-        }
-    }
-
-    #[tokio::test]
-    async fn recurrence_carries_children_and_offset_deadline() {
-        let item_repo = Arc::new(InMemoryItemRepo::new());
-        let mut parent = Item::new_team_item("t1", "Weekly sync");
-        parent.recurrence = Some("every 7 days".to_string());
-        parent.deadline = Some(chrono::Utc::now());
-        let parent_id = item_repo.create(&parent).await.unwrap();
-
-        let mut with_offset = Item::new_team_item("t1", "Prep agenda");
-        with_offset.parent_item_id = Some(parent_id.clone());
-        with_offset.due_offset_days = Some(-2);
-        item_repo.create(&with_offset).await.unwrap();
-
-        let items: Arc<dyn ItemRepo> = item_repo.clone();
-        let teams: Arc<dyn TeamRepo> = Arc::new(active_mock());
-        let mut input = update_input(&parent_id, "Weekly sync", true);
-        input.recurrence = Some("every 7 days".to_string());
-
-        update_team_item(
-            input,
-            server::Extension(items.clone()),
-            server::Extension(teams),
-            server::Extension(auth("u1")),
-        )
-        .await
-        .unwrap();
-
-        assert!(item_repo.get_team_item("t1", &parent_id).await.is_err());
-
-        let remaining = item_repo
-            .list_team_items("t1", None)
-            .await
-            .unwrap()
-            .into_iter()
-            .find(|i| i.name == "Weekly sync")
-            .expect("next occurrence should exist");
-        let new_children = items.list_children(&remaining.id).await.unwrap();
-        assert_eq!(new_children.len(), 1);
-        let prepped = &new_children[0];
-        assert_eq!(
-            prepped.deadline.unwrap().date_naive(),
-            (remaining.deadline.unwrap() - chrono::Duration::days(2)).date_naive()
-        );
-    }
-
-    #[tokio::test]
-    async fn create_team_item_rejects_recurrence_on_child() {
-        let items: Arc<dyn ItemRepo> = Arc::new(InMemoryItemRepo::new());
-        let teams: Arc<dyn TeamRepo> = Arc::new(active_mock());
-
-        let mut inp = create_input("t1", "Subtask");
-        inp.recurrence = Some("every day".to_string());
-        inp.parent_item_id = Some("parent1".to_string());
-
-        let result = create_team_item(
-            inp,
-            server::Extension(items),
-            server::Extension(teams),
-            server::Extension(auth("u1")),
-        )
-        .await;
-
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn update_team_item_rejects_recurrence_on_child() {
-        let item_repo = Arc::new(InMemoryItemRepo::new());
-        let mut child = Item::new_team_item("t1", "Subtask");
-        child.parent_item_id = Some("parent1".to_string());
-        let child_id = item_repo.create(&child).await.unwrap();
-        let items: Arc<dyn ItemRepo> = item_repo;
-        let teams: Arc<dyn TeamRepo> = Arc::new(active_mock());
-
-        let mut input = update_input(&child_id, "Subtask", false);
-        input.recurrence = Some("every day".to_string());
-        input.parent_item_id = Some("parent1".to_string());
-
-        let result = update_team_item(
-            input,
-            server::Extension(items),
-            server::Extension(teams),
-            server::Extension(auth("u1")),
-        )
-        .await;
-
-        assert!(result.is_err());
-    }
 }

@@ -8,7 +8,8 @@ pub struct Item {
     pub team_id: Option<String>,
     pub parent_item_id: Option<String>,
     pub name: String,
-    pub deadline: Option<DateTime<Utc>>,
+    pub due_date: Option<DateTime<Utc>>,
+    pub scheduled_date: Option<DateTime<Utc>>,
     pub complete: bool,
     pub recurrence: Option<String>,
     pub recurrence_basis: Option<String>,
@@ -52,12 +53,12 @@ impl Item {
         let reference = if self.recurrence_basis.as_deref() == Some("COMPLETION_DATE") {
             now
         } else {
-            self.deadline.unwrap_or(now)
+            self.due_date.unwrap_or(now)
         };
         let mut next = self.clone();
         next.id = String::new();
         next.complete = false;
-        next.deadline = Some(recurrence::next_date(&rule, reference, tz_offset_minutes));
+        next.due_date = Some(recurrence::next_date(&rule, reference, tz_offset_minutes));
         next.has_due_time = rule.time_override.is_some() || self.has_due_time;
         Some(next)
     }
@@ -73,7 +74,10 @@ impl Item {
         tz_offset_minutes: i32,
     ) -> Option<DateTime<Utc>> {
         self.due_offset_days.map(|days| {
-            recurrence::apply_end_of_day(root_deadline + Duration::days(days as i64), tz_offset_minutes)
+            recurrence::apply_end_of_day(
+                root_deadline + Duration::days(days as i64),
+                tz_offset_minutes,
+            )
         })
     }
 }
@@ -128,7 +132,7 @@ mod tests {
         item.id = "old-id".to_string();
         item.complete = true;
         item.recurrence = Some("every 3 days".to_string());
-        item.deadline = Some(Utc::now());
+        item.due_date = Some(Utc::now());
 
         let next = item.next_recurrence(Utc::now(), 0).expect("should recur");
 
@@ -137,7 +141,7 @@ mod tests {
         assert_eq!(next.user_id, item.user_id);
         assert_eq!(next.name, item.name);
         assert_eq!(next.recurrence, item.recurrence);
-        assert!(next.deadline.unwrap() > item.deadline.unwrap());
+        assert!(next.due_date.unwrap() > item.due_date.unwrap());
     }
 
     #[test]
@@ -156,20 +160,30 @@ mod tests {
 
         let deadline = child.deadline_from_offset(root_deadline, 0).unwrap();
 
-        assert_eq!(deadline.date_naive(), (root_deadline - Duration::days(2)).date_naive());
+        assert_eq!(
+            deadline.date_naive(),
+            (root_deadline - Duration::days(2)).date_naive()
+        );
     }
 
     #[test]
     fn deadline_from_offset_ignores_prior_deadline() {
         let mut child = Item::new_user_item("u1", "Check inbox");
         child.due_offset_days = Some(1);
-        child.deadline = Some(DateTime::parse_from_rfc3339("2020-01-01T00:00:00Z").unwrap().with_timezone(&Utc));
+        child.due_date = Some(
+            DateTime::parse_from_rfc3339("2020-01-01T00:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
+        );
         let root_deadline = DateTime::parse_from_rfc3339("2026-01-10T00:00:00Z")
             .unwrap()
             .with_timezone(&Utc);
 
         let deadline = child.deadline_from_offset(root_deadline, 0).unwrap();
 
-        assert_eq!(deadline.date_naive(), (root_deadline + Duration::days(1)).date_naive());
+        assert_eq!(
+            deadline.date_naive(),
+            (root_deadline + Duration::days(1)).date_naive()
+        );
     }
 }

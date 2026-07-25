@@ -5,9 +5,9 @@ mod email;
 mod handlers;
 mod storage;
 
-use crate::storage::{
+use crate::storage::sqlite::{
     ItemRepo, TeamRepo, UserRepo,
-    sqlite::{SqliteItemRepo, SqliteTeamRepo, SqliteUserRepo, create_pool},
+    items::SqliteItemRepo, teams::SqliteTeamRepo, users::SqliteUserRepo, create_pool,
 };
 use axum::{Extension, Router, body::boxed, middleware, routing::get};
 use handlers::items::{

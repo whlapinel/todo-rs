@@ -1,5 +1,5 @@
 use super::{internal, not_found};
-use crate::storage::{RepoError, TeamRepo, UserRepo};
+use crate::storage::sqlite::{RepoError, TeamRepo, UserRepo};
 use std::sync::Arc;
 use todo_server_sdk::{error, input, model, output, server};
 

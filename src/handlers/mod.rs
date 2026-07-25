@@ -1,10 +1,10 @@
 pub mod invites;
 pub mod items;
 pub mod team_items;
-pub mod users;
-pub mod templates;
 pub mod teams;
-use crate::storage::{ItemRepo, RepoError};
+pub mod templates;
+pub mod users;
+use crate::storage::sqlite::{ItemRepo, RepoError};
 use chrono::{DateTime, Utc};
 use std::future::Future;
 use std::pin::Pin;
@@ -49,10 +49,17 @@ fn clone_children<'a>(
             new_child.id = String::new();
             new_child.parent_item_id = Some(new_parent_id.to_string());
             new_child.complete = false;
-            new_child.deadline = child.deadline_from_offset(root_deadline, tz_offset_minutes);
+            new_child.due_date = child.deadline_from_offset(root_deadline, tz_offset_minutes);
             new_child.has_due_time = false;
             let new_child_id = repo.create(&new_child).await?;
-            clone_children(repo, &child.id, &new_child_id, root_deadline, tz_offset_minutes).await?;
+            clone_children(
+                repo,
+                &child.id,
+                &new_child_id,
+                root_deadline,
+                tz_offset_minutes,
+            )
+            .await?;
             repo.delete(&child.id).await?;
         }
         Ok(())

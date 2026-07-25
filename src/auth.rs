@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use tower_cookies::{Cookie, Cookies, cookie::SameSite};
 use tracing::info;
 
-use crate::storage::{RepoError, UserRepo};
+use crate::storage::sqlite::{RepoError, UserRepo};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -467,7 +467,7 @@ pub async fn caddy_header_middleware(
     let auth_user = if let Some(email) = email {
         let repo = match req
             .extensions()
-            .get::<Arc<dyn crate::storage::UserRepo>>()
+            .get::<Arc<dyn UserRepo>>()
             .cloned()
         {
             Some(r) => r,

@@ -1,6 +1,6 @@
 use super::{internal, not_found};
 use crate::domain::user::User;
-use crate::storage::{RepoError, UserRepo};
+use crate::storage::sqlite::{RepoError, UserRepo};
 use std::sync::Arc;
 use todo_server_sdk::{error, input, output, server};
 

@@ -1,4 +1,4 @@
-use crate::{auth::AuthUser, email, storage::UserRepo};
+use crate::{auth::AuthUser, email, storage::sqlite::UserRepo};
 use std::sync::Arc;
 use todo_server_sdk::{error, input, output, server};
 

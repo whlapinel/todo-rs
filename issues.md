@@ -1,0 +1,11 @@
+- Shows warning on top-level item "If the top-level item recurs, this due date is recalculated from the offset below — manual edits here won't persist across recurrences."
+    - perhaps we should check if an item has parent id before including this warning, if no parent id then it's root and shouldn't have it?
+
+- Default date of 12/31/1969 when no date added?
+- UI for adding sub-item should say "add child item" or something instead of being the same "new item" as for a root item
+- Item page should show more info if not all info
+- Children should inherit task-list/simple-list type assignment
+- Should be able to change type from simple to task and back
+- Simple list should not show assignment field
+- In item details screen, General option UI e.g. checklists, teams, etc. should not be shown beneath current item heading, implying that these are per-item actions
+- Offset isn't applied to children when instantiating "using" checklist. E.g. if I use a checklist and assign a due date, the children that have an offset are not assigned a due date accordingly. In fact they seem to be treated as simple items, with UI to add a due date and so forth, hidden.
