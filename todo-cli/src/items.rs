@@ -16,7 +16,10 @@ pub enum ItemsCommand {
         due: Option<String>,
         #[arg(long, help = "Parent item ID")]
         parent: Option<String>,
-        #[arg(long, help = "Recurrence pattern, e.g. 'every week' (top-level items only)")]
+        #[arg(
+            long,
+            help = "Recurrence pattern, e.g. 'every week' (top-level items only)"
+        )]
         recurrence: Option<String>,
         #[arg(
             long,
@@ -58,9 +61,17 @@ pub async fn cmd_items(client: &Client, cmd: ItemsCommand, user_id: Option<Strin
             for i in out.items() {
                 let id = i.item_id().unwrap_or("-");
                 let name = i.name().unwrap_or("-");
-                let done = if i.complete().unwrap_or(false) { "✓" } else { " " };
+                let done = if i.complete().unwrap_or(false) {
+                    "✓"
+                } else {
+                    " "
+                };
                 let due = fmt_date_opt(i.due_date());
-                let suffix = if i.has_children().unwrap_or(false) { " ▸" } else { "" };
+                let suffix = if i.has_children().unwrap_or(false) {
+                    " ▸"
+                } else {
+                    ""
+                };
                 println!("{:<36}  {:<4}  {:<12}  {}{}", id, done, due, name, suffix);
             }
         }
@@ -115,7 +126,7 @@ pub async fn cmd_items(client: &Client, cmd: ItemsCommand, user_id: Option<Strin
                 .item_id(&item_id)
                 .name(item.name())
                 .complete(true)
-                .due_date(item.due_date().clone());
+                .due_date(item.due_date().cloned().unwrap());
             if let Some(r) = item.recurrence() {
                 req = req.recurrence(r);
             }
@@ -149,11 +160,19 @@ pub async fn cmd_items(client: &Client, cmd: ItemsCommand, user_id: Option<Strin
                 "ID", "DONE", "DUE", "OWNER", "NAME"
             );
             for i in out.items() {
-                let done = if i.complete().unwrap_or(false) { "✓" } else { " " };
+                let done = if i.complete().unwrap_or(false) {
+                    "✓"
+                } else {
+                    " "
+                };
                 let due = fmt_date_opt(i.due_date());
                 println!(
                     "{:<36}  {:<4}  {:<12}  {:<36}  {}",
-                    i.item_id(), done, due, i.owner_user_id(), i.name()
+                    i.item_id(),
+                    done,
+                    due,
+                    i.owner_user_id(),
+                    i.name()
                 );
             }
         }
@@ -184,7 +203,7 @@ pub async fn cmd_items(client: &Client, cmd: ItemsCommand, user_id: Option<Strin
             println!("id:         {item_id}");
             println!("name:       {}", item.name());
             println!("complete:   {}", item.complete());
-            println!("due:        {}", fmt_date(item.due_date()));
+            println!("due:        {}", fmt_date_opt(item.due_date()));
             println!("recurrence: {}", item.recurrence().unwrap_or("-"));
             println!(
                 "offset:     {}",
@@ -222,12 +241,20 @@ pub async fn cmd_items(client: &Client, cmd: ItemsCommand, user_id: Option<Strin
                 "ID", "DONE", "DUE", "PARENT", "NAME"
             );
             for i in out.items() {
-                let done = if i.complete().unwrap_or(false) { "✓" } else { " " };
+                let done = if i.complete().unwrap_or(false) {
+                    "✓"
+                } else {
+                    " "
+                };
                 let due = fmt_date_opt(i.due_date());
                 let parent = i.parent_name().unwrap_or("-");
                 println!(
                     "{:<36}  {:<4}  {:<12}  {:<24}  {}",
-                    i.item_id(), done, due, parent, i.name()
+                    i.item_id(),
+                    done,
+                    due,
+                    parent,
+                    i.name()
                 );
             }
         }
