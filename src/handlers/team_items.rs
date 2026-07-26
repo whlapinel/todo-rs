@@ -17,7 +17,10 @@ async fn require_active_member(
     match status.as_deref() {
         Some("ACTIVE") => Ok(()),
         Some(_) => Err("team invite not yet accepted".to_string()),
-        None => Err(format!("user id: {} is not a member of this team", user_id)),
+        None => Err(format!(
+            "user id: {} is not a member of team id: {}",
+            user_id, team_id
+        )),
     }
 }
 
