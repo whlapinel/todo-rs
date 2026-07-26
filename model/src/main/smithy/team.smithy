@@ -203,6 +203,7 @@ structure TeamItemSummary for TeamItem {
     $hasChildren
     $dueOffsetDays
     $assignedToUserId
+    assignedToUserName: String
 }
 
 @input

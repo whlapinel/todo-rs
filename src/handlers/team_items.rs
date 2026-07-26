@@ -1,8 +1,10 @@
 use super::{clone_children, internal, not_found};
 use crate::auth::AuthUser;
+use crate::domain::user;
 use crate::domain::{item::Item, recurrence};
-use crate::storage::sqlite::{ItemRepo, RepoError, TeamRepo};
+use crate::storage::sqlite::{ItemRepo, RepoError, TeamRepo, UserRepo};
 use std::sync::Arc;
+use serde_json::to_string;
 use todo_server_sdk::{error, input, output, server, types::DateTime as SmithyDateTime};
 
 async fn require_active_member(
@@ -240,6 +242,7 @@ pub async fn list_team_items(
     input: input::ListTeamItemsInput,
     server::Extension(repo): server::Extension<Arc<dyn ItemRepo>>,
     server::Extension(teams): server::Extension<Arc<dyn TeamRepo>>,
+    server::Extension(users): server::Extension<Arc<dyn UserRepo>>,
     server::Extension(auth): server::Extension<AuthUser>,
 ) -> Result<output::ListTeamItemsOutput, error::ListTeamItemsError> {
     require_active_member(&teams, &input.team_id, &auth.user_id)
@@ -251,7 +254,7 @@ pub async fn list_team_items(
         .map_err(|e| internal(format!("{e:?}")))?;
     let items = items
         .into_iter()
-        .map(|i| todo_server_sdk::model::TeamItemSummary {
+        .map(async |i| todo_server_sdk::model::TeamItemSummary {
             item_id: Some(i.id),
             name: Some(i.name),
             due_date: i
@@ -269,11 +272,25 @@ pub async fn list_team_items(
             has_children: Some(i.has_children),
             due_offset_days: i.due_offset_days,
             assigned_to_user_id: i.assigned_to_user_id,
+            assigned_to_user_name: get_user_name(&i.assigned_to_user_id, &users).await
         })
         .collect();
     Ok(output::ListTeamItemsOutput { items })
 }
 
+async fn get_user_name(user_id: &Option<String>, user_repo: &Arc<dyn UserRepo>)->Option<String>{
+    // 1. Safely extract the &String from the &Option<String>
+    let id = match user_id {
+        Some(id) => id,
+        None => return None,
+    };
+
+    // 2. Await the async repository call outside of Option methods
+    let user = user_repo.get(id).await.ok()?;
+
+    // 3. Format and return the final String
+    Some(format!("{} {}", user.first_name, user.last_name))
+}
 #[cfg(test)]
 mod tests {
     use super::*;
