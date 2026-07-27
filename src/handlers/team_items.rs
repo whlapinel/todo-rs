@@ -3,8 +3,9 @@ use crate::auth::AuthUser;
 use crate::domain::user;
 use crate::domain::{item::Item, recurrence};
 use crate::storage::sqlite::{ItemRepo, RepoError, TeamRepo, UserRepo};
-use std::sync::Arc;
 use serde_json::to_string;
+use std::collections::HashMap;
+use std::sync::Arc;
 use todo_server_sdk::{error, input, output, server, types::DateTime as SmithyDateTime};
 
 async fn require_active_member(
@@ -252,9 +253,25 @@ pub async fn list_team_items(
         .list_team_items(&input.team_id, input.parent_item_id)
         .await
         .map_err(|e| internal(format!("{e:?}")))?;
+    let mut names = HashMap::<String, String>::new();
+    for item in items.iter() {
+        match &item.assigned_to_user_id {
+            Some(id) => match get_user_name(&id, &users).await {
+                Some(name) => {
+                    names.insert(id.to_string(), name);
+                }
+                None => {
+                    tracing::error!(
+                        "unable to map assigned user id to assigned username: get_user_name returned None"
+                    );
+                }
+            },
+            None => {}
+        }
+    }
     let items = items
         .into_iter()
-        .map(async |i| todo_server_sdk::model::TeamItemSummary {
+        .map(|i| todo_server_sdk::model::TeamItemSummary {
             item_id: Some(i.id),
             name: Some(i.name),
             due_date: i
@@ -271,24 +288,28 @@ pub async fn list_team_items(
             parent_item_id: i.parent_item_id,
             has_children: Some(i.has_children),
             due_offset_days: i.due_offset_days,
-            assigned_to_user_id: i.assigned_to_user_id,
-            assigned_to_user_name: get_user_name(&i.assigned_to_user_id, &users).await
+            assigned_to_user_id: i.assigned_to_user_id.clone(),
+            assigned_to_user_name: i
+                .assigned_to_user_id
+                .map(|id| names.get(&id).unwrap_or(&"<Name>".to_string()).clone()),
         })
         .collect();
     Ok(output::ListTeamItemsOutput { items })
 }
 
-async fn get_user_name(user_id: &Option<String>, user_repo: &Arc<dyn UserRepo>)->Option<String>{
-    // 1. Safely extract the &String from the &Option<String>
-    let id = match user_id {
-        Some(id) => id,
-        None => return None,
-    };
-
-    // 2. Await the async repository call outside of Option methods
-    let user = user_repo.get(id).await.ok()?;
-
-    // 3. Format and return the final String
+async fn get_user_name(id: &str, user_repo: &Arc<dyn UserRepo>) -> Option<String> {
+    let user = user_repo
+        .get(&id)
+        .await
+        .map_err(|e| match e {
+            RepoError::NotFound => {
+                tracing::error!("error: id {} not found", id);
+            }
+            RepoError::Internal(s) => {
+                tracing::error!("internal error: {s}");
+            }
+        })
+        .ok()?;
     Some(format!("{} {}", user.first_name, user.last_name))
 }
 #[cfg(test)]
