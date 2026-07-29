@@ -133,7 +133,7 @@ Build/install separately from the main server (`cargo` commands run from `todo-c
 
 ## MCP Server (`mcp-server/`)
 
-A Claude Code MCP server wrapping the todo API. Registered at `~/rust-projects/todo/.mcp.json` — picked up automatically when Claude Code opens this directory.
+A Claude Code MCP server wrapping the todo API. Registered at `~/todo/.mcp.json` — picked up automatically when Claude Code opens this directory.
 
 **Build:**
 ```sh
@@ -156,7 +156,7 @@ The MCP server authenticates with a long-lived JWT, minted by `/auth/token`. Thi
   "mcpServers": {
     "todo": {
       "command": "bash",
-      "args": ["-c", "set -a; source /home/whlapinel/rust-projects/todo/.env; set +a; exec node /home/whlapinel/rust-projects/todo/mcp-server/dist/index.js"]
+      "args": ["-c", "set -a; source /home/whlapinel/todo/.env; set +a; exec node /home/whlapinel/todo/mcp-server/dist/index.js"]
     }
   }
 }

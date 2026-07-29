@@ -2,7 +2,7 @@
   "mcpServers": {
     "todo": {
       "command": "bash",
-      "args": ["-c", "set -a; source /home/whlapinel/rust-projects/todo/.env; set +a; exec node /home/whlapinel/rust-projects/todo/mcp-server/dist/index.js"]
+      "args": ["-c", "set -a; source /home/whlapinel/todo/.env; set +a; exec node /home/whlapinel/todo/mcp-server/dist/index.js"]
     }
   }
 }
