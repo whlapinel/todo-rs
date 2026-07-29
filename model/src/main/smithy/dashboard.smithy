@@ -9,8 +9,9 @@ structure DueItemSummary {
     @required
     name: String
 
-    @required
     ownerUserId: String
+
+    teamId: String
 
     assignedToUserId: String
 

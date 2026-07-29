@@ -1,3 +1,4 @@
+- MAJOR BUG: attempting to complete team item from dashboard will return not found error due to lookup using user id instead of team id. dashboard needs to be aware of whether an item is a team item or a user item and should change the api call accordingly.
 - Shows warning on top-level item "If the top-level item recurs, this due date is recalculated from the offset below — manual edits here won't persist across recurrences."
     - perhaps we should check if an item has parent id before including this warning, if no parent id then it's root and shouldn't have it?
 

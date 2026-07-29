@@ -31,27 +31,24 @@ pub async fn create_item(
     item.due_offset_days = input.due_offset_days;
 
     // Child items of a template automatically become template items
-    if let Some(ref parent_id) = input.parent_item_id {
-        if let Ok(parent) = repo.get(&input.user_id, parent_id).await {
-            if parent.is_template {
-                item.is_template = true;
-            }
-        }
+    if let Some(ref parent_id) = input.parent_item_id
+        && let Ok(parent) = repo.get(&input.user_id, parent_id).await
+        && parent.is_template
+    {
+        item.is_template = true;
     }
-
-    if item.due_date.is_none() {
-        if let Some(ref pattern) = item.recurrence {
-            if let Ok(rule) = recurrence::parse(pattern) {
-                let tz_offset = input.timezone_offset_minutes.unwrap_or(0);
-                let mut deadline = recurrence::next_date(&rule, chrono::Utc::now(), tz_offset);
-                if rule.time_override.is_none() {
-                    deadline = recurrence::apply_end_of_day(deadline, tz_offset);
-                } else {
-                    item.has_due_time = true;
-                }
-                item.due_date = Some(deadline);
-            }
+    if item.due_date.is_none()
+        && let Some(ref pattern) = item.recurrence
+        && let Ok(rule) = recurrence::parse(pattern)
+    {
+        let tz_offset = input.timezone_offset_minutes.unwrap_or(0);
+        let mut deadline = recurrence::next_date(&rule, chrono::Utc::now(), tz_offset);
+        if rule.time_override.is_none() {
+            deadline = recurrence::apply_end_of_day(deadline, tz_offset);
+        } else {
+            item.has_due_time = true;
         }
+        item.due_date = Some(deadline);
     }
     let item_id = repo
         .create(&item)
@@ -235,7 +232,8 @@ pub async fn list_items_due(
         .map(|di| todo_server_sdk::model::DueItemSummary {
             item_id: di.item.id,
             name: di.item.name,
-            owner_user_id: di.item.user_id.or(di.item.team_id).unwrap_or_default(),
+            owner_user_id: di.item.user_id,
+            team_id: di.item.team_id,
             assigned_to_user_id: di.item.assigned_to_user_id,
             parent_name: Some(di.parent_name),
             due_date: di

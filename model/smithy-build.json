@@ -30,9 +30,6 @@
     "todo-client": {
       "plugins": {
         "rust-client-codegen": {
-          "runtimeConfig": {
-            "relativePath": "../smithy-rs/rust-runtime"
-          },
           "codegen": {},
           "service": "common#PeoplesRepublicOfLists",
           "module": "todo-client",

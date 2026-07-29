@@ -1,6 +1,6 @@
 use super::{clone_children, internal, not_found};
 use crate::auth::AuthUser;
-use crate::domain::user;
+use crate::domain::user::{self, split_display_name};
 use crate::domain::{item::Item, recurrence};
 use crate::storage::sqlite::{ItemRepo, RepoError, TeamRepo, UserRepo};
 use serde_json::to_string;
@@ -159,7 +159,15 @@ pub async fn update_team_item(
         .get_team_item(&input.team_id, &input.item_id)
         .await
         .map_err(|e| match e {
-            RepoError::NotFound => error::UpdateTeamItemError::from(not_found()),
+            RepoError::NotFound => {
+                tracing::warn!(
+                    "item not found: team id: {} item id: {}, user id: {}",
+                    input.team_id(),
+                    input.item_id(),
+                    input.name()
+                );
+                error::UpdateTeamItemError::from(not_found())
+            }
             _ => error::UpdateTeamItemError::from(internal(format!("{e:?}"))),
         })?;
 
@@ -203,7 +211,13 @@ pub async fn update_team_item(
     }
 
     repo.update_team_item(&item).await.map_err(|e| match e {
-        RepoError::NotFound => error::UpdateTeamItemError::from(not_found()),
+        RepoError::NotFound => {
+            tracing::warn!(
+                "in call to repo.update_team_item(), item not found: {}",
+                &item.id
+            );
+            error::UpdateTeamItemError::from(not_found())
+        }
         _ => error::UpdateTeamItemError::from(internal(format!("{e:?}"))),
     })?;
     Ok(output::UpdateTeamItemOutput {})
@@ -255,8 +269,8 @@ pub async fn list_team_items(
         .map_err(|e| internal(format!("{e:?}")))?;
     let mut names = HashMap::<String, String>::new();
     for item in items.iter() {
-        match &item.assigned_to_user_id {
-            Some(id) => match get_user_name(&id, &users).await {
+        if let Some(id) = &item.assigned_to_user_id {
+            match get_user_name(id, &users).await {
                 Some(name) => {
                     names.insert(id.to_string(), name);
                 }
@@ -265,8 +279,7 @@ pub async fn list_team_items(
                         "unable to map assigned user id to assigned username: get_user_name returned None"
                     );
                 }
-            },
-            None => {}
+            }
         }
     }
     let items = items

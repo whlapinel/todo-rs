@@ -1,8 +1,7 @@
+use crate::domain::user::User;
+use crate::storage::sqlite::{RepoError, UserRepo, db_err, not_found, row_to_user};
 use async_trait::async_trait;
 use sqlx::{Row, SqlitePool};
-use crate::storage::sqlite::{UserRepo, RepoError, db_err, not_found, row_to_user};
-use crate::domain::{user::User};
-
 
 pub struct SqliteUserRepo(pub SqlitePool);
 #[async_trait]
@@ -142,5 +141,3 @@ impl UserRepo for SqliteUserRepo {
         })
     }
 }
-
-

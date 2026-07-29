@@ -501,9 +501,9 @@ async function renderItems(userId: string, parentItemId?: string, parentItemName
       if (!name) return;
       const { date: dueDate, hasDueTime } = hasTasks
         ? parseDateTimeInput(
-            (document.getElementById("edit-parent-due") as HTMLInputElement).value,
-            (document.getElementById("edit-parent-time") as HTMLInputElement).value,
-          )
+          (document.getElementById("edit-parent-due") as HTMLInputElement).value,
+          (document.getElementById("edit-parent-time") as HTMLInputElement).value,
+        )
         : { date: parentItem!.dueDate, hasDueTime: parentItem!.hasDueTime ?? false };
       // Children can't carry their own recurrence (offset drives their deadline instead) —
       // force this to undefined rather than trusting the hidden field, so a legacy record
@@ -701,7 +701,7 @@ async function renderItems(userId: string, parentItemId?: string, parentItemName
           const offsetVal = item.dueOffsetDays ?? null;
           const offsetLabel = offsetVal === null ? "no offset"
             : offsetVal === 0 ? "on due date"
-            : offsetVal > 0 ? `+${offsetVal}d` : `${offsetVal}d`;
+              : offsetVal > 0 ? `+${offsetVal}d` : `${offsetVal}d`;
           const offsetEl = makeEditableText(offsetLabel, async (newVal) => {
             const parsed = newVal === "" ? undefined : parseInt(newVal, 10);
             await client.send(new UpdateItemCommand({
@@ -744,9 +744,9 @@ async function renderItems(userId: string, parentItemId?: string, parentItemName
       const itemHasTasks = (document.getElementById("item-has-tasks") as HTMLSelectElement).value === "tasks";
       const { date: dueDate, hasDueTime } = hasTasks
         ? parseDateTimeInput(
-            (document.getElementById("item-due") as HTMLInputElement).value,
-            (document.getElementById("item-time") as HTMLInputElement).value,
-          )
+          (document.getElementById("item-due") as HTMLInputElement).value,
+          (document.getElementById("item-time") as HTMLInputElement).value,
+        )
         : { date: undefined, hasDueTime: false };
       const recurrence = hasTasks && !parentItemId ? ((document.getElementById("item-recurrence") as HTMLInputElement).value.trim() || undefined) : undefined;
       const recurrenceBasis = hasTasks ? ((document.getElementById("item-recurrence-basis") as HTMLSelectElement).value as "DUE_DATE" | "COMPLETION_DATE") : undefined;
@@ -800,11 +800,11 @@ function presetRange(preset: string): { after?: Date; before?: Date } {
   const now = new Date();
   const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   switch (preset) {
-    case "Today":        return { after: todayStart, before: new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59) };
-    case "This Week":    return { after: todayStart, before: new Date(+todayStart + 7 * 86400e3) };
+    case "Today": return { after: todayStart, before: new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59) };
+    case "This Week": return { after: todayStart, before: new Date(+todayStart + 7 * 86400e3) };
     case "Next 30 Days": return { after: todayStart, before: new Date(+todayStart + 30 * 86400e3) };
-    case "Overdue":      return { before: now };
-    default:             return {};
+    case "Overdue": return { before: now };
+    default: return {};
   }
 }
 
@@ -869,32 +869,57 @@ async function renderDashboard(userId: string) {
     for (const item of items) {
       const li = document.createElement("li");
       li.className = "row";
-      const ownerId = item.ownerUserId ?? userId;
+      const ownerId = item.ownerUserId;
+      const teamId = item.teamId;
       const isOwn = ownerId === userId;
-
+      const teamOwned = ownerId != null;
+      const userOwned = teamId != null;
       const completeBtn = document.createElement("button");
       completeBtn.textContent = item.complete ? "☑" : "☐";
       completeBtn.title = item.complete ? "Mark incomplete" : "Mark complete";
       completeBtn.style.color = item.complete ? "#2a9d2a" : "#a8d8f0";
-      completeBtn.addEventListener("click", async () => {
-        const markingComplete = !item.complete;
-        try {
-          await client.send(new UpdateItemCommand({
-            userId: ownerId, itemId: item.itemId!,
-            name: item.name!, dueDate: item.dueDate, complete: !item.complete,
-            hasDueTime: item.hasDueTime ?? false,
-            recurrence: item.recurrence ?? undefined,
-            recurrenceBasis: item.recurrenceBasis ?? undefined,
-            timezoneOffsetMinutes: new Date().getTimezoneOffset(),
-          }));
+      if (teamOwned) {
+        completeBtn.addEventListener("click", async () => {
+          const markingComplete = !item.complete;
+          try {
+            await client.send(new UpdateTeamItemCommand({
+              teamId: teamId, itemId: item.itemId!,
+              name: item.name!, dueDate: item.dueDate, complete: !item.complete,
+              hasDueTime: item.hasDueTime ?? false,
+              recurrence: item.recurrence ?? undefined,
+              recurrenceBasis: item.recurrenceBasis ?? undefined,
+              timezoneOffsetMinutes: new Date().getTimezoneOffset(),
+            }));
+          } catch (err) {
+            showError(String(err));
+          }
           if (markingComplete) {
             showSuccess(item.recurrence ? "✓ Completed — next occurrence scheduled." : "✓ Done!");
           }
           await load();
-        } catch (err) {
-          showError(String(err));
-        }
-      });
+        });
+      } else if (userOwned) {
+        completeBtn.addEventListener("click", async () => {
+          const markingComplete = !item.complete;
+          try {
+            await client.send(new UpdateItemCommand({
+              userId: ownerId, itemId: item.itemId!,
+              name: item.name!, dueDate: item.dueDate, complete: !item.complete,
+              hasDueTime: item.hasDueTime ?? false,
+              recurrence: item.recurrence ?? undefined,
+              recurrenceBasis: item.recurrenceBasis ?? undefined,
+              timezoneOffsetMinutes: new Date().getTimezoneOffset(),
+            }));
+          } catch (err) {
+            showError(String(err));
+          }
+
+          if (markingComplete) {
+            showSuccess(item.recurrence ? "✓ Completed — next occurrence scheduled." : "✓ Done!");
+          }
+          await load();
+        });
+      }
 
       const nameSpan = document.createElement("a");
       nameSpan.href = `/users/${ownerId}/items/${item.itemId}`;
@@ -920,8 +945,14 @@ async function renderDashboard(userId: string) {
       parentBadge.style.cssText = "font-size:0.8rem;color:#5aace0;";
       parentBadge.title = "Parent item";
 
+
+
       const fromBadge = document.createElement("span");
-      fromBadge.textContent = isOwn ? "" : `[from ${userNames.get(ownerId) ?? "?"}]`;
+      if (userOwned) {
+        fromBadge.textContent = isOwn ? "" : `[from ${userNames.get(ownerId!) ?? "?"}]`;
+      } else if (teamOwned) {
+        fromBadge.textContent = isOwn ? "" : `[from team ${teamId!}]`;
+      }
       fromBadge.style.cssText = "font-size:0.8rem;color:#5aace0;";
 
       const deleteBtn = document.createElement("button");
@@ -1225,7 +1256,7 @@ async function renderChecklistDetail(userId: string, checklistId: string, checkl
       const offsetVal = item.dueOffsetDays ?? null;
       const offsetLabel = offsetVal === null ? "no offset"
         : offsetVal === 0 ? "on due date"
-        : offsetVal > 0 ? `+${offsetVal}d` : `${offsetVal}d`;
+          : offsetVal > 0 ? `+${offsetVal}d` : `${offsetVal}d`;
       const offsetEl = makeEditableText(offsetLabel, async (newVal) => {
         const parsed = newVal === "" ? undefined : parseInt(newVal, 10);
         await client.send(new UpdateItemCommand({
@@ -1743,9 +1774,9 @@ async function renderTeamItems(teamId: string, parentItemId?: string, parentItem
       if (!name) return;
       const { date: dueDate, hasDueTime } = hasTasks
         ? parseDateTimeInput(
-            (document.getElementById("edit-parent-due") as HTMLInputElement).value,
-            (document.getElementById("edit-parent-time") as HTMLInputElement).value,
-          )
+          (document.getElementById("edit-parent-due") as HTMLInputElement).value,
+          (document.getElementById("edit-parent-time") as HTMLInputElement).value,
+        )
         : { date: parentItem!.dueDate, hasDueTime: parentItem!.hasDueTime ?? false };
       // Children can't carry their own recurrence (offset drives their deadline instead) —
       // force this to undefined rather than trusting the hidden field, so a legacy record
@@ -1920,7 +1951,7 @@ async function renderTeamItems(teamId: string, parentItemId?: string, parentItem
           const offsetVal = item.dueOffsetDays ?? null;
           const offsetLabel = offsetVal === null ? "no offset"
             : offsetVal === 0 ? "on due date"
-            : offsetVal > 0 ? `+${offsetVal}d` : `${offsetVal}d`;
+              : offsetVal > 0 ? `+${offsetVal}d` : `${offsetVal}d`;
           const offsetEl = makeEditableText(offsetLabel, async (newVal) => {
             const parsed = newVal === "" ? undefined : parseInt(newVal, 10);
             await client.send(new UpdateTeamItemCommand({
@@ -1963,9 +1994,9 @@ async function renderTeamItems(teamId: string, parentItemId?: string, parentItem
       const itemHasTasks = (document.getElementById("item-has-tasks") as HTMLSelectElement).value === "tasks";
       const { date: dueDate, hasDueTime } = hasTasks
         ? parseDateTimeInput(
-            (document.getElementById("item-due") as HTMLInputElement).value,
-            (document.getElementById("item-time") as HTMLInputElement).value,
-          )
+          (document.getElementById("item-due") as HTMLInputElement).value,
+          (document.getElementById("item-time") as HTMLInputElement).value,
+        )
         : { date: undefined, hasDueTime: false };
       const recurrence = hasTasks && !parentItemId ? ((document.getElementById("item-recurrence") as HTMLInputElement).value.trim() || undefined) : undefined;
       const recurrenceBasis = hasTasks ? ((document.getElementById("item-recurrence-basis") as HTMLSelectElement).value as "DUE_DATE" | "COMPLETION_DATE") : undefined;
