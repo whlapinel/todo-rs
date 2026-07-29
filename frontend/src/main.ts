@@ -867,20 +867,21 @@ async function renderDashboard(userId: string) {
     }
 
     for (const item of items) {
+      console.log(item);
       const li = document.createElement("li");
       li.className = "row";
       const ownerId = item.ownerUserId;
       const teamId = item.teamId;
       const isOwn = ownerId === userId;
-      const teamOwned = ownerId != null;
-      const userOwned = teamId != null;
+      const teamOwned = teamId != null;
+      const userOwned = ownerId != null;
       const completeBtn = document.createElement("button");
       completeBtn.textContent = item.complete ? "☑" : "☐";
       completeBtn.title = item.complete ? "Mark incomplete" : "Mark complete";
       completeBtn.style.color = item.complete ? "#2a9d2a" : "#a8d8f0";
+      const markingComplete = !item.complete;
       if (teamOwned) {
         completeBtn.addEventListener("click", async () => {
-          const markingComplete = !item.complete;
           try {
             await client.send(new UpdateTeamItemCommand({
               teamId: teamId, itemId: item.itemId!,
@@ -899,8 +900,8 @@ async function renderDashboard(userId: string) {
           await load();
         });
       } else if (userOwned) {
+        console.log("user owned item event listener added");
         completeBtn.addEventListener("click", async () => {
-          const markingComplete = !item.complete;
           try {
             await client.send(new UpdateItemCommand({
               userId: ownerId, itemId: item.itemId!,
