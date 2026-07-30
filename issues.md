@@ -1,10 +1,13 @@
-- MAJOR BUG: attempting to complete team item from dashboard will return not found error due to lookup using user id instead of team id. dashboard needs to be aware of whether an item is a team item or a user item and should change the api call accordingly.
+- Major bug: "Assigned to me" has the same bug as dashboard page had, where team-owned items are treated as user-owned items
+- Item should have team name for team-owned items so we don't have to fetch in order to display in "from __" field
+- Potential long term issue: are we duplicating code unnecessarily between items and team items? risk of code drift, and different logic when it should be consistent between the two repos?  Should consolidate where feasible. There's also duplication on frontend e.g. between dashboard and assigned to me pages.
+- Potential major bug: it appears that when marking recurring items complete, only the parent item is deleted, which would orphan all child items.
+    - Furthermore, not sure I want to just delete the completed item. Might want to keep it actually. When we show completed items, any recurring item doesn't show up because it was deleted.
 - Shows warning on top-level item "If the top-level item recurs, this due date is recalculated from the offset below — manual edits here won't persist across recurrences."
     - perhaps we should check if an item has parent id before including this warning, if no parent id then it's root and shouldn't have it?
-
-- Default date of 12/31/1969 when no date added?
 - UI for adding sub-item should say "add child item" or something instead of being the same "new item" as for a root item
 - Item page should show more info if not all info
+- Team page should have edit button (e.g. editing name should be possible)
 - Children should inherit task-list/simple-list type assignment
 - Should be able to change type from simple to task and back
 - Simple list should not show assignment field
