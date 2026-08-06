@@ -30,6 +30,9 @@ use handlers::json_api::teams::{
 };
 use handlers::json_api::templates::{create_template, list_templates};
 use handlers::json_api::users::{get_user, list_users, update_user};
+use handlers::web_ui::dashboard::*;
+use handlers::web_ui::hello_world::hello_world;
+use handlers::web_ui::items::*;
 use todo_server_sdk::{PeoplesRepublicOfLists, PeoplesRepublicOfListsConfig};
 use tower::ServiceBuilder;
 use tower_cookies::CookieManagerLayer;
@@ -37,34 +40,22 @@ use tower_http::services::{ServeDir, ServeFile};
 
 fn build_web_router() -> Router {
     Router::new()
-        .route("/test", get(handlers::web_ui::hello_world::hello_world))
-        .route(
-            "/items",
-            get(handlers::web_ui::items::items_page).post(handlers::web_ui::items::create_item_form),
-        )
-        .route("/items/batch", post(handlers::web_ui::items::create_items_batch))
+        .route("/test", get(hello_world))
+        .route("/items", get(items_page).post(create_item_form))
+        .route("/items/batch", post(create_items_batch))
         .route(
             "/items/:item_id",
-            get(handlers::web_ui::items::item_detail_page)
-                .put(handlers::web_ui::items::update_item_form)
-                .delete(handlers::web_ui::items::delete_item_form),
+            get(item_detail_page)
+                .put(update_item_form)
+                .delete(delete_item_form),
         )
-        .route(
-            "/items/:item_id/children",
-            get(handlers::web_ui::items::children_fragment),
-        )
-        .route(
-            "/items/:item_id/save-as-checklist",
-            post(handlers::web_ui::items::save_as_checklist),
-        )
-        .route("/dashboard", get(handlers::web_ui::dashboard::dashboard_page))
-        .route(
-            "/dashboard/items/:item_id",
-            put(handlers::web_ui::dashboard::toggle_item_complete),
-        )
+        .route("/items/:item_id/children", get(children_fragment))
+        .route("/items/:item_id/save-as-checklist", post(save_as_checklist))
+        .route("/dashboard", get(dashboard_page))
+        .route("/dashboard/items/:item_id", put(toggle_item_complete))
         .route(
             "/dashboard/team-items/:team_id/:item_id",
-            put(handlers::web_ui::dashboard::toggle_team_item_complete),
+            put(toggle_team_item_complete),
         )
         // Without this, a path under /web/ that doesn't match any route above falls through
         // to the outer router's fallback_service (the SPA's frontend/dist/index.html) — a
