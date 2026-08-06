@@ -74,6 +74,16 @@ fn build_web_router() -> Router {
             "/dashboard/team-items/:team_id/:item_id",
             put(handlers::web_ui::dashboard::toggle_team_item_complete),
         )
+        // Without this, a path under /web/ that doesn't match any route above falls through
+        // to the outer router's fallback_service (the SPA's frontend/dist/index.html) — a
+        // different document with no #page element, which silently renders blank when a
+        // boosted link's inherited hx-select="#page" finds nothing to swap in. A real 404
+        // here fails loudly instead, for any not-yet-built /web/* route or plain typo.
+        .fallback(web_not_found)
+}
+
+async fn web_not_found() -> axum::http::StatusCode {
+    axum::http::StatusCode::NOT_FOUND
 }
 
 #[tokio::main]
