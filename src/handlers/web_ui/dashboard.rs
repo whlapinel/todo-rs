@@ -66,6 +66,11 @@ struct DashboardRow {
     // still-functional `/teams/:teamId/items/:itemId` view instead of `/web/items/:id`,
     // which is scoped to personal items and would 404 for a team-owned id.
     detail_link: String,
+    // `detail_link` above crosses into a different app (the SPA) for team items, which needs
+    // a real full-page load to boot its own JS — boosting it would try to hx-select="#page"
+    // out of the SPA's index.html, which has no such element (it has #app), and blank the
+    // page. Only personal-item links stay boosted for the smooth in-app swap.
+    is_team_item: bool,
     toggle_complete_json: String,
 }
 
@@ -97,6 +102,7 @@ impl DashboardRow {
             can_delete: !is_team_item,
             toggle_target,
             detail_link,
+            is_team_item,
             toggle_complete_json: (!item.complete).to_string(),
         }
     }

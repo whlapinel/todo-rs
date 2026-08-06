@@ -3,7 +3,7 @@
     <input type="checkbox" {% if complete %}checked{% endif %}
            hx-put="/web/items/{{ id }}" hx-vals='{"complete": "{{ toggle_complete_json }}"}'
            hx-target="#item-{{ id }}" hx-select="#item-{{ id }}" hx-swap="outerHTML" class="shrink-0" />
-    <a href="/web/items/{{ id }}"
+    <a href="/web/items/{{ id }}" hx-target="#page" hx-select="#page" hx-swap="innerHTML"
        class="truncate {% if complete %}line-through text-slate-400{% else %}text-slate-900{% endif %}">
       {% if has_children %}<span class="text-slate-400">&#9656;</span>{% endif %} {{ name }}
     </a>
