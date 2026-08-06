@@ -5,6 +5,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{% block title %}Todo{% endblock %}</title>
   <link rel="stylesheet" href="/web/static/style.css" />
+  <script>
+    // Fallback for the tzOffsetMinutes header (see the htmx:configRequest listener below):
+    // that header only exists on htmx-issued requests, so a raw full-page load (bookmark,
+    // hard refresh, typed URL) never carries one. This cookie, sent automatically on every
+    // request including that first one, is what the server falls back to for those — see
+    // TzOffset::from_request_parts in src/handlers/web_ui/mod.rs. Only a page's very first
+    // load, before this has ever run once, is truly unavoidable (no cookie yet either).
+    document.cookie = "tz_offset=" + new Date().getTimezoneOffset() + "; path=/; max-age=31536000; samesite=lax";
+  </script>
 </head>
 <body class="bg-slate-50 text-slate-900" hx-boost="true" hx-target="#page" hx-select="#page" hx-swap="innerHTML">
   {% block header %}

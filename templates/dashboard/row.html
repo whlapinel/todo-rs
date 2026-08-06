@@ -13,7 +13,7 @@
     <button hx-delete="/web/items/{{ item_id }}"
             hx-confirm="Delete {{ name }}?"
             hx-target="#dash-item-{{ item_id }}" hx-select="unset" hx-swap="outerHTML swap:200ms"
-            class="text-red-500 hover:text-red-700">Delete</button>
+            class="cursor-pointer text-red-500 hover:text-red-700">Delete</button>
     {% endif %}
   </div>
 </li>

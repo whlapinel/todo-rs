@@ -1,6 +1,6 @@
 use crate::auth::AuthUser;
 use crate::domain::item::Item;
-use crate::handlers::web_ui::TzOffset;
+use crate::handlers::web_ui::{TzOffset, to_local};
 use crate::service::items::{self as item_service, ItemError};
 use crate::service::templates::{self as template_service, CreateTemplateParams};
 use crate::storage::sqlite::{ItemRepo, RepoError};
@@ -206,7 +206,7 @@ struct ItemRow {
 }
 
 impl ItemRow {
-    fn from_item(item: &Item) -> Self {
+    fn from_item(item: &Item, tz: i32) -> Self {
         let offset_label = item
             .parent_item_id
             .as_ref()
@@ -222,7 +222,7 @@ impl ItemRow {
             complete: item.complete,
             due_date: item
                 .due_date
-                .map(|d| d.format("%Y-%m-%d %H:%M UTC").to_string()),
+                .map(|d| to_local(d, tz).format("%Y-%m-%d %H:%M").to_string()),
             has_children: item.has_children,
             offset_label,
             recurrence: item.recurrence.clone(),
@@ -248,18 +248,20 @@ struct DetailFields {
     recurrence: Option<String>,
     recurrence_basis: Option<String>,
     due_offset_days_input: String,
+    /// Set only on the fragment returned by a successful save (never on a plain page load),
+    /// so the confirmation message appears exactly once per save and isn't still there on
+    /// the next GET.
+    just_saved: bool,
 }
 
 impl DetailFields {
-    fn from_item(item: &Item) -> Self {
-        let due_date_input = item
-            .due_date
+    fn from_item(item: &Item, tz: i32, just_saved: bool) -> Self {
+        let local_due_date = item.due_date.map(|d| to_local(d, tz));
+        let due_date_input = local_due_date
             .map(|d| d.format("%Y-%m-%d").to_string())
             .unwrap_or_default();
         let due_time_input = if item.has_due_time {
-            item.due_date
-                .map(|d| d.format("%H:%M").to_string())
-                .unwrap_or_default()
+            local_due_date.map(|d| d.format("%H:%M").to_string()).unwrap_or_default()
         } else {
             String::new()
         };
@@ -274,6 +276,7 @@ impl DetailFields {
             recurrence: item.recurrence.clone(),
             recurrence_basis: item.recurrence_basis.clone(),
             due_offset_days_input: format_offset_input(item.due_offset_days),
+            just_saved,
         }
     }
 }
@@ -305,11 +308,11 @@ struct ItemDetailPageTemplate {
 
 // ---- shared rendering helpers ------------------------------------------------
 
-fn render_rows(items: &[Item], show_complete: bool) -> Result<Vec<String>, StatusCode> {
+fn render_rows(items: &[Item], show_complete: bool, tz: i32) -> Result<Vec<String>, StatusCode> {
     items
         .iter()
         .filter(|i| show_complete || !i.complete)
-        .map(|i| ItemRow::from_item(i).render())
+        .map(|i| ItemRow::from_item(i, tz).render())
         .collect::<Result<Vec<_>, _>>()
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
@@ -319,6 +322,7 @@ async fn render_scope_fragment(
     user_id: &str,
     parent_item_id: Option<&str>,
     show_complete: bool,
+    tz: i32,
 ) -> Result<Html<String>, StatusCode> {
     let (items, empty_message) = if let Some(parent_id) = parent_item_id {
         (
@@ -335,7 +339,7 @@ async fn render_scope_fragment(
             "No items yet.",
         )
     };
-    let rows = render_rows(&items, parent_item_id.is_some() || show_complete)?;
+    let rows = render_rows(&items, parent_item_id.is_some() || show_complete, tz)?;
     render(RowsFragmentTemplate {
         rows,
         empty_message: empty_message.to_string(),
@@ -353,6 +357,7 @@ pub struct ShowCompleteQuery {
 pub async fn items_page(
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    TzOffset(tz): TzOffset,
     Query(q): Query<ShowCompleteQuery>,
 ) -> Result<Html<String>, StatusCode> {
     let show_complete = q.show_complete.is_some();
@@ -360,7 +365,7 @@ pub async fn items_page(
         .list(&auth_user.user_id)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let rows = render_rows(&items, show_complete)?;
+    let rows = render_rows(&items, show_complete, tz)?;
     render(ItemsListPageTemplate {
         rows,
         show_complete,
@@ -374,12 +379,13 @@ pub async fn item_detail_page(
     Path(item_id): Path<String>,
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    TzOffset(tz): TzOffset,
 ) -> Result<Html<String>, StatusCode> {
     let item = repo
         .get(&auth_user.user_id, &item_id)
         .await
         .map_err(repo_status)?;
-    let fields = DetailFields::from_item(&item)
+    let fields = DetailFields::from_item(&item, tz, false)
         .render()
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     render(ItemDetailPageTemplate {
@@ -393,6 +399,7 @@ pub async fn children_fragment(
     Path(item_id): Path<String>,
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    TzOffset(tz): TzOffset,
 ) -> Result<Html<String>, StatusCode> {
     // Ownership gate: list_children itself isn't scoped by user, so confirm the caller owns
     // the parent before listing its children.
@@ -403,7 +410,7 @@ pub async fn children_fragment(
         .list_children(&item_id)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let rows = render_rows(&children, true)?;
+    let rows = render_rows(&children, true, tz)?;
     render(RowsFragmentTemplate {
         rows,
         empty_message: "No sub-items yet.".to_string(),
@@ -427,6 +434,7 @@ pub async fn create_item_form(
         &auth_user.user_id,
         parent_item_id.as_deref(),
         show_complete,
+        tz,
     )
     .await
 }
@@ -467,6 +475,7 @@ pub async fn create_items_batch(
         &auth_user.user_id,
         parent_item_id.as_deref(),
         form.show_complete.is_some(),
+        tz,
     )
     .await
 }
@@ -489,10 +498,10 @@ pub async fn update_item_form(
 
     match repo.get(&auth_user.user_id, &item_id).await {
         Ok(updated) => {
-            let row = ItemRow::from_item(&updated)
+            let row = ItemRow::from_item(&updated, tz)
                 .render()
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-            let fields = DetailFields::from_item(&updated)
+            let fields = DetailFields::from_item(&updated, tz, true)
                 .render()
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             Ok(Html(format!("{row}{fields}")).into_response())

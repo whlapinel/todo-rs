@@ -1,2 +1,11 @@
 @import "tailwindcss";
 @source "../templates/**/*.html";
+
+@keyframes toast-fade {
+  0%, 60% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+.toast-fade {
+  animation: toast-fade 2.5s ease-in forwards;
+}

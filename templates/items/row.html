@@ -15,10 +15,10 @@
     {% if let Some(d) = due_date %}<span>{{ d }}</span>{% endif %}
     {% if let Some(r) = recurrence %}<span title="repeats">&#8635; {{ r }}</span>{% endif %}
     <button hx-post="/web/items/{{ id }}/save-as-checklist" hx-target="this" hx-select="unset" hx-swap="outerHTML"
-            class="text-slate-400 hover:text-slate-700">Save as checklist</button>
+            class="cursor-pointer text-slate-400 hover:text-slate-700">Save as checklist</button>
     <button hx-delete="/web/items/{{ id }}"
             hx-confirm="Delete {{ name }}{% if has_children %} and all its sub-items{% endif %}?"
             hx-target="#item-{{ id }}" hx-select="unset" hx-swap="outerHTML swap:200ms"
-            class="text-red-500 hover:text-red-700">Delete</button>
+            class="cursor-pointer text-red-500 hover:text-red-700">Delete</button>
   </div>
 </li>

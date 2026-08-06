@@ -35,6 +35,11 @@
       </select>
     </label>
     {% call macros::recurrence_fields(is_top_level, recurrence, recurrence_basis, due_offset_days_input) %}{% endcall %}
-    <button type="submit" class="rounded-md bg-slate-900 text-white text-sm px-3 py-1.5">Save</button>
+    <div class="flex items-center gap-x-3">
+      <button type="submit" class="cursor-pointer rounded-md bg-slate-900 text-white text-sm px-3 py-1.5">Save</button>
+      {% if just_saved %}
+      <span class="toast-fade text-sm text-green-600">&#10003; Saved</span>
+      {% endif %}
+    </div>
   </form>
 </div>

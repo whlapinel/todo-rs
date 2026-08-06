@@ -1,5 +1,5 @@
 use crate::auth::AuthUser;
-use crate::handlers::web_ui::TzOffset;
+use crate::handlers::web_ui::{TzOffset, to_local};
 use crate::service::items::{self as item_service, ItemError};
 use crate::service::team_items::{self as team_item_service, UpdateTeamItemParams};
 use crate::storage::sqlite::{DueItem, ItemRepo, RepoError, TeamRepo};
@@ -70,7 +70,7 @@ struct DashboardRow {
 }
 
 impl DashboardRow {
-    fn from_due_item(di: &DueItem) -> Self {
+    fn from_due_item(di: &DueItem, tz: i32) -> Self {
         let item = &di.item;
         let is_team_item = item.team_id.is_some();
         let (toggle_target, detail_link) = match &item.team_id {
@@ -91,7 +91,7 @@ impl DashboardRow {
             item_id: item.id.clone(),
             name: item.name.clone(),
             complete: item.complete,
-            due_date: item.due_date.map(|d| d.format("%Y-%m-%d %H:%M UTC").to_string()),
+            due_date: item.due_date.map(|d| to_local(d, tz).format("%Y-%m-%d %H:%M").to_string()),
             parent_name: if di.parent_name.is_empty() { None } else { Some(di.parent_name.clone()) },
             from_badge: item.team_id.as_ref().map(|team_id| format!("from team {team_id}")),
             can_delete: !is_team_item,
@@ -121,12 +121,12 @@ pub struct DashboardQuery {
     show_complete: Option<String>,
 }
 
-fn render_rows(items: &[DueItem], preset: &str, show_complete: bool) -> Result<Vec<String>, StatusCode> {
+fn render_rows(items: &[DueItem], preset: &str, show_complete: bool, tz: i32) -> Result<Vec<String>, StatusCode> {
     items
         .iter()
         .filter(|di| show_complete || !di.item.complete)
         .filter(|di| preset != "All with due date" || di.item.due_date.is_some())
-        .map(|di| DashboardRow::from_due_item(di).render())
+        .map(|di| DashboardRow::from_due_item(di, tz).render())
         .collect::<Result<Vec<_>, _>>()
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
@@ -145,7 +145,7 @@ pub async fn dashboard_page(
         .list_due(&auth_user.user_id, after.map(|d| d.timestamp()), before.map(|d| d.timestamp()))
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let rows = render_rows(&due_items, &preset, show_complete)?;
+    let rows = render_rows(&due_items, &preset, show_complete, tz_offset)?;
 
     let presets = PRESETS.iter().map(|&p| (p, p == preset)).collect();
     render(DashboardPageTemplate {
@@ -186,10 +186,13 @@ pub async fn toggle_item_complete(
     item_service::update_item(&repo, params).await.map_err(service_status)?;
 
     match repo.get(&auth_user.user_id, &item_id).await {
-        Ok(updated) => render(DashboardRow::from_due_item(&DueItem {
-            parent_name: String::new(),
-            item: updated,
-        })),
+        Ok(updated) => render(DashboardRow::from_due_item(
+            &DueItem {
+                parent_name: String::new(),
+                item: updated,
+            },
+            tz,
+        )),
         // Recurring item just completed and got replaced under a new id (see
         // service::items::update_item) — nothing to render back for the old id.
         Err(RepoError::NotFound) => Ok(Html(String::new())),
@@ -226,10 +229,13 @@ pub async fn toggle_team_item_complete(
         .map_err(service_status)?;
 
     match repo.get_team_item(&team_id, &item_id).await {
-        Ok(updated) => render(DashboardRow::from_due_item(&DueItem {
-            parent_name: String::new(),
-            item: updated,
-        })),
+        Ok(updated) => render(DashboardRow::from_due_item(
+            &DueItem {
+                parent_name: String::new(),
+                item: updated,
+            },
+            tz,
+        )),
         Err(RepoError::NotFound) => Ok(Html(String::new())),
         Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
     }
