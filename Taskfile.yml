@@ -40,11 +40,26 @@ tasks:
     generates:
       - dist/**/*
 
+  web-styles:
+    desc: Build Tailwind CSS and vendor htmx.min.js for the web_ui templates (outputs to static/)
+    dir: styles
+    cmds:
+      - npm install
+      - npm run build
+    sources:
+      - input.css
+      - package.json
+      - ../templates/**/*.html
+    generates:
+      - ../static/style.css
+      - ../static/js/htmx.min.js
+
   build:
     desc: Build everything (codegen + frontend + server)
     cmds:
       - task: codegen
       - task: frontend
+      - task: web-styles
       - cargo build
 
   run:
@@ -54,6 +69,7 @@ tasks:
     cmds:
       - task: codegen
       - task: frontend
+      - task: web-styles
       - cargo run
 
   check:

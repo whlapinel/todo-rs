@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{% block title %}Todo{% endblock %}</title>
+  <link rel="stylesheet" href="/web/static/style.css" />
+</head>
+<body class="bg-slate-50 text-slate-900" hx-boost="true" hx-target="#page" hx-select="#page" hx-swap="innerHTML">
+  {% block header %}
+  <header class="border-b border-slate-200 bg-white">
+    <div class="max-w-3xl mx-auto flex items-center justify-between px-6 py-3">
+      <a href="/web/items" class="text-sm font-semibold text-slate-900">Todo</a>
+      <nav class="flex items-center gap-x-4 text-sm text-slate-600">
+        <a href="/web/items" class="hover:underline">Items</a>
+        <a href="/web/dashboard" class="hover:underline">Dashboard</a>
+        <a href="/web/teams" class="hover:underline">Teams</a>
+        <a href="/web/checklists" class="hover:underline">Checklists</a>
+        <a href="/auth/logout" class="hover:underline">Log out</a>
+      </nav>
+    </div>
+  </header>
+  {% endblock %}
+
+  <main id="page" class="max-w-3xl mx-auto px-6 py-8">
+    {% block content %}{% endblock %}
+  </main>
+
+  <script src="/web/static/js/htmx.min.js"></script>
+  <script>
+    document.body.addEventListener("htmx:configRequest", function (evt) {
+      evt.detail.parameters["tzOffsetMinutes"] = new Date().getTimezoneOffset();
+    });
+  </script>
+</body>
+</html>

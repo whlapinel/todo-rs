@@ -1,9 +1,7 @@
 use super::{clone_children, internal, not_found};
 use crate::auth::AuthUser;
-use crate::domain::user::{self, split_display_name};
 use crate::domain::{item::Item, recurrence};
 use crate::storage::sqlite::{ItemRepo, RepoError, TeamRepo, UserRepo};
-use serde_json::to_string;
 use std::collections::HashMap;
 use std::sync::Arc;
 use todo_server_sdk::{error, input, output, server, types::DateTime as SmithyDateTime};

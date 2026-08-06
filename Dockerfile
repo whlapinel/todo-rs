@@ -13,6 +13,12 @@ RUN cd frontend && npm ci
 COPY frontend/src/ ./frontend/src/
 COPY frontend/index.html frontend/tsconfig.json ./frontend/
 RUN cd frontend && npm run build
+# Install and build the Tailwind CSS for the web_ui templates
+COPY styles/package.json styles/package-lock.json ./styles/
+RUN cd styles && npm ci
+COPY styles/input.css ./styles/
+COPY templates/ ./templates/
+RUN cd styles && npm run build
 
 # ── Stage 2: Build the Rust binary (cross-compile to x86_64) ─────────────────
 # --platform=$BUILDPLATFORM: run this stage natively on the host (e.g. arm64 Mac)
@@ -41,6 +47,7 @@ RUN mkdir -p src && echo "fn main() {}" > src/main.rs \
     && cargo build --release --target x86_64-unknown-linux-gnu \
     && rm -rf src
 COPY src/ ./src/
+COPY templates/ ./templates/
 RUN touch src/main.rs && cargo build --release --target x86_64-unknown-linux-gnu
 
 # ── Stage 3: Minimal runtime image ───────────────────────────────────────────
@@ -50,6 +57,7 @@ RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/
 WORKDIR /app
 COPY --from=rust-builder /build/target/x86_64-unknown-linux-gnu/release/todo ./
 COPY --from=frontend-builder /build/frontend/dist/ ./frontend/dist/
+COPY --from=frontend-builder /build/static/ ./static/
 VOLUME ["/data"]
 ENV TODO_DATABASE_URL=sqlite:///data/todo.db?mode=rwc
 EXPOSE 3000

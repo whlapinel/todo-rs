@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}{{ parent_name }} · Todo{% endblock %}
+{% block content %}
+<div class="max-w-xl mx-auto mt-8 p-6 rounded-lg border border-slate-200 shadow-sm">
+  <div class="flex items-center justify-between">
+    <h1 class="text-2xl font-semibold text-slate-900">{{ parent_name }}</h1>
+    <a href="/web/items/{{ parent_id }}" class="text-sm text-slate-600 hover:underline">Back to item</a>
+  </div>
+  <div class="mt-4">
+    {% if rows.is_empty() %}
+    <p class="text-sm text-slate-500">No sub-items yet.</p>
+    {% else %}
+    {% for row in rows %}
+    {{ row|safe }}
+    {% endfor %}
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

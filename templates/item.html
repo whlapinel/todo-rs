@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}{{ name }} · Todo{% endblock %}
+{% block content %}
+<div class="max-w-xl mx-auto mt-8 p-6 rounded-lg border border-slate-200 shadow-sm">
+  <h1 class="text-2xl font-semibold text-slate-900">{{ name }}</h1>
+  <p class="mt-2 text-sm">
+    Status:
+    {% if complete %}
+    <span class="font-medium text-green-600">done</span>
+    {% else %}
+    <span class="font-medium text-amber-600">not done</span>
+    {% endif %}
+  </p>
+  {% if let Some(d) = due_date %}
+  <p class="mt-1 text-sm text-slate-600">Due: {{ d }}</p>
+  {% endif %}
+  {% if has_children %}
+  <p class="mt-3">
+    <a href="/web/items/{{ id }}/children" class="text-sm text-slate-600 hover:underline">View sub-items</a>
+  </p>
+  {% endif %}
+</div>
+{% endblock %}
