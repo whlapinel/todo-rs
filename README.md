@@ -83,8 +83,7 @@ todo/
 │   └── build.gradle.kts           # Gradle build for the model subproject
 ├── todo-server-sdk/               # Generated Rust server crate (do not edit)
 ├── todo-typescript-client/        # Generated TS client (do not edit)
-├── frontend/                      # TypeScript SPA (Vite, imports @todo/client)
-│   └── src/main.ts
+├── templates/                     # Askama HTML templates (server-rendered UI)
 ├── mcp-server/                    # Claude Code MCP server wrapping the API
 │   └── src/index.ts
 ├── todo-cli/                      # prl CLI binary (standalone Rust crate)

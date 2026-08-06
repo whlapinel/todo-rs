@@ -14,6 +14,7 @@ use axum::{
     Extension, Router,
     body::boxed,
     middleware,
+    response::Redirect,
     routing::{get, post, put},
 };
 use handlers::json_api::invites::send_app_invite;
@@ -41,7 +42,7 @@ use handlers::web_ui::teams::*;
 use todo_server_sdk::{PeoplesRepublicOfLists, PeoplesRepublicOfListsConfig};
 use tower::ServiceBuilder;
 use tower_cookies::CookieManagerLayer;
-use tower_http::services::{ServeDir, ServeFile};
+use tower_http::services::ServeDir;
 
 fn build_web_router() -> Router {
     Router::new()
@@ -172,8 +173,6 @@ async fn main() {
         .map_response(|res: http::Response<_>| res.map(boxed))
         .service(smithy);
 
-    let frontend =
-        ServeDir::new("frontend/dist").fallback(ServeFile::new("frontend/dist/index.html"));
     let web_static = ServeDir::new("static");
 
     let auth_mode = std::env::var("TODO_AUTH_MODE").unwrap_or_else(|_| "internal".to_string());
@@ -201,6 +200,7 @@ async fn main() {
             let public_web_router = build_public_web_router();
 
             Router::new()
+                .route("/", get(|| async { Redirect::to("/web/items") }))
                 .nest("/api", api_router)
                 .nest("/auth", auth_router)
                 .nest("/web", web_router.merge(public_web_router))
@@ -208,7 +208,6 @@ async fn main() {
                 .layer(Extension(user_repo))
                 .layer(Extension(Arc::new(jwt_secret)))
                 .layer(CookieManagerLayer::new())
-                .fallback_service(frontend)
         }
         _ => {
             let google_client_id = std::env::var("TODO_GOOGLE_CLIENT_ID")
@@ -249,13 +248,13 @@ async fn main() {
             let public_web_router = build_public_web_router();
 
             Router::new()
+                .route("/", get(|| async { Redirect::to("/web/items") }))
                 .nest("/auth", auth_router)
                 .nest("/api", api_router)
                 .nest("/web", web_router.merge(public_web_router))
                 .nest_service("/web/static", web_static)
                 .layer(Extension(app_state))
                 .layer(CookieManagerLayer::new())
-                .fallback_service(frontend)
         }
     };
 

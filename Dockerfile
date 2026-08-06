@@ -1,19 +1,6 @@
-# ── Stage 1: Build frontend (TypeScript client + Vite frontend) ───────────────
-FROM --platform=$BUILDPLATFORM node:22-alpine AS frontend-builder
+# ── Stage 1: Build Tailwind CSS for the web_ui templates ──────────────────────
+FROM --platform=$BUILDPLATFORM node:22-alpine AS styles-builder
 WORKDIR /build
-# Install and build the generated TS client package
-COPY todo-typescript-client/package.json todo-typescript-client/package-lock.json ./todo-typescript-client/
-RUN cd todo-typescript-client && npm ci
-COPY todo-typescript-client/src/ ./todo-typescript-client/src/
-COPY todo-typescript-client/tsconfig*.json ./todo-typescript-client/
-RUN cd todo-typescript-client && npm run build
-# Install and build the frontend (file: dep resolves to ../todo-typescript-client)
-COPY frontend/package.json frontend/package-lock.json ./frontend/
-RUN cd frontend && npm ci
-COPY frontend/src/ ./frontend/src/
-COPY frontend/index.html frontend/tsconfig.json ./frontend/
-RUN cd frontend && npm run build
-# Install and build the Tailwind CSS for the web_ui templates
 COPY styles/package.json styles/package-lock.json ./styles/
 RUN cd styles && npm ci
 COPY styles/input.css ./styles/
@@ -56,8 +43,7 @@ FROM --platform=linux/amd64 debian:bookworm-slim
 RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=rust-builder /build/target/x86_64-unknown-linux-gnu/release/todo ./
-COPY --from=frontend-builder /build/frontend/dist/ ./frontend/dist/
-COPY --from=frontend-builder /build/static/ ./static/
+COPY --from=styles-builder /build/static/ ./static/
 VOLUME ["/data"]
 ENV TODO_DATABASE_URL=sqlite:///data/todo.db?mode=rwc
 EXPOSE 3000

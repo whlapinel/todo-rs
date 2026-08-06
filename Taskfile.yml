@@ -14,32 +14,6 @@ tasks:
       - todo-client/src/**/*.rs
       - todo-typescript-client/
 
-  client:
-    desc: Build the generated TypeScript client package
-    dir: todo-typescript-client
-    cmds:
-      - npm install
-      - npm run build
-    sources:
-      - src/**/*.ts
-    generates:
-      - dist-cjs/**/*
-      - dist-es/**/*
-      - dist-types/**/*
-
-  frontend:
-    desc: Build the frontend (outputs to frontend/dist/)
-    dir: frontend
-    deps: [client]
-    cmds:
-      - npm install
-      - npm run build
-    sources:
-      - src/**/*.ts
-      - index.html
-    generates:
-      - dist/**/*
-
   web-styles:
     desc: Build Tailwind CSS and vendor htmx.min.js for the web_ui templates (outputs to static/)
     dir: styles
@@ -55,10 +29,9 @@ tasks:
       - ../static/js/htmx.min.js
 
   build:
-    desc: Build everything (codegen + frontend + server)
+    desc: Build everything (codegen + server)
     cmds:
       - task: codegen
-      - task: frontend
       - task: web-styles
       - cargo build
 
@@ -68,7 +41,6 @@ tasks:
     desc: Build and run the server
     cmds:
       - task: codegen
-      - task: frontend
       - task: web-styles
       - cargo run
 
