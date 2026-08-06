@@ -1,0 +1,10 @@
+{
+  "files.associations": {
+    "**/templates/**/*.html": "askama-html"
+  },
+  "[askama-html]": {
+    "editor.defaultFormatter": "monosans.djlint",
+    "editor.formatOnSave": true,
+    "djlint.enableLinting": true
+  }
+}
