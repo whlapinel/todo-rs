@@ -5,28 +5,12 @@ use crate::service::team_items::{self as team_item_service, UpdateTeamItemParams
 use crate::storage::sqlite::{DueItem, ItemRepo, RepoError, TeamRepo};
 use askama::Template;
 use axum::extract::{Extension, Form, Path, Query};
-use axum::http::StatusCode;
 use axum::response::Html;
 use chrono::{DateTime, Duration, Utc};
 use std::sync::Arc;
 
-fn repo_status(e: RepoError) -> StatusCode {
-    match e {
-        RepoError::NotFound => StatusCode::NOT_FOUND,
-        RepoError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
-    }
-}
-
-fn service_status(e: ItemError) -> StatusCode {
-    match e {
-        ItemError::NotFound => StatusCode::NOT_FOUND,
-        ItemError::Invalid(_) => StatusCode::UNPROCESSABLE_ENTITY,
-        ItemError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
-    }
-}
-
-fn render<T: Template>(t: T) -> Result<Html<String>, StatusCode> {
-    t.render().map(Html).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+fn render<T: Template>(t: T) -> Result<Html<String>, ItemError> {
+    Ok(Html(t.render()?))
 }
 
 /// Mirrors `presetRange()` in `frontend/src/main.ts` — computes a due-date window using the
@@ -127,14 +111,14 @@ pub struct DashboardQuery {
     show_complete: Option<String>,
 }
 
-fn render_rows(items: &[DueItem], preset: &str, show_complete: bool, tz: i32) -> Result<Vec<String>, StatusCode> {
+fn render_rows(items: &[DueItem], preset: &str, show_complete: bool, tz: i32) -> Result<Vec<String>, ItemError> {
     items
         .iter()
         .filter(|di| show_complete || !di.item.complete)
         .filter(|di| preset != "All with due date" || di.item.due_date.is_some())
         .map(|di| DashboardRow::from_due_item(di, tz).render())
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+        .map_err(ItemError::from)
 }
 
 pub async fn dashboard_page(
@@ -142,7 +126,7 @@ pub async fn dashboard_page(
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     TzOffset(tz_offset): TzOffset,
     Query(q): Query<DashboardQuery>,
-) -> Result<Html<String>, StatusCode> {
+) -> Result<Html<String>, ItemError> {
     let preset = q.preset.unwrap_or_else(|| "Today".to_string());
     let show_complete = q.show_complete.is_some();
     let (after, before) = preset_range(&preset, Utc::now(), tz_offset);
@@ -150,7 +134,7 @@ pub async fn dashboard_page(
     let due_items = repo
         .list_due(&auth_user.user_id, after.map(|d| d.timestamp()), before.map(|d| d.timestamp()))
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(ItemError::from)?;
     let rows = render_rows(&due_items, &preset, show_complete, tz_offset)?;
 
     let presets = PRESETS.iter().map(|&p| (p, p == preset)).collect();
@@ -173,8 +157,8 @@ pub async fn toggle_item_complete(
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     TzOffset(tz): TzOffset,
     Form(form): Form<ToggleForm>,
-) -> Result<Html<String>, StatusCode> {
-    let current = repo.get(&auth_user.user_id, &item_id).await.map_err(repo_status)?;
+) -> Result<Html<String>, ItemError> {
+    let current = repo.get(&auth_user.user_id, &item_id).await.map_err(ItemError::from)?;
     let params = item_service::UpdateItemParams {
         user_id: auth_user.user_id.clone(),
         item_id: item_id.clone(),
@@ -189,7 +173,7 @@ pub async fn toggle_item_complete(
         due_offset_days: current.due_offset_days,
         timezone_offset_minutes: Some(tz),
     };
-    item_service::update_item(&repo, params).await.map_err(service_status)?;
+    item_service::update_item(&repo, params).await?;
 
     match repo.get(&auth_user.user_id, &item_id).await {
         Ok(updated) => render(DashboardRow::from_due_item(
@@ -202,7 +186,7 @@ pub async fn toggle_item_complete(
         // Recurring item just completed and got replaced under a new id (see
         // service::items::update_item) — nothing to render back for the old id.
         Err(RepoError::NotFound) => Ok(Html(String::new())),
-        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
+        Err(e) => Err(ItemError::from(e)),
     }
 }
 
@@ -213,8 +197,8 @@ pub async fn toggle_team_item_complete(
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     TzOffset(tz): TzOffset,
     Form(form): Form<ToggleForm>,
-) -> Result<Html<String>, StatusCode> {
-    let current = repo.get_team_item(&team_id, &item_id).await.map_err(repo_status)?;
+) -> Result<Html<String>, ItemError> {
+    let current = repo.get_team_item(&team_id, &item_id).await.map_err(ItemError::from)?;
     let params = UpdateTeamItemParams {
         team_id: team_id.clone(),
         item_id: item_id.clone(),
@@ -230,9 +214,7 @@ pub async fn toggle_team_item_complete(
         assigned_to_user_id: current.assigned_to_user_id.clone(),
         timezone_offset_minutes: Some(tz),
     };
-    team_item_service::update_team_item(&repo, &teams, &auth_user.user_id, params)
-        .await
-        .map_err(service_status)?;
+    team_item_service::update_team_item(&repo, &teams, &auth_user.user_id, params).await?;
 
     match repo.get_team_item(&team_id, &item_id).await {
         Ok(updated) => render(DashboardRow::from_due_item(
@@ -243,6 +225,6 @@ pub async fn toggle_team_item_complete(
             tz,
         )),
         Err(RepoError::NotFound) => Ok(Html(String::new())),
-        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
+        Err(e) => Err(ItemError::from(e)),
     }
 }

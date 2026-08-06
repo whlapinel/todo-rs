@@ -5,6 +5,95 @@ use crate::storage::sqlite::{ItemRepo, TeamRepo};
 use chrono::{DateTime, Utc};
 use std::sync::Arc;
 
+#[derive(Debug, Default)]
+pub struct CreateTeamItemParams {
+    pub team_id: String,
+    pub name: String,
+    pub due_date: Option<DateTime<Utc>>,
+    pub complete: Option<bool>,
+    pub recurrence: Option<String>,
+    pub recurrence_basis: Option<String>,
+    pub has_due_time: Option<bool>,
+    pub has_tasks: Option<bool>,
+    pub parent_item_id: Option<String>,
+    pub due_offset_days: Option<i32>,
+    pub assigned_to_user_id: Option<String>,
+    pub timezone_offset_minutes: Option<i32>,
+}
+
+/// Moved from `json_api::team_items::create_team_item`.
+pub async fn create_team_item(
+    repo: &Arc<dyn ItemRepo>,
+    teams: &Arc<dyn TeamRepo>,
+    requester_user_id: &str,
+    params: CreateTeamItemParams,
+) -> Result<String, ItemError> {
+    require_active_member(teams, &params.team_id, requester_user_id).await?;
+    if let Some(ref r) = params.recurrence {
+        recurrence::parse(r).map_err(ItemError::Invalid)?;
+    }
+    if params.recurrence.is_some() && params.parent_item_id.is_some() {
+        return Err(ItemError::Invalid(
+            "child items cannot have their own recurrence; set dueOffsetDays instead".to_string(),
+        ));
+    }
+    let mut item = Item::new_team_item(&params.team_id, &params.name);
+    item.due_date = params.due_date;
+    item.complete = params.complete.unwrap_or(false);
+    item.recurrence = params.recurrence.clone();
+    item.recurrence_basis = params.recurrence_basis;
+    item.has_due_time = params.has_due_time.unwrap_or(false);
+    item.has_tasks = params.has_tasks.unwrap_or(true);
+    item.parent_item_id = params.parent_item_id;
+    item.due_offset_days = params.due_offset_days;
+    item.assigned_to_user_id =
+        resolve_assignee(teams, &params.team_id, params.assigned_to_user_id).await?;
+
+    if item.due_date.is_none()
+        && let Some(ref pattern) = item.recurrence
+        && let Ok(rule) = recurrence::parse(pattern)
+    {
+        let tz_offset = params.timezone_offset_minutes.unwrap_or(0);
+        let mut deadline = recurrence::next_date(&rule, chrono::Utc::now(), tz_offset);
+        if rule.time_override.is_none() {
+            deadline = recurrence::apply_end_of_day(deadline, tz_offset);
+        } else {
+            item.has_due_time = true;
+        }
+        item.due_date = Some(deadline);
+    }
+    let item_id = repo.create(&item).await?;
+    Ok(item_id)
+}
+
+/// Moved from `json_api::team_items::delete_team_item`, with one behavior fix (same class as
+/// `service::items::delete_item`'s): the original never confirmed `item_id` actually belongs
+/// to `team_id` before deleting it — an active member of *any* team could delete *any* item
+/// by id, team-scoping notwithstanding. `repo.get_team_item` below closes that gap; a
+/// mismatched pair now surfaces as `ItemError::NotFound`.
+pub async fn delete_team_item(
+    repo: &Arc<dyn ItemRepo>,
+    teams: &Arc<dyn TeamRepo>,
+    requester_user_id: &str,
+    team_id: &str,
+    item_id: &str,
+) -> Result<(), ItemError> {
+    require_active_member(teams, team_id, requester_user_id).await?;
+    repo.get_team_item(team_id, item_id).await?;
+
+    let mut queue = vec![item_id.to_string()];
+    while let Some(parent_id) = queue.first().cloned() {
+        queue.remove(0);
+        let children = repo.list_children(&parent_id).await?;
+        for child in children {
+            queue.push(child.id.clone());
+            repo.delete(&child.id).await?;
+        }
+    }
+    repo.delete(item_id).await?;
+    Ok(())
+}
+
 /// Moved from `json_api::team_items::require_active_member`.
 pub(crate) async fn require_active_member(
     teams: &Arc<dyn TeamRepo>,
@@ -62,11 +151,7 @@ pub struct UpdateTeamItemParams {
     pub timezone_offset_minutes: Option<i32>,
 }
 
-/// Moved from `json_api::team_items::update_team_item`. Only this one function is extracted
-/// so far (not the full team_items CRUD set) — it's the one `web_ui` needs today, for the
-/// dashboard's team-owned-item complete-toggle (see `web_ui::dashboard`). The rest of
-/// `json_api::team_items` moves the same way once Stage 3 (team items screen) needs it from
-/// `web_ui` too.
+/// Moved from `json_api::team_items::update_team_item`.
 pub async fn update_team_item(
     repo: &Arc<dyn ItemRepo>,
     teams: &Arc<dyn TeamRepo>,

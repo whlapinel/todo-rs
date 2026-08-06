@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}{{ name }} · Todo{% endblock %}
+{% block content %}
+<div class="space-y-6">
+  <div class="flex items-center justify-between">
+    <h1 class="text-2xl font-semibold text-slate-900">{{ name }}</h1>
+    <a href="/web/team-items/{{ team_id }}" hx-target="#page" hx-select="#page" hx-swap="innerHTML"
+       class="text-sm text-slate-600 hover:underline">Back to items</a>
+  </div>
+
+  {{ fields|safe }}
+
+  <div>
+    <h2 class="text-sm font-semibold text-slate-700 mb-2">Sub-items</h2>
+    <ul id="children-list" class="divide-y divide-slate-100 rounded-lg border border-slate-200 bg-white px-4"
+        hx-get="/web/team-items/{{ team_id }}/{{ id }}/children" hx-trigger="load"
+        hx-target="this" hx-select="unset" hx-swap="innerHTML"></ul>
+
+    <form hx-post="/web/team-items/{{ team_id }}" hx-target="#children-list" hx-select="unset" hx-swap="innerHTML"
+          hx-on::after-request="if(event.detail.successful) this.reset()"
+          class="mt-4 flex items-end gap-x-2">
+      <input type="hidden" name="parentItemId" value="{{ id }}" />
+      <label class="flex-1 block text-sm text-slate-700">New sub-item
+        <input type="text" name="name" placeholder="Name" required class="mt-1 block w-full rounded-md border-slate-300 text-sm" />
+      </label>
+      <label class="block text-sm text-slate-700">Offset days
+        <input type="number" name="dueOffsetDays" class="mt-1 block w-20 rounded-md border-slate-300 text-sm" />
+      </label>
+      <button type="submit" class="cursor-pointer rounded-md bg-slate-900 text-white text-sm px-3 py-1.5">Add</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

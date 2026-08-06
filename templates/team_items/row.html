@@ -1,0 +1,25 @@
+<li id="item-{{ id }}" class="flex items-center justify-between gap-x-3 py-2">
+  <div class="flex items-center gap-x-3 min-w-0">
+    <input type="checkbox" {% if complete %}checked{% endif %}
+           hx-put="/web/team-items/{{ team_id }}/{{ id }}" hx-vals='{"complete": "{{ toggle_complete_json }}"}'
+           hx-target="#item-{{ id }}" hx-select="#item-{{ id }}" hx-swap="outerHTML" class="shrink-0" />
+    <a href="/web/team-items/{{ team_id }}/{{ id }}" hx-target="#page" hx-select="#page" hx-swap="innerHTML"
+       class="truncate {% if complete %}line-through text-slate-400{% else %}text-slate-900{% endif %}">
+      {% if has_children %}<span class="text-slate-400">&#9656;</span>{% endif %} {{ name }}
+    </a>
+    {% if let Some(label) = offset_label %}
+    <span class="text-xs text-slate-400 shrink-0">{{ label }}</span>
+    {% endif %}
+    {% if let Some(assignee) = assignee_name %}
+    <span class="text-xs text-sky-600 shrink-0">[{{ assignee }}]</span>
+    {% endif %}
+  </div>
+  <div class="flex items-center gap-x-3 text-xs text-slate-500 shrink-0">
+    {% if let Some(d) = due_date %}<span>{{ d }}</span>{% endif %}
+    {% if let Some(r) = recurrence %}<span title="repeats">&#8635; {{ r }}</span>{% endif %}
+    <button hx-delete="/web/team-items/{{ team_id }}/{{ id }}"
+            hx-confirm="Delete {{ name }}{% if has_children %} and all its sub-items{% endif %}?"
+            hx-target="#item-{{ id }}" hx-select="unset" hx-swap="outerHTML swap:200ms"
+            class="cursor-pointer text-red-500 hover:text-red-700">Delete</button>
+  </div>
+</li>

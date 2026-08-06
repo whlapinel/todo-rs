@@ -1,0 +1,10 @@
+<li id="assigned-{{ id }}" class="flex items-center justify-between gap-x-3 py-2">
+  <div class="flex items-center gap-x-3 min-w-0">
+    <input type="checkbox" {% if complete %}checked{% endif %}
+           hx-put="/web/team-items/{{ team_id }}/{{ id }}" hx-vals='{"complete": "{{ toggle_complete_json }}"}'
+           hx-target="#assigned-{{ id }}" hx-select="unset" hx-swap="outerHTML" class="shrink-0" />
+    <a href="/web/team-items/{{ team_id }}/{{ id }}" hx-target="#page" hx-select="#page" hx-swap="innerHTML"
+       class="truncate {% if complete %}line-through text-slate-400{% else %}text-slate-900{% endif %}">{{ name }}</a>
+  </div>
+  {% if let Some(d) = due_date %}<span class="text-xs text-slate-500 shrink-0">{{ d }}</span>{% endif %}
+</li>

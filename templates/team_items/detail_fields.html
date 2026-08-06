@@ -1,0 +1,53 @@
+{% import "macros.html" as macros %}
+<div id="item-{{ id }}-fields" class="rounded-lg border border-slate-200 bg-white p-6 space-y-3">
+  <form hx-put="/web/team-items/{{ team_id }}/{{ id }}" hx-target="#item-{{ id }}-fields" hx-select="#item-{{ id }}-fields" hx-swap="outerHTML" class="space-y-3">
+    <label class="block text-sm text-slate-700">Name
+      <input type="text" name="name" value="{{ name }}" class="mt-1 block w-full rounded-md border-slate-300 text-sm" />
+    </label>
+    <div class="flex items-center gap-x-4">
+      <label class="block text-sm text-slate-700">Due date
+        <input type="date" name="dueDate" value="{{ due_date_input }}" class="mt-1 block rounded-md border-slate-300 text-sm" />
+      </label>
+      <label class="block text-sm text-slate-700">Due time
+        <input type="time" name="dueTime" value="{{ due_time_input }}" class="mt-1 block rounded-md border-slate-300 text-sm" />
+      </label>
+    </div>
+    <label class="block text-sm text-slate-700">Type
+      <select name="hasTasks" class="mt-1 block rounded-md border-slate-300 text-sm">
+        {% if has_tasks %}
+        <option value="tasks" selected>Task list</option>
+        <option value="simple">Simple item</option>
+        {% else %}
+        <option value="tasks">Task list</option>
+        <option value="simple" selected>Simple item</option>
+        {% endif %}
+      </select>
+    </label>
+    <label class="block text-sm text-slate-700">Assign to
+      <select name="assignedToUserId" class="mt-1 block rounded-md border-slate-300 text-sm">
+        <option value="" {% if assigned_to_user_id.is_none() %}selected{% endif %}>Unassigned</option>
+        {% for opt in assignee_options %}
+        <option value="{{ opt.0 }}" {% if assigned_to_user_id.as_deref() == Some(opt.0.as_str()) %}selected{% endif %}>{{ opt.1 }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="block text-sm text-slate-700">Status
+      <select name="complete" class="mt-1 block rounded-md border-slate-300 text-sm">
+        {% if complete %}
+        <option value="false">Not done</option>
+        <option value="true" selected>Done</option>
+        {% else %}
+        <option value="false" selected>Not done</option>
+        <option value="true">Done</option>
+        {% endif %}
+      </select>
+    </label>
+    {% call macros::recurrence_fields(is_top_level, recurrence, recurrence_basis, due_offset_days_input) %}{% endcall %}
+    <div class="flex items-center gap-x-3">
+      <button type="submit" class="cursor-pointer rounded-md bg-slate-900 text-white text-sm px-3 py-1.5">Save</button>
+      {% if just_saved %}
+      <span class="toast-fade text-sm text-green-600">&#10003; Saved</span>
+      {% endif %}
+    </div>
+  </form>
+</div>

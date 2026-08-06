@@ -23,10 +23,9 @@
       <nav class="flex items-center gap-x-4 text-sm text-slate-600">
         <a href="/web/items" class="hover:underline">Items</a>
         <a href="/web/dashboard" class="hover:underline">Dashboard</a>
-        <!-- Teams and Checklists land in Stages 3/4 of the migration plan — until those
-             routes exist, linking to them here falls through to the SPA's fallback_service
-             (a different document, no #page element), and hx-select="#page" swaps in
-             nothing. Add these back once web_ui/teams.rs and web_ui/checklists.rs ship. -->
+        <a href="/web/teams" class="hover:underline">Teams</a>
+        <a href="/web/assigned-items" class="hover:underline">Assigned to me</a>
+        <a href="/web/checklists" class="hover:underline">Checklists</a>
         <a href="/auth/logout" class="hover:underline">Log out</a>
       </nav>
     </div>

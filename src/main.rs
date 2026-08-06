@@ -30,9 +30,14 @@ use handlers::json_api::teams::{
 };
 use handlers::json_api::templates::{create_template, list_templates};
 use handlers::json_api::users::{get_user, list_users, update_user};
+use handlers::web_ui::assigned_items::assigned_items_page;
+use handlers::web_ui::checklists::*;
 use handlers::web_ui::dashboard::*;
 use handlers::web_ui::hello_world::hello_world;
 use handlers::web_ui::items::*;
+use handlers::web_ui::login::login_page;
+use handlers::web_ui::team_items::*;
+use handlers::web_ui::teams::*;
 use todo_server_sdk::{PeoplesRepublicOfLists, PeoplesRepublicOfListsConfig};
 use tower::ServiceBuilder;
 use tower_cookies::CookieManagerLayer;
@@ -57,12 +62,63 @@ fn build_web_router() -> Router {
             "/dashboard/team-items/:team_id/:item_id",
             put(toggle_team_item_complete),
         )
+        .route("/assigned-items", get(assigned_items_page))
+        .route(
+            "/checklists",
+            get(checklists_page).post(create_checklist_form),
+        )
+        .route(
+            "/checklists/:template_id",
+            get(checklist_detail_page)
+                .post(create_checklist_child_form)
+                .delete(delete_checklist_form),
+        )
+        .route(
+            "/checklists/:template_id/items",
+            get(checklist_children_fragment),
+        )
+        .route(
+            "/checklists/:template_id/items/:item_id",
+            get(checklist_child_detail_page)
+                .put(update_checklist_child_form)
+                .delete(delete_checklist_child_form),
+        )
+        .route("/checklists/:template_id/use", post(use_checklist_form))
+        .route("/teams", get(teams_page).post(create_team_form))
+        .route("/teams/:team_id", get(team_detail_page))
+        .route("/teams/:team_id/invite", post(invite_team_member_form))
+        .route("/teams/:team_id/accept", post(accept_team_invite_form))
+        .route("/teams/:team_id/leave", post(leave_team_form))
+        .route(
+            "/team-items/:team_id",
+            get(team_items_page).post(create_team_item_form),
+        )
+        .route(
+            "/team-items/:team_id/batch",
+            post(create_team_items_batch),
+        )
+        .route(
+            "/team-items/:team_id/:item_id",
+            get(team_item_detail_page)
+                .put(update_team_item_form)
+                .delete(delete_team_item_form),
+        )
+        .route(
+            "/team-items/:team_id/:item_id/children",
+            get(team_item_children_fragment),
+        )
         // Without this, a path under /web/ that doesn't match any route above falls through
         // to the outer router's fallback_service (the SPA's frontend/dist/index.html) — a
         // different document with no #page element, which silently renders blank when a
         // boosted link's inherited hx-select="#page" finds nothing to swap in. A real 404
         // here fails loudly instead, for any not-yet-built /web/* route or plain typo.
         .fallback(web_not_found)
+}
+
+/// Routes that must stay reachable without a session — kept out of `build_web_router()` so
+/// the auth middleware layered onto that router in `main()` never wraps this one too.
+fn build_public_web_router() -> Router {
+    Router::new().route("/login", get(login_page))
 }
 
 async fn web_not_found() -> axum::http::StatusCode {
@@ -142,11 +198,12 @@ async fn main() {
                 .layer(Extension(item_repo.clone()))
                 .layer(Extension(team_repo.clone()))
                 .layer(middleware::from_fn(auth::caddy_header_middleware));
+            let public_web_router = build_public_web_router();
 
             Router::new()
                 .nest("/api", api_router)
                 .nest("/auth", auth_router)
-                .nest("/web", web_router)
+                .nest("/web", web_router.merge(public_web_router))
                 .nest_service("/web/static", web_static)
                 .layer(Extension(user_repo))
                 .layer(Extension(Arc::new(jwt_secret)))
@@ -189,11 +246,12 @@ async fn main() {
                 .layer(Extension(item_repo.clone()))
                 .layer(Extension(team_repo.clone()))
                 .layer(middleware::from_fn(auth::web_auth_middleware));
+            let public_web_router = build_public_web_router();
 
             Router::new()
                 .nest("/auth", auth_router)
                 .nest("/api", api_router)
-                .nest("/web", web_router)
+                .nest("/web", web_router.merge(public_web_router))
                 .nest_service("/web/static", web_static)
                 .layer(Extension(app_state))
                 .layer(CookieManagerLayer::new())

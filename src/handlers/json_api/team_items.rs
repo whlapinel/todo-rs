@@ -1,8 +1,9 @@
 use super::{internal, not_found};
 use crate::auth::AuthUser;
-use crate::domain::{item::Item, recurrence};
 use crate::service::items::ItemError;
-use crate::service::team_items::{self as team_item_service, resolve_assignee, UpdateTeamItemParams};
+use crate::service::team_items::{
+    self as team_item_service, CreateTeamItemParams, UpdateTeamItemParams,
+};
 use crate::storage::sqlite::{ItemRepo, RepoError, TeamRepo, UserRepo};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -18,57 +19,51 @@ async fn require_active_member(
         .map_err(|e| e.to_string())
 }
 
+fn to_create_team_item_error(e: ItemError) -> error::CreateTeamItemError {
+    match e {
+        ItemError::NotFound => not_found().into(),
+        ItemError::Invalid(msg) | ItemError::Internal(msg) => internal(msg).into(),
+    }
+}
+
+fn to_delete_team_item_error(e: ItemError) -> error::DeleteTeamItemError {
+    match e {
+        ItemError::NotFound => not_found().into(),
+        ItemError::Invalid(msg) | ItemError::Internal(msg) => internal(msg).into(),
+    }
+}
+
 pub async fn create_team_item(
     input: input::CreateTeamItemInput,
     server::Extension(repo): server::Extension<Arc<dyn ItemRepo>>,
     server::Extension(teams): server::Extension<Arc<dyn TeamRepo>>,
     server::Extension(auth): server::Extension<AuthUser>,
 ) -> Result<output::CreateTeamItemOutput, error::CreateTeamItemError> {
-    require_active_member(&teams, &input.team_id, &auth.user_id)
-        .await
-        .map_err(internal)?;
-    if let Some(ref r) = input.recurrence {
-        recurrence::parse(r).map_err(internal)?;
-    }
-    if input.recurrence.is_some() && input.parent_item_id.is_some() {
-        return Err(internal(
-            "child items cannot have their own recurrence; set dueOffsetDays instead",
-        )
-        .into());
-    }
-    let mut item = Item::new_team_item(&input.team_id, &input.name);
-    if let Some(dt) = input.due_date {
-        item.due_date = chrono::DateTime::from_timestamp(dt.secs(), dt.subsec_nanos())
-            .map(|d| d.with_timezone(&chrono::Utc));
-    }
-    item.complete = input.complete.unwrap_or(false);
-    item.recurrence = input.recurrence;
-    item.recurrence_basis = input.recurrence_basis;
-    item.has_due_time = input.has_due_time.unwrap_or(false);
-    item.has_tasks = input.has_tasks.unwrap_or(true);
-    item.parent_item_id = input.parent_item_id;
-    item.due_offset_days = input.due_offset_days;
-    item.assigned_to_user_id = resolve_assignee(&teams, &input.team_id, input.assigned_to_user_id)
-        .await
-        .map_err(internal)?;
-
-    if item.due_date.is_none()
-        && let Some(ref pattern) = item.recurrence
-        && let Ok(rule) = recurrence::parse(pattern)
-    {
-        let tz_offset = input.timezone_offset_minutes.unwrap_or(0);
-        let mut deadline = recurrence::next_date(&rule, chrono::Utc::now(), tz_offset);
-        if rule.time_override.is_none() {
-            deadline = recurrence::apply_end_of_day(deadline, tz_offset);
-        } else {
-            item.has_due_time = true;
-        }
-        item.due_date = Some(deadline);
-    }
-    let item_id = repo
-        .create(&item)
-        .await
-        .map_err(|e| internal(format!("{e:?}")))?;
+    let due_date = input
+        .due_date
+        .and_then(|dt| chrono::DateTime::from_timestamp(dt.secs(), dt.subsec_nanos()))
+        .map(|d| d.with_timezone(&chrono::Utc));
+    let item_id = team_item_service::create_team_item(
+        &repo,
+        &teams,
+        &auth.user_id,
+        CreateTeamItemParams {
+            team_id: input.team_id,
+            name: input.name,
+            due_date,
+            complete: input.complete,
+            recurrence: input.recurrence,
+            recurrence_basis: input.recurrence_basis,
+            has_due_time: input.has_due_time,
+            has_tasks: input.has_tasks,
+            parent_item_id: input.parent_item_id,
+            due_offset_days: input.due_offset_days,
+            assigned_to_user_id: input.assigned_to_user_id,
+            timezone_offset_minutes: input.timezone_offset_minutes,
+        },
+    )
+    .await
+    .map_err(to_create_team_item_error)?;
     Ok(output::CreateTeamItemOutput { item_id })
 }
 
@@ -156,27 +151,9 @@ pub async fn delete_team_item(
     server::Extension(teams): server::Extension<Arc<dyn TeamRepo>>,
     server::Extension(auth): server::Extension<AuthUser>,
 ) -> Result<output::DeleteTeamItemOutput, error::DeleteTeamItemError> {
-    require_active_member(&teams, &input.team_id, &auth.user_id)
+    team_item_service::delete_team_item(&repo, &teams, &auth.user_id, &input.team_id, &input.item_id)
         .await
-        .map_err(internal)?;
-    let mut queue = vec![input.item_id.clone()];
-    while let Some(parent_id) = queue.first().cloned() {
-        queue.remove(0);
-        let children = repo
-            .list_children(&parent_id)
-            .await
-            .map_err(|e| internal(format!("{e:?}")))?;
-        for child in children {
-            queue.push(child.id.clone());
-            repo.delete(&child.id)
-                .await
-                .map_err(|e| internal(format!("{e:?}")))?;
-        }
-    }
-    repo.delete(&input.item_id).await.map_err(|e| match e {
-        RepoError::NotFound => error::DeleteTeamItemError::from(not_found()),
-        _ => error::DeleteTeamItemError::from(internal(format!("{e:?}"))),
-    })?;
+        .map_err(to_delete_team_item_error)?;
     Ok(output::DeleteTeamItemOutput {})
 }
 

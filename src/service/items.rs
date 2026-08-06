@@ -6,30 +6,11 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-#[derive(Debug, Clone)]
-pub enum ItemError {
-    NotFound,
-    Invalid(String),
-    Internal(String),
-}
-
-impl std::fmt::Display for ItemError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ItemError::NotFound => write!(f, "not found"),
-            ItemError::Invalid(msg) | ItemError::Internal(msg) => write!(f, "{msg}"),
-        }
-    }
-}
-
-impl From<RepoError> for ItemError {
-    fn from(e: RepoError) -> Self {
-        match e {
-            RepoError::NotFound => ItemError::NotFound,
-            RepoError::Internal(msg) => ItemError::Internal(msg),
-        }
-    }
-}
+/// Re-exported so existing `crate::service::items::ItemError` imports across the codebase
+/// keep working unchanged — the type itself now lives in `service::error` since it's shared
+/// across every module in this layer (items, team_items, templates, teams), not specific to
+/// items.
+pub use crate::service::error::ItemError;
 
 #[derive(Debug, Default)]
 pub struct CreateItemParams {
@@ -221,6 +202,48 @@ pub(crate) fn clone_children<'a>(
             )
             .await?;
             repo.delete(&child.id).await?;
+        }
+        Ok(())
+    })
+}
+
+/// Recursively copies the subtree under `template_parent_id` onto `new_parent_id`, leaving
+/// the template itself untouched (unlike `clone_children`, nothing is deleted — the template
+/// must stay reusable for the next "Use" click). Used by `web_ui::checklists::use_checklist`
+/// when instantiating a real item from a checklist template.
+///
+/// Same fixed-root-offset semantics as `clone_children`: every descendant's deadline is
+/// `deadline_from_offset(root_due_date, tz_offset_minutes)`, measured from the single new
+/// item that was just created, not chained through intermediate copied parents. If the new
+/// item has no due date at all, copied children get none either, regardless of any offset —
+/// there's nothing for an offset to be measured from.
+pub(crate) fn copy_template_children<'a>(
+    repo: &'a Arc<dyn ItemRepo>,
+    template_parent_id: &'a str,
+    new_parent_id: &'a str,
+    root_due_date: Option<DateTime<Utc>>,
+    tz_offset_minutes: i32,
+) -> Pin<Box<dyn Future<Output = Result<(), RepoError>> + Send + 'a>> {
+    Box::pin(async move {
+        let children = repo.list_children(template_parent_id).await?;
+        for child in children {
+            let mut new_child = child.clone();
+            new_child.id = String::new();
+            new_child.parent_item_id = Some(new_parent_id.to_string());
+            new_child.complete = false;
+            new_child.is_template = false;
+            new_child.due_date =
+                root_due_date.and_then(|root| child.deadline_from_offset(root, tz_offset_minutes));
+            new_child.has_due_time = false;
+            let new_child_id = repo.create(&new_child).await?;
+            copy_template_children(
+                repo,
+                &child.id,
+                &new_child_id,
+                root_due_date,
+                tz_offset_minutes,
+            )
+            .await?;
         }
         Ok(())
     })

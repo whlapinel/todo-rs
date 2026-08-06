@@ -1,0 +1,415 @@
+use crate::auth::AuthUser;
+use crate::domain::item::Item;
+use crate::domain::recurrence;
+use crate::handlers::web_ui::TzOffset;
+use crate::service::items::{self as item_service, ItemError};
+use crate::service::templates::{self as template_service, CreateTemplateParams};
+use crate::storage::sqlite::ItemRepo;
+use askama::Template;
+use axum::extract::{Extension, Form, Path};
+use axum::response::{Html, IntoResponse, Response};
+use chrono::{DateTime, Utc};
+use std::sync::Arc;
+
+fn render<T: Template>(t: T) -> Result<Html<String>, ItemError> {
+    Ok(Html(t.render()?))
+}
+
+/// A plain "YYYY-MM-DD" local date (the "Use" form only ever collects a date, never a time —
+/// templates carry no `hasDueTime` concept) into an end-of-local-day UTC instant, same
+/// `UTC = local + tzOffsetMinutes` convention used everywhere else in `web_ui`.
+fn parse_use_due_date(date: &str, tz_offset_minutes: i32) -> Option<DateTime<Utc>> {
+    let naive_date = chrono::NaiveDate::parse_from_str(date.trim(), "%Y-%m-%d").ok()?;
+    let naive = naive_date.and_hms_opt(0, 0, 0)?;
+    let as_utc = DateTime::<Utc>::from_naive_utc_and_offset(naive, Utc);
+    Some(recurrence::apply_end_of_day(
+        as_utc + chrono::Duration::minutes(tz_offset_minutes as i64),
+        tz_offset_minutes,
+    ))
+}
+
+// ---- templates --------------------------------------------------------------
+
+#[derive(Template)]
+#[template(path = "checklists/row.html")]
+struct ChecklistRow {
+    id: String,
+    name: String,
+    recurrence: Option<String>,
+}
+
+impl ChecklistRow {
+    fn from_item(item: &Item) -> Self {
+        Self {
+            id: item.id.clone(),
+            name: item.name.clone(),
+            recurrence: item.recurrence.clone(),
+        }
+    }
+}
+
+#[derive(Template)]
+#[template(path = "checklists/list_page.html")]
+struct ChecklistsListPageTemplate {
+    rows: Vec<String>,
+}
+
+#[derive(Template)]
+#[template(path = "checklists/rows_fragment.html")]
+struct ChecklistsRowsFragmentTemplate {
+    rows: Vec<String>,
+}
+
+#[derive(Template)]
+#[template(path = "checklists/child_row.html")]
+struct ChecklistChildRow {
+    template_id: String,
+    id: String,
+    name: String,
+    offset_label: String,
+}
+
+fn format_offset_label(due_offset_days: Option<i32>) -> String {
+    match due_offset_days {
+        Some(0) => "on due date".to_string(),
+        Some(n) if n > 0 => format!("+{n}d"),
+        Some(n) => format!("{n}d"),
+        None => "no offset".to_string(),
+    }
+}
+
+impl ChecklistChildRow {
+    fn from_item(template_id: &str, item: &Item) -> Self {
+        Self {
+            template_id: template_id.to_string(),
+            id: item.id.clone(),
+            name: item.name.clone(),
+            offset_label: format_offset_label(item.due_offset_days),
+        }
+    }
+}
+
+#[derive(Template)]
+#[template(path = "checklists/children_fragment.html")]
+struct ChildrenFragmentTemplate {
+    rows: Vec<String>,
+}
+
+#[derive(Template)]
+#[template(path = "checklists/detail_page.html")]
+struct ChecklistDetailPageTemplate {
+    id: String,
+    name: String,
+}
+
+#[derive(Template)]
+#[template(path = "checklists/child_detail_fields.html")]
+struct ChecklistChildDetailFields {
+    template_id: String,
+    id: String,
+    name: String,
+    due_offset_days_input: String,
+    /// Set only on the fragment returned by a successful save (never on a plain page load) —
+    /// same convention as `items::DetailFields::just_saved`.
+    just_saved: bool,
+}
+
+impl ChecklistChildDetailFields {
+    fn from_item(template_id: &str, item: &Item, just_saved: bool) -> Self {
+        Self {
+            template_id: template_id.to_string(),
+            id: item.id.clone(),
+            name: item.name.clone(),
+            due_offset_days_input: item
+                .due_offset_days
+                .map(|d| d.to_string())
+                .unwrap_or_default(),
+            just_saved,
+        }
+    }
+}
+
+#[derive(Template)]
+#[template(path = "checklists/child_detail_page.html")]
+struct ChecklistChildDetailPageTemplate {
+    template_id: String,
+    name: String,
+    fields: String,
+}
+
+// ---- shared rendering helpers ------------------------------------------------
+
+fn render_checklist_rows(templates: &[Item]) -> Result<Vec<String>, ItemError> {
+    templates
+        .iter()
+        .map(|i| ChecklistRow::from_item(i).render())
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(ItemError::from)
+}
+
+async fn render_checklists_rows_fragment(
+    repo: &Arc<dyn ItemRepo>,
+    user_id: &str,
+) -> Result<Html<String>, ItemError> {
+    let templates = repo.list_templates(user_id).await.map_err(ItemError::from)?;
+    let rows = render_checklist_rows(&templates)?;
+    render(ChecklistsRowsFragmentTemplate { rows })
+}
+
+fn render_children_rows(template_id: &str, children: &[Item]) -> Result<Vec<String>, ItemError> {
+    children
+        .iter()
+        .map(|i| ChecklistChildRow::from_item(template_id, i).render())
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(ItemError::from)
+}
+
+async fn render_children_fragment(
+    repo: &Arc<dyn ItemRepo>,
+    template_id: &str,
+) -> Result<Html<String>, ItemError> {
+    let children = repo.list_children(template_id).await.map_err(ItemError::from)?;
+    let rows = render_children_rows(template_id, &children)?;
+    render(ChildrenFragmentTemplate { rows })
+}
+
+// ---- handlers -----------------------------------------------------------------
+
+pub async fn checklists_page(
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+) -> Result<Html<String>, ItemError> {
+    let templates = repo
+        .list_templates(&auth_user.user_id)
+        .await
+        .map_err(ItemError::from)?;
+    let rows = render_checklist_rows(&templates)?;
+    render(ChecklistsListPageTemplate { rows })
+}
+
+#[derive(serde::Deserialize)]
+pub struct CreateChecklistForm {
+    name: String,
+}
+
+pub async fn create_checklist_form(
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Form(form): Form<CreateChecklistForm>,
+) -> Result<Html<String>, ItemError> {
+    template_service::create_template(
+        &repo,
+        CreateTemplateParams {
+            user_id: auth_user.user_id.clone(),
+            name: form.name,
+            source_item_id: None,
+        },
+    )
+    .await?;
+    render_checklists_rows_fragment(&repo, &auth_user.user_id).await
+}
+
+pub async fn delete_checklist_form(
+    Path(template_id): Path<String>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+) -> Result<Html<String>, ItemError> {
+    item_service::delete_item(&repo, &auth_user.user_id, &template_id).await?;
+    Ok(Html(String::new()))
+}
+
+pub async fn checklist_detail_page(
+    Path(template_id): Path<String>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+) -> Result<Html<String>, ItemError> {
+    let template = repo
+        .get(&auth_user.user_id, &template_id)
+        .await
+        .map_err(ItemError::from)?;
+    render(ChecklistDetailPageTemplate {
+        id: template.id,
+        name: template.name,
+    })
+}
+
+pub async fn checklist_children_fragment(
+    Path(template_id): Path<String>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+) -> Result<Html<String>, ItemError> {
+    // Ownership gate: list_children itself isn't scoped by user, so confirm the caller owns
+    // the checklist before listing its items.
+    repo.get(&auth_user.user_id, &template_id)
+        .await
+        .map_err(ItemError::from)?;
+    render_children_fragment(&repo, &template_id).await
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChecklistChildForm {
+    name: String,
+    due_offset_days: Option<String>,
+}
+
+fn parse_offset(form_value: &Option<String>) -> Option<i32> {
+    form_value
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .and_then(|s| s.parse().ok())
+}
+
+pub async fn create_checklist_child_form(
+    Path(template_id): Path<String>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Form(form): Form<ChecklistChildForm>,
+) -> Result<Html<String>, ItemError> {
+    let params = item_service::CreateItemParams {
+        user_id: auth_user.user_id.clone(),
+        name: form.name,
+        parent_item_id: Some(template_id.clone()),
+        has_tasks: Some(false),
+        due_offset_days: parse_offset(&form.due_offset_days),
+        ..Default::default()
+    };
+    item_service::create_item(&repo, params).await?;
+    render_children_fragment(&repo, &template_id).await
+}
+
+pub async fn checklist_child_detail_page(
+    Path((template_id, item_id)): Path<(String, String)>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+) -> Result<Html<String>, ItemError> {
+    let item = repo
+        .get(&auth_user.user_id, &item_id)
+        .await
+        .map_err(ItemError::from)?;
+    let fields = ChecklistChildDetailFields::from_item(&template_id, &item, false).render()?;
+    render(ChecklistChildDetailPageTemplate {
+        template_id,
+        name: item.name,
+        fields,
+    })
+}
+
+pub async fn update_checklist_child_form(
+    Path((template_id, item_id)): Path<(String, String)>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Form(form): Form<ChecklistChildForm>,
+) -> Result<Html<String>, ItemError> {
+    let current = repo
+        .get(&auth_user.user_id, &item_id)
+        .await
+        .map_err(ItemError::from)?;
+    let name = if form.name.trim().is_empty() {
+        current.name.clone()
+    } else {
+        form.name.trim().to_string()
+    };
+    let params = item_service::UpdateItemParams {
+        user_id: auth_user.user_id.clone(),
+        item_id: item_id.clone(),
+        name,
+        due_date: None,
+        complete: false,
+        recurrence: None,
+        recurrence_basis: None,
+        has_due_time: Some(false),
+        has_tasks: Some(false),
+        parent_item_id: Some(template_id.clone()),
+        due_offset_days: parse_offset(&form.due_offset_days),
+        timezone_offset_minutes: None,
+    };
+    item_service::update_item(&repo, params).await?;
+    let updated = repo
+        .get(&auth_user.user_id, &item_id)
+        .await
+        .map_err(ItemError::from)?;
+    // Same dual-purpose response as items::update_item_form: the row half serves a row-level
+    // PUT (none exist for checklist children today, but keeps this consistent with the
+    // items.rs pattern it mirrors), the fields half serves this handler's own edit form,
+    // which targets/selects only `#checklist-item-{id}-fields` and ignores the rest.
+    let row = ChecklistChildRow::from_item(&template_id, &updated).render()?;
+    let fields = ChecklistChildDetailFields::from_item(&template_id, &updated, true).render()?;
+    Ok(Html(format!("{row}{fields}")))
+}
+
+pub async fn delete_checklist_child_form(
+    Path((_template_id, item_id)): Path<(String, String)>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+) -> Result<Html<String>, ItemError> {
+    item_service::delete_item(&repo, &auth_user.user_id, &item_id).await?;
+    Ok(Html(String::new()))
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UseChecklistForm {
+    name: Option<String>,
+    due_date: Option<String>,
+}
+
+pub async fn use_checklist_form(
+    Path(template_id): Path<String>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    TzOffset(tz): TzOffset,
+    Form(form): Form<UseChecklistForm>,
+) -> Result<Response, ItemError> {
+    let template = repo
+        .get(&auth_user.user_id, &template_id)
+        .await
+        .map_err(ItemError::from)?;
+
+    let due_date = form
+        .due_date
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .and_then(|s| parse_use_due_date(s, tz));
+
+    let name = form
+        .name
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| template.name.clone());
+
+    let params = item_service::CreateItemParams {
+        user_id: auth_user.user_id.clone(),
+        name,
+        due_date,
+        recurrence: template.recurrence.clone(),
+        recurrence_basis: template.recurrence_basis.clone(),
+        has_tasks: Some(template.has_tasks),
+        timezone_offset_minutes: Some(tz),
+        ..Default::default()
+    };
+    let new_item_id = item_service::create_item(&repo, params).await?;
+
+    // Re-fetch: if the template carries its own recurrence and no due date was submitted
+    // above, create_item auto-computes an initial deadline server-side — the offset root for
+    // copied children must reflect that actual deadline, not the blank form input.
+    let new_item = repo
+        .get(&auth_user.user_id, &new_item_id)
+        .await
+        .map_err(ItemError::from)?;
+
+    item_service::copy_template_children(&repo, &template_id, &new_item_id, new_item.due_date, tz)
+        .await
+        .map_err(ItemError::from)?;
+
+    Ok((
+        [(
+            axum::http::header::HeaderName::from_static("hx-redirect"),
+            format!("/web/items/{new_item_id}"),
+        )],
+        Html(String::new()),
+    )
+        .into_response())
+}

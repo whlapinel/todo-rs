@@ -1,6 +1,12 @@
+pub mod assigned_items;
+pub mod checklists;
 pub mod dashboard;
+pub mod error;
 pub mod hello_world;
 pub mod items;
+pub mod login;
+pub mod team_items;
+pub mod teams;
 
 use async_trait::async_trait;
 use axum::extract::FromRequestParts;

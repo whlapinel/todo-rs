@@ -1,31 +1,31 @@
 use crate::auth::AuthUser;
 use crate::domain::item::Item;
 use crate::handlers::web_ui::{TzOffset, to_local};
-use crate::service::items::{self as item_service, ItemError};
-use crate::service::templates::{self as template_service, CreateTemplateParams};
-use crate::storage::sqlite::{ItemRepo, RepoError};
+use crate::service::error::ItemError;
+use crate::service::team_items::{
+    self as team_item_service, require_active_member, CreateTeamItemParams, UpdateTeamItemParams,
+};
+use crate::service::teams as team_service;
+use crate::storage::sqlite::{ItemRepo, RepoError, TeamRepo};
 use askama::Template;
 use axum::extract::{Extension, Form, Path, Query};
 use axum::response::{Html, IntoResponse, Response};
 use chrono::{DateTime, Utc};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 fn render<T: Template>(t: T) -> Result<Html<String>, ItemError> {
     Ok(Html(t.render()?))
 }
 
-// ---- form parsing helpers -------------------------------------------------
-//
-// Every field below is `Option<String>` (never `Option<bool>`/`Option<i32>` directly) and
-// parsed manually. This gives a consistent three-way read for every field, used throughout
-// this file: form key absent (`None`) => this request didn't touch that field, keep whatever
-// the current item already has; present but empty (`Some("")`) => explicit clear; present
-// with content => set it. That distinction is what lets a single `PUT /web/items/:id`
-// endpoint serve both the full edit form (every field present) and the row-level
-// click-to-edit / complete-toggle interactions (exactly one field present).
+// Mirrors web_ui::items's form-parsing helpers exactly (same three-way None/empty/value read
+// per field) — see the comment there for why. Not shared as a common function between the two
+// files because `CreateTeamItemParams`/`UpdateTeamItemParams` and `CreateItemParams`/
+// `UpdateItemParams` are distinct generated-adjacent structs with an extra `assigned_to_user_id`
+// field here; a shared helper would need to abstract over that difference for no real benefit.
 #[derive(serde::Deserialize, Debug, Default)]
 #[serde(rename_all = "camelCase")]
-pub struct ItemForm {
+pub struct TeamItemForm {
     name: Option<String>,
     due_date: Option<String>,
     due_time: Option<String>,
@@ -35,6 +35,7 @@ pub struct ItemForm {
     due_offset_days: Option<String>,
     has_tasks: Option<String>,
     parent_item_id: Option<String>,
+    assigned_to_user_id: Option<String>,
     show_complete: Option<String>,
 }
 
@@ -91,11 +92,6 @@ fn overlay_has_due_time(form_time: &Option<String>, current: bool) -> bool {
     }
 }
 
-/// Combines a "YYYY-MM-DD" date and optional "HH:MM" time — both always local wall-clock
-/// values from an `<input type="date">`/`<input type="time">`, never zone-aware — into a
-/// `DateTime<Utc>`, using the same `UTC = local + tzOffsetMinutes` convention as
-/// `domain::recurrence` (see its `apply_end_of_day`). No time given means "due by end of
-/// that day", matching how the recurrence engine treats a plain date.
 fn combine_local_to_utc(
     date: &str,
     time: Option<&str>,
@@ -124,9 +120,13 @@ fn overlay_due_date(
     }
 }
 
-fn create_params_from_form(user_id: &str, form: &ItemForm, tz: i32) -> item_service::CreateItemParams {
-    item_service::CreateItemParams {
-        user_id: user_id.to_string(),
+fn create_params_from_form(
+    team_id: &str,
+    form: &TeamItemForm,
+    tz: i32,
+) -> CreateTeamItemParams {
+    CreateTeamItemParams {
+        team_id: team_id.to_string(),
         name: form.name.clone().unwrap_or_default(),
         due_date: overlay_due_date(&form.due_date, &form.due_time, tz, None),
         complete: form.complete.as_deref().map(|s| s == "true"),
@@ -145,19 +145,20 @@ fn create_params_from_form(user_id: &str, form: &ItemForm, tz: i32) -> item_serv
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .and_then(|s| s.parse().ok()),
+        assigned_to_user_id: non_empty(&form.assigned_to_user_id),
         timezone_offset_minutes: Some(tz),
     }
 }
 
 fn update_params_from_form(
-    user_id: &str,
+    team_id: &str,
     item_id: &str,
     current: &Item,
-    form: &ItemForm,
+    form: &TeamItemForm,
     tz: i32,
-) -> item_service::UpdateItemParams {
-    item_service::UpdateItemParams {
-        user_id: user_id.to_string(),
+) -> UpdateTeamItemParams {
+    UpdateTeamItemParams {
+        team_id: team_id.to_string(),
         item_id: item_id.to_string(),
         name: overlay_required_str(&form.name, &current.name),
         due_date: overlay_due_date(&form.due_date, &form.due_time, tz, current.due_date),
@@ -168,27 +169,49 @@ fn update_params_from_form(
         has_tasks: Some(overlay_has_tasks(&form.has_tasks, current.has_tasks)),
         parent_item_id: current.parent_item_id.clone(),
         due_offset_days: overlay_i32(&form.due_offset_days, current.due_offset_days),
+        assigned_to_user_id: overlay_str(
+            &form.assigned_to_user_id,
+            current.assigned_to_user_id.clone(),
+        ),
         timezone_offset_minutes: Some(tz),
     }
+}
+
+/// (user_id, display name) for every *active* member of `team_id` — the assignee dropdown's
+/// candidate list, resolved server-side at render time (unlike the SPA's separate
+/// `loadTeamMembers` fetch).
+async fn active_member_options(
+    teams: &Arc<dyn TeamRepo>,
+    team_id: &str,
+    requester_user_id: &str,
+) -> Result<Vec<(String, String)>, ItemError> {
+    let members = team_service::list_team_members(teams, team_id, requester_user_id).await?;
+    Ok(members
+        .into_iter()
+        .filter(|m| m.status == "ACTIVE")
+        .map(|m| (m.user.id, format!("{} {}", m.user.first_name, m.user.last_name)))
+        .collect())
 }
 
 // ---- templates --------------------------------------------------------------
 
 #[derive(Template)]
-#[template(path = "items/row.html")]
-struct ItemRow {
+#[template(path = "team_items/row.html")]
+struct TeamItemRow {
     id: String,
+    team_id: String,
     name: String,
     complete: bool,
     due_date: Option<String>,
     has_children: bool,
     offset_label: Option<String>,
     recurrence: Option<String>,
+    assignee_name: Option<String>,
     toggle_complete_json: String,
 }
 
-impl ItemRow {
-    fn from_item(item: &Item, tz: i32) -> Self {
+impl TeamItemRow {
+    fn from_item(item: &Item, team_id: &str, names: &HashMap<String, String>, tz: i32) -> Self {
         let offset_label = item
             .parent_item_id
             .as_ref()
@@ -200,6 +223,7 @@ impl ItemRow {
             });
         Self {
             id: item.id.clone(),
+            team_id: team_id.to_string(),
             name: item.name.clone(),
             complete: item.complete,
             due_date: item
@@ -208,6 +232,10 @@ impl ItemRow {
             has_children: item.has_children,
             offset_label,
             recurrence: item.recurrence.clone(),
+            assignee_name: item
+                .assigned_to_user_id
+                .as_ref()
+                .map(|id| names.get(id).cloned().unwrap_or_else(|| id.clone())),
             toggle_complete_json: (!item.complete).to_string(),
         }
     }
@@ -218,9 +246,10 @@ fn format_offset_input(due_offset_days: Option<i32>) -> String {
 }
 
 #[derive(Template)]
-#[template(path = "items/detail_fields.html")]
+#[template(path = "team_items/detail_fields.html")]
 struct DetailFields {
     id: String,
+    team_id: String,
     name: String,
     complete: bool,
     has_tasks: bool,
@@ -230,14 +259,19 @@ struct DetailFields {
     recurrence: Option<String>,
     recurrence_basis: Option<String>,
     due_offset_days_input: String,
-    /// Set only on the fragment returned by a successful save (never on a plain page load),
-    /// so the confirmation message appears exactly once per save and isn't still there on
-    /// the next GET.
+    assignee_options: Vec<(String, String)>,
+    assigned_to_user_id: Option<String>,
     just_saved: bool,
 }
 
 impl DetailFields {
-    fn from_item(item: &Item, tz: i32, just_saved: bool) -> Self {
+    fn from_item(
+        item: &Item,
+        team_id: &str,
+        assignee_options: Vec<(String, String)>,
+        tz: i32,
+        just_saved: bool,
+    ) -> Self {
         let local_due_date = item.due_date.map(|d| to_local(d, tz));
         let due_date_input = local_due_date
             .map(|d| d.format("%Y-%m-%d").to_string())
@@ -249,6 +283,7 @@ impl DetailFields {
         };
         Self {
             id: item.id.clone(),
+            team_id: team_id.to_string(),
             name: item.name.clone(),
             complete: item.complete,
             has_tasks: item.has_tasks,
@@ -258,50 +293,75 @@ impl DetailFields {
             recurrence: item.recurrence.clone(),
             recurrence_basis: item.recurrence_basis.clone(),
             due_offset_days_input: format_offset_input(item.due_offset_days),
+            assignee_options,
+            assigned_to_user_id: item.assigned_to_user_id.clone(),
             just_saved,
         }
     }
 }
 
 #[derive(Template)]
-#[template(path = "items/rows_fragment.html")]
+#[template(path = "team_items/rows_fragment.html")]
 struct RowsFragmentTemplate {
     rows: Vec<String>,
     empty_message: String,
 }
 
 #[derive(Template)]
-#[template(path = "items/list_page.html")]
-struct ItemsListPageTemplate {
+#[template(path = "team_items/list_page.html")]
+struct TeamItemsListPageTemplate {
+    team_id: String,
     rows: Vec<String>,
     show_complete: bool,
+    assignee_options: Vec<(String, String)>,
     blank_recurrence: Option<String>,
     blank_recurrence_basis: Option<String>,
     blank_due_offset_days_input: String,
 }
 
 #[derive(Template)]
-#[template(path = "items/detail_page.html")]
-struct ItemDetailPageTemplate {
+#[template(path = "team_items/detail_page.html")]
+struct TeamItemDetailPageTemplate {
     id: String,
+    team_id: String,
     name: String,
     fields: String,
 }
 
 // ---- shared rendering helpers ------------------------------------------------
 
-fn render_rows(items: &[Item], show_complete: bool, tz: i32) -> Result<Vec<String>, ItemError> {
+async fn names_for(
+    teams: &Arc<dyn TeamRepo>,
+    team_id: &str,
+    requester_user_id: &str,
+) -> Result<HashMap<String, String>, ItemError> {
+    let members = team_service::list_team_members(teams, team_id, requester_user_id).await?;
+    Ok(members
+        .into_iter()
+        .map(|m| (m.user.id.clone(), format!("{} {}", m.user.first_name, m.user.last_name)))
+        .collect())
+}
+
+fn render_rows(
+    items: &[Item],
+    team_id: &str,
+    names: &HashMap<String, String>,
+    show_complete: bool,
+    tz: i32,
+) -> Result<Vec<String>, ItemError> {
     items
         .iter()
         .filter(|i| show_complete || !i.complete)
-        .map(|i| ItemRow::from_item(i, tz).render())
+        .map(|i| TeamItemRow::from_item(i, team_id, names, tz).render())
         .collect::<Result<Vec<_>, _>>()
         .map_err(ItemError::from)
 }
 
 async fn render_scope_fragment(
     repo: &Arc<dyn ItemRepo>,
-    user_id: &str,
+    teams: &Arc<dyn TeamRepo>,
+    team_id: &str,
+    requester_user_id: &str,
     parent_item_id: Option<&str>,
     show_complete: bool,
     tz: i32,
@@ -313,11 +373,12 @@ async fn render_scope_fragment(
         )
     } else {
         (
-            repo.list(user_id).await.map_err(ItemError::from)?,
+            repo.list_team_items(team_id, None).await.map_err(ItemError::from)?,
             "No items yet.",
         )
     };
-    let rows = render_rows(&items, parent_item_id.is_some() || show_complete, tz)?;
+    let names = names_for(teams, team_id, requester_user_id).await?;
+    let rows = render_rows(&items, team_id, &names, parent_item_id.is_some() || show_complete, tz)?;
     render(RowsFragmentTemplate {
         rows,
         empty_message: empty_message.to_string(),
@@ -332,73 +393,89 @@ pub struct ShowCompleteQuery {
     show_complete: Option<String>,
 }
 
-pub async fn items_page(
+pub async fn team_items_page(
+    Path(team_id): Path<String>,
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
     TzOffset(tz): TzOffset,
     Query(q): Query<ShowCompleteQuery>,
 ) -> Result<Html<String>, ItemError> {
+    require_active_member(&teams, &team_id, &auth_user.user_id).await?;
     let show_complete = q.show_complete.is_some();
-    let items = repo.list(&auth_user.user_id).await.map_err(ItemError::from)?;
-    let rows = render_rows(&items, show_complete, tz)?;
-    render(ItemsListPageTemplate {
+    let items = repo
+        .list_team_items(&team_id, None)
+        .await
+        .map_err(ItemError::from)?;
+    let names = names_for(&teams, &team_id, &auth_user.user_id).await?;
+    let rows = render_rows(&items, &team_id, &names, show_complete, tz)?;
+    let assignee_options = active_member_options(&teams, &team_id, &auth_user.user_id).await?;
+    render(TeamItemsListPageTemplate {
+        team_id,
         rows,
         show_complete,
+        assignee_options,
         blank_recurrence: None,
         blank_recurrence_basis: None,
         blank_due_offset_days_input: String::new(),
     })
 }
 
-pub async fn item_detail_page(
-    Path(item_id): Path<String>,
+pub async fn team_item_detail_page(
+    Path((team_id, item_id)): Path<(String, String)>,
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
     TzOffset(tz): TzOffset,
 ) -> Result<Html<String>, ItemError> {
-    let item = repo
-        .get(&auth_user.user_id, &item_id)
-        .await
-        .map_err(ItemError::from)?;
-    let fields = DetailFields::from_item(&item, tz, false).render()?;
-    render(ItemDetailPageTemplate {
+    require_active_member(&teams, &team_id, &auth_user.user_id).await?;
+    let item = repo.get_team_item(&team_id, &item_id).await.map_err(ItemError::from)?;
+    let assignee_options = active_member_options(&teams, &team_id, &auth_user.user_id).await?;
+    let fields = DetailFields::from_item(&item, &team_id, assignee_options, tz, false).render()?;
+    render(TeamItemDetailPageTemplate {
         id: item.id,
+        team_id,
         name: item.name,
         fields,
     })
 }
 
-pub async fn children_fragment(
-    Path(item_id): Path<String>,
+pub async fn team_item_children_fragment(
+    Path((team_id, item_id)): Path<(String, String)>,
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
     TzOffset(tz): TzOffset,
 ) -> Result<Html<String>, ItemError> {
-    // Ownership gate: list_children itself isn't scoped by user, so confirm the caller owns
-    // the parent before listing its children.
-    repo.get(&auth_user.user_id, &item_id)
-        .await
-        .map_err(ItemError::from)?;
+    require_active_member(&teams, &team_id, &auth_user.user_id).await?;
+    // Ownership gate: list_children isn't scoped by team, so confirm the parent actually
+    // belongs to this team before listing its children (mirrors web_ui::items's equivalent).
+    repo.get_team_item(&team_id, &item_id).await.map_err(ItemError::from)?;
     let children = repo.list_children(&item_id).await.map_err(ItemError::from)?;
-    let rows = render_rows(&children, true, tz)?;
+    let names = names_for(&teams, &team_id, &auth_user.user_id).await?;
+    let rows = render_rows(&children, &team_id, &names, true, tz)?;
     render(RowsFragmentTemplate {
         rows,
         empty_message: "No sub-items yet.".to_string(),
     })
 }
 
-pub async fn create_item_form(
+pub async fn create_team_item_form(
+    Path(team_id): Path<String>,
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
     TzOffset(tz): TzOffset,
-    Form(form): Form<ItemForm>,
+    Form(form): Form<TeamItemForm>,
 ) -> Result<Html<String>, ItemError> {
     let show_complete = form.show_complete.is_some();
-    let params = create_params_from_form(&auth_user.user_id, &form, tz);
+    let params = create_params_from_form(&team_id, &form, tz);
     let parent_item_id = params.parent_item_id.clone();
-    item_service::create_item(&repo, params).await?;
+    team_item_service::create_team_item(&repo, &teams, &auth_user.user_id, params).await?;
     render_scope_fragment(
         &repo,
+        &teams,
+        &team_id,
         &auth_user.user_id,
         parent_item_id.as_deref(),
         show_complete,
@@ -415,9 +492,11 @@ pub struct BatchForm {
     show_complete: Option<String>,
 }
 
-pub async fn create_items_batch(
+pub async fn create_team_items_batch(
+    Path(team_id): Path<String>,
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
     TzOffset(tz): TzOffset,
     Form(form): Form<BatchForm>,
 ) -> Result<Html<String>, ItemError> {
@@ -427,17 +506,19 @@ pub async fn create_items_batch(
         if name.is_empty() {
             continue;
         }
-        let params = item_service::CreateItemParams {
-            user_id: auth_user.user_id.clone(),
+        let params = CreateTeamItemParams {
+            team_id: team_id.clone(),
             name: name.to_string(),
             parent_item_id: parent_item_id.clone(),
             timezone_offset_minutes: Some(tz),
             ..Default::default()
         };
-        item_service::create_item(&repo, params).await?;
+        team_item_service::create_team_item(&repo, &teams, &auth_user.user_id, params).await?;
     }
     render_scope_fragment(
         &repo,
+        &teams,
+        &team_id,
         &auth_user.user_id,
         parent_item_id.as_deref(),
         form.show_complete.is_some(),
@@ -446,30 +527,30 @@ pub async fn create_items_batch(
     .await
 }
 
-pub async fn update_item_form(
-    Path(item_id): Path<String>,
+pub async fn update_team_item_form(
+    Path((team_id, item_id)): Path<(String, String)>,
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
     TzOffset(tz): TzOffset,
-    Form(form): Form<ItemForm>,
+    Form(form): Form<TeamItemForm>,
 ) -> Result<Response, ItemError> {
-    let current = repo
-        .get(&auth_user.user_id, &item_id)
-        .await
-        .map_err(ItemError::from)?;
-    let params = update_params_from_form(&auth_user.user_id, &item_id, &current, &form, tz);
-    item_service::update_item(&repo, params).await?;
+    require_active_member(&teams, &team_id, &auth_user.user_id).await?;
+    let current = repo.get_team_item(&team_id, &item_id).await.map_err(ItemError::from)?;
+    let params = update_params_from_form(&team_id, &item_id, &current, &form, tz);
+    team_item_service::update_team_item(&repo, &teams, &auth_user.user_id, params).await?;
 
-    match repo.get(&auth_user.user_id, &item_id).await {
+    match repo.get_team_item(&team_id, &item_id).await {
         Ok(updated) => {
-            let row = ItemRow::from_item(&updated, tz).render()?;
-            let fields = DetailFields::from_item(&updated, tz, true).render()?;
+            let names = names_for(&teams, &team_id, &auth_user.user_id).await?;
+            let row = TeamItemRow::from_item(&updated, &team_id, &names, tz).render()?;
+            let assignee_options = active_member_options(&teams, &team_id, &auth_user.user_id).await?;
+            let fields =
+                DetailFields::from_item(&updated, &team_id, assignee_options, tz, true).render()?;
             Ok(Html(format!("{row}{fields}")).into_response())
         }
-        // The item was recurring, just got marked complete, and the service layer replaced
-        // it with a fresh successor under a new id (see service::items::update_item) — there
-        // is no single row/fields fragment left to swap back in under the old id, so ask the
-        // client to reload rather than guessing at the new one.
+        // Recurring item just completed and got replaced under a new id (see
+        // service::team_items::update_team_item) — nothing to swap back in under the old id.
         Err(RepoError::NotFound) => Ok((
             [(
                 axum::http::header::HeaderName::from_static("hx-refresh"),
@@ -482,35 +563,13 @@ pub async fn update_item_form(
     }
 }
 
-pub async fn delete_item_form(
-    Path(item_id): Path<String>,
+pub async fn delete_team_item_form(
+    Path((team_id, item_id)): Path<(String, String)>,
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
 ) -> Result<Html<String>, ItemError> {
-    item_service::delete_item(&repo, &auth_user.user_id, &item_id).await?;
+    team_item_service::delete_team_item(&repo, &teams, &auth_user.user_id, &team_id, &item_id)
+        .await?;
     Ok(Html(String::new()))
 }
-
-pub async fn save_as_checklist(
-    Path(item_id): Path<String>,
-    Extension(auth_user): Extension<AuthUser>,
-    Extension(repo): Extension<Arc<dyn ItemRepo>>,
-) -> Result<Html<String>, ItemError> {
-    let item = repo
-        .get(&auth_user.user_id, &item_id)
-        .await
-        .map_err(ItemError::from)?;
-    template_service::create_template(
-        &repo,
-        CreateTemplateParams {
-            user_id: auth_user.user_id.clone(),
-            name: item.name.clone(),
-            source_item_id: Some(item_id),
-        },
-    )
-    .await?;
-    Ok(Html(
-        r#"<span class="text-xs text-green-600">Saved</span>"#.to_string(),
-    ))
-}
-

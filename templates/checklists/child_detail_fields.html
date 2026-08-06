@@ -1,0 +1,17 @@
+<div id="checklist-item-{{ id }}-fields" class="rounded-lg border border-slate-200 bg-white p-6 space-y-3">
+  <form hx-put="/web/checklists/{{ template_id }}/items/{{ id }}" hx-target="#checklist-item-{{ id }}-fields"
+        hx-select="#checklist-item-{{ id }}-fields" hx-swap="outerHTML" class="space-y-3">
+    <label class="block text-sm text-slate-700">Name
+      <input type="text" name="name" value="{{ name }}" class="mt-1 block w-full rounded-md border-slate-300 text-sm" />
+    </label>
+    <label class="block text-sm text-slate-700">Offset days
+      <input type="number" name="dueOffsetDays" value="{{ due_offset_days_input }}" class="mt-1 block w-20 rounded-md border-slate-300 text-sm" />
+    </label>
+    <div class="flex items-center gap-x-3">
+      <button type="submit" class="cursor-pointer rounded-md bg-slate-900 text-white text-sm px-3 py-1.5">Save</button>
+      {% if just_saved %}
+      <span class="toast-fade text-sm text-green-600">&#10003; Saved</span>
+      {% endif %}
+    </div>
+  </form>
+</div>
