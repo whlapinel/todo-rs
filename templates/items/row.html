@@ -3,22 +3,22 @@
     <input type="checkbox" {% if complete %}checked{% endif %}
            hx-put="/web/items/{{ id }}" hx-vals='{"complete": "{{ toggle_complete_json }}"}'
            hx-target="#item-{{ id }}" hx-select="#item-{{ id }}" hx-swap="outerHTML" class="shrink-0" />
-    {% if has_children %}<a href="/web/items/{{ id }}" class="text-slate-400 mr-1" title="View sub-items">&#9656;</a>{% endif %}
-    <span hx-get="/web/items/{{ id }}/edit-name" hx-trigger="click" hx-target="this" hx-swap="outerHTML"
-          class="cursor-text truncate {% if complete %}line-through text-slate-400{% else %}text-slate-900{% endif %}">{{ name }}</span>
+    <a href="/web/items/{{ id }}"
+       class="truncate {% if complete %}line-through text-slate-400{% else %}text-slate-900{% endif %}">
+      {% if has_children %}<span class="text-slate-400">&#9656;</span>{% endif %} {{ name }}
+    </a>
     {% if let Some(label) = offset_label %}
-    <span hx-get="/web/items/{{ id }}/edit-offset" hx-trigger="click" hx-target="this" hx-swap="outerHTML"
-          class="text-xs text-slate-400 cursor-text shrink-0">{{ label }}</span>
+    <span class="text-xs text-slate-400 shrink-0">{{ label }}</span>
     {% endif %}
   </div>
   <div class="flex items-center gap-x-3 text-xs text-slate-500 shrink-0">
     {% if let Some(d) = due_date %}<span>{{ d }}</span>{% endif %}
     {% if let Some(r) = recurrence %}<span title="repeats">&#8635; {{ r }}</span>{% endif %}
-    <button hx-post="/web/items/{{ id }}/save-as-checklist" hx-target="this" hx-swap="outerHTML"
+    <button hx-post="/web/items/{{ id }}/save-as-checklist" hx-target="this" hx-select="unset" hx-swap="outerHTML"
             class="text-slate-400 hover:text-slate-700">Save as checklist</button>
     <button hx-delete="/web/items/{{ id }}"
             hx-confirm="Delete {{ name }}{% if has_children %} and all its sub-items{% endif %}?"
-            hx-target="#item-{{ id }}" hx-swap="outerHTML swap:200ms"
+            hx-target="#item-{{ id }}" hx-select="unset" hx-swap="outerHTML swap:200ms"
             class="text-red-500 hover:text-red-700">Delete</button>
   </div>
 </li>

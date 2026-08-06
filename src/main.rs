@@ -57,14 +57,6 @@ fn build_web_router() -> Router {
             "/items/:item_id/save-as-checklist",
             post(handlers::web_ui::items::save_as_checklist),
         )
-        .route(
-            "/items/:item_id/edit-name",
-            get(handlers::web_ui::items::edit_name_input),
-        )
-        .route(
-            "/items/:item_id/edit-offset",
-            get(handlers::web_ui::items::edit_offset_input),
-        )
         .route("/dashboard", get(handlers::web_ui::dashboard::dashboard_page))
         .route(
             "/dashboard/items/:item_id",

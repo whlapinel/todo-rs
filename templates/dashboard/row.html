@@ -2,7 +2,7 @@
   <div class="flex items-center gap-x-3 min-w-0">
     <input type="checkbox" {% if complete %}checked{% endif %}
            hx-put="{{ toggle_target }}" hx-vals='{"complete": "{{ toggle_complete_json }}"}'
-           hx-target="#dash-item-{{ item_id }}" hx-swap="outerHTML" class="shrink-0" />
+           hx-target="#dash-item-{{ item_id }}" hx-select="unset" hx-swap="outerHTML" class="shrink-0" />
     <a href="{{ detail_link }}" class="truncate {% if complete %}line-through text-slate-400{% else %}text-slate-900{% endif %}">{{ name }}</a>
     {% if let Some(p) = parent_name %}<span class="text-xs text-sky-600 shrink-0">[{{ p }}]</span>{% endif %}
     {% if let Some(badge) = from_badge %}<span class="text-xs text-sky-600 shrink-0">[{{ badge }}]</span>{% endif %}
@@ -12,7 +12,7 @@
     {% if can_delete %}
     <button hx-delete="/web/items/{{ item_id }}"
             hx-confirm="Delete {{ name }}?"
-            hx-target="#dash-item-{{ item_id }}" hx-swap="outerHTML swap:200ms"
+            hx-target="#dash-item-{{ item_id }}" hx-select="unset" hx-swap="outerHTML swap:200ms"
             class="text-red-500 hover:text-red-700">Delete</button>
     {% endif %}
   </div>

@@ -12,9 +12,10 @@
   <div>
     <h2 class="text-sm font-semibold text-slate-700 mb-2">Sub-items</h2>
     <ul id="children-list" class="divide-y divide-slate-100 rounded-lg border border-slate-200 bg-white px-4"
-        hx-get="/web/items/{{ id }}/children" hx-trigger="load" hx-swap="innerHTML"></ul>
+        hx-get="/web/items/{{ id }}/children" hx-trigger="load"
+        hx-target="this" hx-select="unset" hx-swap="innerHTML"></ul>
 
-    <form hx-post="/web/items" hx-target="#children-list" hx-swap="innerHTML"
+    <form hx-post="/web/items" hx-target="#children-list" hx-select="unset" hx-swap="innerHTML"
           hx-on::after-request="if(event.detail.successful) this.reset()"
           class="mt-4 flex items-end gap-x-2">
       <input type="hidden" name="parentItemId" value="{{ id }}" />

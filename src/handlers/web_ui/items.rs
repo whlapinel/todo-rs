@@ -231,22 +231,8 @@ impl ItemRow {
     }
 }
 
-#[derive(Template)]
-#[template(path = "items/name_edit_input.html")]
-struct NameEditInput {
-    id: String,
-    name: String,
-}
-
 fn format_offset_input(due_offset_days: Option<i32>) -> String {
     due_offset_days.map(|d| d.to_string()).unwrap_or_default()
-}
-
-#[derive(Template)]
-#[template(path = "items/offset_edit_input.html")]
-struct OffsetEditInput {
-    id: String,
-    due_offset_days_input: String,
 }
 
 #[derive(Template)]
@@ -562,32 +548,3 @@ pub async fn save_as_checklist(
     ))
 }
 
-pub async fn edit_name_input(
-    Path(item_id): Path<String>,
-    Extension(auth_user): Extension<AuthUser>,
-    Extension(repo): Extension<Arc<dyn ItemRepo>>,
-) -> Result<Html<String>, StatusCode> {
-    let item = repo
-        .get(&auth_user.user_id, &item_id)
-        .await
-        .map_err(repo_status)?;
-    render(NameEditInput {
-        id: item.id,
-        name: item.name,
-    })
-}
-
-pub async fn edit_offset_input(
-    Path(item_id): Path<String>,
-    Extension(auth_user): Extension<AuthUser>,
-    Extension(repo): Extension<Arc<dyn ItemRepo>>,
-) -> Result<Html<String>, StatusCode> {
-    let item = repo
-        .get(&auth_user.user_id, &item_id)
-        .await
-        .map_err(repo_status)?;
-    render(OffsetEditInput {
-        id: item.id,
-        due_offset_days_input: format_offset_input(item.due_offset_days),
-    })
-}
