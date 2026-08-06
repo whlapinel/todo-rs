@@ -11,7 +11,9 @@ use chrono::{DateTime, Utc};
 use std::sync::Arc;
 
 fn render<T: Template>(t: T) -> Result<Html<String>, StatusCode> {
-    t.render().map(Html).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+    t.render()
+        .map(Html)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
 fn repo_status(e: RepoError) -> StatusCode {
@@ -112,7 +114,11 @@ fn overlay_has_due_time(form_time: &Option<String>, current: bool) -> bool {
 /// `DateTime<Utc>`, using the same `UTC = local + tzOffsetMinutes` convention as
 /// `domain::recurrence` (see its `apply_end_of_day`). No time given means "due by end of
 /// that day", matching how the recurrence engine treats a plain date.
-fn combine_local_to_utc(date: &str, time: Option<&str>, tz_offset_minutes: i32) -> Option<DateTime<Utc>> {
+fn combine_local_to_utc(
+    date: &str,
+    time: Option<&str>,
+    tz_offset_minutes: i32,
+) -> Option<DateTime<Utc>> {
     let naive_date = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").ok()?;
     let naive_time = time
         .filter(|t| !t.trim().is_empty())
@@ -202,17 +208,22 @@ struct ItemRow {
 
 impl ItemRow {
     fn from_item(item: &Item) -> Self {
-        let offset_label = item.parent_item_id.as_ref().map(|_| match item.due_offset_days {
-            Some(0) => "on due date".to_string(),
-            Some(n) if n > 0 => format!("+{n}d"),
-            Some(n) => format!("{n}d"),
-            None => "no offset".to_string(),
-        });
+        let offset_label = item
+            .parent_item_id
+            .as_ref()
+            .map(|_| match item.due_offset_days {
+                Some(0) => "on due date".to_string(),
+                Some(n) if n > 0 => format!("+{n}d"),
+                Some(n) => format!("{n}d"),
+                None => "no offset".to_string(),
+            });
         Self {
             id: item.id.clone(),
             name: item.name.clone(),
             complete: item.complete,
-            due_date: item.due_date.map(|d| d.format("%Y-%m-%d %H:%M UTC").to_string()),
+            due_date: item
+                .due_date
+                .map(|d| d.format("%Y-%m-%d %H:%M UTC").to_string()),
             has_children: item.has_children,
             offset_label,
             recurrence: item.recurrence.clone(),
@@ -261,7 +272,9 @@ impl DetailFields {
             .map(|d| d.format("%Y-%m-%d").to_string())
             .unwrap_or_default();
         let due_time_input = if item.has_due_time {
-            item.due_date.map(|d| d.format("%H:%M").to_string()).unwrap_or_default()
+            item.due_date
+                .map(|d| d.format("%H:%M").to_string())
+                .unwrap_or_default()
         } else {
             String::new()
         };
@@ -324,12 +337,16 @@ async fn render_scope_fragment(
 ) -> Result<Html<String>, StatusCode> {
     let (items, empty_message) = if let Some(parent_id) = parent_item_id {
         (
-            repo.list_children(parent_id).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+            repo.list_children(parent_id)
+                .await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
             "No sub-items yet.",
         )
     } else {
         (
-            repo.list(user_id).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+            repo.list(user_id)
+                .await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
             "No items yet.",
         )
     };
@@ -354,7 +371,10 @@ pub async fn items_page(
     Query(q): Query<ShowCompleteQuery>,
 ) -> Result<Html<String>, StatusCode> {
     let show_complete = q.show_complete.is_some();
-    let items = repo.list(&auth_user.user_id).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let items = repo
+        .list(&auth_user.user_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let rows = render_rows(&items, show_complete)?;
     render(ItemsListPageTemplate {
         rows,
@@ -370,8 +390,13 @@ pub async fn item_detail_page(
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
 ) -> Result<Html<String>, StatusCode> {
-    let item = repo.get(&auth_user.user_id, &item_id).await.map_err(repo_status)?;
-    let fields = DetailFields::from_item(&item).render().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let item = repo
+        .get(&auth_user.user_id, &item_id)
+        .await
+        .map_err(repo_status)?;
+    let fields = DetailFields::from_item(&item)
+        .render()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     render(ItemDetailPageTemplate {
         id: item.id,
         name: item.name,
@@ -386,8 +411,13 @@ pub async fn children_fragment(
 ) -> Result<Html<String>, StatusCode> {
     // Ownership gate: list_children itself isn't scoped by user, so confirm the caller owns
     // the parent before listing its children.
-    repo.get(&auth_user.user_id, &item_id).await.map_err(repo_status)?;
-    let children = repo.list_children(&item_id).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    repo.get(&auth_user.user_id, &item_id)
+        .await
+        .map_err(repo_status)?;
+    let children = repo
+        .list_children(&item_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let rows = render_rows(&children, true)?;
     render(RowsFragmentTemplate {
         rows,
@@ -403,8 +433,16 @@ pub async fn create_item_form(
     let show_complete = form.show_complete.is_some();
     let params = create_params_from_form(&auth_user.user_id, &form);
     let parent_item_id = params.parent_item_id.clone();
-    item_service::create_item(&repo, params).await.map_err(service_status)?;
-    render_scope_fragment(&repo, &auth_user.user_id, parent_item_id.as_deref(), show_complete).await
+    item_service::create_item(&repo, params)
+        .await
+        .map_err(service_status)?;
+    render_scope_fragment(
+        &repo,
+        &auth_user.user_id,
+        parent_item_id.as_deref(),
+        show_complete,
+    )
+    .await
 }
 
 #[derive(serde::Deserialize, Debug, Default)]
@@ -434,7 +472,9 @@ pub async fn create_items_batch(
             timezone_offset_minutes: form.tz_offset_minutes,
             ..Default::default()
         };
-        item_service::create_item(&repo, params).await.map_err(service_status)?;
+        item_service::create_item(&repo, params)
+            .await
+            .map_err(service_status)?;
     }
     render_scope_fragment(
         &repo,
@@ -451,9 +491,14 @@ pub async fn update_item_form(
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Form(form): Form<ItemForm>,
 ) -> Result<Response, StatusCode> {
-    let current = repo.get(&auth_user.user_id, &item_id).await.map_err(repo_status)?;
+    let current = repo
+        .get(&auth_user.user_id, &item_id)
+        .await
+        .map_err(repo_status)?;
     let params = update_params_from_form(&auth_user.user_id, &item_id, &current, &form);
-    item_service::update_item(&repo, params).await.map_err(service_status)?;
+    item_service::update_item(&repo, params)
+        .await
+        .map_err(service_status)?;
 
     match repo.get(&auth_user.user_id, &item_id).await {
         Ok(updated) => {
@@ -470,7 +515,10 @@ pub async fn update_item_form(
         // is no single row/fields fragment left to swap back in under the old id, so ask the
         // client to reload rather than guessing at the new one.
         Err(RepoError::NotFound) => Ok((
-            [(axum::http::header::HeaderName::from_static("hx-refresh"), "true")],
+            [(
+                axum::http::header::HeaderName::from_static("hx-refresh"),
+                "true",
+            )],
             Html(String::new()),
         )
             .into_response()),
@@ -494,7 +542,10 @@ pub async fn save_as_checklist(
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
 ) -> Result<Html<String>, StatusCode> {
-    let item = repo.get(&auth_user.user_id, &item_id).await.map_err(repo_status)?;
+    let item = repo
+        .get(&auth_user.user_id, &item_id)
+        .await
+        .map_err(repo_status)?;
     template_service::create_template(
         &repo,
         CreateTemplateParams {
@@ -505,7 +556,9 @@ pub async fn save_as_checklist(
     )
     .await
     .map_err(service_status)?;
-    Ok(Html(r#"<span class="text-xs text-green-600">Saved</span>"#.to_string()))
+    Ok(Html(
+        r#"<span class="text-xs text-green-600">Saved</span>"#.to_string(),
+    ))
 }
 
 pub async fn edit_name_input(
@@ -513,7 +566,10 @@ pub async fn edit_name_input(
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
 ) -> Result<Html<String>, StatusCode> {
-    let item = repo.get(&auth_user.user_id, &item_id).await.map_err(repo_status)?;
+    let item = repo
+        .get(&auth_user.user_id, &item_id)
+        .await
+        .map_err(repo_status)?;
     render(NameEditInput {
         id: item.id,
         name: item.name,
@@ -525,7 +581,10 @@ pub async fn edit_offset_input(
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
 ) -> Result<Html<String>, StatusCode> {
-    let item = repo.get(&auth_user.user_id, &item_id).await.map_err(repo_status)?;
+    let item = repo
+        .get(&auth_user.user_id, &item_id)
+        .await
+        .map_err(repo_status)?;
     render(OffsetEditInput {
         id: item.id,
         due_offset_days_input: format_offset_input(item.due_offset_days),

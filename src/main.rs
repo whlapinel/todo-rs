@@ -14,7 +14,7 @@ use axum::{
     Extension, Router,
     body::boxed,
     middleware,
-    routing::{get, post},
+    routing::{get, post, put},
 };
 use handlers::json_api::invites::send_app_invite;
 use handlers::json_api::items::{
@@ -64,6 +64,15 @@ fn build_web_router() -> Router {
         .route(
             "/items/:item_id/edit-offset",
             get(handlers::web_ui::items::edit_offset_input),
+        )
+        .route("/dashboard", get(handlers::web_ui::dashboard::dashboard_page))
+        .route(
+            "/dashboard/items/:item_id",
+            put(handlers::web_ui::dashboard::toggle_item_complete),
+        )
+        .route(
+            "/dashboard/team-items/:team_id/:item_id",
+            put(handlers::web_ui::dashboard::toggle_team_item_complete),
         )
 }
 

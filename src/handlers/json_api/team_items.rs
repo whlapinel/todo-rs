@@ -1,7 +1,8 @@
 use super::{internal, not_found};
 use crate::auth::AuthUser;
 use crate::domain::{item::Item, recurrence};
-use crate::service::items::clone_children;
+use crate::service::items::ItemError;
+use crate::service::team_items::{self as team_item_service, resolve_assignee, UpdateTeamItemParams};
 use crate::storage::sqlite::{ItemRepo, RepoError, TeamRepo, UserRepo};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -12,36 +13,9 @@ async fn require_active_member(
     team_id: &str,
     user_id: &str,
 ) -> Result<(), String> {
-    let status = teams
-        .member_status(team_id, user_id)
+    crate::service::team_items::require_active_member(teams, team_id, user_id)
         .await
-        .map_err(|e| format!("{e:?}"))?;
-    match status.as_deref() {
-        Some("ACTIVE") => Ok(()),
-        Some(_) => Err("team invite not yet accepted".to_string()),
-        None => Err(format!(
-            "user id: {} is not a member of team id: {}",
-            user_id, team_id
-        )),
-    }
-}
-
-async fn resolve_assignee(
-    teams: &Arc<dyn TeamRepo>,
-    team_id: &str,
-    assignee_id: Option<String>,
-) -> Result<Option<String>, String> {
-    let Some(assignee_id) = assignee_id else {
-        return Ok(None);
-    };
-    let status = teams
-        .member_status(team_id, &assignee_id)
-        .await
-        .map_err(|e| format!("{e:?}"))?;
-    if status.as_deref() != Some("ACTIVE") {
-        return Err("assignee must be an active member of this team".to_string());
-    }
-    Ok(Some(assignee_id))
+        .map_err(|e| e.to_string())
 }
 
 pub async fn create_team_item(
@@ -142,82 +116,36 @@ pub async fn update_team_item(
     server::Extension(teams): server::Extension<Arc<dyn TeamRepo>>,
     server::Extension(auth): server::Extension<AuthUser>,
 ) -> Result<output::UpdateTeamItemOutput, error::UpdateTeamItemError> {
-    require_active_member(&teams, &input.team_id, &auth.user_id)
-        .await
-        .map_err(internal)?;
-    if let Some(ref r) = input.recurrence {
-        recurrence::parse(r).map_err(internal)?;
-    }
-    if input.recurrence.is_some() && input.parent_item_id.is_some() {
-        return Err(internal(
-            "child items cannot have their own recurrence; set dueOffsetDays instead",
-        )
-        .into());
-    }
-    let current = repo
-        .get_team_item(&input.team_id, &input.item_id)
-        .await
-        .map_err(|e| match e {
-            RepoError::NotFound => {
-                tracing::warn!(
-                    "item not found: team id: {} item id: {}, user id: {}",
-                    input.team_id(),
-                    input.item_id(),
-                    input.name()
-                );
-                error::UpdateTeamItemError::from(not_found())
-            }
-            _ => error::UpdateTeamItemError::from(internal(format!("{e:?}"))),
-        })?;
-
-    let mut item = Item::new_team_item(&input.team_id, &input.name);
-    item.id = input.item_id.clone();
-    item.complete = input.complete;
-    if let Some(dt) = input.due_date {
-        item.due_date = chrono::DateTime::from_timestamp(dt.secs(), dt.subsec_nanos())
-            .map(|d| d.with_timezone(&chrono::Utc));
-    }
-    item.recurrence = input.recurrence.clone();
-    item.recurrence_basis = input.recurrence_basis.clone();
-    item.has_due_time = input.has_due_time.unwrap_or(false);
-    item.has_tasks = input.has_tasks.unwrap_or(true);
-    item.parent_item_id = input.parent_item_id.clone();
-    item.due_offset_days = input.due_offset_days;
-    item.assigned_to_user_id = if input.assigned_to_user_id == current.assigned_to_user_id {
-        current.assigned_to_user_id.clone()
-    } else {
-        resolve_assignee(&teams, &input.team_id, input.assigned_to_user_id)
-            .await
-            .map_err(internal)?
-    };
-
-    let tz_offset = input.timezone_offset_minutes.unwrap_or(0);
-    if let Some(next_item) = item.next_recurrence(chrono::Utc::now(), tz_offset) {
-        let next_deadline = next_item
-            .due_date
-            .expect("next_recurrence always sets a deadline");
-        let next_id = repo
-            .create(&next_item)
-            .await
-            .map_err(|e| internal(format!("{e:?}")))?;
-        clone_children(&repo, &item.id, &next_id, next_deadline, tz_offset)
-            .await
-            .map_err(|e| internal(format!("{e:?}")))?;
-        repo.delete(&item.id)
-            .await
-            .map_err(|e| internal(format!("{e:?}")))?;
-        return Ok(output::UpdateTeamItemOutput {});
-    }
-
-    repo.update_team_item(&item).await.map_err(|e| match e {
-        RepoError::NotFound => {
-            tracing::warn!(
-                "in call to repo.update_team_item(), item not found: {}",
-                &item.id
-            );
-            error::UpdateTeamItemError::from(not_found())
+    let due_date = input
+        .due_date
+        .and_then(|dt| chrono::DateTime::from_timestamp(dt.secs(), dt.subsec_nanos()))
+        .map(|d| d.with_timezone(&chrono::Utc));
+    team_item_service::update_team_item(
+        &repo,
+        &teams,
+        &auth.user_id,
+        UpdateTeamItemParams {
+            team_id: input.team_id,
+            item_id: input.item_id,
+            name: input.name,
+            due_date,
+            complete: input.complete,
+            recurrence: input.recurrence,
+            recurrence_basis: input.recurrence_basis,
+            has_due_time: input.has_due_time,
+            has_tasks: input.has_tasks,
+            parent_item_id: input.parent_item_id,
+            due_offset_days: input.due_offset_days,
+            assigned_to_user_id: input.assigned_to_user_id,
+            timezone_offset_minutes: input.timezone_offset_minutes,
+        },
+    )
+    .await
+    .map_err(|e| match e {
+        ItemError::NotFound => error::UpdateTeamItemError::from(not_found()),
+        ItemError::Invalid(msg) | ItemError::Internal(msg) => {
+            error::UpdateTeamItemError::from(internal(msg))
         }
-        _ => error::UpdateTeamItemError::from(internal(format!("{e:?}"))),
     })?;
     Ok(output::UpdateTeamItemOutput {})
 }
