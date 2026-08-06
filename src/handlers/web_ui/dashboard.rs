@@ -1,4 +1,5 @@
 use crate::auth::AuthUser;
+use crate::handlers::web_ui::TzOffset;
 use crate::service::items::{self as item_service, ItemError};
 use crate::service::team_items::{self as team_item_service, UpdateTeamItemParams};
 use crate::storage::sqlite::{DueItem, ItemRepo, RepoError, TeamRepo};
@@ -118,7 +119,6 @@ struct DashboardPageTemplate {
 pub struct DashboardQuery {
     preset: Option<String>,
     show_complete: Option<String>,
-    tz_offset_minutes: Option<i32>,
 }
 
 fn render_rows(items: &[DueItem], preset: &str, show_complete: bool) -> Result<Vec<String>, StatusCode> {
@@ -134,11 +134,11 @@ fn render_rows(items: &[DueItem], preset: &str, show_complete: bool) -> Result<V
 pub async fn dashboard_page(
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    TzOffset(tz_offset): TzOffset,
     Query(q): Query<DashboardQuery>,
 ) -> Result<Html<String>, StatusCode> {
     let preset = q.preset.unwrap_or_else(|| "Today".to_string());
     let show_complete = q.show_complete.is_some();
-    let tz_offset = q.tz_offset_minutes.unwrap_or(0);
     let (after, before) = preset_range(&preset, Utc::now(), tz_offset);
 
     let due_items = repo
@@ -159,13 +159,13 @@ pub async fn dashboard_page(
 #[serde(rename_all = "camelCase")]
 pub struct ToggleForm {
     complete: Option<String>,
-    tz_offset_minutes: Option<i32>,
 }
 
 pub async fn toggle_item_complete(
     Path(item_id): Path<String>,
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    TzOffset(tz): TzOffset,
     Form(form): Form<ToggleForm>,
 ) -> Result<Html<String>, StatusCode> {
     let current = repo.get(&auth_user.user_id, &item_id).await.map_err(repo_status)?;
@@ -181,7 +181,7 @@ pub async fn toggle_item_complete(
         has_tasks: Some(current.has_tasks),
         parent_item_id: current.parent_item_id.clone(),
         due_offset_days: current.due_offset_days,
-        timezone_offset_minutes: form.tz_offset_minutes,
+        timezone_offset_minutes: Some(tz),
     };
     item_service::update_item(&repo, params).await.map_err(service_status)?;
 
@@ -202,6 +202,7 @@ pub async fn toggle_team_item_complete(
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    TzOffset(tz): TzOffset,
     Form(form): Form<ToggleForm>,
 ) -> Result<Html<String>, StatusCode> {
     let current = repo.get_team_item(&team_id, &item_id).await.map_err(repo_status)?;
@@ -218,7 +219,7 @@ pub async fn toggle_team_item_complete(
         parent_item_id: current.parent_item_id.clone(),
         due_offset_days: current.due_offset_days,
         assigned_to_user_id: current.assigned_to_user_id.clone(),
-        timezone_offset_minutes: form.tz_offset_minutes,
+        timezone_offset_minutes: Some(tz),
     };
     team_item_service::update_team_item(&repo, &teams, &auth_user.user_id, params)
         .await

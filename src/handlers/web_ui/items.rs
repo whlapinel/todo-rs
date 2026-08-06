@@ -1,5 +1,6 @@
 use crate::auth::AuthUser;
 use crate::domain::item::Item;
+use crate::handlers::web_ui::TzOffset;
 use crate::service::items::{self as item_service, ItemError};
 use crate::service::templates::{self as template_service, CreateTemplateParams};
 use crate::storage::sqlite::{ItemRepo, RepoError};
@@ -53,7 +54,6 @@ pub struct ItemForm {
     has_tasks: Option<String>,
     parent_item_id: Option<String>,
     show_complete: Option<String>,
-    tz_offset_minutes: Option<i32>,
 }
 
 fn non_empty(v: &Option<String>) -> Option<String> {
@@ -142,8 +142,7 @@ fn overlay_due_date(
     }
 }
 
-fn create_params_from_form(user_id: &str, form: &ItemForm) -> item_service::CreateItemParams {
-    let tz = form.tz_offset_minutes.unwrap_or(0);
+fn create_params_from_form(user_id: &str, form: &ItemForm, tz: i32) -> item_service::CreateItemParams {
     item_service::CreateItemParams {
         user_id: user_id.to_string(),
         name: form.name.clone().unwrap_or_default(),
@@ -164,7 +163,7 @@ fn create_params_from_form(user_id: &str, form: &ItemForm) -> item_service::Crea
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .and_then(|s| s.parse().ok()),
-        timezone_offset_minutes: form.tz_offset_minutes,
+        timezone_offset_minutes: Some(tz),
     }
 }
 
@@ -173,8 +172,8 @@ fn update_params_from_form(
     item_id: &str,
     current: &Item,
     form: &ItemForm,
+    tz: i32,
 ) -> item_service::UpdateItemParams {
-    let tz = form.tz_offset_minutes.unwrap_or(0);
     item_service::UpdateItemParams {
         user_id: user_id.to_string(),
         item_id: item_id.to_string(),
@@ -187,7 +186,7 @@ fn update_params_from_form(
         has_tasks: Some(overlay_has_tasks(&form.has_tasks, current.has_tasks)),
         parent_item_id: current.parent_item_id.clone(),
         due_offset_days: overlay_i32(&form.due_offset_days, current.due_offset_days),
-        timezone_offset_minutes: form.tz_offset_minutes,
+        timezone_offset_minutes: Some(tz),
     }
 }
 
@@ -428,10 +427,11 @@ pub async fn children_fragment(
 pub async fn create_item_form(
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    TzOffset(tz): TzOffset,
     Form(form): Form<ItemForm>,
 ) -> Result<Html<String>, StatusCode> {
     let show_complete = form.show_complete.is_some();
-    let params = create_params_from_form(&auth_user.user_id, &form);
+    let params = create_params_from_form(&auth_user.user_id, &form, tz);
     let parent_item_id = params.parent_item_id.clone();
     item_service::create_item(&repo, params)
         .await
@@ -451,12 +451,12 @@ pub struct BatchForm {
     names: String,
     parent_item_id: Option<String>,
     show_complete: Option<String>,
-    tz_offset_minutes: Option<i32>,
 }
 
 pub async fn create_items_batch(
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    TzOffset(tz): TzOffset,
     Form(form): Form<BatchForm>,
 ) -> Result<Html<String>, StatusCode> {
     let parent_item_id = non_empty(&form.parent_item_id);
@@ -469,7 +469,7 @@ pub async fn create_items_batch(
             user_id: auth_user.user_id.clone(),
             name: name.to_string(),
             parent_item_id: parent_item_id.clone(),
-            timezone_offset_minutes: form.tz_offset_minutes,
+            timezone_offset_minutes: Some(tz),
             ..Default::default()
         };
         item_service::create_item(&repo, params)
@@ -489,13 +489,14 @@ pub async fn update_item_form(
     Path(item_id): Path<String>,
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    TzOffset(tz): TzOffset,
     Form(form): Form<ItemForm>,
 ) -> Result<Response, StatusCode> {
     let current = repo
         .get(&auth_user.user_id, &item_id)
         .await
         .map_err(repo_status)?;
-    let params = update_params_from_form(&auth_user.user_id, &item_id, &current, &form);
+    let params = update_params_from_form(&auth_user.user_id, &item_id, &current, &form, tz);
     item_service::update_item(&repo, params)
         .await
         .map_err(service_status)?;
