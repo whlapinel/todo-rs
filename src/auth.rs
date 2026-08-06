@@ -574,3 +574,53 @@ pub async fn jwt_auth_middleware(
         }
     }
 }
+
+/// Same identity check as `jwt_auth_middleware` (Bearer header or `todo_auth` cookie), but
+/// redirects to the Google login flow instead of returning a JSON 401 — for the
+/// browser-facing `/web/*` page routes, where a bare 401 body is the wrong UX for a
+/// signed-out visitor. `/api/*` keeps `jwt_auth_middleware` unchanged (CLI/MCP clients want
+/// a 401, not a redirect).
+pub async fn web_auth_middleware(
+    Extension(state): Extension<Arc<AppState>>,
+    mut req: Request<Body>,
+    next: Next<Body>,
+) -> Response {
+    let token = req
+        .headers()
+        .get(http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer ").map(|t| t.to_string()))
+        .or_else(|| {
+            req.headers()
+                .get(http::header::COOKIE)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| {
+                    s.split(';').find_map(|part| {
+                        let part = part.trim();
+                        part.strip_prefix("todo_auth=").map(|v| v.to_string())
+                    })
+                })
+        });
+
+    let claims = token.and_then(|t| {
+        decode::<Claims>(
+            &t,
+            &DecodingKey::from_secret(state.jwt_secret.as_bytes()),
+            &Validation::default(),
+        )
+        .ok()
+    });
+
+    match claims {
+        Some(data) => {
+            req.extensions_mut().insert(AuthUser {
+                user_id: data.claims.sub,
+            });
+            next.run(req).await
+        }
+        None => {
+            tracing::info!(path = %req.uri().path(), "web_auth_middleware: no valid session, redirecting to login");
+            Redirect::to("/auth/google").into_response()
+        }
+    }
+}

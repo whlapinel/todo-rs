@@ -3,13 +3,19 @@ mod auth;
 mod domain;
 mod email;
 mod handlers;
+mod service;
 mod storage;
 
 use crate::storage::sqlite::{
     ItemRepo, TeamRepo, UserRepo, create_pool, items::SqliteItemRepo, teams::SqliteTeamRepo,
     users::SqliteUserRepo,
 };
-use axum::{Extension, Router, body::boxed, middleware, routing::get};
+use axum::{
+    Extension, Router,
+    body::boxed,
+    middleware,
+    routing::{get, post},
+};
 use handlers::json_api::invites::send_app_invite;
 use handlers::json_api::items::{
     create_item, delete_item, get_item, list_assigned_items, list_items, list_items_due,
@@ -28,6 +34,38 @@ use todo_server_sdk::{PeoplesRepublicOfLists, PeoplesRepublicOfListsConfig};
 use tower::ServiceBuilder;
 use tower_cookies::CookieManagerLayer;
 use tower_http::services::{ServeDir, ServeFile};
+
+fn build_web_router() -> Router {
+    Router::new()
+        .route("/test", get(handlers::web_ui::hello_world::hello_world))
+        .route(
+            "/items",
+            get(handlers::web_ui::items::items_page).post(handlers::web_ui::items::create_item_form),
+        )
+        .route("/items/batch", post(handlers::web_ui::items::create_items_batch))
+        .route(
+            "/items/:item_id",
+            get(handlers::web_ui::items::item_detail_page)
+                .put(handlers::web_ui::items::update_item_form)
+                .delete(handlers::web_ui::items::delete_item_form),
+        )
+        .route(
+            "/items/:item_id/children",
+            get(handlers::web_ui::items::children_fragment),
+        )
+        .route(
+            "/items/:item_id/save-as-checklist",
+            post(handlers::web_ui::items::save_as_checklist),
+        )
+        .route(
+            "/items/:item_id/edit-name",
+            get(handlers::web_ui::items::edit_name_input),
+        )
+        .route(
+            "/items/:item_id/edit-offset",
+            get(handlers::web_ui::items::edit_offset_input),
+        )
+}
 
 #[tokio::main]
 async fn main() {
@@ -97,13 +135,7 @@ async fn main() {
                 .route("/me", get(auth::caddy_auth_me))
                 .route("/token", get(auth::caddy_auth_token));
 
-            let web_router = Router::new()
-                .route("/test", get(handlers::web_ui::hello_world::hello_world))
-                .route("/items/:item_id", get(handlers::web_ui::item_page::item_page))
-                .route(
-                    "/items/:item_id/children",
-                    get(handlers::web_ui::item_children_page::item_children_page),
-                )
+            let web_router = build_web_router()
                 .layer(Extension(user_repo.clone()))
                 .layer(Extension(item_repo.clone()))
                 .layer(Extension(team_repo.clone()))
@@ -133,7 +165,7 @@ async fn main() {
                 google_client_secret,
                 base_url,
                 jwt_secret,
-                user_repo,
+                user_repo.clone(),
             ));
 
             let auth_router = Router::new()
@@ -150,15 +182,11 @@ async fn main() {
                 .route_service("/teams/*path", api.clone())
                 .layer(middleware::from_fn(auth::jwt_auth_middleware));
 
-            let web_router = Router::new()
-                .route("/test", get(handlers::web_ui::hello_world::hello_world))
-                .route("/items/:item_id", get(handlers::web_ui::item_page::item_page))
-                .route(
-                    "/items/:item_id/children",
-                    get(handlers::web_ui::item_children_page::item_children_page),
-                )
+            let web_router = build_web_router()
+                .layer(Extension(user_repo))
                 .layer(Extension(item_repo.clone()))
-                .layer(middleware::from_fn(auth::jwt_auth_middleware));
+                .layer(Extension(team_repo.clone()))
+                .layer(middleware::from_fn(auth::web_auth_middleware));
 
             Router::new()
                 .nest("/auth", auth_router)

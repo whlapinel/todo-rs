@@ -1,6 +1,7 @@
-use super::{clone_children, internal, not_found};
+use super::{internal, not_found};
 use crate::auth::AuthUser;
 use crate::domain::{item::Item, recurrence};
+use crate::service::items::clone_children;
 use crate::storage::sqlite::{ItemRepo, RepoError, TeamRepo, UserRepo};
 use std::collections::HashMap;
 use std::sync::Arc;

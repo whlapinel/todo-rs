@@ -1,0 +1,29 @@
+{% macro recurrence_fields(is_top_level, recurrence, recurrence_basis, due_offset_days_input) %}
+{% if is_top_level %}
+<div class="recurrence-fields">
+  <label class="block text-sm text-slate-700">Repeat
+    <input type="text" name="recurrence" value="{{ recurrence.as_deref().unwrap_or_default() }}"
+           placeholder="e.g. every 3 days" class="mt-1 block w-full rounded-md border-slate-300 text-sm" />
+  </label>
+  <label class="block text-sm text-slate-700 mt-2">Repeat from
+    <select name="recurrenceBasis" class="mt-1 block w-full rounded-md border-slate-300 text-sm">
+      {% if recurrence_basis.as_deref() == Some("COMPLETION_DATE") %}
+      <option value="DUE_DATE">Due date</option>
+      <option value="COMPLETION_DATE" selected>Completion date</option>
+      {% else %}
+      <option value="DUE_DATE" selected>Due date</option>
+      <option value="COMPLETION_DATE">Completion date</option>
+      {% endif %}
+    </select>
+  </label>
+</div>
+{% else %}
+<div class="offset-field">
+  <label class="block text-sm text-slate-700">Due offset (days from parent's due date)
+    <input type="number" name="dueOffsetDays" value="{{ due_offset_days_input }}"
+           class="mt-1 block w-full rounded-md border-slate-300 text-sm" />
+  </label>
+  <p class="mt-1 text-xs text-slate-400">Manual due-date edits on this item won't survive the next time an ancestor recurs — the date is recomputed from this offset.</p>
+</div>
+{% endif %}
+{% endmacro %}

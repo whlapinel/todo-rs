@@ -1,6 +1,7 @@
 use super::{internal, not_found};
-use crate::domain::item::Item;
-use crate::storage::sqlite::{ItemRepo, RepoError};
+use crate::service::items::ItemError;
+use crate::service::templates::{self as template_service, CreateTemplateParams};
+use crate::storage::sqlite::ItemRepo;
 use std::sync::Arc;
 use todo_server_sdk::{error, input, output, server};
 
@@ -8,30 +9,21 @@ pub async fn create_template(
     input: input::CreateTemplateInput,
     server::Extension(repo): server::Extension<Arc<dyn ItemRepo>>,
 ) -> Result<output::CreateTemplateOutput, error::CreateTemplateError> {
-    let mut item = Item::new_user_item(&input.user_id, &input.name);
-    item.is_template = true;
-
-    if let Some(source_id) = input.source_item_id {
-        let source = repo
-            .get(&input.user_id, &source_id)
-            .await
-            .map_err(|e| match e {
-                RepoError::NotFound => error::CreateTemplateError::from(not_found()),
-                _ => error::CreateTemplateError::from(internal(format!("{e:?}"))),
-            })?;
-        item.name = source.name;
-        item.recurrence = source.recurrence;
-        item.recurrence_basis = source.recurrence_basis;
-        item.has_due_time = source.has_due_time;
-        item.has_tasks = source.has_tasks;
-        item.due_offset_days = source.due_offset_days;
-        // deadline intentionally not copied — templates have no dates
-    }
-
-    let template_id = repo
-        .create(&item)
-        .await
-        .map_err(|e| internal(format!("{e:?}")))?;
+    let template_id = template_service::create_template(
+        &repo,
+        CreateTemplateParams {
+            user_id: input.user_id,
+            name: input.name,
+            source_item_id: input.source_item_id,
+        },
+    )
+    .await
+    .map_err(|e| match e {
+        ItemError::NotFound => error::CreateTemplateError::from(not_found()),
+        ItemError::Invalid(msg) | ItemError::Internal(msg) => {
+            error::CreateTemplateError::from(internal(msg))
+        }
+    })?;
     Ok(output::CreateTemplateOutput { template_id })
 }
 

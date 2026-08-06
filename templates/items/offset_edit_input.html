@@ -1,0 +1,4 @@
+<input type="number" name="dueOffsetDays" value="{{ due_offset_days_input }}" autofocus
+       hx-put="/web/items/{{ id }}" hx-trigger="blur, keyup[key=='Enter']"
+       hx-target="#item-{{ id }}" hx-select="#item-{{ id }}" hx-swap="outerHTML"
+       class="border border-slate-300 rounded px-1 text-xs w-16" />
