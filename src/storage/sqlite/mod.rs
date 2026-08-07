@@ -202,35 +202,9 @@ pub async fn create_pool(url: &str) -> Result<SqlitePool, sqlx::Error> {
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_items_assigned_to ON items (assigned_to_user_id)")
         .execute(&pool)
         .await?;
-    // Migration for pre-existing DBs: item_type/event_type replace the old
-    // is_template bool (folded into item_type as a third variant instead of
-    // staying a separate flag). Each step is error-ignored so it stays
-    // idempotent across restarts, including once is_template is gone.
-    let _ = sqlx::query("ALTER TABLE items ADD COLUMN item_type TEXT NOT NULL DEFAULT 'TASK'")
-        .execute(&pool)
-        .await;
-    let _ = sqlx::query("ALTER TABLE items ADD COLUMN event_type TEXT")
-        .execute(&pool)
-        .await;
-    let _ = sqlx::query("UPDATE items SET item_type = 'TEMPLATE' WHERE is_template = 1")
-        .execute(&pool)
-        .await;
-    let _ = sqlx::query("ALTER TABLE items DROP COLUMN is_template")
-        .execute(&pool)
-        .await;
-    // Additive migration: scheduled_date's counterpart end date, plus the has-a-real-time
-    // flags for both (mirroring has_due_time) — see CLAUDE.md's Events section.
-    let _ = sqlx::query("ALTER TABLE items ADD COLUMN scheduled_end_date INTEGER")
-        .execute(&pool)
-        .await;
-    let _ = sqlx::query(
-        "ALTER TABLE items ADD COLUMN has_scheduled_time INTEGER NOT NULL DEFAULT 0",
-    )
-    .execute(&pool)
-    .await;
-    let _ = sqlx::query("ALTER TABLE items ADD COLUMN has_end_time INTEGER NOT NULL DEFAULT 0")
-        .execute(&pool)
-        .await;
+    crate::storage::migrations::run_migrations(&pool)
+        .await
+        .map_err(|crate::storage::migrations::MigrationError::Database(e)| e)?;
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS teams (
             id TEXT PRIMARY KEY,

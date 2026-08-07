@@ -93,7 +93,7 @@ In both modes, `AuthUser { user_id }` is injected into request extensions by the
 
 `UserRepo` methods include `get_or_create_by_google_id` (used by internal OAuth flow) and `get_or_create_by_email` (used by caddy middleware — looks up by email, creates a record if none exists).
 
-SQLite schema is created/migrated inline in `create_pool()`. Additive schema migrations use `ALTER TABLE ... ADD COLUMN` with the error ignored (handles existing DBs where the column already exists).
+SQLite schema management is split in two. The baseline `CREATE TABLE IF NOT EXISTS`/`CREATE INDEX IF NOT EXISTS` statements in `create_pool()` always reflect the *current* full schema, so a fresh DB is correct from the start and never touches the migration system below. Schema changes to already-deployed DBs go through `src/storage/migrations/` — a versioned `Migration` trait (`version()`, `name()`, `async fn up(&self, conn: &mut SqliteConnection)`), one file per migration, run once at startup via `run_migrations(&pool)` (called from `create_pool()`), which tracks applied versions in a `_migrations` table and runs each unapplied migration in its own transaction. Adapted from a sibling project's (`courses-api`) migration system, with one addition: since SQLite's `ALTER TABLE ... ADD COLUMN`/`DROP COLUMN` have no `IF NOT EXISTS` form, every migration guards its `ALTER TABLE`s with `column_exists()` (`PRAGMA table_info`) — necessary because a DB that already has a target column (either a fresh DB whose `CREATE TABLE` already includes it, or an existing DB migrated under the old pre-`_migrations` inline-ALTER-TABLE approach) must not error when the migration runs for the first time.
 
 ### Domain Models (`src/domain/`)
 
@@ -215,8 +215,8 @@ See the touch-point checklist below for all files that may need updating.
 
 **Adding a DB column:**
 
-1. Add the column to `CREATE TABLE IF NOT EXISTS` in `create_pool()` (sqlite.rs)
-2. Add a `let _ = sqlx::query("ALTER TABLE ... ADD COLUMN ...").execute(&pool).await;` line after the CREATE (error ignored for existing DBs)
+1. Add the column to `CREATE TABLE IF NOT EXISTS` in `create_pool()` (sqlite.rs) — this is what makes a fresh DB correct without ever running the migration below
+2. Add a new file under `src/storage/migrations/` implementing `Migration` with the next version number; guard each `ALTER TABLE ... ADD COLUMN` with `if !column_exists(conn, "items", "...").await? { ... }` (SQLite has no `ADD COLUMN IF NOT EXISTS`), and register it in `all_migrations()`
 3. Update relevant SELECT/INSERT/UPDATE queries and row mapping
 
 **Web UI-only change (no Smithy or handler-logic changes):**
