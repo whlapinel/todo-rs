@@ -1,10 +1,10 @@
 <li id="checklist-item-{{ id }}" class="flex items-center justify-between gap-x-3 py-2">
   <a href="/web/checklists/{{ template_id }}/items/{{ id }}" hx-target="#page" hx-select="#page" hx-swap="innerHTML"
-     class="truncate text-slate-900">{{ name }}</a>
-  <div class="flex items-center gap-x-3 text-xs text-slate-500 shrink-0">
+     class="truncate text-gray-900 hover:text-indigo-600 dark:text-white dark:hover:text-indigo-400">{{ name }}</a>
+  <div class="flex items-center gap-x-3 text-xs text-gray-500 shrink-0 dark:text-gray-400">
     <span>{{ offset_label }}</span>
     <button hx-delete="/web/checklists/{{ template_id }}/items/{{ id }}"
             hx-confirm="Remove {{ name }}?" hx-target="#checklist-item-{{ id }}" hx-select="unset"
-            hx-swap="outerHTML swap:200ms" class="cursor-pointer text-red-500 hover:text-red-700">Remove</button>
+            hx-swap="outerHTML swap:200ms" class="cursor-pointer text-red-600 hover:text-red-500 dark:text-red-400 dark:hover:text-red-300">Remove</button>
   </div>
 </li>

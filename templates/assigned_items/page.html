@@ -2,10 +2,14 @@
 {% block title %}Assigned to me · Todo{% endblock %}
 {% block content %}
 <div class="space-y-6">
-  <h1 class="text-2xl font-semibold text-slate-900">Assigned to me</h1>
-  <ul id="assigned-list" class="divide-y divide-slate-100 rounded-lg border border-slate-200 bg-white px-4">
+  <div class="md:flex md:items-center md:justify-between">
+    <div class="min-w-0 flex-1">
+      <h2 class="text-2xl/7 font-bold text-gray-900 sm:truncate sm:text-3xl sm:tracking-tight dark:text-white">Assigned to me</h2>
+    </div>
+  </div>
+  <ul id="assigned-list" class="divide-y divide-gray-100 rounded-lg border border-gray-200 bg-white px-4 dark:divide-white/5 dark:border-white/10 dark:bg-gray-800/50">
     {% if rows.is_empty() %}
-    <li class="py-3 text-sm text-slate-500">Nothing assigned to you.</li>
+    <li class="py-3 text-sm text-gray-500 dark:text-gray-400">Nothing assigned to you.</li>
     {% else %}
     {% for row in rows %}
     {{ row|safe }}

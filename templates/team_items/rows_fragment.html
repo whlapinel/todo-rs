@@ -1,5 +1,5 @@
 {% if rows.is_empty() %}
-<li class="py-3 text-sm text-slate-500">{{ empty_message }}</li>
+<li class="py-3 text-sm text-gray-500 dark:text-gray-400">{{ empty_message }}</li>
 {% else %}
 {% for row in rows %}
 {{ row|safe }}

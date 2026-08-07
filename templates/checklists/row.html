@@ -1,21 +1,23 @@
 <li id="checklist-{{ id }}" class="py-3 space-y-2">
   <div class="flex items-center justify-between gap-x-3">
     <a href="/web/checklists/{{ id }}" hx-target="#page" hx-select="#page" hx-swap="innerHTML"
-       class="text-slate-900 hover:underline">{{ name }}</a>
+       class="text-gray-900 hover:text-indigo-600 dark:text-white dark:hover:text-indigo-400">{{ name }}</a>
     <div class="flex items-center gap-x-3 text-xs">
-      {% if let Some(r) = recurrence %}<span class="text-slate-400" title="repeats">&#8635; {{ r }}</span>{% endif %}
+      {% if let Some(r) = recurrence %}<span class="text-gray-400 dark:text-gray-500" title="repeats">&#8635; {{ r }}</span>{% endif %}
       <button hx-delete="/web/checklists/{{ id }}" hx-confirm="Delete checklist {{ name }}?"
               hx-target="#checklist-{{ id }}" hx-select="unset" hx-swap="outerHTML swap:200ms"
-              class="cursor-pointer text-red-500 hover:text-red-700">Delete</button>
+              class="cursor-pointer text-red-600 hover:text-red-500 dark:text-red-400 dark:hover:text-red-300">Delete</button>
     </div>
   </div>
   <details>
-    <summary class="cursor-pointer text-xs text-slate-500">Use&hellip;</summary>
+    <summary class="cursor-pointer text-xs text-gray-500 dark:text-gray-400">Use&hellip;</summary>
     <form hx-post="/web/checklists/{{ id }}/use" hx-target="#page" hx-select="#page" hx-swap="innerHTML"
           class="mt-2 flex items-center gap-x-2">
-      <input type="text" name="name" value="{{ name }}" required class="flex-1 rounded-md border-slate-300 text-sm" />
-      <input type="date" name="dueDate" class="rounded-md border-slate-300 text-sm" />
-      <button type="submit" class="cursor-pointer rounded-md bg-slate-900 text-white text-sm px-3 py-1.5">Add to items</button>
+      <input type="text" name="name" value="{{ name }}" required
+             class="flex-1 rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 placeholder:text-gray-400 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:placeholder:text-gray-500 dark:focus:outline-indigo-500" />
+      <input type="date" name="dueDate"
+             class="rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:focus:outline-indigo-500" />
+      <button type="submit" class="inline-flex items-center justify-center rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-xs hover:bg-indigo-500 dark:bg-indigo-500 dark:shadow-none dark:hover:bg-indigo-400">Add to items</button>
     </form>
   </details>
 </li>
