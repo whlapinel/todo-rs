@@ -1,21 +1,68 @@
-<div id="item-{{ id }}-view" class="rounded-lg border border-slate-200 bg-white p-6 space-y-3">
-  <label class="flex items-center gap-x-3 text-sm text-slate-700">
+{% import "macros.html" as macros %}
+<div id="item-{{ id }}-view" class="overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm dark:border-white/10 dark:bg-gray-800/50 dark:shadow-none">
+  <div class="flex items-center gap-x-2 px-4 py-4 sm:px-6">
     <input type="checkbox" {% if complete %}checked{% endif %}
            hx-put="/web/team-items/{{ team_id }}/{{ id }}" hx-vals='{"complete": "{{ toggle_complete_json }}"}'
-           hx-target="#item-{{ id }}-view" hx-select="#item-{{ id }}-view" hx-swap="outerHTML" />
-    {% if complete %}Done{% else %}Not done{% endif %}
-  </label>
-  <dl class="text-sm text-slate-700 space-y-2">
-    <div><dt class="text-slate-500">Type</dt><dd>{% if has_tasks %}Task list{% else %}Simple item{% endif %}</dd></div>
-    {% if let Some(a) = assignee_name %}<div><dt class="text-slate-500">Assigned to</dt><dd>{{ a }}</dd></div>{% endif %}
-    {% if let Some(d) = due_date %}<div><dt class="text-slate-500">Due</dt><dd>{{ d }}</dd></div>{% endif %}
-    {% if let Some(d) = scheduled_date %}<div><dt class="text-slate-500">Scheduled start</dt><dd>{{ d }}</dd></div>{% endif %}
-    {% if let Some(d) = scheduled_end_date %}<div><dt class="text-slate-500">Scheduled end</dt><dd>{{ d }}</dd></div>{% endif %}
-    {% if is_top_level %}
-    {% if let Some(r) = recurrence %}<div><dt class="text-slate-500">Repeats</dt><dd>{{ r }} (from {{ recurrence_basis_label }})</dd></div>{% endif %}
-    {% else %}
-    {% if let Some(o) = offset_label %}<div><dt class="text-slate-500">Due offset</dt><dd>{{ o }}</dd></div>{% endif %}
-    {% endif %}
-    <div><dt class="text-slate-500">Kind</dt><dd>{% if is_event %}Event{% if let Some(e) = event_type %} ({{ e }}){% endif %}{% else %}Task{% endif %}</dd></div>
-  </dl>
+           hx-target="#item-{{ id }}-view" hx-select="#item-{{ id }}-view" hx-swap="outerHTML"
+           class="size-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-600 dark:border-white/20 dark:bg-white/5" />
+    <label class="text-sm text-gray-900 dark:text-white">{% if complete %}Done{% else %}Not done{% endif %}</label>
+  </div>
+  <div class="border-t border-gray-100 dark:border-white/5">
+    <dl class="divide-y divide-gray-100 dark:divide-white/5">
+      <div class="px-4 py-4 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
+        <dt class="text-sm font-medium text-gray-900 dark:text-gray-100">Type</dt>
+        <dd class="mt-1 text-sm text-gray-700 sm:col-span-2 sm:mt-0 dark:text-gray-300">{% if has_tasks %}Task list{% else %}Simple item{% endif %}</dd>
+      </div>
+      {% if let Some(a) = assignee_name %}
+      <div class="px-4 py-4 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
+        <dt class="text-sm font-medium text-gray-900 dark:text-gray-100">Assigned to</dt>
+        <dd class="mt-1 text-sm text-gray-700 sm:col-span-2 sm:mt-0 dark:text-gray-300">{{ a }}</dd>
+      </div>
+      {% endif %}
+      {% if let Some(d) = due_date %}
+      <div class="px-4 py-4 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
+        <dt class="text-sm font-medium text-gray-900 dark:text-gray-100">Due</dt>
+        <dd class="mt-1 text-sm text-gray-700 sm:col-span-2 sm:mt-0 dark:text-gray-300">{{ d }}</dd>
+      </div>
+      {% endif %}
+      {% if let Some(d) = scheduled_date %}
+      <div class="px-4 py-4 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
+        <dt class="text-sm font-medium text-gray-900 dark:text-gray-100">Scheduled start</dt>
+        <dd class="mt-1 text-sm text-gray-700 sm:col-span-2 sm:mt-0 dark:text-gray-300">{{ d }}</dd>
+      </div>
+      {% endif %}
+      {% if let Some(d) = scheduled_end_date %}
+      <div class="px-4 py-4 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
+        <dt class="text-sm font-medium text-gray-900 dark:text-gray-100">Scheduled end</dt>
+        <dd class="mt-1 text-sm text-gray-700 sm:col-span-2 sm:mt-0 dark:text-gray-300">{{ d }}</dd>
+      </div>
+      {% endif %}
+      {% if is_top_level %}
+      {% if let Some(r) = recurrence %}
+      <div class="px-4 py-4 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
+        <dt class="text-sm font-medium text-gray-900 dark:text-gray-100">Repeats</dt>
+        <dd class="mt-1 text-sm text-gray-700 sm:col-span-2 sm:mt-0 dark:text-gray-300">{{ r }} (from {{ recurrence_basis_label }})</dd>
+      </div>
+      {% endif %}
+      {% else %}
+      {% if let Some(o) = offset_label %}
+      <div class="px-4 py-4 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
+        <dt class="text-sm font-medium text-gray-900 dark:text-gray-100">Due offset</dt>
+        <dd class="mt-1 text-sm text-gray-700 sm:col-span-2 sm:mt-0 dark:text-gray-300">{{ o }}</dd>
+      </div>
+      {% endif %}
+      {% endif %}
+      <div class="px-4 py-4 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
+        <dt class="text-sm font-medium text-gray-900 dark:text-gray-100">Kind</dt>
+        <dd class="mt-1 text-sm text-gray-700 sm:col-span-2 sm:mt-0 dark:text-gray-300">
+          {% if is_event %}
+          {% call macros::badge("Event", "indigo") %}{% endcall %}
+          {% if let Some(e) = event_type %}<span class="ml-2 text-gray-500 dark:text-gray-400">({{ e }})</span>{% endif %}
+          {% else %}
+          {% call macros::badge("Task", "gray") %}{% endcall %}
+          {% endif %}
+        </dd>
+      </div>
+    </dl>
+  </div>
 </div>
