@@ -467,7 +467,7 @@ pub async fn items_page(
         rows,
         show_complete,
         blank_recurrence: None,
-        blank_recurrence_basis: None,
+        blank_recurrence_basis: Some("SCHEDULED_DATE".to_string()),
         blank_due_offset_days_input: String::new(),
         blank_event_type_input: String::new(),
         blank_scheduled_date_input: String::new(),

@@ -73,18 +73,26 @@ pub async fn create_team_item(
     item.assigned_to_user_id =
         resolve_assignee(teams, &params.team_id, params.assigned_to_user_id).await?;
 
-    if item.due_date.is_none()
-        && let Some(ref pattern) = item.recurrence
+    if let Some(ref pattern) = item.recurrence
         && let Ok(rule) = recurrence::parse(pattern)
     {
+        let basis = item.recurrence_basis.as_deref().unwrap_or("DUE_DATE");
         let tz_offset = params.timezone_offset_minutes.unwrap_or(0);
-        let mut deadline = recurrence::next_date(&rule, chrono::Utc::now(), tz_offset);
-        if rule.time_override.is_none() {
-            deadline = recurrence::apply_end_of_day(deadline, tz_offset);
-        } else {
-            item.has_due_time = true;
+        if basis == "DUE_DATE" && item.due_date.is_none() {
+            let mut deadline = recurrence::next_date(&rule, chrono::Utc::now(), tz_offset);
+            if rule.time_override.is_none() {
+                deadline = recurrence::apply_end_of_day(deadline, tz_offset);
+            } else {
+                item.has_due_time = true;
+            }
+            item.due_date = Some(deadline);
+        } else if basis != "DUE_DATE" && item.scheduled_date.is_none() {
+            let when = recurrence::next_date(&rule, chrono::Utc::now(), tz_offset);
+            if rule.time_override.is_some() {
+                item.has_scheduled_time = true;
+            }
+            item.scheduled_date = Some(when);
         }
-        item.due_date = Some(deadline);
     }
     let item_id = repo.create(&item).await?;
 
@@ -250,12 +258,9 @@ pub async fn update_team_item(
     };
 
     let tz_offset = params.timezone_offset_minutes.unwrap_or(0);
-    if let Some(next_item) = item.next_recurrence(chrono::Utc::now(), tz_offset) {
-        let next_deadline = next_item
-            .due_date
-            .expect("next_recurrence always sets a deadline");
+    if let Some((next_item, next_anchor)) = item.next_recurrence(chrono::Utc::now(), tz_offset) {
         let next_id = repo.create(&next_item).await?;
-        clone_children(repo, &item.id, &next_id, next_deadline, tz_offset).await?;
+        clone_children(repo, &item.id, &next_id, next_anchor, tz_offset).await?;
         repo.delete(&item.id).await?;
         return Ok(());
     }

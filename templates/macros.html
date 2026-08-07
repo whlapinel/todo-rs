@@ -10,9 +10,15 @@
       {% if recurrence_basis.as_deref() == Some("COMPLETION_DATE") %}
       <option value="DUE_DATE">Due date</option>
       <option value="COMPLETION_DATE" selected>Completion date</option>
+      <option value="SCHEDULED_DATE">Scheduled date</option>
+      {% else if recurrence_basis.as_deref() == Some("SCHEDULED_DATE") %}
+      <option value="DUE_DATE">Due date</option>
+      <option value="COMPLETION_DATE">Completion date</option>
+      <option value="SCHEDULED_DATE" selected>Scheduled date</option>
       {% else %}
       <option value="DUE_DATE" selected>Due date</option>
       <option value="COMPLETION_DATE">Completion date</option>
+      <option value="SCHEDULED_DATE">Scheduled date</option>
       {% endif %}
     </select>
   </label>

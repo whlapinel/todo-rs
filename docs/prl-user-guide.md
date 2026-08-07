@@ -270,7 +270,7 @@ When adding an item with `--recurrence`, the system understands natural English 
 | Day of month | `every month on the 15th` |
 | Day of week | `every monday` |
 
-When a recurring item is marked done, it is replaced by a new item with the next computed due date. The recurrence basis (due date vs. completion date) controls how that date is calculated and must be set via the web app.
+When a recurring item is marked done, it is replaced by a new item with the next computed date. The recurrence basis — due date, completion date, or scheduled date — controls both which date the next occurrence is measured from and which field (`due` or `scheduled`) it's written into; due-date basis writes the new due date, the other two write the new scheduled date instead. Basis must be set via the web app — `prl` has no flag for it yet.
 
 Recurrence only applies to top-level items — a child item (created with `--parent`) can't have its own recurrence. Instead, a child can have an offset (days from its top-level item's due date, set with `--due-offset-days`), which is used to recompute the child's due date whenever the top-level item recurs.
 

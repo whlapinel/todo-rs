@@ -84,18 +84,26 @@ pub async fn create_item(
     {
         item.item_type = ItemType::Template;
     }
-    if item.due_date.is_none()
-        && let Some(ref pattern) = item.recurrence
+    if let Some(ref pattern) = item.recurrence
         && let Ok(rule) = recurrence::parse(pattern)
     {
+        let basis = item.recurrence_basis.as_deref().unwrap_or("DUE_DATE");
         let tz_offset = params.timezone_offset_minutes.unwrap_or(0);
-        let mut deadline = recurrence::next_date(&rule, chrono::Utc::now(), tz_offset);
-        if rule.time_override.is_none() {
-            deadline = recurrence::apply_end_of_day(deadline, tz_offset);
-        } else {
-            item.has_due_time = true;
+        if basis == "DUE_DATE" && item.due_date.is_none() {
+            let mut deadline = recurrence::next_date(&rule, chrono::Utc::now(), tz_offset);
+            if rule.time_override.is_none() {
+                deadline = recurrence::apply_end_of_day(deadline, tz_offset);
+            } else {
+                item.has_due_time = true;
+            }
+            item.due_date = Some(deadline);
+        } else if basis != "DUE_DATE" && item.scheduled_date.is_none() {
+            let when = recurrence::next_date(&rule, chrono::Utc::now(), tz_offset);
+            if rule.time_override.is_some() {
+                item.has_scheduled_time = true;
+            }
+            item.scheduled_date = Some(when);
         }
-        item.due_date = Some(deadline);
     }
     let item_id = repo.create(&item).await?;
 
@@ -189,12 +197,9 @@ pub async fn update_item(
     item.assigned_to_user_id = current.assigned_to_user_id.clone();
 
     let tz_offset = params.timezone_offset_minutes.unwrap_or(0);
-    if let Some(next_item) = item.next_recurrence(chrono::Utc::now(), tz_offset) {
-        let next_deadline = next_item
-            .due_date
-            .expect("next_recurrence always sets a deadline");
+    if let Some((next_item, next_anchor)) = item.next_recurrence(chrono::Utc::now(), tz_offset) {
         let next_id = repo.create(&next_item).await?;
-        clone_children(repo, &item.id, &next_id, next_deadline, tz_offset).await?;
+        clone_children(repo, &item.id, &next_id, next_anchor, tz_offset).await?;
         repo.delete(&item.id).await?;
         return Ok(());
     }
@@ -435,6 +440,93 @@ mod tests {
         .expect_err("should reject Template item_type");
 
         assert!(matches!(err, ItemError::Invalid(_)));
+    }
+
+    #[tokio::test]
+    async fn update_item_recurrence_anchors_child_offset_to_new_scheduled_date_not_stale_due_date() {
+        let mut mock = MockItemRepo::new();
+
+        let stale_due_date = DateTime::parse_from_rfc3339("2020-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let scheduled_base = DateTime::parse_from_rfc3339("2026-01-10T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        mock.expect_get()
+            .returning(move |_, _| {
+                Ok(Item {
+                    id: "item1".to_string(),
+                    user_id: Some("u1".to_string()),
+                    ..Item::default()
+                })
+            });
+
+        // The recurring item itself is re-created fresh (fresh id) with an advanced
+        // scheduled_date; due_date rides along unchanged (still the stale value).
+        mock.expect_create()
+            .withf(|item: &Item| item.parent_item_id.is_none())
+            .times(1)
+            .returning(|_| Ok("new-item-id".to_string()));
+
+        mock.expect_list_children()
+            .withf(|parent_id: &str| parent_id == "item1")
+            .times(1)
+            .returning(|_| {
+                Ok(vec![Item {
+                    id: "child1".to_string(),
+                    parent_item_id: Some("item1".to_string()),
+                    due_offset_days: Some(2),
+                    ..Item::default()
+                }])
+            });
+
+        let rule = recurrence::parse("every week").unwrap();
+        let expected_scheduled = recurrence::next_date(&rule, scheduled_base, 0);
+        let expected_child_due =
+            recurrence::apply_end_of_day(expected_scheduled + chrono::Duration::days(2), 0);
+
+        mock.expect_create()
+            .withf(move |item: &Item| {
+                item.parent_item_id.as_deref() == Some("new-item-id")
+                    && item.due_date == Some(expected_child_due)
+            })
+            .times(1)
+            .returning(|_| Ok("new-child-id".to_string()));
+
+        mock.expect_list_children()
+            .withf(|parent_id: &str| parent_id == "child1")
+            .times(1)
+            .returning(|_| Ok(vec![]));
+
+        mock.expect_delete()
+            .withf(|id: &str| id == "child1")
+            .times(1)
+            .returning(|_| Ok(()));
+
+        mock.expect_delete()
+            .withf(|id: &str| id == "item1")
+            .times(1)
+            .returning(|_| Ok(()));
+
+        let repo: Arc<dyn ItemRepo> = Arc::new(mock);
+
+        update_item(
+            &repo,
+            UpdateItemParams {
+                user_id: "u1".to_string(),
+                item_id: "item1".to_string(),
+                name: "Work session".to_string(),
+                complete: true,
+                recurrence: Some("every week".to_string()),
+                recurrence_basis: Some("SCHEDULED_DATE".to_string()),
+                scheduled_date: Some(scheduled_base),
+                due_date: Some(stale_due_date),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("should recur and clone children");
     }
 
     #[tokio::test]
