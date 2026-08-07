@@ -1,0 +1,20 @@
+<div id="item-{{ id }}-view" class="rounded-lg border border-slate-200 bg-white p-6 space-y-3">
+  <label class="flex items-center gap-x-3 text-sm text-slate-700">
+    <input type="checkbox" {% if complete %}checked{% endif %}
+           hx-put="/web/items/{{ id }}" hx-vals='{"complete": "{{ toggle_complete_json }}"}'
+           hx-target="#item-{{ id }}-view" hx-select="#item-{{ id }}-view" hx-swap="outerHTML" />
+    {% if complete %}Done{% else %}Not done{% endif %}
+  </label>
+  <dl class="text-sm text-slate-700 space-y-2">
+    <div><dt class="text-slate-500">Type</dt><dd>{% if has_tasks %}Task list{% else %}Simple item{% endif %}</dd></div>
+    {% if let Some(d) = due_date %}<div><dt class="text-slate-500">Due</dt><dd>{{ d }}</dd></div>{% endif %}
+    {% if let Some(d) = scheduled_date %}<div><dt class="text-slate-500">Scheduled start</dt><dd>{{ d }}</dd></div>{% endif %}
+    {% if let Some(d) = scheduled_end_date %}<div><dt class="text-slate-500">Scheduled end</dt><dd>{{ d }}</dd></div>{% endif %}
+    {% if is_top_level %}
+    {% if let Some(r) = recurrence %}<div><dt class="text-slate-500">Repeats</dt><dd>{{ r }} (from {{ recurrence_basis_label }})</dd></div>{% endif %}
+    {% else %}
+    {% if let Some(o) = offset_label %}<div><dt class="text-slate-500">Due offset</dt><dd>{{ o }}</dd></div>{% endif %}
+    {% endif %}
+    <div><dt class="text-slate-500">Kind</dt><dd>{% if is_event %}Event{% if let Some(e) = event_type %} ({{ e }}){% endif %}{% else %}Task{% endif %}</dd></div>
+  </dl>
+</div>

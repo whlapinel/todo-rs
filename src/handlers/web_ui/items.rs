@@ -380,6 +380,89 @@ impl DetailFields {
     }
 }
 
+fn recurrence_basis_label(recurrence_basis: &Option<String>) -> String {
+    match recurrence_basis.as_deref() {
+        Some("COMPLETION_DATE") => "completion date".to_string(),
+        Some("SCHEDULED_DATE") => "scheduled date".to_string(),
+        Some(other) if other != "DUE_DATE" => other.to_string(),
+        _ => "due date".to_string(),
+    }
+}
+
+/// Read-only counterpart to `DetailFields` — same computed data, rendered as plain text
+/// instead of form inputs. Carries a complete-toggle checkbox (see CLAUDE.md's row-editing
+/// convention) so marking an item done doesn't require entering edit mode.
+#[derive(Template)]
+#[template(path = "items/detail_view.html")]
+struct DetailView {
+    id: String,
+    complete: bool,
+    toggle_complete_json: String,
+    has_tasks: bool,
+    due_date: Option<String>,
+    scheduled_date: Option<String>,
+    scheduled_end_date: Option<String>,
+    is_top_level: bool,
+    recurrence: Option<String>,
+    recurrence_basis_label: String,
+    offset_label: Option<String>,
+    is_event: bool,
+    event_type: Option<String>,
+}
+
+impl DetailView {
+    fn from_item(item: &Item, tz: i32) -> Self {
+        let due_date = item.due_date.map(|d| {
+            let local = to_local(d, tz);
+            if item.has_due_time {
+                local.format("%Y-%m-%d %H:%M").to_string()
+            } else {
+                local.format("%Y-%m-%d").to_string()
+            }
+        });
+        let scheduled_date = item.scheduled_date.map(|d| {
+            let local = to_local(d, tz);
+            if item.has_scheduled_time {
+                local.format("%Y-%m-%d %H:%M").to_string()
+            } else {
+                local.format("%Y-%m-%d").to_string()
+            }
+        });
+        let scheduled_end_date = item.scheduled_end_date.map(|d| {
+            let local = to_local(d, tz);
+            if item.has_end_time {
+                local.format("%Y-%m-%d %H:%M").to_string()
+            } else {
+                local.format("%Y-%m-%d").to_string()
+            }
+        });
+        let offset_label = item
+            .parent_item_id
+            .as_ref()
+            .map(|_| match item.due_offset_days {
+                Some(0) => "on due date".to_string(),
+                Some(n) if n > 0 => format!("+{n}d"),
+                Some(n) => format!("{n}d"),
+                None => "no offset".to_string(),
+            });
+        Self {
+            id: item.id.clone(),
+            complete: item.complete,
+            toggle_complete_json: (!item.complete).to_string(),
+            has_tasks: item.has_tasks,
+            due_date,
+            scheduled_date,
+            scheduled_end_date,
+            is_top_level: item.parent_item_id.is_none(),
+            recurrence: item.recurrence.clone(),
+            recurrence_basis_label: recurrence_basis_label(&item.recurrence_basis),
+            offset_label,
+            is_event: item.item_type == ItemType::Event,
+            event_type: item.event_type.clone(),
+        }
+    }
+}
+
 #[derive(Template)]
 #[template(path = "items/rows_fragment.html")]
 struct RowsFragmentTemplate {
@@ -405,6 +488,14 @@ struct ItemsListPageTemplate {
 #[derive(Template)]
 #[template(path = "items/detail_page.html")]
 struct ItemDetailPageTemplate {
+    id: String,
+    name: String,
+    view: String,
+}
+
+#[derive(Template)]
+#[template(path = "items/edit_page.html")]
+struct ItemEditPageTemplate {
     id: String,
     name: String,
     fields: String,
@@ -487,8 +578,26 @@ pub async fn item_detail_page(
         .get(&auth_user.user_id, &item_id)
         .await
         .map_err(ItemError::from)?;
-    let fields = DetailFields::from_item(&item, tz, false).render()?;
+    let view = DetailView::from_item(&item, tz).render()?;
     render(ItemDetailPageTemplate {
+        id: item.id,
+        name: item.name,
+        view,
+    })
+}
+
+pub async fn item_edit_page(
+    Path(item_id): Path<String>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    TzOffset(tz): TzOffset,
+) -> Result<Html<String>, ItemError> {
+    let item = repo
+        .get(&auth_user.user_id, &item_id)
+        .await
+        .map_err(ItemError::from)?;
+    let fields = DetailFields::from_item(&item, tz, false).render()?;
+    render(ItemEditPageTemplate {
         id: item.id,
         name: item.name,
         fields,
@@ -591,7 +700,8 @@ pub async fn update_item_form(
         Ok(updated) => {
             let row = ItemRow::from_item(&updated, tz).render()?;
             let fields = DetailFields::from_item(&updated, tz, true).render()?;
-            Ok(Html(format!("{row}{fields}")).into_response())
+            let view = DetailView::from_item(&updated, tz).render()?;
+            Ok(Html(format!("{row}{fields}{view}")).into_response())
         }
         // The item was recurring, just got marked complete, and the service layer replaced
         // it with a fresh successor under a new id (see service::items::update_item) — there

@@ -55,6 +55,7 @@ fn build_web_router() -> Router {
                 .put(update_item_form)
                 .delete(delete_item_form),
         )
+        .route("/items/:item_id/edit", get(item_edit_page))
         .route("/items/:item_id/children", get(children_fragment))
         .route("/items/:item_id/save-as-checklist", post(save_as_checklist))
         .route("/dashboard", get(dashboard_page))
@@ -84,6 +85,10 @@ fn build_web_router() -> Router {
                 .put(update_checklist_child_form)
                 .delete(delete_checklist_child_form),
         )
+        .route(
+            "/checklists/:template_id/items/:item_id/edit",
+            get(checklist_child_edit_page),
+        )
         .route("/checklists/:template_id/use", post(use_checklist_form))
         .route("/teams", get(teams_page).post(create_team_form))
         .route("/teams/:team_id", get(team_detail_page))
@@ -103,6 +108,10 @@ fn build_web_router() -> Router {
             get(team_item_detail_page)
                 .put(update_team_item_form)
                 .delete(delete_team_item_form),
+        )
+        .route(
+            "/team-items/:team_id/:item_id/edit",
+            get(team_item_edit_page),
         )
         .route(
             "/team-items/:team_id/:item_id/children",

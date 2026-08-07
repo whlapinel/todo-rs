@@ -129,10 +129,40 @@ impl ChecklistChildDetailFields {
     }
 }
 
+/// Read-only counterpart to `ChecklistChildDetailFields` — just the offset label, since
+/// that's the only thing besides the name (already shown via `<h1>`) the edit form sets.
+/// No complete-toggle: checklist children have no `complete` concept in their form at all
+/// (see `update_checklist_child_form`, which hardcodes it to `false`).
+#[derive(Template)]
+#[template(path = "checklists/child_detail_view.html")]
+struct ChecklistChildDetailView {
+    id: String,
+    offset_label: String,
+}
+
+impl ChecklistChildDetailView {
+    fn from_item(item: &Item) -> Self {
+        Self {
+            id: item.id.clone(),
+            offset_label: format_offset_label(item.due_offset_days),
+        }
+    }
+}
+
 #[derive(Template)]
 #[template(path = "checklists/child_detail_page.html")]
 struct ChecklistChildDetailPageTemplate {
     template_id: String,
+    id: String,
+    name: String,
+    view: String,
+}
+
+#[derive(Template)]
+#[template(path = "checklists/child_edit_page.html")]
+struct ChecklistChildEditPageTemplate {
+    template_id: String,
+    id: String,
     name: String,
     fields: String,
 }
@@ -297,9 +327,28 @@ pub async fn checklist_child_detail_page(
         .get(&auth_user.user_id, &item_id)
         .await
         .map_err(ItemError::from)?;
-    let fields = ChecklistChildDetailFields::from_item(&template_id, &item, false).render()?;
+    let view = ChecklistChildDetailView::from_item(&item).render()?;
     render(ChecklistChildDetailPageTemplate {
         template_id,
+        id: item.id,
+        name: item.name,
+        view,
+    })
+}
+
+pub async fn checklist_child_edit_page(
+    Path((template_id, item_id)): Path<(String, String)>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+) -> Result<Html<String>, ItemError> {
+    let item = repo
+        .get(&auth_user.user_id, &item_id)
+        .await
+        .map_err(ItemError::from)?;
+    let fields = ChecklistChildDetailFields::from_item(&template_id, &item, false).render()?;
+    render(ChecklistChildEditPageTemplate {
+        template_id,
+        id: item.id,
         name: item.name,
         fields,
     })

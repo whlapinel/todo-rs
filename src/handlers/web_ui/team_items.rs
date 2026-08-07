@@ -411,6 +411,96 @@ impl DetailFields {
     }
 }
 
+fn recurrence_basis_label(recurrence_basis: &Option<String>) -> String {
+    match recurrence_basis.as_deref() {
+        Some("COMPLETION_DATE") => "completion date".to_string(),
+        Some("SCHEDULED_DATE") => "scheduled date".to_string(),
+        Some(other) if other != "DUE_DATE" => other.to_string(),
+        _ => "due date".to_string(),
+    }
+}
+
+/// Read-only counterpart to `DetailFields` — same computed data, rendered as plain text
+/// instead of form inputs, plus the assignee name (mirrors `TeamItemRow`'s lookup) and a
+/// complete-toggle checkbox so marking an item done doesn't require entering edit mode.
+#[derive(Template)]
+#[template(path = "team_items/detail_view.html")]
+struct DetailView {
+    id: String,
+    team_id: String,
+    complete: bool,
+    toggle_complete_json: String,
+    has_tasks: bool,
+    due_date: Option<String>,
+    scheduled_date: Option<String>,
+    scheduled_end_date: Option<String>,
+    is_top_level: bool,
+    recurrence: Option<String>,
+    recurrence_basis_label: String,
+    offset_label: Option<String>,
+    is_event: bool,
+    event_type: Option<String>,
+    assignee_name: Option<String>,
+}
+
+impl DetailView {
+    fn from_item(item: &Item, team_id: &str, names: &HashMap<String, String>, tz: i32) -> Self {
+        let due_date = item.due_date.map(|d| {
+            let local = to_local(d, tz);
+            if item.has_due_time {
+                local.format("%Y-%m-%d %H:%M").to_string()
+            } else {
+                local.format("%Y-%m-%d").to_string()
+            }
+        });
+        let scheduled_date = item.scheduled_date.map(|d| {
+            let local = to_local(d, tz);
+            if item.has_scheduled_time {
+                local.format("%Y-%m-%d %H:%M").to_string()
+            } else {
+                local.format("%Y-%m-%d").to_string()
+            }
+        });
+        let scheduled_end_date = item.scheduled_end_date.map(|d| {
+            let local = to_local(d, tz);
+            if item.has_end_time {
+                local.format("%Y-%m-%d %H:%M").to_string()
+            } else {
+                local.format("%Y-%m-%d").to_string()
+            }
+        });
+        let offset_label = item
+            .parent_item_id
+            .as_ref()
+            .map(|_| match item.due_offset_days {
+                Some(0) => "on due date".to_string(),
+                Some(n) if n > 0 => format!("+{n}d"),
+                Some(n) => format!("{n}d"),
+                None => "no offset".to_string(),
+            });
+        Self {
+            id: item.id.clone(),
+            team_id: team_id.to_string(),
+            complete: item.complete,
+            toggle_complete_json: (!item.complete).to_string(),
+            has_tasks: item.has_tasks,
+            due_date,
+            scheduled_date,
+            scheduled_end_date,
+            is_top_level: item.parent_item_id.is_none(),
+            recurrence: item.recurrence.clone(),
+            recurrence_basis_label: recurrence_basis_label(&item.recurrence_basis),
+            offset_label,
+            is_event: item.item_type == ItemType::Event,
+            event_type: item.event_type.clone(),
+            assignee_name: item
+                .assigned_to_user_id
+                .as_ref()
+                .map(|id| names.get(id).cloned().unwrap_or_else(|| id.clone())),
+        }
+    }
+}
+
 #[derive(Template)]
 #[template(path = "team_items/rows_fragment.html")]
 struct RowsFragmentTemplate {
@@ -438,6 +528,15 @@ struct TeamItemsListPageTemplate {
 #[derive(Template)]
 #[template(path = "team_items/detail_page.html")]
 struct TeamItemDetailPageTemplate {
+    id: String,
+    team_id: String,
+    name: String,
+    view: String,
+}
+
+#[derive(Template)]
+#[template(path = "team_items/edit_page.html")]
+struct TeamItemEditPageTemplate {
     id: String,
     team_id: String,
     name: String,
@@ -551,9 +650,28 @@ pub async fn team_item_detail_page(
 ) -> Result<Html<String>, ItemError> {
     require_active_member(&teams, &team_id, &auth_user.user_id).await?;
     let item = repo.get_team_item(&team_id, &item_id).await.map_err(ItemError::from)?;
+    let names = names_for(&teams, &team_id, &auth_user.user_id).await?;
+    let view = DetailView::from_item(&item, &team_id, &names, tz).render()?;
+    render(TeamItemDetailPageTemplate {
+        id: item.id,
+        team_id,
+        name: item.name,
+        view,
+    })
+}
+
+pub async fn team_item_edit_page(
+    Path((team_id, item_id)): Path<(String, String)>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    TzOffset(tz): TzOffset,
+) -> Result<Html<String>, ItemError> {
+    require_active_member(&teams, &team_id, &auth_user.user_id).await?;
+    let item = repo.get_team_item(&team_id, &item_id).await.map_err(ItemError::from)?;
     let assignee_options = active_member_options(&teams, &team_id, &auth_user.user_id).await?;
     let fields = DetailFields::from_item(&item, &team_id, assignee_options, tz, false).render()?;
-    render(TeamItemDetailPageTemplate {
+    render(TeamItemEditPageTemplate {
         id: item.id,
         team_id,
         name: item.name,
@@ -668,7 +786,8 @@ pub async fn update_team_item_form(
             let assignee_options = active_member_options(&teams, &team_id, &auth_user.user_id).await?;
             let fields =
                 DetailFields::from_item(&updated, &team_id, assignee_options, tz, true).render()?;
-            Ok(Html(format!("{row}{fields}")).into_response())
+            let view = DetailView::from_item(&updated, &team_id, &names, tz).render()?;
+            Ok(Html(format!("{row}{fields}{view}")).into_response())
         }
         // Recurring item just completed and got replaced under a new id (see
         // service::team_items::update_team_item) — nothing to swap back in under the old id.
