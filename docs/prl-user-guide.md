@@ -98,9 +98,23 @@ prl items add "Submit report" --due 2026-06-20
 prl items add "Water plants" --recurrence "every week"
 prl items add "Chapter notes" --parent <parent-item-id>
 prl items add "Pack bag" --parent <parent-item-id> --due-offset-days -1
+prl items add "Team offsite" --item-type event --due 2026-09-01
+prl items add "Rain today" --item-type event --event-type rain
+prl items add "Write report" --scheduled 2026-06-18 --scheduled-end 2026-06-20
 ```
 
-`--due` accepts `YYYY-MM-DD` or a Unix timestamp.
+`--item-type` is `task` (default) or `event` — events are calendar-style items,
+distinguished from tasks mainly for display purposes. `--event-type` is a free-text
+category (e.g. `rain`); if it matches a checklist template's own event type, that
+template's checklist items are automatically added as children the moment the item
+is created. Checklist templates themselves aren't yet manageable from `prl` (web UI
+or MCP server only), but any item created via `prl items add --event-type ...` can
+still trigger one that already exists.
+
+`--due`, `--scheduled`, and `--scheduled-end` all accept `YYYY-MM-DD` or a Unix
+timestamp. `--due` is the deadline (drives recurrence and offset-based child due
+dates); `--scheduled`/`--scheduled-end` describe an optional start→end window —
+when you actually plan to do it — and apply to tasks just as much as events.
 
 > **Note:** Assignment is no longer supported on personal items. To create an
 > assignable task, use the web UI to create a team item under a team you

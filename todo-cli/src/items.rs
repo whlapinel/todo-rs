@@ -1,6 +1,18 @@
 use crate::helpers::{fmt_date, fmt_date_opt, parse_date, require_user, unwrap_or_exit};
 use clap::Subcommand;
+use todo_client::types::ItemType;
 use todo_client::Client;
+
+fn parse_item_type_flag(s: &str) -> ItemType {
+    match s.to_lowercase().as_str() {
+        "task" => ItemType::Task,
+        "event" => ItemType::Event,
+        _ => {
+            eprintln!("error: --item-type must be 'task' or 'event'");
+            std::process::exit(1);
+        }
+    }
+}
 
 #[derive(Subcommand)]
 pub enum ItemsCommand {
@@ -26,6 +38,17 @@ pub enum ItemsCommand {
             help = "Days from the top-level item's due date (child items only; negative = before, positive = after)"
         )]
         due_offset_days: Option<i32>,
+        #[arg(long, help = "Item kind: 'task' (default) or 'event'")]
+        item_type: Option<String>,
+        #[arg(
+            long,
+            help = "Event category, e.g. 'rain' — auto-triggers matching checklist templates"
+        )]
+        event_type: Option<String>,
+        #[arg(long, help = "Scheduled start: YYYY-MM-DD or Unix timestamp")]
+        scheduled: Option<String>,
+        #[arg(long, help = "Scheduled end: YYYY-MM-DD or Unix timestamp")]
+        scheduled_end: Option<String>,
     },
     /// Mark an item complete
     Done { item_id: String },
@@ -81,6 +104,10 @@ pub async fn cmd_items(client: &Client, cmd: ItemsCommand, user_id: Option<Strin
             parent,
             recurrence,
             due_offset_days,
+            item_type,
+            event_type,
+            scheduled,
+            scheduled_end,
         } => {
             if parent.is_some() && recurrence.is_some() {
                 eprintln!(
@@ -105,6 +132,26 @@ pub async fn cmd_items(client: &Client, cmd: ItemsCommand, user_id: Option<Strin
             }
             if let Some(o) = due_offset_days {
                 req = req.due_offset_days(o);
+            }
+            if let Some(t) = item_type {
+                req = req.item_type(parse_item_type_flag(&t));
+            }
+            if let Some(e) = event_type {
+                req = req.event_type(e);
+            }
+            if let Some(ref s) = scheduled {
+                let scheduled_date = parse_date(s).unwrap_or_else(|e| {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                });
+                req = req.scheduled_date(scheduled_date);
+            }
+            if let Some(ref s) = scheduled_end {
+                let scheduled_end_date = parse_date(s).unwrap_or_else(|e| {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                });
+                req = req.scheduled_end_date(scheduled_end_date);
             }
             let out = unwrap_or_exit(req.send().await, "add item");
             println!("created item {}", out.item_id());
@@ -141,6 +188,24 @@ pub async fn cmd_items(client: &Client, cmd: ItemsCommand, user_id: Option<Strin
             }
             if let Some(o) = item.due_offset_days() {
                 req = req.due_offset_days(o);
+            }
+            if let Some(t) = item.item_type() {
+                req = req.item_type(t.clone());
+            }
+            if let Some(e) = item.event_type() {
+                req = req.event_type(e);
+            }
+            if let Some(d) = item.scheduled_date() {
+                req = req.scheduled_date(d.clone());
+            }
+            if let Some(d) = item.scheduled_end_date() {
+                req = req.scheduled_end_date(d.clone());
+            }
+            if let Some(t) = item.has_scheduled_time() {
+                req = req.has_scheduled_time(t);
+            }
+            if let Some(t) = item.has_end_time() {
+                req = req.has_end_time(t);
             }
             unwrap_or_exit(req.send().await, "mark done");
             println!("marked {item_id} complete");
@@ -204,6 +269,11 @@ pub async fn cmd_items(client: &Client, cmd: ItemsCommand, user_id: Option<Strin
             println!("name:       {}", item.name());
             println!("complete:   {}", item.complete());
             println!("due:        {}", fmt_date_opt(item.due_date()));
+            println!("scheduled:  {}", fmt_date_opt(item.scheduled_date()));
+            println!(
+                "sched end:  {}",
+                fmt_date_opt(item.scheduled_end_date())
+            );
             println!("recurrence: {}", item.recurrence().unwrap_or("-"));
             println!(
                 "offset:     {}",
@@ -213,6 +283,8 @@ pub async fn cmd_items(client: &Client, cmd: ItemsCommand, user_id: Option<Strin
             );
             println!("children:   {}", item.has_children().unwrap_or(false));
             println!("assigned:   {}", item.assigned_to_user_id().unwrap_or("-"));
+            println!("item type:  {:?}", item.item_type());
+            println!("event type: {}", item.event_type().unwrap_or("-"));
         }
         ItemsCommand::Due { after, before } => {
             let uid = require_user(user_id);

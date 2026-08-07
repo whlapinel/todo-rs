@@ -13,6 +13,7 @@
   </div>
   <div class="flex items-center gap-x-3 text-xs text-slate-500 shrink-0">
     {% if let Some(d) = due_date %}<span>{{ d }}</span>{% endif %}
+    {% if let Some(d) = scheduled_date %}<span title="scheduled">{{ d }}</span>{% endif %}
     {% if let Some(r) = recurrence %}<span title="repeats">&#8635; {{ r }}</span>{% endif %}
     <button hx-post="/web/items/{{ id }}/save-as-checklist" hx-target="this" hx-select="unset" hx-swap="outerHTML"
             class="cursor-pointer text-slate-400 hover:text-slate-700">Save as checklist</button>

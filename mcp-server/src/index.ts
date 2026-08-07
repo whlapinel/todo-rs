@@ -113,6 +113,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: "string",
             description: "ISO 8601 date/time string for the due date",
           },
+          scheduledDate: {
+            type: "string",
+            description: "ISO 8601 date/time string for when this is scheduled to start",
+          },
+          scheduledEndDate: {
+            type: "string",
+            description: "ISO 8601 date/time string for when this is scheduled to end",
+          },
           complete: { type: "boolean" },
           recurrence: {
             type: "string",
@@ -128,6 +136,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: "boolean",
             description: "Whether the due date includes a specific time",
           },
+          hasScheduledTime: {
+            type: "boolean",
+            description: "Whether scheduledDate includes a specific time",
+          },
+          hasEndTime: {
+            type: "boolean",
+            description: "Whether scheduledEndDate includes a specific time",
+          },
           hasTasks: {
             type: "boolean",
             description: "Whether this item can have sub-tasks",
@@ -135,6 +151,17 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           parentItemId: {
             type: "string",
             description: "ID of the parent item (for sub-tasks)",
+          },
+          itemType: {
+            type: "string",
+            enum: ["TASK", "EVENT"],
+            description:
+              "TASK (default) is due-date-driven; EVENT is scheduled-date-primary, for calendar-style items.",
+          },
+          eventType: {
+            type: "string",
+            description:
+              "Free-text category (e.g. 'rain'). If it matches a checklist template's own eventType, that template's children are automatically copied onto this item when it's created.",
           },
           dueOffsetDays: {
             type: "number",
@@ -162,14 +189,24 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           name: { type: "string" },
           complete: { type: "boolean" },
           dueDate: { type: "string", description: "ISO 8601 date/time string" },
+          scheduledDate: { type: "string", description: "ISO 8601 date/time string" },
+          scheduledEndDate: { type: "string", description: "ISO 8601 date/time string" },
           recurrence: { type: "string", description: "Only valid when parentItemId is not set." },
           recurrenceBasis: {
             type: "string",
             enum: ["DUE_DATE", "COMPLETION_DATE"],
           },
           hasDueTime: { type: "boolean" },
+          hasScheduledTime: { type: "boolean" },
+          hasEndTime: { type: "boolean" },
           hasTasks: { type: "boolean" },
           parentItemId: { type: "string" },
+          itemType: {
+            type: "string",
+            enum: ["TASK", "EVENT"],
+            description: "Omit to leave the item's current kind unchanged.",
+          },
+          eventType: { type: "string" },
           dueOffsetDays: {
             type: "number",
             description: "For a child item only: days from the top-level item's due date (negative = before, positive = after).",
@@ -345,12 +382,27 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           teamId: { type: "string" },
           name: { type: "string" },
           dueDate: { type: "string", description: "ISO 8601 date/time string" },
+          scheduledDate: { type: "string", description: "ISO 8601 date/time string" },
+          scheduledEndDate: { type: "string", description: "ISO 8601 date/time string" },
           complete: { type: "boolean" },
           recurrence: { type: "string", description: "Only valid when parentItemId is not set." },
           recurrenceBasis: { type: "string", enum: ["DUE_DATE", "COMPLETION_DATE"] },
           hasDueTime: { type: "boolean" },
+          hasScheduledTime: { type: "boolean" },
+          hasEndTime: { type: "boolean" },
           hasTasks: { type: "boolean" },
           parentItemId: { type: "string" },
+          itemType: {
+            type: "string",
+            enum: ["TASK", "EVENT"],
+            description:
+              "TASK (default) is due-date-driven; EVENT is scheduled-date-primary, for calendar-style items.",
+          },
+          eventType: {
+            type: "string",
+            description:
+              "Free-text category (e.g. 'rain'). If it matches a checklist template's own eventType, that template's children are automatically copied onto this item when it's created.",
+          },
           dueOffsetDays: {
             type: "number",
             description:
@@ -374,11 +426,21 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           name: { type: "string" },
           complete: { type: "boolean" },
           dueDate: { type: "string", description: "ISO 8601 date/time string" },
+          scheduledDate: { type: "string", description: "ISO 8601 date/time string" },
+          scheduledEndDate: { type: "string", description: "ISO 8601 date/time string" },
           recurrence: { type: "string", description: "Only valid when parentItemId is not set." },
           recurrenceBasis: { type: "string", enum: ["DUE_DATE", "COMPLETION_DATE"] },
           hasDueTime: { type: "boolean" },
+          hasScheduledTime: { type: "boolean" },
+          hasEndTime: { type: "boolean" },
           hasTasks: { type: "boolean" },
           parentItemId: { type: "string" },
+          itemType: {
+            type: "string",
+            enum: ["TASK", "EVENT"],
+            description: "Omit to leave the item's current kind unchanged.",
+          },
+          eventType: { type: "string" },
           dueOffsetDays: {
             type: "number",
             description: "For a child item only: days from the top-level item's due date (negative = before, positive = after).",
@@ -453,12 +515,18 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       case "create_item": {
         const body: Record<string, unknown> = { name: args.name };
         if (args.dueDate) body.dueDate = toEpochSecs(args.dueDate as string);
+        if (args.scheduledDate) body.scheduledDate = toEpochSecs(args.scheduledDate as string);
+        if (args.scheduledEndDate) body.scheduledEndDate = toEpochSecs(args.scheduledEndDate as string);
         if (args.complete !== undefined) body.complete = args.complete;
         if (args.recurrence) body.recurrence = args.recurrence;
         if (args.recurrenceBasis) body.recurrenceBasis = args.recurrenceBasis;
         if (args.hasDueTime !== undefined) body.hasDueTime = args.hasDueTime;
+        if (args.hasScheduledTime !== undefined) body.hasScheduledTime = args.hasScheduledTime;
+        if (args.hasEndTime !== undefined) body.hasEndTime = args.hasEndTime;
         if (args.hasTasks !== undefined) body.hasTasks = args.hasTasks;
         if (args.parentItemId) body.parentItemId = args.parentItemId;
+        if (args.itemType) body.itemType = args.itemType;
+        if (args.eventType) body.eventType = args.eventType;
         if (args.dueOffsetDays !== undefined) body.dueOffsetDays = args.dueOffsetDays;
         if (args.timezoneOffsetMinutes !== undefined)
           body.timezoneOffsetMinutes = args.timezoneOffsetMinutes;
@@ -472,11 +540,17 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           complete: args.complete,
         };
         if (args.dueDate) body.dueDate = toEpochSecs(args.dueDate as string);
+        if (args.scheduledDate) body.scheduledDate = toEpochSecs(args.scheduledDate as string);
+        if (args.scheduledEndDate) body.scheduledEndDate = toEpochSecs(args.scheduledEndDate as string);
         if (args.recurrence) body.recurrence = args.recurrence;
         if (args.recurrenceBasis) body.recurrenceBasis = args.recurrenceBasis;
         if (args.hasDueTime !== undefined) body.hasDueTime = args.hasDueTime;
+        if (args.hasScheduledTime !== undefined) body.hasScheduledTime = args.hasScheduledTime;
+        if (args.hasEndTime !== undefined) body.hasEndTime = args.hasEndTime;
         if (args.hasTasks !== undefined) body.hasTasks = args.hasTasks;
         if (args.parentItemId) body.parentItemId = args.parentItemId;
+        if (args.itemType) body.itemType = args.itemType;
+        if (args.eventType !== undefined) body.eventType = args.eventType;
         if (args.dueOffsetDays !== undefined) body.dueOffsetDays = args.dueOffsetDays;
         if (args.timezoneOffsetMinutes !== undefined)
           body.timezoneOffsetMinutes = args.timezoneOffsetMinutes;
@@ -558,12 +632,18 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       case "create_team_item": {
         const body: Record<string, unknown> = { name: args.name };
         if (args.dueDate) body.dueDate = toEpochSecs(args.dueDate as string);
+        if (args.scheduledDate) body.scheduledDate = toEpochSecs(args.scheduledDate as string);
+        if (args.scheduledEndDate) body.scheduledEndDate = toEpochSecs(args.scheduledEndDate as string);
         if (args.complete !== undefined) body.complete = args.complete;
         if (args.recurrence) body.recurrence = args.recurrence;
         if (args.recurrenceBasis) body.recurrenceBasis = args.recurrenceBasis;
         if (args.hasDueTime !== undefined) body.hasDueTime = args.hasDueTime;
+        if (args.hasScheduledTime !== undefined) body.hasScheduledTime = args.hasScheduledTime;
+        if (args.hasEndTime !== undefined) body.hasEndTime = args.hasEndTime;
         if (args.hasTasks !== undefined) body.hasTasks = args.hasTasks;
         if (args.parentItemId) body.parentItemId = args.parentItemId;
+        if (args.itemType) body.itemType = args.itemType;
+        if (args.eventType) body.eventType = args.eventType;
         if (args.dueOffsetDays !== undefined) body.dueOffsetDays = args.dueOffsetDays;
         if (args.assignedToUserId) body.assignedToUserId = args.assignedToUserId;
         if (args.timezoneOffsetMinutes !== undefined)
@@ -578,11 +658,17 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           complete: args.complete,
         };
         if (args.dueDate) body.dueDate = toEpochSecs(args.dueDate as string);
+        if (args.scheduledDate) body.scheduledDate = toEpochSecs(args.scheduledDate as string);
+        if (args.scheduledEndDate) body.scheduledEndDate = toEpochSecs(args.scheduledEndDate as string);
         if (args.recurrence) body.recurrence = args.recurrence;
         if (args.recurrenceBasis) body.recurrenceBasis = args.recurrenceBasis;
         if (args.hasDueTime !== undefined) body.hasDueTime = args.hasDueTime;
+        if (args.hasScheduledTime !== undefined) body.hasScheduledTime = args.hasScheduledTime;
+        if (args.hasEndTime !== undefined) body.hasEndTime = args.hasEndTime;
         if (args.hasTasks !== undefined) body.hasTasks = args.hasTasks;
         if (args.parentItemId) body.parentItemId = args.parentItemId;
+        if (args.itemType) body.itemType = args.itemType;
+        if (args.eventType !== undefined) body.eventType = args.eventType;
         if (args.dueOffsetDays !== undefined) body.dueOffsetDays = args.dueOffsetDays;
         if (args.assignedToUserId) body.assignedToUserId = args.assignedToUserId;
         if (args.timezoneOffsetMinutes !== undefined)

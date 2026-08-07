@@ -1,6 +1,6 @@
-use crate::domain::item::Item;
+use crate::domain::item::{Item, ItemType};
 use crate::domain::recurrence;
-use crate::service::items::{clone_children, ItemError};
+use crate::service::items::{clone_children, copy_template_children, ItemError};
 use crate::storage::sqlite::{ItemRepo, TeamRepo};
 use chrono::{DateTime, Utc};
 use std::sync::Arc;
@@ -10,12 +10,18 @@ pub struct CreateTeamItemParams {
     pub team_id: String,
     pub name: String,
     pub due_date: Option<DateTime<Utc>>,
+    pub scheduled_date: Option<DateTime<Utc>>,
+    pub scheduled_end_date: Option<DateTime<Utc>>,
     pub complete: Option<bool>,
     pub recurrence: Option<String>,
     pub recurrence_basis: Option<String>,
     pub has_due_time: Option<bool>,
+    pub has_scheduled_time: Option<bool>,
+    pub has_end_time: Option<bool>,
     pub has_tasks: Option<bool>,
     pub parent_item_id: Option<String>,
+    pub item_type: Option<ItemType>,
+    pub event_type: Option<String>,
     pub due_offset_days: Option<i32>,
     pub assigned_to_user_id: Option<String>,
     pub timezone_offset_minutes: Option<i32>,
@@ -37,14 +43,32 @@ pub async fn create_team_item(
             "child items cannot have their own recurrence; set dueOffsetDays instead".to_string(),
         ));
     }
+    if params.item_type == Some(ItemType::Template) {
+        return Err(ItemError::Invalid(
+            "item_type Template is not supported for team items".to_string(),
+        ));
+    }
+    if let (Some(start), Some(end)) = (params.scheduled_date, params.scheduled_end_date)
+        && end < start
+    {
+        return Err(ItemError::Invalid(
+            "scheduledEndDate cannot be before scheduledDate".to_string(),
+        ));
+    }
     let mut item = Item::new_team_item(&params.team_id, &params.name);
     item.due_date = params.due_date;
+    item.scheduled_date = params.scheduled_date;
+    item.scheduled_end_date = params.scheduled_end_date;
     item.complete = params.complete.unwrap_or(false);
     item.recurrence = params.recurrence.clone();
     item.recurrence_basis = params.recurrence_basis;
     item.has_due_time = params.has_due_time.unwrap_or(false);
+    item.has_scheduled_time = params.has_scheduled_time.unwrap_or(false);
+    item.has_end_time = params.has_end_time.unwrap_or(false);
     item.has_tasks = params.has_tasks.unwrap_or(true);
     item.parent_item_id = params.parent_item_id;
+    item.item_type = params.item_type.unwrap_or_default();
+    item.event_type = params.event_type.clone();
     item.due_offset_days = params.due_offset_days;
     item.assigned_to_user_id =
         resolve_assignee(teams, &params.team_id, params.assigned_to_user_id).await?;
@@ -63,6 +87,21 @@ pub async fn create_team_item(
         item.due_date = Some(deadline);
     }
     let item_id = repo.create(&item).await?;
+
+    // Checklist templates are a personal-item concept (scoped to the requester,
+    // not the team), but a team event can still trigger one onto itself — same
+    // mechanism as service::items::create_item's trigger step.
+    if let Some(ref event_type) = item.event_type {
+        let tz_offset = params.timezone_offset_minutes.unwrap_or(0);
+        let root_date = item.due_date.or(item.scheduled_date);
+        let templates = repo.list_templates(requester_user_id).await?;
+        for tpl in templates
+            .iter()
+            .filter(|t| t.event_type.as_deref() == Some(event_type.as_str()))
+        {
+            copy_template_children(repo, &tpl.id, &item_id, root_date, tz_offset).await?;
+        }
+    }
     Ok(item_id)
 }
 
@@ -140,12 +179,18 @@ pub struct UpdateTeamItemParams {
     pub item_id: String,
     pub name: String,
     pub due_date: Option<DateTime<Utc>>,
+    pub scheduled_date: Option<DateTime<Utc>>,
+    pub scheduled_end_date: Option<DateTime<Utc>>,
     pub complete: bool,
     pub recurrence: Option<String>,
     pub recurrence_basis: Option<String>,
     pub has_due_time: Option<bool>,
+    pub has_scheduled_time: Option<bool>,
+    pub has_end_time: Option<bool>,
     pub has_tasks: Option<bool>,
     pub parent_item_id: Option<String>,
+    pub item_type: Option<ItemType>,
+    pub event_type: Option<String>,
     pub due_offset_days: Option<i32>,
     pub assigned_to_user_id: Option<String>,
     pub timezone_offset_minutes: Option<i32>,
@@ -168,17 +213,35 @@ pub async fn update_team_item(
                 .to_string(),
         ));
     }
+    if params.item_type == Some(ItemType::Template) {
+        return Err(ItemError::Invalid(
+            "item_type Template is not supported for team items".to_string(),
+        ));
+    }
+    if let (Some(start), Some(end)) = (params.scheduled_date, params.scheduled_end_date)
+        && end < start
+    {
+        return Err(ItemError::Invalid(
+            "scheduledEndDate cannot be before scheduledDate".to_string(),
+        ));
+    }
     let current = repo.get_team_item(&params.team_id, &params.item_id).await?;
 
     let mut item = Item::new_team_item(&params.team_id, &params.name);
     item.id = params.item_id.clone();
     item.complete = params.complete;
     item.due_date = params.due_date;
+    item.scheduled_date = params.scheduled_date;
+    item.scheduled_end_date = params.scheduled_end_date;
     item.recurrence = params.recurrence.clone();
     item.recurrence_basis = params.recurrence_basis.clone();
     item.has_due_time = params.has_due_time.unwrap_or(false);
+    item.has_scheduled_time = params.has_scheduled_time.unwrap_or(false);
+    item.has_end_time = params.has_end_time.unwrap_or(false);
     item.has_tasks = params.has_tasks.unwrap_or(true);
     item.parent_item_id = params.parent_item_id.clone();
+    item.item_type = params.item_type.unwrap_or(current.item_type);
+    item.event_type = params.event_type.clone();
     item.due_offset_days = params.due_offset_days;
     item.assigned_to_user_id = if params.assigned_to_user_id == current.assigned_to_user_id {
         current.assigned_to_user_id.clone()

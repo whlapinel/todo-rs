@@ -11,13 +11,18 @@ resource TeamItem {
         name: String
         dueDate: Timestamp
         scheduledDate: Timestamp
+        scheduledEndDate: Timestamp
         complete: Boolean
         recurrence: String
         recurrenceBasis: String
         hasDueTime: Boolean
+        hasScheduledTime: Boolean
+        hasEndTime: Boolean
         hasTasks: Boolean
         parentItemId: String
         hasChildren: Boolean
+        itemType: ItemType
+        eventType: String
         dueOffsetDays: Integer
         assignedToUserId: String
     }
@@ -42,6 +47,8 @@ operation CreateTeamItem {
 
         $scheduledDate
 
+        $scheduledEndDate
+
         $complete
 
         $recurrence
@@ -50,9 +57,17 @@ operation CreateTeamItem {
 
         $hasDueTime
 
+        $hasScheduledTime
+
+        $hasEndTime
+
         $hasTasks
 
         $parentItemId
+
+        $itemType
+
+        $eventType
 
         $dueOffsetDays
 
@@ -93,6 +108,8 @@ operation GetTeamItem {
 
         $scheduledDate
 
+        $scheduledEndDate
+
         @required
         $complete
 
@@ -102,11 +119,19 @@ operation GetTeamItem {
 
         $hasDueTime
 
+        $hasScheduledTime
+
+        $hasEndTime
+
         $hasTasks
 
         $parentItemId
 
         $hasChildren
+
+        $itemType
+
+        $eventType
 
         $dueOffsetDays
 
@@ -137,6 +162,8 @@ operation UpdateTeamItem {
 
         $scheduledDate
 
+        $scheduledEndDate
+
         @required
         $complete
 
@@ -146,9 +173,17 @@ operation UpdateTeamItem {
 
         $hasDueTime
 
+        $hasScheduledTime
+
+        $hasEndTime
+
         $hasTasks
 
         $parentItemId
+
+        $itemType
+
+        $eventType
 
         $dueOffsetDays
 
@@ -194,13 +229,18 @@ structure TeamItemSummary for TeamItem {
     $name
     $dueDate
     $scheduledDate
+    $scheduledEndDate
     $complete
     $recurrence
     $recurrenceBasis
     $hasDueTime
+    $hasScheduledTime
+    $hasEndTime
     $hasTasks
     $parentItemId
     $hasChildren
+    $itemType
+    $eventType
     $dueOffsetDays
     $assignedToUserId
     assignedToUserName: String

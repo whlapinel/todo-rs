@@ -16,6 +16,7 @@
   </div>
   <div class="flex items-center gap-x-3 text-xs text-slate-500 shrink-0">
     {% if let Some(d) = due_date %}<span>{{ d }}</span>{% endif %}
+    {% if let Some(d) = scheduled_date %}<span title="scheduled">{{ d }}</span>{% endif %}
     {% if let Some(r) = recurrence %}<span title="repeats">&#8635; {{ r }}</span>{% endif %}
     <button hx-delete="/web/team-items/{{ team_id }}/{{ id }}"
             hx-confirm="Delete {{ name }}{% if has_children %} and all its sub-items{% endif %}?"

@@ -7,8 +7,9 @@ use crate::storage::sqlite::{DueItem, ItemRepo, RepoError, db_err, not_found, ro
 pub struct SqliteItemRepo(pub SqlitePool);
 
 const ITEM_SELECT: &str =
-    "SELECT id, user_id, team_id, parent_item_id, name, due_date, scheduled_date, complete, recurrence, recurrence_basis, has_due_time, has_tasks,
-            is_template, due_offset_days, assigned_to_user_id,
+    "SELECT id, user_id, team_id, parent_item_id, name, due_date, scheduled_date, scheduled_end_date, complete, recurrence, recurrence_basis,
+            has_due_time, has_scheduled_time, has_end_time, has_tasks,
+            item_type, event_type, due_offset_days, assigned_to_user_id,
             EXISTS(SELECT 1 FROM items c WHERE c.parent_item_id = items.id) AS has_children";
 
 #[async_trait]
@@ -27,7 +28,7 @@ impl ItemRepo for SqliteItemRepo {
 
     async fn list(&self, user_id: &str) -> Result<Vec<Item>, RepoError> {
         let q = format!(
-            "{ITEM_SELECT} FROM items WHERE user_id = ? AND parent_item_id IS NULL AND is_template = 0 \
+            "{ITEM_SELECT} FROM items WHERE user_id = ? AND parent_item_id IS NULL AND item_type != 'TEMPLATE' \
              ORDER BY COALESCE(due_date, 9999999999999) ASC"
         );
         sqlx::query(&q)
@@ -96,13 +97,16 @@ impl ItemRepo for SqliteItemRepo {
         let id = uuid::Uuid::new_v4().to_string();
         let due_date: Option<i64> = item.due_date.map(|dt| dt.timestamp());
         let scheduled_date: Option<i64> = item.scheduled_date.map(|dt| dt.timestamp());
+        let scheduled_end_date: Option<i64> = item.scheduled_end_date.map(|dt| dt.timestamp());
         let complete: i64 = item.complete as i64;
         let has_due_time: i64 = item.has_due_time as i64;
+        let has_scheduled_time: i64 = item.has_scheduled_time as i64;
+        let has_end_time: i64 = item.has_end_time as i64;
         let has_tasks: i64 = item.has_tasks as i64;
-        let is_template: i64 = item.is_template as i64;
+        let item_type: &str = item.item_type.as_str();
         sqlx::query(
-            "INSERT INTO items (id, user_id, team_id, parent_item_id, name, due_date, scheduled_date, complete, recurrence, recurrence_basis, has_due_time, has_tasks, is_template, due_offset_days, assigned_to_user_id)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO items (id, user_id, team_id, parent_item_id, name, due_date, scheduled_date, scheduled_end_date, complete, recurrence, recurrence_basis, has_due_time, has_scheduled_time, has_end_time, has_tasks, item_type, event_type, due_offset_days, assigned_to_user_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(&item.user_id)
@@ -111,12 +115,16 @@ impl ItemRepo for SqliteItemRepo {
         .bind(&item.name)
         .bind(due_date)
         .bind(scheduled_date)
+        .bind(scheduled_end_date)
         .bind(complete)
         .bind(&item.recurrence)
         .bind(&item.recurrence_basis)
         .bind(has_due_time)
+        .bind(has_scheduled_time)
+        .bind(has_end_time)
         .bind(has_tasks)
-        .bind(is_template)
+        .bind(item_type)
+        .bind(&item.event_type)
         .bind(item.due_offset_days)
         .bind(&item.assigned_to_user_id)
         .execute(&self.0)
@@ -128,25 +136,32 @@ impl ItemRepo for SqliteItemRepo {
     async fn update(&self, item: &Item) -> Result<(), RepoError> {
         let due_date: Option<i64> = item.due_date.map(|dt| dt.timestamp());
         let scheduled_date: Option<i64> = item.scheduled_date.map(|dt| dt.timestamp());
+        let scheduled_end_date: Option<i64> = item.scheduled_end_date.map(|dt| dt.timestamp());
         let complete: i64 = item.complete as i64;
         let has_due_time: i64 = item.has_due_time as i64;
+        let has_scheduled_time: i64 = item.has_scheduled_time as i64;
+        let has_end_time: i64 = item.has_end_time as i64;
         let has_tasks: i64 = item.has_tasks as i64;
-        let is_template: i64 = item.is_template as i64;
+        let item_type: &str = item.item_type.as_str();
         let rows = sqlx::query(
-            "UPDATE items SET name = ?, due_date = ?, scheduled_date = ?, complete = ?, recurrence = ?, recurrence_basis = ?, \
-             has_due_time = ?, has_tasks = ?, parent_item_id = ?, is_template = ?, due_offset_days = ?, assigned_to_user_id = ? \
+            "UPDATE items SET name = ?, due_date = ?, scheduled_date = ?, scheduled_end_date = ?, complete = ?, recurrence = ?, recurrence_basis = ?, \
+             has_due_time = ?, has_scheduled_time = ?, has_end_time = ?, has_tasks = ?, parent_item_id = ?, item_type = ?, event_type = ?, due_offset_days = ?, assigned_to_user_id = ? \
              WHERE id = ? AND user_id = ?",
         )
         .bind(&item.name)
         .bind(due_date)
         .bind(scheduled_date)
+        .bind(scheduled_end_date)
         .bind(complete)
         .bind(&item.recurrence)
         .bind(&item.recurrence_basis)
         .bind(has_due_time)
+        .bind(has_scheduled_time)
+        .bind(has_end_time)
         .bind(has_tasks)
         .bind(&item.parent_item_id)
-        .bind(is_template)
+        .bind(item_type)
+        .bind(&item.event_type)
         .bind(item.due_offset_days)
         .bind(&item.assigned_to_user_id)
         .bind(&item.id)
@@ -161,25 +176,32 @@ impl ItemRepo for SqliteItemRepo {
     async fn update_team_item(&self, item: &Item) -> Result<(), RepoError> {
         let due_date: Option<i64> = item.due_date.map(|dt| dt.timestamp());
         let scheduled_date: Option<i64> = item.scheduled_date.map(|dt| dt.timestamp());
+        let scheduled_end_date: Option<i64> = item.scheduled_end_date.map(|dt| dt.timestamp());
         let complete: i64 = item.complete as i64;
         let has_due_time: i64 = item.has_due_time as i64;
+        let has_scheduled_time: i64 = item.has_scheduled_time as i64;
+        let has_end_time: i64 = item.has_end_time as i64;
         let has_tasks: i64 = item.has_tasks as i64;
-        let is_template: i64 = item.is_template as i64;
+        let item_type: &str = item.item_type.as_str();
         let rows = sqlx::query(
-            "UPDATE items SET name = ?, due_date = ?, scheduled_date = ?, complete = ?, recurrence = ?, recurrence_basis = ?, \
-             has_due_time = ?, has_tasks = ?, parent_item_id = ?, is_template = ?, due_offset_days = ?, assigned_to_user_id = ? \
+            "UPDATE items SET name = ?, due_date = ?, scheduled_date = ?, scheduled_end_date = ?, complete = ?, recurrence = ?, recurrence_basis = ?, \
+             has_due_time = ?, has_scheduled_time = ?, has_end_time = ?, has_tasks = ?, parent_item_id = ?, item_type = ?, event_type = ?, due_offset_days = ?, assigned_to_user_id = ? \
              WHERE id = ? AND team_id = ?",
         )
         .bind(&item.name)
         .bind(due_date)
         .bind(scheduled_date)
+        .bind(scheduled_end_date)
         .bind(complete)
         .bind(&item.recurrence)
         .bind(&item.recurrence_basis)
         .bind(has_due_time)
+        .bind(has_scheduled_time)
+        .bind(has_end_time)
         .bind(has_tasks)
         .bind(&item.parent_item_id)
-        .bind(is_template)
+        .bind(item_type)
+        .bind(&item.event_type)
         .bind(item.due_offset_days)
         .bind(&item.assigned_to_user_id)
         .bind(&item.id)
@@ -208,9 +230,9 @@ impl ItemRepo for SqliteItemRepo {
         due_date_before: Option<i64>,
     ) -> Result<Vec<DueItem>, RepoError> {
         sqlx::query(
-            "SELECT items.id, items.user_id, items.team_id, items.parent_item_id, items.name, items.due_date, items.scheduled_date,
-                    items.complete, items.recurrence, items.recurrence_basis, items.has_due_time, items.has_tasks,
-                    items.is_template, items.due_offset_days, items.assigned_to_user_id,
+            "SELECT items.id, items.user_id, items.team_id, items.parent_item_id, items.name, items.due_date, items.scheduled_date, items.scheduled_end_date,
+                    items.complete, items.recurrence, items.recurrence_basis, items.has_due_time, items.has_scheduled_time, items.has_end_time, items.has_tasks,
+                    items.item_type, items.event_type, items.due_offset_days, items.assigned_to_user_id,
                     COALESCE(parent.name, '') AS parent_name,
                     EXISTS(SELECT 1 FROM items c WHERE c.parent_item_id = items.id) AS has_children
              FROM items
@@ -241,7 +263,7 @@ impl ItemRepo for SqliteItemRepo {
 
     async fn list_templates(&self, user_id: &str) -> Result<Vec<Item>, RepoError> {
         let q = format!(
-            "{ITEM_SELECT} FROM items WHERE user_id = ? AND is_template = 1 AND parent_item_id IS NULL \
+            "{ITEM_SELECT} FROM items WHERE user_id = ? AND item_type = 'TEMPLATE' AND parent_item_id IS NULL \
              ORDER BY name ASC"
         );
         sqlx::query(&q)

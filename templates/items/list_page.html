@@ -28,6 +28,8 @@
       </select>
     </label>
     {% call macros::recurrence_fields(true, blank_recurrence, blank_recurrence_basis, blank_due_offset_days_input) %}{% endcall %}
+    {% call macros::scheduled_fields(blank_scheduled_date_input, blank_scheduled_time_input, blank_scheduled_end_date_input, blank_scheduled_end_time_input) %}{% endcall %}
+    {% call macros::event_fields(false, blank_event_type_input) %}{% endcall %}
     <button type="submit" class="cursor-pointer rounded-md bg-slate-900 text-white text-sm px-3 py-1.5">Add item</button>
   </form>
 

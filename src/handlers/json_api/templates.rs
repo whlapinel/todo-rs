@@ -1,4 +1,4 @@
-use super::{internal, not_found};
+use super::{internal, not_found, to_sdk_item_type};
 use crate::service::items::ItemError;
 use crate::service::templates::{self as template_service, CreateTemplateParams};
 use crate::storage::sqlite::ItemRepo;
@@ -15,6 +15,7 @@ pub async fn create_template(
             user_id: input.user_id,
             name: input.name,
             source_item_id: input.source_item_id,
+            event_type: input.event_type,
         },
     )
     .await
@@ -42,14 +43,18 @@ pub async fn list_templates(
             name: Some(i.name),
             due_date: None,
             scheduled_date: None,
+            scheduled_end_date: None,
             complete: Some(i.complete),
             recurrence: i.recurrence,
             recurrence_basis: i.recurrence_basis,
             has_due_time: Some(i.has_due_time),
+            has_scheduled_time: Some(i.has_scheduled_time),
+            has_end_time: Some(i.has_end_time),
             has_tasks: Some(i.has_tasks),
             parent_item_id: i.parent_item_id,
             has_children: Some(i.has_children),
-            is_template: Some(true),
+            item_type: Some(to_sdk_item_type(i.item_type)),
+            event_type: i.event_type,
             due_offset_days: i.due_offset_days,
             assigned_to_user_id: None,
         })

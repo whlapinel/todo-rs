@@ -119,6 +119,7 @@ fn row_to_user(row: &sqlx::sqlite::SqliteRow) -> User {
 fn row_to_item(row: &sqlx::sqlite::SqliteRow) -> Item {
     let due_date_secs: Option<i64> = row.get("due_date");
     let scheduled_secs: Option<i64> = row.get("scheduled_date");
+    let scheduled_end_secs: Option<i64> = row.get("scheduled_end_date");
     let complete: Option<i64> = row.get("complete");
     Item {
         id: row.get("id"),
@@ -132,13 +133,22 @@ fn row_to_item(row: &sqlx::sqlite::SqliteRow) -> Item {
         scheduled_date: scheduled_secs
             .and_then(|s| chrono::DateTime::from_timestamp(s, 0))
             .map(|dt| dt.with_timezone(&chrono::Utc)),
+        scheduled_end_date: scheduled_end_secs
+            .and_then(|s| chrono::DateTime::from_timestamp(s, 0))
+            .map(|dt| dt.with_timezone(&chrono::Utc)),
         complete: complete.unwrap_or(0) != 0,
         recurrence: row.get("recurrence"),
         recurrence_basis: row.get("recurrence_basis"),
         has_due_time: row.get::<Option<i64>, _>("has_due_time").unwrap_or(0) != 0,
+        has_scheduled_time: row.get::<Option<i64>, _>("has_scheduled_time").unwrap_or(0) != 0,
+        has_end_time: row.get::<Option<i64>, _>("has_end_time").unwrap_or(0) != 0,
         has_tasks: row.get::<Option<i64>, _>("has_tasks").unwrap_or(1) != 0,
         has_children: row.get::<Option<i64>, _>("has_children").unwrap_or(0) != 0,
-        is_template: row.get::<Option<i64>, _>("is_template").unwrap_or(0) != 0,
+        item_type: row
+            .get::<Option<String>, _>("item_type")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or_default(),
+        event_type: row.get("event_type"),
         due_offset_days: row.get("due_offset_days"),
         assigned_to_user_id: row.get("assigned_to_user_id"),
     }
@@ -167,12 +177,16 @@ pub async fn create_pool(url: &str) -> Result<SqlitePool, sqlx::Error> {
             name TEXT NOT NULL,
             due_date INTEGER,
             scheduled_date INTEGER,
+            scheduled_end_date INTEGER,
             complete INTEGER DEFAULT 0,
             recurrence TEXT,
             recurrence_basis TEXT,
             has_due_time INTEGER NOT NULL DEFAULT 0,
+            has_scheduled_time INTEGER NOT NULL DEFAULT 0,
+            has_end_time INTEGER NOT NULL DEFAULT 0,
             has_tasks INTEGER NOT NULL DEFAULT 1,
-            is_template INTEGER NOT NULL DEFAULT 0,
+            item_type TEXT NOT NULL DEFAULT 'TASK',
+            event_type TEXT,
             due_offset_days INTEGER,
             assigned_to_user_id TEXT
         )",
@@ -188,6 +202,35 @@ pub async fn create_pool(url: &str) -> Result<SqlitePool, sqlx::Error> {
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_items_assigned_to ON items (assigned_to_user_id)")
         .execute(&pool)
         .await?;
+    // Migration for pre-existing DBs: item_type/event_type replace the old
+    // is_template bool (folded into item_type as a third variant instead of
+    // staying a separate flag). Each step is error-ignored so it stays
+    // idempotent across restarts, including once is_template is gone.
+    let _ = sqlx::query("ALTER TABLE items ADD COLUMN item_type TEXT NOT NULL DEFAULT 'TASK'")
+        .execute(&pool)
+        .await;
+    let _ = sqlx::query("ALTER TABLE items ADD COLUMN event_type TEXT")
+        .execute(&pool)
+        .await;
+    let _ = sqlx::query("UPDATE items SET item_type = 'TEMPLATE' WHERE is_template = 1")
+        .execute(&pool)
+        .await;
+    let _ = sqlx::query("ALTER TABLE items DROP COLUMN is_template")
+        .execute(&pool)
+        .await;
+    // Additive migration: scheduled_date's counterpart end date, plus the has-a-real-time
+    // flags for both (mirroring has_due_time) — see CLAUDE.md's Events section.
+    let _ = sqlx::query("ALTER TABLE items ADD COLUMN scheduled_end_date INTEGER")
+        .execute(&pool)
+        .await;
+    let _ = sqlx::query(
+        "ALTER TABLE items ADD COLUMN has_scheduled_time INTEGER NOT NULL DEFAULT 0",
+    )
+    .execute(&pool)
+    .await;
+    let _ = sqlx::query("ALTER TABLE items ADD COLUMN has_end_time INTEGER NOT NULL DEFAULT 0")
+        .execute(&pool)
+        .await;
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS teams (
             id TEXT PRIMARY KEY,

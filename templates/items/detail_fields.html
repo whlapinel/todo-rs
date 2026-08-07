@@ -12,6 +12,7 @@
         <input type="time" name="dueTime" value="{{ due_time_input }}" class="mt-1 block rounded-md border-slate-300 text-sm" />
       </label>
     </div>
+    {% call macros::scheduled_fields(scheduled_date_input, scheduled_time_input, scheduled_end_date_input, scheduled_end_time_input) %}{% endcall %}
     <label class="block text-sm text-slate-700">Type
       <select name="hasTasks" class="mt-1 block rounded-md border-slate-300 text-sm">
         {% if has_tasks %}
@@ -35,6 +36,7 @@
       </select>
     </label>
     {% call macros::recurrence_fields(is_top_level, recurrence, recurrence_basis, due_offset_days_input) %}{% endcall %}
+    {% call macros::event_fields(is_event, event_type_input) %}{% endcall %}
     <div class="flex items-center gap-x-3">
       <button type="submit" class="cursor-pointer rounded-md bg-slate-900 text-white text-sm px-3 py-1.5">Save</button>
       {% if just_saved %}

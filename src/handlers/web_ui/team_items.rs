@@ -1,5 +1,5 @@
 use crate::auth::AuthUser;
-use crate::domain::item::Item;
+use crate::domain::item::{Item, ItemType};
 use crate::handlers::web_ui::{TzOffset, to_local};
 use crate::service::error::ItemError;
 use crate::service::team_items::{
@@ -29,12 +29,18 @@ pub struct TeamItemForm {
     name: Option<String>,
     due_date: Option<String>,
     due_time: Option<String>,
+    scheduled_date: Option<String>,
+    scheduled_time: Option<String>,
+    scheduled_end_date: Option<String>,
+    scheduled_end_time: Option<String>,
     complete: Option<String>,
     recurrence: Option<String>,
     recurrence_basis: Option<String>,
     due_offset_days: Option<String>,
     has_tasks: Option<String>,
     parent_item_id: Option<String>,
+    item_type: Option<String>,
+    event_type: Option<String>,
     assigned_to_user_id: Option<String>,
     show_complete: Option<String>,
 }
@@ -92,19 +98,32 @@ fn overlay_has_due_time(form_time: &Option<String>, current: bool) -> bool {
     }
 }
 
+fn parse_item_type(form_value: &Option<String>) -> Option<ItemType> {
+    non_empty(form_value).and_then(|s| s.parse().ok())
+}
+
 fn combine_local_to_utc(
     date: &str,
     time: Option<&str>,
     tz_offset_minutes: i32,
+    default_time: chrono::NaiveTime,
 ) -> Option<DateTime<Utc>> {
     let naive_date = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").ok()?;
     let naive_time = time
         .filter(|t| !t.trim().is_empty())
         .and_then(|t| chrono::NaiveTime::parse_from_str(t.trim(), "%H:%M").ok())
-        .unwrap_or_else(|| chrono::NaiveTime::from_hms_opt(23, 59, 59).unwrap());
+        .unwrap_or(default_time);
     let naive = naive_date.and_time(naive_time);
     let as_utc = DateTime::<Utc>::from_naive_utc_and_offset(naive, Utc);
     Some(as_utc + chrono::Duration::minutes(tz_offset_minutes as i64))
+}
+
+fn end_of_day() -> chrono::NaiveTime {
+    chrono::NaiveTime::from_hms_opt(23, 59, 59).unwrap()
+}
+
+fn start_of_day() -> chrono::NaiveTime {
+    chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap()
 }
 
 fn overlay_due_date(
@@ -116,7 +135,33 @@ fn overlay_due_date(
     match form_date {
         None => current,
         Some(s) if s.trim().is_empty() => None,
-        Some(s) => combine_local_to_utc(s.trim(), form_time.as_deref(), tz_offset_minutes),
+        Some(s) => combine_local_to_utc(s.trim(), form_time.as_deref(), tz_offset_minutes, end_of_day()),
+    }
+}
+
+fn overlay_scheduled_date(
+    form_date: &Option<String>,
+    form_time: &Option<String>,
+    tz_offset_minutes: i32,
+    current: Option<DateTime<Utc>>,
+) -> Option<DateTime<Utc>> {
+    match form_date {
+        None => current,
+        Some(s) if s.trim().is_empty() => None,
+        Some(s) => combine_local_to_utc(s.trim(), form_time.as_deref(), tz_offset_minutes, start_of_day()),
+    }
+}
+
+fn overlay_scheduled_end_date(
+    form_date: &Option<String>,
+    form_time: &Option<String>,
+    tz_offset_minutes: i32,
+    current: Option<DateTime<Utc>>,
+) -> Option<DateTime<Utc>> {
+    match form_date {
+        None => current,
+        Some(s) if s.trim().is_empty() => None,
+        Some(s) => combine_local_to_utc(s.trim(), form_time.as_deref(), tz_offset_minutes, end_of_day()),
     }
 }
 
@@ -129,16 +174,27 @@ fn create_params_from_form(
         team_id: team_id.to_string(),
         name: form.name.clone().unwrap_or_default(),
         due_date: overlay_due_date(&form.due_date, &form.due_time, tz, None),
+        scheduled_date: overlay_scheduled_date(&form.scheduled_date, &form.scheduled_time, tz, None),
+        scheduled_end_date: overlay_scheduled_end_date(
+            &form.scheduled_end_date,
+            &form.scheduled_end_time,
+            tz,
+            None,
+        ),
         complete: form.complete.as_deref().map(|s| s == "true"),
         recurrence: non_empty(&form.recurrence),
         recurrence_basis: non_empty(&form.recurrence_basis),
         has_due_time: form.due_time.as_deref().map(|t| !t.trim().is_empty()),
+        has_scheduled_time: form.scheduled_time.as_deref().map(|t| !t.trim().is_empty()),
+        has_end_time: form.scheduled_end_time.as_deref().map(|t| !t.trim().is_empty()),
         has_tasks: match form.has_tasks.as_deref() {
             Some("simple") => Some(false),
             Some("tasks") => Some(true),
             _ => None,
         },
         parent_item_id: non_empty(&form.parent_item_id),
+        item_type: parse_item_type(&form.item_type),
+        event_type: non_empty(&form.event_type),
         due_offset_days: form
             .due_offset_days
             .as_deref()
@@ -162,12 +218,28 @@ fn update_params_from_form(
         item_id: item_id.to_string(),
         name: overlay_required_str(&form.name, &current.name),
         due_date: overlay_due_date(&form.due_date, &form.due_time, tz, current.due_date),
+        scheduled_date: overlay_scheduled_date(
+            &form.scheduled_date,
+            &form.scheduled_time,
+            tz,
+            current.scheduled_date,
+        ),
+        scheduled_end_date: overlay_scheduled_end_date(
+            &form.scheduled_end_date,
+            &form.scheduled_end_time,
+            tz,
+            current.scheduled_end_date,
+        ),
         complete: overlay_bool(&form.complete, current.complete),
         recurrence: overlay_str(&form.recurrence, current.recurrence.clone()),
         recurrence_basis: overlay_str(&form.recurrence_basis, current.recurrence_basis.clone()),
         has_due_time: Some(overlay_has_due_time(&form.due_time, current.has_due_time)),
+        has_scheduled_time: Some(overlay_has_due_time(&form.scheduled_time, current.has_scheduled_time)),
+        has_end_time: Some(overlay_has_due_time(&form.scheduled_end_time, current.has_end_time)),
         has_tasks: Some(overlay_has_tasks(&form.has_tasks, current.has_tasks)),
         parent_item_id: current.parent_item_id.clone(),
+        item_type: parse_item_type(&form.item_type),
+        event_type: overlay_str(&form.event_type, current.event_type.clone()),
         due_offset_days: overlay_i32(&form.due_offset_days, current.due_offset_days),
         assigned_to_user_id: overlay_str(
             &form.assigned_to_user_id,
@@ -203,6 +275,7 @@ struct TeamItemRow {
     name: String,
     complete: bool,
     due_date: Option<String>,
+    scheduled_date: Option<String>,
     has_children: bool,
     offset_label: Option<String>,
     recurrence: Option<String>,
@@ -229,6 +302,14 @@ impl TeamItemRow {
             due_date: item
                 .due_date
                 .map(|d| to_local(d, tz).format("%Y-%m-%d %H:%M").to_string()),
+            scheduled_date: item.scheduled_date.map(|d| {
+                let local = to_local(d, tz);
+                if item.has_scheduled_time {
+                    local.format("%Y-%m-%d %H:%M").to_string()
+                } else {
+                    local.format("%Y-%m-%d").to_string()
+                }
+            }),
             has_children: item.has_children,
             offset_label,
             recurrence: item.recurrence.clone(),
@@ -256,9 +337,15 @@ struct DetailFields {
     is_top_level: bool,
     due_date_input: String,
     due_time_input: String,
+    scheduled_date_input: String,
+    scheduled_time_input: String,
+    scheduled_end_date_input: String,
+    scheduled_end_time_input: String,
     recurrence: Option<String>,
     recurrence_basis: Option<String>,
     due_offset_days_input: String,
+    is_event: bool,
+    event_type_input: String,
     assignee_options: Vec<(String, String)>,
     assigned_to_user_id: Option<String>,
     just_saved: bool,
@@ -281,6 +368,24 @@ impl DetailFields {
         } else {
             String::new()
         };
+        let local_scheduled_date = item.scheduled_date.map(|d| to_local(d, tz));
+        let scheduled_date_input = local_scheduled_date
+            .map(|d| d.format("%Y-%m-%d").to_string())
+            .unwrap_or_default();
+        let scheduled_time_input = if item.has_scheduled_time {
+            local_scheduled_date.map(|d| d.format("%H:%M").to_string()).unwrap_or_default()
+        } else {
+            String::new()
+        };
+        let local_scheduled_end_date = item.scheduled_end_date.map(|d| to_local(d, tz));
+        let scheduled_end_date_input = local_scheduled_end_date
+            .map(|d| d.format("%Y-%m-%d").to_string())
+            .unwrap_or_default();
+        let scheduled_end_time_input = if item.has_end_time {
+            local_scheduled_end_date.map(|d| d.format("%H:%M").to_string()).unwrap_or_default()
+        } else {
+            String::new()
+        };
         Self {
             id: item.id.clone(),
             team_id: team_id.to_string(),
@@ -290,9 +395,15 @@ impl DetailFields {
             is_top_level: item.parent_item_id.is_none(),
             due_date_input,
             due_time_input,
+            scheduled_date_input,
+            scheduled_time_input,
+            scheduled_end_date_input,
+            scheduled_end_time_input,
             recurrence: item.recurrence.clone(),
             recurrence_basis: item.recurrence_basis.clone(),
             due_offset_days_input: format_offset_input(item.due_offset_days),
+            is_event: item.item_type == ItemType::Event,
+            event_type_input: item.event_type.clone().unwrap_or_default(),
             assignee_options,
             assigned_to_user_id: item.assigned_to_user_id.clone(),
             just_saved,
@@ -317,6 +428,11 @@ struct TeamItemsListPageTemplate {
     blank_recurrence: Option<String>,
     blank_recurrence_basis: Option<String>,
     blank_due_offset_days_input: String,
+    blank_event_type_input: String,
+    blank_scheduled_date_input: String,
+    blank_scheduled_time_input: String,
+    blank_scheduled_end_date_input: String,
+    blank_scheduled_end_time_input: String,
 }
 
 #[derive(Template)]
@@ -418,6 +534,11 @@ pub async fn team_items_page(
         blank_recurrence: None,
         blank_recurrence_basis: None,
         blank_due_offset_days_input: String::new(),
+        blank_event_type_input: String::new(),
+        blank_scheduled_date_input: String::new(),
+        blank_scheduled_time_input: String::new(),
+        blank_scheduled_end_date_input: String::new(),
+        blank_scheduled_end_time_input: String::new(),
     })
 }
 

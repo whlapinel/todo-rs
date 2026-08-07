@@ -1,4 +1,4 @@
-use crate::domain::item::Item;
+use crate::domain::item::{Item, ItemType};
 use crate::domain::recurrence;
 use crate::storage::sqlite::{ItemRepo, RepoError};
 use chrono::{DateTime, Utc};
@@ -17,12 +17,18 @@ pub struct CreateItemParams {
     pub user_id: String,
     pub name: String,
     pub due_date: Option<DateTime<Utc>>,
+    pub scheduled_date: Option<DateTime<Utc>>,
+    pub scheduled_end_date: Option<DateTime<Utc>>,
     pub complete: Option<bool>,
     pub recurrence: Option<String>,
     pub recurrence_basis: Option<String>,
     pub has_due_time: Option<bool>,
+    pub has_scheduled_time: Option<bool>,
+    pub has_end_time: Option<bool>,
     pub has_tasks: Option<bool>,
     pub parent_item_id: Option<String>,
+    pub item_type: Option<ItemType>,
+    pub event_type: Option<String>,
     pub due_offset_days: Option<i32>,
     pub timezone_offset_minutes: Option<i32>,
 }
@@ -42,22 +48,41 @@ pub async fn create_item(
                 .to_string(),
         ));
     }
+    if params.item_type == Some(ItemType::Template) {
+        return Err(ItemError::Invalid(
+            "item_type Template can only be set via the checklist-template creation flow"
+                .to_string(),
+        ));
+    }
+    if let (Some(start), Some(end)) = (params.scheduled_date, params.scheduled_end_date)
+        && end < start
+    {
+        return Err(ItemError::Invalid(
+            "scheduledEndDate cannot be before scheduledDate".to_string(),
+        ));
+    }
     let mut item = Item::new_user_item(&params.user_id, &params.name);
     item.due_date = params.due_date;
+    item.scheduled_date = params.scheduled_date;
+    item.scheduled_end_date = params.scheduled_end_date;
     item.complete = params.complete.unwrap_or(false);
     item.recurrence = params.recurrence;
     item.recurrence_basis = params.recurrence_basis;
     item.has_due_time = params.has_due_time.unwrap_or(false);
+    item.has_scheduled_time = params.has_scheduled_time.unwrap_or(false);
+    item.has_end_time = params.has_end_time.unwrap_or(false);
     item.has_tasks = params.has_tasks.unwrap_or(true);
     item.parent_item_id = params.parent_item_id.clone();
+    item.item_type = params.item_type.unwrap_or_default();
+    item.event_type = params.event_type.clone();
     item.due_offset_days = params.due_offset_days;
 
     // Child items of a template automatically become template items.
     if let Some(ref parent_id) = params.parent_item_id
         && let Ok(parent) = repo.get(&params.user_id, parent_id).await
-        && parent.is_template
+        && parent.item_type == ItemType::Template
     {
-        item.is_template = true;
+        item.item_type = ItemType::Template;
     }
     if item.due_date.is_none()
         && let Some(ref pattern) = item.recurrence
@@ -73,6 +98,21 @@ pub async fn create_item(
         item.due_date = Some(deadline);
     }
     let item_id = repo.create(&item).await?;
+
+    // An event-typed item can auto-instantiate matching checklist templates'
+    // children onto itself — same mechanism the checklist "Use" flow already
+    // uses, just triggered by event_type matching instead of a manual click.
+    if let Some(ref event_type) = item.event_type {
+        let tz_offset = params.timezone_offset_minutes.unwrap_or(0);
+        let root_date = item.due_date.or(item.scheduled_date);
+        let templates = repo.list_templates(&params.user_id).await?;
+        for tpl in templates
+            .iter()
+            .filter(|t| t.event_type.as_deref() == Some(event_type.as_str()))
+        {
+            copy_template_children(repo, &tpl.id, &item_id, root_date, tz_offset).await?;
+        }
+    }
     Ok(item_id)
 }
 
@@ -82,12 +122,18 @@ pub struct UpdateItemParams {
     pub item_id: String,
     pub name: String,
     pub due_date: Option<DateTime<Utc>>,
+    pub scheduled_date: Option<DateTime<Utc>>,
+    pub scheduled_end_date: Option<DateTime<Utc>>,
     pub complete: bool,
     pub recurrence: Option<String>,
     pub recurrence_basis: Option<String>,
     pub has_due_time: Option<bool>,
+    pub has_scheduled_time: Option<bool>,
+    pub has_end_time: Option<bool>,
     pub has_tasks: Option<bool>,
     pub parent_item_id: Option<String>,
+    pub item_type: Option<ItemType>,
+    pub event_type: Option<String>,
     pub due_offset_days: Option<i32>,
     pub timezone_offset_minutes: Option<i32>,
 }
@@ -108,6 +154,19 @@ pub async fn update_item(
                 .to_string(),
         ));
     }
+    if params.item_type == Some(ItemType::Template) {
+        return Err(ItemError::Invalid(
+            "item_type Template can only be set via the checklist-template creation flow"
+                .to_string(),
+        ));
+    }
+    if let (Some(start), Some(end)) = (params.scheduled_date, params.scheduled_end_date)
+        && end < start
+    {
+        return Err(ItemError::Invalid(
+            "scheduledEndDate cannot be before scheduledDate".to_string(),
+        ));
+    }
 
     let current = repo.get(&params.user_id, &params.item_id).await?;
 
@@ -115,11 +174,17 @@ pub async fn update_item(
     item.id = params.item_id.clone();
     item.complete = params.complete;
     item.due_date = params.due_date;
+    item.scheduled_date = params.scheduled_date;
+    item.scheduled_end_date = params.scheduled_end_date;
     item.recurrence = params.recurrence.clone();
     item.recurrence_basis = params.recurrence_basis.clone();
     item.has_due_time = params.has_due_time.unwrap_or(false);
+    item.has_scheduled_time = params.has_scheduled_time.unwrap_or(false);
+    item.has_end_time = params.has_end_time.unwrap_or(false);
     item.has_tasks = params.has_tasks.unwrap_or(true);
     item.parent_item_id = params.parent_item_id.clone();
+    item.item_type = params.item_type.unwrap_or(current.item_type);
+    item.event_type = params.event_type.clone();
     item.due_offset_days = params.due_offset_days;
     item.assigned_to_user_id = current.assigned_to_user_id.clone();
 
@@ -231,7 +296,7 @@ pub(crate) fn copy_template_children<'a>(
             new_child.id = String::new();
             new_child.parent_item_id = Some(new_parent_id.to_string());
             new_child.complete = false;
-            new_child.is_template = false;
+            new_child.item_type = ItemType::Task;
             new_child.due_date =
                 root_due_date.and_then(|root| child.deadline_from_offset(root, tz_offset_minutes));
             new_child.has_due_time = false;
@@ -247,4 +312,181 @@ pub(crate) fn copy_template_children<'a>(
         }
         Ok(())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::sqlite::MockItemRepo;
+
+    fn template_item(id: &str, user_id: &str, event_type: &str) -> Item {
+        Item {
+            id: id.to_string(),
+            user_id: Some(user_id.to_string()),
+            item_type: ItemType::Template,
+            event_type: Some(event_type.to_string()),
+            ..Item::default()
+        }
+    }
+
+    fn template_child(id: &str, parent_id: &str, offset_days: i32) -> Item {
+        Item {
+            id: id.to_string(),
+            parent_item_id: Some(parent_id.to_string()),
+            item_type: ItemType::Template,
+            due_offset_days: Some(offset_days),
+            ..Item::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn create_item_with_matching_event_type_copies_template_children() {
+        let mut mock = MockItemRepo::new();
+
+        mock.expect_create()
+            .withf(|item: &Item| item.parent_item_id.is_none())
+            .times(1)
+            .returning(|_| Ok("new-event-id".to_string()));
+
+        mock.expect_list_templates()
+            .withf(|user_id: &str| user_id == "u1")
+            .times(1)
+            .returning(|_| Ok(vec![template_item("tpl1", "u1", "rain")]));
+
+        mock.expect_list_children()
+            .withf(|parent_id: &str| parent_id == "tpl1")
+            .times(1)
+            .returning(|_| Ok(vec![template_child("child1", "tpl1", 1)]));
+
+        mock.expect_create()
+            .withf(|item: &Item| item.parent_item_id.as_deref() == Some("new-event-id"))
+            .times(1)
+            .returning(|_| Ok("new-child-id".to_string()));
+
+        mock.expect_list_children()
+            .withf(|parent_id: &str| parent_id == "child1")
+            .times(1)
+            .returning(|_| Ok(vec![]));
+
+        let repo: Arc<dyn ItemRepo> = Arc::new(mock);
+
+        let item_id = create_item(
+            &repo,
+            CreateItemParams {
+                user_id: "u1".to_string(),
+                name: "It rained".to_string(),
+                item_type: Some(ItemType::Event),
+                event_type: Some("rain".to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("should create item");
+
+        assert_eq!(item_id, "new-event-id");
+    }
+
+    #[tokio::test]
+    async fn create_item_with_no_matching_template_creates_nothing_else() {
+        let mut mock = MockItemRepo::new();
+
+        mock.expect_create()
+            .times(1)
+            .returning(|_| Ok("new-event-id".to_string()));
+
+        mock.expect_list_templates()
+            .times(1)
+            .returning(|_| Ok(vec![template_item("tpl1", "u1", "snow")]));
+
+        // No expectations set on create (beyond the one above) or list_children — mockall
+        // panics on an unexpected call, so this also proves the mismatch short-circuits the
+        // trigger before touching either.
+        let repo: Arc<dyn ItemRepo> = Arc::new(mock);
+
+        create_item(
+            &repo,
+            CreateItemParams {
+                user_id: "u1".to_string(),
+                name: "It rained".to_string(),
+                item_type: Some(ItemType::Event),
+                event_type: Some("rain".to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("should create item");
+    }
+
+    #[tokio::test]
+    async fn create_item_rejects_template_item_type() {
+        let mock = MockItemRepo::new();
+        let repo: Arc<dyn ItemRepo> = Arc::new(mock);
+
+        let err = create_item(
+            &repo,
+            CreateItemParams {
+                user_id: "u1".to_string(),
+                name: "Sneaky template".to_string(),
+                item_type: Some(ItemType::Template),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect_err("should reject Template item_type");
+
+        assert!(matches!(err, ItemError::Invalid(_)));
+    }
+
+    #[tokio::test]
+    async fn create_item_rejects_scheduled_end_before_start() {
+        let mock = MockItemRepo::new();
+        let repo: Arc<dyn ItemRepo> = Arc::new(mock);
+
+        let start = chrono::DateTime::parse_from_rfc3339("2026-01-10T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let end = start - chrono::Duration::days(1);
+
+        let err = create_item(
+            &repo,
+            CreateItemParams {
+                user_id: "u1".to_string(),
+                name: "Backwards window".to_string(),
+                scheduled_date: Some(start),
+                scheduled_end_date: Some(end),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect_err("should reject end before start");
+
+        assert!(matches!(err, ItemError::Invalid(_)));
+    }
+
+    #[tokio::test]
+    async fn update_item_rejects_scheduled_end_before_start() {
+        let mock = MockItemRepo::new();
+        let repo: Arc<dyn ItemRepo> = Arc::new(mock);
+
+        let start = chrono::DateTime::parse_from_rfc3339("2026-01-10T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let end = start - chrono::Duration::days(1);
+
+        let err = update_item(
+            &repo,
+            UpdateItemParams {
+                user_id: "u1".to_string(),
+                item_id: "item1".to_string(),
+                name: "Backwards window".to_string(),
+                scheduled_date: Some(start),
+                scheduled_end_date: Some(end),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect_err("should reject end before start");
+
+        assert!(matches!(err, ItemError::Invalid(_)));
+    }
 }

@@ -1,5 +1,48 @@
 use super::recurrence;
 use chrono::{DateTime, Duration, Utc};
+use std::fmt;
+use std::str::FromStr;
+
+/// What kind of thing an `Item` row represents. Replaces what used to be an
+/// `is_template: bool` alongside a task/event distinction as two independent
+/// flags — those were both answering "what kind of row is this," so they're
+/// one field now instead of two that can drift out of sync.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ItemType {
+    #[default]
+    Task,
+    Event,
+    Template,
+}
+
+impl ItemType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ItemType::Task => "TASK",
+            ItemType::Event => "EVENT",
+            ItemType::Template => "TEMPLATE",
+        }
+    }
+}
+
+impl fmt::Display for ItemType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for ItemType {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "TASK" => Ok(ItemType::Task),
+            "EVENT" => Ok(ItemType::Event),
+            "TEMPLATE" => Ok(ItemType::Template),
+            other => Err(format!("unknown item type: {other}")),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Item {
@@ -10,13 +53,17 @@ pub struct Item {
     pub name: String,
     pub due_date: Option<DateTime<Utc>>,
     pub scheduled_date: Option<DateTime<Utc>>,
+    pub scheduled_end_date: Option<DateTime<Utc>>,
     pub complete: bool,
     pub recurrence: Option<String>,
     pub recurrence_basis: Option<String>,
     pub has_due_time: bool,
+    pub has_scheduled_time: bool,
+    pub has_end_time: bool,
     pub has_tasks: bool,
     pub has_children: bool,
-    pub is_template: bool,
+    pub item_type: ItemType,
+    pub event_type: Option<String>,
     pub due_offset_days: Option<i32>,
     pub assigned_to_user_id: Option<String>,
 }

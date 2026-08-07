@@ -1,5 +1,5 @@
 use crate::auth::AuthUser;
-use crate::domain::item::Item;
+use crate::domain::item::{Item, ItemType};
 use crate::domain::recurrence;
 use crate::handlers::web_ui::TzOffset;
 use crate::service::items::{self as item_service, ItemError};
@@ -188,8 +188,10 @@ pub async fn checklists_page(
 }
 
 #[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CreateChecklistForm {
     name: String,
+    event_type: Option<String>,
 }
 
 pub async fn create_checklist_form(
@@ -197,12 +199,19 @@ pub async fn create_checklist_form(
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Form(form): Form<CreateChecklistForm>,
 ) -> Result<Html<String>, ItemError> {
+    let event_type = form
+        .event_type
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
     template_service::create_template(
         &repo,
         CreateTemplateParams {
             user_id: auth_user.user_id.clone(),
             name: form.name,
             source_item_id: None,
+            event_type,
         },
     )
     .await?;
@@ -316,12 +325,18 @@ pub async fn update_checklist_child_form(
         item_id: item_id.clone(),
         name,
         due_date: None,
+        scheduled_date: None,
+        scheduled_end_date: None,
         complete: false,
         recurrence: None,
         recurrence_basis: None,
         has_due_time: Some(false),
+        has_scheduled_time: Some(false),
+        has_end_time: Some(false),
         has_tasks: Some(false),
         parent_item_id: Some(template_id.clone()),
+        item_type: Some(ItemType::Task),
+        event_type: current.event_type.clone(),
         due_offset_days: parse_offset(&form.due_offset_days),
         timezone_offset_minutes: None,
     };

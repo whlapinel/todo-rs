@@ -2,6 +2,12 @@ $version: "2"
 
 namespace common
 
+enum ItemType {
+    TASK
+    EVENT
+    TEMPLATE
+}
+
 resource Item {
     identifiers: {
         itemId: String
@@ -11,14 +17,18 @@ resource Item {
         name: String
         dueDate: Timestamp
         scheduledDate: Timestamp
+        scheduledEndDate: Timestamp
         complete: Boolean
         recurrence: String
         recurrenceBasis: String
         hasDueTime: Boolean
+        hasScheduledTime: Boolean
+        hasEndTime: Boolean
         hasTasks: Boolean
         parentItemId: String
         hasChildren: Boolean
-        isTemplate: Boolean
+        itemType: ItemType
+        eventType: String
         dueOffsetDays: Integer
         assignedToUserId: String
     }
@@ -43,6 +53,8 @@ operation CreateItem {
 
         $scheduledDate
 
+        $scheduledEndDate
+
         $complete
 
         $recurrence
@@ -51,9 +63,17 @@ operation CreateItem {
 
         $hasDueTime
 
+        $hasScheduledTime
+
+        $hasEndTime
+
         $hasTasks
 
         $parentItemId
+
+        $itemType
+
+        $eventType
 
         $dueOffsetDays
 
@@ -92,6 +112,8 @@ operation GetItem {
 
         $scheduledDate
 
+        $scheduledEndDate
+
         @required
         $complete
 
@@ -101,13 +123,19 @@ operation GetItem {
 
         $hasDueTime
 
+        $hasScheduledTime
+
+        $hasEndTime
+
         $hasTasks
 
         $parentItemId
 
         $hasChildren
 
-        $isTemplate
+        $itemType
+
+        $eventType
 
         $dueOffsetDays
 
@@ -138,6 +166,8 @@ operation UpdateItem {
 
         $scheduledDate
 
+        $scheduledEndDate
+
         @required
         $complete
 
@@ -147,9 +177,17 @@ operation UpdateItem {
 
         $hasDueTime
 
+        $hasScheduledTime
+
+        $hasEndTime
+
         $hasTasks
 
         $parentItemId
+
+        $itemType
+
+        $eventType
 
         $dueOffsetDays
 
@@ -193,14 +231,18 @@ structure ItemSummary for Item {
     $name
     $dueDate
     $scheduledDate
+    $scheduledEndDate
     $complete
     $recurrence
     $recurrenceBasis
     $hasDueTime
+    $hasScheduledTime
+    $hasEndTime
     $hasTasks
     $parentItemId
     $hasChildren
-    $isTemplate
+    $itemType
+    $eventType
     $dueOffsetDays
     $assignedToUserId
 }
@@ -244,6 +286,9 @@ operation CreateTemplate {
 
         @notProperty
         sourceItemId: String
+
+        @notProperty
+        eventType: String
     }
 
     output := {

@@ -1,4 +1,4 @@
-use super::{internal, not_found};
+use super::{internal, not_found, to_domain_item_type, to_sdk_item_type};
 use crate::auth::AuthUser;
 use crate::service::items::ItemError;
 use crate::service::team_items::{
@@ -43,6 +43,14 @@ pub async fn create_team_item(
         .due_date
         .and_then(|dt| chrono::DateTime::from_timestamp(dt.secs(), dt.subsec_nanos()))
         .map(|d| d.with_timezone(&chrono::Utc));
+    let scheduled_date = input
+        .scheduled_date
+        .and_then(|dt| chrono::DateTime::from_timestamp(dt.secs(), dt.subsec_nanos()))
+        .map(|d| d.with_timezone(&chrono::Utc));
+    let scheduled_end_date = input
+        .scheduled_end_date
+        .and_then(|dt| chrono::DateTime::from_timestamp(dt.secs(), dt.subsec_nanos()))
+        .map(|d| d.with_timezone(&chrono::Utc));
     let item_id = team_item_service::create_team_item(
         &repo,
         &teams,
@@ -51,12 +59,18 @@ pub async fn create_team_item(
             team_id: input.team_id,
             name: input.name,
             due_date,
+            scheduled_date,
+            scheduled_end_date,
             complete: input.complete,
             recurrence: input.recurrence,
             recurrence_basis: input.recurrence_basis,
             has_due_time: input.has_due_time,
+            has_scheduled_time: input.has_scheduled_time,
+            has_end_time: input.has_end_time,
             has_tasks: input.has_tasks,
             parent_item_id: input.parent_item_id,
+            item_type: to_domain_item_type(input.item_type),
+            event_type: input.event_type,
             due_offset_days: input.due_offset_days,
             assigned_to_user_id: input.assigned_to_user_id,
             timezone_offset_minutes: input.timezone_offset_minutes,
@@ -89,17 +103,25 @@ pub async fn get_team_item(
     let scheduled_date = item
         .scheduled_date
         .map(|dt| SmithyDateTime::from_secs(dt.timestamp()));
+    let scheduled_end_date = item
+        .scheduled_end_date
+        .map(|dt| SmithyDateTime::from_secs(dt.timestamp()));
     Ok(output::GetTeamItemOutput {
         name: item.name,
         due_date,
         scheduled_date,
+        scheduled_end_date,
         complete: item.complete,
         recurrence: item.recurrence,
         recurrence_basis: item.recurrence_basis,
         has_due_time: Some(item.has_due_time),
+        has_scheduled_time: Some(item.has_scheduled_time),
+        has_end_time: Some(item.has_end_time),
         has_tasks: Some(item.has_tasks),
         parent_item_id: item.parent_item_id,
         has_children: Some(item.has_children),
+        item_type: Some(to_sdk_item_type(item.item_type)),
+        event_type: item.event_type,
         due_offset_days: item.due_offset_days,
         assigned_to_user_id: item.assigned_to_user_id,
     })
@@ -115,6 +137,14 @@ pub async fn update_team_item(
         .due_date
         .and_then(|dt| chrono::DateTime::from_timestamp(dt.secs(), dt.subsec_nanos()))
         .map(|d| d.with_timezone(&chrono::Utc));
+    let scheduled_date = input
+        .scheduled_date
+        .and_then(|dt| chrono::DateTime::from_timestamp(dt.secs(), dt.subsec_nanos()))
+        .map(|d| d.with_timezone(&chrono::Utc));
+    let scheduled_end_date = input
+        .scheduled_end_date
+        .and_then(|dt| chrono::DateTime::from_timestamp(dt.secs(), dt.subsec_nanos()))
+        .map(|d| d.with_timezone(&chrono::Utc));
     team_item_service::update_team_item(
         &repo,
         &teams,
@@ -124,12 +154,18 @@ pub async fn update_team_item(
             item_id: input.item_id,
             name: input.name,
             due_date,
+            scheduled_date,
+            scheduled_end_date,
             complete: input.complete,
             recurrence: input.recurrence,
             recurrence_basis: input.recurrence_basis,
             has_due_time: input.has_due_time,
+            has_scheduled_time: input.has_scheduled_time,
+            has_end_time: input.has_end_time,
             has_tasks: input.has_tasks,
             parent_item_id: input.parent_item_id,
+            item_type: to_domain_item_type(input.item_type),
+            event_type: input.event_type,
             due_offset_days: input.due_offset_days,
             assigned_to_user_id: input.assigned_to_user_id,
             timezone_offset_minutes: input.timezone_offset_minutes,
@@ -197,13 +233,20 @@ pub async fn list_team_items(
             scheduled_date: i
                 .scheduled_date
                 .map(|dt| SmithyDateTime::from_secs(dt.timestamp())),
+            scheduled_end_date: i
+                .scheduled_end_date
+                .map(|dt| SmithyDateTime::from_secs(dt.timestamp())),
             complete: Some(i.complete),
             recurrence: i.recurrence,
             recurrence_basis: i.recurrence_basis,
             has_due_time: Some(i.has_due_time),
+            has_scheduled_time: Some(i.has_scheduled_time),
+            has_end_time: Some(i.has_end_time),
             has_tasks: Some(i.has_tasks),
             parent_item_id: i.parent_item_id,
             has_children: Some(i.has_children),
+            item_type: Some(to_sdk_item_type(i.item_type)),
+            event_type: i.event_type,
             due_offset_days: i.due_offset_days,
             assigned_to_user_id: i.assigned_to_user_id.clone(),
             assigned_to_user_name: i

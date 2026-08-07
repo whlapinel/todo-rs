@@ -27,3 +27,42 @@
 </div>
 {% endif %}
 {% endmacro %}
+
+{% macro scheduled_fields(scheduled_date_input, scheduled_time_input, scheduled_end_date_input, scheduled_end_time_input) %}
+<div class="flex items-center gap-x-4">
+  <label class="block text-sm text-slate-700">Scheduled start date
+    <input type="date" name="scheduledDate" value="{{ scheduled_date_input }}" class="mt-1 block rounded-md border-slate-300 text-sm" />
+  </label>
+  <label class="block text-sm text-slate-700">Time
+    <input type="time" name="scheduledTime" value="{{ scheduled_time_input }}" class="mt-1 block rounded-md border-slate-300 text-sm" />
+  </label>
+</div>
+<div class="flex items-center gap-x-4">
+  <label class="block text-sm text-slate-700">Scheduled end date
+    <input type="date" name="scheduledEndDate" value="{{ scheduled_end_date_input }}" class="mt-1 block rounded-md border-slate-300 text-sm" />
+  </label>
+  <label class="block text-sm text-slate-700">Time
+    <input type="time" name="scheduledEndTime" value="{{ scheduled_end_time_input }}" class="mt-1 block rounded-md border-slate-300 text-sm" />
+  </label>
+</div>
+{% endmacro %}
+
+{% macro event_fields(is_event, event_type_input) %}
+<div class="event-fields">
+  <label class="block text-sm text-slate-700">Kind
+    <span class="mt-1 flex gap-4">
+      <label class="inline-flex items-center gap-1 text-sm font-normal">
+        <input type="radio" name="itemType" value="TASK" {% if !is_event %}checked{% endif %} /> Task
+      </label>
+      <label class="inline-flex items-center gap-1 text-sm font-normal">
+        <input type="radio" name="itemType" value="EVENT" {% if is_event %}checked{% endif %} /> Event
+      </label>
+    </span>
+  </label>
+  <label class="block text-sm text-slate-700 mt-2">Event type
+    <input type="text" name="eventType" value="{{ event_type_input }}"
+           placeholder="e.g. rain" class="mt-1 block w-full rounded-md border-slate-300 text-sm" />
+  </label>
+  <p class="mt-1 text-xs text-slate-400">If this matches a checklist template's event type, that template's checklist items are added as children automatically when this is created.</p>
+</div>
+{% endmacro %}
