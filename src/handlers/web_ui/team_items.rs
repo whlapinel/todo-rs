@@ -1,5 +1,6 @@
 use crate::auth::AuthUser;
 use crate::domain::item::{Item, ItemType};
+use crate::handlers::web_ui::nav::{self, ActiveContext, SidebarSection};
 use crate::handlers::web_ui::{TzOffset, to_local};
 use crate::service::error::ItemError;
 use crate::service::team_items::{
@@ -499,6 +500,9 @@ struct TeamItemsListPageTemplate {
     team_id: String,
     rows: Vec<String>,
     show_complete: bool,
+    heading: &'static str,
+    query_suffix: String,
+    nav_html: String,
 }
 
 #[derive(Template)]
@@ -507,6 +511,7 @@ struct NewTeamItemPageTemplate {
     team_id: String,
     show_complete: bool,
     assignee_options: Vec<(String, String)>,
+    default_kind: &'static str,
     blank_recurrence: Option<String>,
     blank_recurrence_basis: Option<String>,
     blank_due_offset_days_input: String,
@@ -515,6 +520,7 @@ struct NewTeamItemPageTemplate {
     blank_scheduled_time_input: String,
     blank_scheduled_end_date_input: String,
     blank_scheduled_end_time_input: String,
+    nav_html: String,
 }
 
 #[derive(Template)]
@@ -524,6 +530,7 @@ struct TeamItemDetailPageTemplate {
     team_id: String,
     name: String,
     view: String,
+    nav_html: String,
 }
 
 #[derive(Template)]
@@ -533,6 +540,7 @@ struct TeamItemEditPageTemplate {
     team_id: String,
     name: String,
     fields: String,
+    nav_html: String,
 }
 
 // ---- shared rendering helpers ------------------------------------------------
@@ -598,6 +606,31 @@ async fn render_scope_fragment(
 #[serde(rename_all = "camelCase")]
 pub struct ShowCompleteQuery {
     show_complete: Option<String>,
+    /// Interim `?kind=` filter, same purpose/lifetime as `items.rs`'s field of the same
+    /// name — see that file's doc comment on `ShowCompleteQuery`. Goes away once dedicated
+    /// team-scoped Tasks/Events/Simple-Lists screens (nav plan Stages 5-7) exist.
+    kind: Option<String>,
+}
+
+fn query_suffix(kind: Option<&str>) -> String {
+    kind.map(|k| format!("?kind={k}")).unwrap_or_default()
+}
+
+fn heading_for_kind(kind: Option<&str>) -> &'static str {
+    match kind {
+        Some("task") => "Tasks",
+        Some("event") => "Events",
+        Some("simple") => "Simple Lists",
+        _ => "Items",
+    }
+}
+
+fn default_kind_for(kind: Option<&str>) -> &'static str {
+    match kind {
+        Some("simple") => "SIMPLE",
+        Some("event") => "EVENT",
+        _ => "TASK",
+    }
 }
 
 pub async fn team_items_page(
@@ -610,16 +643,33 @@ pub async fn team_items_page(
 ) -> Result<Html<String>, ItemError> {
     require_active_member(&teams, &team_id, &auth_user.user_id).await?;
     let show_complete = q.show_complete.is_some();
-    let items = repo
+    let mut items = repo
         .list_team_items(&team_id, None)
         .await
         .map_err(ItemError::from)?;
+    match q.kind.as_deref() {
+        Some("task") => items.retain(|i| i.item_type == ItemType::Task),
+        Some("event") => items.retain(|i| i.item_type == ItemType::Event),
+        Some("simple") => items.retain(|i| i.item_type == ItemType::Simple),
+        _ => {}
+    }
     let names = names_for(&teams, &team_id, &auth_user.user_id).await?;
     let rows = render_rows(&items, &team_id, &names, show_complete, tz)?;
+    let section = SidebarSection::from_kind(q.kind.as_deref());
+    let nav_html = nav::build_nav_html(
+        &teams,
+        &auth_user.user_id,
+        ActiveContext::Team(team_id.clone()),
+        section,
+    )
+    .await?;
     render(TeamItemsListPageTemplate {
         team_id,
         rows,
         show_complete,
+        heading: heading_for_kind(q.kind.as_deref()),
+        query_suffix: query_suffix(q.kind.as_deref()),
+        nav_html,
     })
 }
 
@@ -631,10 +681,19 @@ pub async fn new_team_item_page(
 ) -> Result<Html<String>, ItemError> {
     require_active_member(&teams, &team_id, &auth_user.user_id).await?;
     let assignee_options = active_member_options(&teams, &team_id, &auth_user.user_id).await?;
+    let section = SidebarSection::from_kind(q.kind.as_deref());
+    let nav_html = nav::build_nav_html(
+        &teams,
+        &auth_user.user_id,
+        ActiveContext::Team(team_id.clone()),
+        section,
+    )
+    .await?;
     render(NewTeamItemPageTemplate {
         team_id,
         show_complete: q.show_complete.is_some(),
         assignee_options,
+        default_kind: default_kind_for(q.kind.as_deref()),
         blank_recurrence: None,
         blank_recurrence_basis: Some("SCHEDULED_DATE".to_string()),
         blank_due_offset_days_input: String::new(),
@@ -643,6 +702,7 @@ pub async fn new_team_item_page(
         blank_scheduled_time_input: String::new(),
         blank_scheduled_end_date_input: String::new(),
         blank_scheduled_end_time_input: String::new(),
+        nav_html,
     })
 }
 
@@ -657,11 +717,19 @@ pub async fn team_item_detail_page(
     let item = repo.get_team_item(&team_id, &item_id).await.map_err(ItemError::from)?;
     let names = names_for(&teams, &team_id, &auth_user.user_id).await?;
     let view = DetailView::from_item(&item, &team_id, &names, tz).render()?;
+    let nav_html = nav::build_nav_html(
+        &teams,
+        &auth_user.user_id,
+        ActiveContext::Team(team_id.clone()),
+        SidebarSection::None,
+    )
+    .await?;
     render(TeamItemDetailPageTemplate {
         id: item.id,
         team_id,
         name: item.name,
         view,
+        nav_html,
     })
 }
 
@@ -676,11 +744,19 @@ pub async fn team_item_edit_page(
     let item = repo.get_team_item(&team_id, &item_id).await.map_err(ItemError::from)?;
     let assignee_options = active_member_options(&teams, &team_id, &auth_user.user_id).await?;
     let fields = DetailFields::from_item(&item, &team_id, assignee_options, tz, false).render()?;
+    let nav_html = nav::build_nav_html(
+        &teams,
+        &auth_user.user_id,
+        ActiveContext::Team(team_id.clone()),
+        SidebarSection::None,
+    )
+    .await?;
     render(TeamItemEditPageTemplate {
         id: item.id,
         team_id,
         name: item.name,
         fields,
+        nav_html,
     })
 }
 

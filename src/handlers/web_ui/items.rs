@@ -1,9 +1,10 @@
 use crate::auth::AuthUser;
 use crate::domain::item::{Item, ItemType};
+use crate::handlers::web_ui::nav::{self, ActiveContext, SidebarSection};
 use crate::handlers::web_ui::{TzOffset, to_local};
 use crate::service::items::{self as item_service, ItemError};
 use crate::service::templates::{self as template_service, CreateTemplateParams};
-use crate::storage::sqlite::{ItemRepo, RepoError};
+use crate::storage::sqlite::{ItemRepo, RepoError, TeamRepo};
 use askama::Template;
 use axum::extract::{Extension, Form, Path, Query};
 use axum::response::{Html, IntoResponse, Response};
@@ -509,12 +510,16 @@ struct RowsFragmentTemplate {
 struct ItemsListPageTemplate {
     rows: Vec<String>,
     show_complete: bool,
+    heading: &'static str,
+    query_suffix: String,
+    nav_html: String,
 }
 
 #[derive(Template)]
 #[template(path = "items/new_page.html")]
 struct NewItemPageTemplate {
     show_complete: bool,
+    default_kind: &'static str,
     blank_recurrence: Option<String>,
     blank_recurrence_basis: Option<String>,
     blank_due_offset_days_input: String,
@@ -523,6 +528,7 @@ struct NewItemPageTemplate {
     blank_scheduled_time_input: String,
     blank_scheduled_end_date_input: String,
     blank_scheduled_end_time_input: String,
+    nav_html: String,
 }
 
 #[derive(Template)]
@@ -531,6 +537,7 @@ struct ItemDetailPageTemplate {
     id: String,
     name: String,
     view: String,
+    nav_html: String,
 }
 
 #[derive(Template)]
@@ -539,6 +546,7 @@ struct ItemEditPageTemplate {
     id: String,
     name: String,
     fields: String,
+    nav_html: String,
 }
 
 // ---- shared rendering helpers ------------------------------------------------
@@ -585,29 +593,76 @@ async fn render_scope_fragment(
 #[serde(rename_all = "camelCase")]
 pub struct ShowCompleteQuery {
     show_complete: Option<String>,
+    /// Interim `?kind=` filter for the still-generic Items screen — `"task"`/`"simple"`
+    /// filter the list in-presentation (same pattern `events.rs`'s `list_events` already
+    /// uses for `ItemType::Event`); anything else (including absent) leaves it unfiltered,
+    /// preserving today's mixed-kind behavior for anyone hitting `/web/items` directly. See
+    /// the nav plan's Stage 1 — this goes away once dedicated Tasks/Simple-Lists screens
+    /// (Stages 2-3) replace it.
+    kind: Option<String>,
+}
+
+fn query_suffix(kind: Option<&str>) -> String {
+    kind.map(|k| format!("?kind={k}")).unwrap_or_default()
+}
+
+fn heading_for_kind(kind: Option<&str>) -> &'static str {
+    match kind {
+        Some("task") => "Tasks",
+        Some("simple") => "Simple Lists",
+        _ => "Items",
+    }
+}
+
+fn default_kind_for(kind: Option<&str>) -> &'static str {
+    match kind {
+        Some("simple") => "SIMPLE",
+        Some("event") => "EVENT",
+        _ => "TASK",
+    }
 }
 
 pub async fn items_page(
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(team_repo): Extension<Arc<dyn TeamRepo>>,
     TzOffset(tz): TzOffset,
     Query(q): Query<ShowCompleteQuery>,
 ) -> Result<Html<String>, ItemError> {
     let show_complete = q.show_complete.is_some();
-    let items = repo
+    let mut items = repo
         .list(&auth_user.user_id)
         .await
         .map_err(ItemError::from)?;
+    match q.kind.as_deref() {
+        Some("task") => items.retain(|i| i.item_type == ItemType::Task),
+        Some("simple") => items.retain(|i| i.item_type == ItemType::Simple),
+        _ => {}
+    }
     let rows = render_rows(&items, show_complete, tz)?;
+    let section = SidebarSection::from_kind(q.kind.as_deref());
+    let nav_html =
+        nav::build_nav_html(&team_repo, &auth_user.user_id, ActiveContext::Personal, section).await?;
     render(ItemsListPageTemplate {
         rows,
         show_complete,
+        heading: heading_for_kind(q.kind.as_deref()),
+        query_suffix: query_suffix(q.kind.as_deref()),
+        nav_html,
     })
 }
 
-pub async fn new_item_page(Query(q): Query<ShowCompleteQuery>) -> Result<Html<String>, ItemError> {
+pub async fn new_item_page(
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(team_repo): Extension<Arc<dyn TeamRepo>>,
+    Query(q): Query<ShowCompleteQuery>,
+) -> Result<Html<String>, ItemError> {
+    let section = SidebarSection::from_kind(q.kind.as_deref());
+    let nav_html =
+        nav::build_nav_html(&team_repo, &auth_user.user_id, ActiveContext::Personal, section).await?;
     render(NewItemPageTemplate {
         show_complete: q.show_complete.is_some(),
+        default_kind: default_kind_for(q.kind.as_deref()),
         blank_recurrence: None,
         blank_recurrence_basis: Some("SCHEDULED_DATE".to_string()),
         blank_due_offset_days_input: String::new(),
@@ -616,6 +671,7 @@ pub async fn new_item_page(Query(q): Query<ShowCompleteQuery>) -> Result<Html<St
         blank_scheduled_time_input: String::new(),
         blank_scheduled_end_date_input: String::new(),
         blank_scheduled_end_time_input: String::new(),
+        nav_html,
     })
 }
 
@@ -623,6 +679,7 @@ pub async fn item_detail_page(
     Path(item_id): Path<String>,
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(team_repo): Extension<Arc<dyn TeamRepo>>,
     TzOffset(tz): TzOffset,
 ) -> Result<Html<String>, ItemError> {
     let item = repo
@@ -630,10 +687,18 @@ pub async fn item_detail_page(
         .await
         .map_err(ItemError::from)?;
     let view = DetailView::from_item(&item, tz).render()?;
+    let nav_html = nav::build_nav_html(
+        &team_repo,
+        &auth_user.user_id,
+        ActiveContext::Personal,
+        SidebarSection::None,
+    )
+    .await?;
     render(ItemDetailPageTemplate {
         id: item.id,
         name: item.name,
         view,
+        nav_html,
     })
 }
 
@@ -641,6 +706,7 @@ pub async fn item_edit_page(
     Path(item_id): Path<String>,
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(team_repo): Extension<Arc<dyn TeamRepo>>,
     TzOffset(tz): TzOffset,
 ) -> Result<Html<String>, ItemError> {
     let item = repo
@@ -648,10 +714,18 @@ pub async fn item_edit_page(
         .await
         .map_err(ItemError::from)?;
     let fields = DetailFields::from_item(&item, tz, false).render()?;
+    let nav_html = nav::build_nav_html(
+        &team_repo,
+        &auth_user.user_id,
+        ActiveContext::Personal,
+        SidebarSection::None,
+    )
+    .await?;
     render(ItemEditPageTemplate {
         id: item.id,
         name: item.name,
         fields,
+        nav_html,
     })
 }
 

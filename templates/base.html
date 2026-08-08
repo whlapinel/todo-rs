@@ -16,25 +16,12 @@
   </script>
 </head>
 <body class="bg-gray-50 text-gray-900 dark:bg-gray-900 dark:text-white" hx-boost="true" hx-target="#page" hx-select="#page" hx-swap="innerHTML">
-  {% block header %}
-  <header class="border-b border-gray-200 bg-white dark:border-white/10 dark:bg-gray-900">
-    <div class="max-w-7xl mx-auto flex items-center justify-between px-4 py-3 sm:px-6 lg:px-8">
-      <a href="/web/items" class="text-sm font-semibold text-gray-900 dark:text-white">Todo</a>
-      <nav class="flex items-center gap-x-4 text-sm text-gray-600 dark:text-gray-400">
-        <a href="/web/items" class="hover:text-gray-900 dark:hover:text-white">Items</a>
-        <a href="/web/events" class="hover:text-gray-900 dark:hover:text-white">Events</a>
-        <a href="/web/dashboard" class="hover:text-gray-900 dark:hover:text-white">Dashboard</a>
-        <a href="/web/teams" class="hover:text-gray-900 dark:hover:text-white">Teams</a>
-        <a href="/web/assigned-items" class="hover:text-gray-900 dark:hover:text-white">Assigned to me</a>
-        <a href="/web/checklists" class="hover:text-gray-900 dark:hover:text-white">Checklists</a>
-        <a href="/auth/logout" class="hover:text-gray-900 dark:hover:text-white">Log out</a>
-      </nav>
-    </div>
-  </header>
-  {% endblock %}
+  {% block header %}{{ nav_html|safe }}{% endblock %}
 
-  <main id="page" class="max-w-7xl mx-auto px-4 py-8 sm:px-6 lg:px-8">
-    {% block content %}{% endblock %}
+  <main id="page" class="lg:pl-72">
+    <div class="max-w-7xl mx-auto px-4 py-8 sm:px-6 lg:px-8">
+      {% block content %}{% endblock %}
+    </div>
   </main>
 
   <script src="/web/static/js/htmx.min.js"></script>

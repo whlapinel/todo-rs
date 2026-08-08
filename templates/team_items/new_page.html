@@ -40,7 +40,7 @@
         </div>
       </label>
     </div>
-    {% call macros::kind_fields("TASK", blank_event_type_input) %}{% endcall %}
+    {% call macros::kind_fields(default_kind, blank_event_type_input) %}{% endcall %}
     {% call macros::recurrence_fields(true, blank_recurrence, blank_recurrence_basis, blank_due_offset_days_input) %}{% endcall %}
     {% call macros::scheduled_fields(blank_scheduled_date_input, blank_scheduled_time_input, blank_scheduled_end_date_input, blank_scheduled_end_time_input) %}{% endcall %}
     {% call macros::button_primary("Add item") %}{% endcall %}

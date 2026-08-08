@@ -1,8 +1,9 @@
 use crate::auth::AuthUser;
 use crate::domain::item::{Item, ItemType};
+use crate::handlers::web_ui::nav::{self, ActiveContext, SidebarSection};
 use crate::handlers::web_ui::{TzOffset, to_local};
 use crate::service::items::{self as item_service, ItemError};
-use crate::storage::sqlite::{ItemRepo, RepoError};
+use crate::storage::sqlite::{ItemRepo, RepoError, TeamRepo};
 use askama::Template;
 use axum::extract::{Extension, Form, Path, Query};
 use axum::response::{Html, IntoResponse, Response};
@@ -448,6 +449,7 @@ struct EventRowsFragmentTemplate {
 struct EventsListPageTemplate {
     rows: Vec<String>,
     show_complete: bool,
+    nav_html: String,
 }
 
 #[derive(Template)]
@@ -461,6 +463,7 @@ struct NewEventPageTemplate {
     blank_scheduled_time_input: String,
     blank_scheduled_end_date_input: String,
     blank_scheduled_end_time_input: String,
+    nav_html: String,
 }
 
 #[derive(Template)]
@@ -469,6 +472,7 @@ struct EventDetailPageTemplate {
     id: String,
     name: String,
     view: String,
+    nav_html: String,
 }
 
 #[derive(Template)]
@@ -477,6 +481,7 @@ struct EventEditPageTemplate {
     id: String,
     name: String,
     fields: String,
+    nav_html: String,
 }
 
 struct CalendarEventEntry {
@@ -503,6 +508,7 @@ struct EventsCalendarPageTemplate {
     next_year: i32,
     next_month: u32,
     days: Vec<CalendarDay>,
+    nav_html: String,
 }
 
 // ---- shared rendering helpers ------------------------------------------------
@@ -622,15 +628,24 @@ pub struct ShowCompleteQuery {
 pub async fn events_page(
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(team_repo): Extension<Arc<dyn TeamRepo>>,
     TzOffset(tz): TzOffset,
     Query(q): Query<ShowCompleteQuery>,
 ) -> Result<Html<String>, ItemError> {
     let show_complete = q.show_complete.is_some();
     let items = list_events(&repo, &auth_user.user_id).await?;
     let rows = render_rows(&items, show_complete, tz)?;
+    let nav_html = nav::build_nav_html(
+        &team_repo,
+        &auth_user.user_id,
+        ActiveContext::Personal,
+        SidebarSection::Events,
+    )
+    .await?;
     render(EventsListPageTemplate {
         rows,
         show_complete,
+        nav_html,
     })
 }
 
@@ -643,6 +658,7 @@ pub struct CalendarQuery {
 pub async fn events_calendar_page(
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(team_repo): Extension<Arc<dyn TeamRepo>>,
     TzOffset(tz): TzOffset,
     Query(q): Query<CalendarQuery>,
 ) -> Result<Html<String>, ItemError> {
@@ -657,6 +673,13 @@ pub async fn events_calendar_page(
     let days = build_calendar_days(year, month, &items, tz, today);
     let (prev_year, prev_month) = prev_month(year, month);
     let (next_year, next_month) = next_month(year, month);
+    let nav_html = nav::build_nav_html(
+        &team_repo,
+        &auth_user.user_id,
+        ActiveContext::Personal,
+        SidebarSection::Events,
+    )
+    .await?;
 
     render(EventsCalendarPageTemplate {
         month_label: NaiveDate::from_ymd_opt(year, month, 1)
@@ -669,10 +692,22 @@ pub async fn events_calendar_page(
         next_year,
         next_month,
         days,
+        nav_html,
     })
 }
 
-pub async fn new_event_page(Query(q): Query<ShowCompleteQuery>) -> Result<Html<String>, ItemError> {
+pub async fn new_event_page(
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(team_repo): Extension<Arc<dyn TeamRepo>>,
+    Query(q): Query<ShowCompleteQuery>,
+) -> Result<Html<String>, ItemError> {
+    let nav_html = nav::build_nav_html(
+        &team_repo,
+        &auth_user.user_id,
+        ActiveContext::Personal,
+        SidebarSection::Events,
+    )
+    .await?;
     render(NewEventPageTemplate {
         show_complete: q.show_complete.is_some(),
         blank_recurrence: None,
@@ -682,6 +717,7 @@ pub async fn new_event_page(Query(q): Query<ShowCompleteQuery>) -> Result<Html<S
         blank_scheduled_time_input: String::new(),
         blank_scheduled_end_date_input: String::new(),
         blank_scheduled_end_time_input: String::new(),
+        nav_html,
     })
 }
 
@@ -689,6 +725,7 @@ pub async fn event_detail_page(
     Path(item_id): Path<String>,
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(team_repo): Extension<Arc<dyn TeamRepo>>,
     TzOffset(tz): TzOffset,
 ) -> Result<Html<String>, ItemError> {
     let item = repo
@@ -697,10 +734,18 @@ pub async fn event_detail_page(
         .map_err(ItemError::from)?;
     let item = require_event(item)?;
     let view = EventDetailView::from_item(&item, tz).render()?;
+    let nav_html = nav::build_nav_html(
+        &team_repo,
+        &auth_user.user_id,
+        ActiveContext::Personal,
+        SidebarSection::Events,
+    )
+    .await?;
     render(EventDetailPageTemplate {
         id: item.id,
         name: item.name,
         view,
+        nav_html,
     })
 }
 
@@ -708,6 +753,7 @@ pub async fn event_edit_page(
     Path(item_id): Path<String>,
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(team_repo): Extension<Arc<dyn TeamRepo>>,
     TzOffset(tz): TzOffset,
 ) -> Result<Html<String>, ItemError> {
     let item = repo
@@ -716,10 +762,18 @@ pub async fn event_edit_page(
         .map_err(ItemError::from)?;
     let item = require_event(item)?;
     let fields = EventDetailFields::from_item(&item, tz, false).render()?;
+    let nav_html = nav::build_nav_html(
+        &team_repo,
+        &auth_user.user_id,
+        ActiveContext::Personal,
+        SidebarSection::Events,
+    )
+    .await?;
     render(EventEditPageTemplate {
         id: item.id,
         name: item.name,
         fields,
+        nav_html,
     })
 }
 

@@ -1,4 +1,5 @@
 use crate::auth::AuthUser;
+use crate::handlers::web_ui::nav::{self, ActiveContext, SidebarSection};
 use crate::service::error::ItemError;
 use crate::service::teams as team_service;
 use crate::storage::sqlite::{TeamRepo, UserRepo};
@@ -31,6 +32,7 @@ struct PendingTeamRow {
 struct TeamsListPageTemplate {
     active_rows: Vec<String>,
     pending_rows: Vec<String>,
+    nav_html: String,
 }
 
 async fn render_teams_page(
@@ -60,9 +62,12 @@ async fn render_teams_page(
             );
         }
     }
+    let nav_html =
+        nav::build_nav_html(teams, user_id, ActiveContext::Personal, SidebarSection::None).await?;
     render(TeamsListPageTemplate {
         active_rows,
         pending_rows,
+        nav_html,
     })
 }
 
@@ -134,6 +139,7 @@ struct TeamDetailPageTemplate {
     /// candidates for a fresh invite.
     invite_candidates: Vec<(String, String)>,
     is_active_member: bool,
+    nav_html: String,
 }
 
 async fn render_team_detail(
@@ -168,12 +174,21 @@ async fn render_team_detail(
         .map(|u| (u.id, format!("{} {}", u.first_name, u.last_name)))
         .collect();
 
+    let nav_html = nav::build_nav_html(
+        teams,
+        requester_user_id,
+        ActiveContext::Team(team_id.to_string()),
+        SidebarSection::None,
+    )
+    .await?;
+
     render(TeamDetailPageTemplate {
         id: team.id,
         name: team.name,
         member_rows,
         invite_candidates,
         is_active_member,
+        nav_html,
     })
 }
 

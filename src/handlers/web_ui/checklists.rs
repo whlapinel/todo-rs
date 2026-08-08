@@ -2,9 +2,10 @@ use crate::auth::AuthUser;
 use crate::domain::item::{Item, ItemType};
 use crate::domain::recurrence;
 use crate::handlers::web_ui::TzOffset;
+use crate::handlers::web_ui::nav::{self, ActiveContext, SidebarSection};
 use crate::service::items::{self as item_service, ItemError};
 use crate::service::templates::{self as template_service, CreateTemplateParams};
-use crate::storage::sqlite::ItemRepo;
+use crate::storage::sqlite::{ItemRepo, TeamRepo};
 use askama::Template;
 use axum::extract::{Extension, Form, Path};
 use axum::response::{Html, IntoResponse, Response};
@@ -52,6 +53,7 @@ impl ChecklistRow {
 #[template(path = "checklists/list_page.html")]
 struct ChecklistsListPageTemplate {
     rows: Vec<String>,
+    nav_html: String,
 }
 
 #[derive(Template)]
@@ -100,6 +102,7 @@ struct ChildrenFragmentTemplate {
 struct ChecklistDetailPageTemplate {
     id: String,
     name: String,
+    nav_html: String,
 }
 
 #[derive(Template)]
@@ -156,6 +159,7 @@ struct ChecklistChildDetailPageTemplate {
     id: String,
     name: String,
     view: String,
+    nav_html: String,
 }
 
 #[derive(Template)]
@@ -165,6 +169,7 @@ struct ChecklistChildEditPageTemplate {
     id: String,
     name: String,
     fields: String,
+    nav_html: String,
 }
 
 // ---- shared rendering helpers ------------------------------------------------
@@ -208,13 +213,21 @@ async fn render_children_fragment(
 pub async fn checklists_page(
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(team_repo): Extension<Arc<dyn TeamRepo>>,
 ) -> Result<Html<String>, ItemError> {
     let templates = repo
         .list_templates(&auth_user.user_id)
         .await
         .map_err(ItemError::from)?;
     let rows = render_checklist_rows(&templates)?;
-    render(ChecklistsListPageTemplate { rows })
+    let nav_html = nav::build_nav_html(
+        &team_repo,
+        &auth_user.user_id,
+        ActiveContext::Personal,
+        SidebarSection::Templates,
+    )
+    .await?;
+    render(ChecklistsListPageTemplate { rows, nav_html })
 }
 
 #[derive(serde::Deserialize)]
@@ -261,14 +274,23 @@ pub async fn checklist_detail_page(
     Path(template_id): Path<String>,
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(team_repo): Extension<Arc<dyn TeamRepo>>,
 ) -> Result<Html<String>, ItemError> {
     let template = repo
         .get(&auth_user.user_id, &template_id)
         .await
         .map_err(ItemError::from)?;
+    let nav_html = nav::build_nav_html(
+        &team_repo,
+        &auth_user.user_id,
+        ActiveContext::Personal,
+        SidebarSection::Templates,
+    )
+    .await?;
     render(ChecklistDetailPageTemplate {
         id: template.id,
         name: template.name,
+        nav_html,
     })
 }
 
@@ -321,17 +343,26 @@ pub async fn checklist_child_detail_page(
     Path((template_id, item_id)): Path<(String, String)>,
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(team_repo): Extension<Arc<dyn TeamRepo>>,
 ) -> Result<Html<String>, ItemError> {
     let item = repo
         .get(&auth_user.user_id, &item_id)
         .await
         .map_err(ItemError::from)?;
     let view = ChecklistChildDetailView::from_item(&item).render()?;
+    let nav_html = nav::build_nav_html(
+        &team_repo,
+        &auth_user.user_id,
+        ActiveContext::Personal,
+        SidebarSection::Templates,
+    )
+    .await?;
     render(ChecklistChildDetailPageTemplate {
         template_id,
         id: item.id,
         name: item.name,
         view,
+        nav_html,
     })
 }
 
@@ -339,17 +370,26 @@ pub async fn checklist_child_edit_page(
     Path((template_id, item_id)): Path<(String, String)>,
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(team_repo): Extension<Arc<dyn TeamRepo>>,
 ) -> Result<Html<String>, ItemError> {
     let item = repo
         .get(&auth_user.user_id, &item_id)
         .await
         .map_err(ItemError::from)?;
     let fields = ChecklistChildDetailFields::from_item(&template_id, &item, false).render()?;
+    let nav_html = nav::build_nav_html(
+        &team_repo,
+        &auth_user.user_id,
+        ActiveContext::Personal,
+        SidebarSection::Templates,
+    )
+    .await?;
     render(ChecklistChildEditPageTemplate {
         template_id,
         id: item.id,
         name: item.name,
         fields,
+        nav_html,
     })
 }
 

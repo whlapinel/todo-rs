@@ -1,8 +1,9 @@
 use crate::auth::AuthUser;
 use crate::domain::item::Item;
+use crate::handlers::web_ui::nav::{self, ActiveContext, SidebarSection};
 use crate::handlers::web_ui::to_local;
 use crate::service::error::ItemError;
-use crate::storage::sqlite::ItemRepo;
+use crate::storage::sqlite::{ItemRepo, TeamRepo};
 use askama::Template;
 use axum::extract::Extension;
 use axum::response::Html;
@@ -44,11 +45,13 @@ impl AssignedItemRow {
 #[template(path = "assigned_items/page.html")]
 struct AssignedItemsPageTemplate {
     rows: Vec<String>,
+    nav_html: String,
 }
 
 pub async fn assigned_items_page(
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(team_repo): Extension<Arc<dyn TeamRepo>>,
     TzOffset(tz): TzOffset,
 ) -> Result<Html<String>, ItemError> {
     let items = repo
@@ -63,5 +66,12 @@ pub async fn assigned_items_page(
         .filter_map(|i| AssignedItemRow::from_item(i, tz))
         .map(|row| row.render())
         .collect::<Result<Vec<_>, _>>()?;
-    render(AssignedItemsPageTemplate { rows })
+    let nav_html = nav::build_nav_html(
+        &team_repo,
+        &auth_user.user_id,
+        ActiveContext::Personal,
+        SidebarSection::None,
+    )
+    .await?;
+    render(AssignedItemsPageTemplate { rows, nav_html })
 }

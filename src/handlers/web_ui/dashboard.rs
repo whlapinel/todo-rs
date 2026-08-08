@@ -1,4 +1,5 @@
 use crate::auth::AuthUser;
+use crate::handlers::web_ui::nav::{self, ActiveContext, SidebarSection};
 use crate::handlers::web_ui::{TzOffset, to_local};
 use crate::service::items::{self as item_service, ItemError};
 use crate::service::team_items::{self as team_item_service, UpdateTeamItemParams};
@@ -102,6 +103,7 @@ struct DashboardPageTemplate {
     /// (option label, is currently selected) — precomputed so the template never has to
     /// compare strings itself.
     presets: Vec<(&'static str, bool)>,
+    nav_html: String,
 }
 
 #[derive(serde::Deserialize, Default)]
@@ -124,6 +126,7 @@ fn render_rows(items: &[DueItem], preset: &str, show_complete: bool, tz: i32) ->
 pub async fn dashboard_page(
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(team_repo): Extension<Arc<dyn TeamRepo>>,
     TzOffset(tz_offset): TzOffset,
     Query(q): Query<DashboardQuery>,
 ) -> Result<Html<String>, ItemError> {
@@ -138,10 +141,18 @@ pub async fn dashboard_page(
     let rows = render_rows(&due_items, &preset, show_complete, tz_offset)?;
 
     let presets = PRESETS.iter().map(|&p| (p, p == preset)).collect();
+    let nav_html = nav::build_nav_html(
+        &team_repo,
+        &auth_user.user_id,
+        ActiveContext::Personal,
+        SidebarSection::None,
+    )
+    .await?;
     render(DashboardPageTemplate {
         rows,
         show_complete,
         presets,
+        nav_html,
     })
 }
 
