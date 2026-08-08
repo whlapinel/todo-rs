@@ -2,6 +2,7 @@ pub mod assigned_items;
 pub mod checklists;
 pub mod dashboard;
 pub mod error;
+pub mod events;
 pub mod hello_world;
 pub mod items;
 pub mod login;

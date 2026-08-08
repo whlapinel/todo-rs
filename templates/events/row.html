@@ -1,0 +1,28 @@
+<li id="item-{{ id }}" class="flex items-center justify-between gap-x-3 py-2">
+  <div class="flex items-center gap-x-3 min-w-0">
+    <input type="checkbox" {% if complete %}checked{% endif %}
+           hx-put="/web/events/{{ id }}" hx-vals='{"complete": "{{ toggle_complete_json }}"}'
+           hx-target="#item-{{ id }}" hx-select="#item-{{ id }}" hx-swap="outerHTML"
+           class="shrink-0 size-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-600 dark:border-white/20 dark:bg-white/5" />
+    <a href="/web/events/{{ id }}" hx-target="#page" hx-select="#page" hx-swap="innerHTML"
+       class="truncate {% if complete %}line-through text-gray-400 dark:text-gray-500{% else %}text-gray-900 dark:text-white{% endif %}">
+      {% if has_children %}<span class="text-gray-400 dark:text-gray-500">&#9656;</span>{% endif %} {{ name }}
+    </a>
+    {% if let Some(e) = event_type %}
+    <span class="text-xs text-gray-400 shrink-0 dark:text-gray-500">({{ e }})</span>
+    {% endif %}
+  </div>
+  <div class="flex items-center gap-x-3 text-xs text-gray-500 shrink-0 dark:text-gray-400">
+    {% if let Some(d) = due_date %}<span title="due">due {{ d }}</span>{% endif %}
+    {% if let Some(d) = scheduled_date %}
+    <span>
+      {{ d }}{% if let Some(e) = scheduled_end_date %}&ndash;{{ e }}{% endif %}
+    </span>
+    {% endif %}
+    {% if let Some(r) = recurrence %}<span title="repeats">&#8635; {{ r }}</span>{% endif %}
+    <button hx-delete="/web/events/{{ id }}"
+            hx-confirm="Delete {{ name }}{% if has_children %} and all its sub-items{% endif %}?"
+            hx-target="#item-{{ id }}" hx-select="unset" hx-swap="outerHTML swap:200ms"
+            class="cursor-pointer text-red-600 hover:text-red-500 dark:text-red-400 dark:hover:text-red-300">Delete</button>
+  </div>
+</li>

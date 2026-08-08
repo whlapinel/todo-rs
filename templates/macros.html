@@ -89,6 +89,17 @@
 </div>
 {% endmacro %}
 
+{% macro event_type_field(event_type_input) %}
+<label class="block text-sm/6 font-medium text-gray-900 dark:text-white mt-2">Event type
+  <div class="mt-2">
+    <input type="text" name="eventType" value="{{ event_type_input }}"
+           placeholder="e.g. rain"
+           class="block w-full rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 placeholder:text-gray-400 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:placeholder:text-gray-500 dark:focus:outline-indigo-500" />
+  </div>
+</label>
+<p class="mt-1 text-xs text-gray-400 dark:text-gray-500">If this matches a checklist template's event type, that template's checklist items are added as children automatically when this is created.</p>
+{% endmacro %}
+
 {% macro kind_fields(item_type_str, event_type_input) %}
 <div class="kind-fields">
   <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Kind
@@ -108,14 +119,7 @@
     </span>
   </label>
   <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">Simple items are a bare checkable name — no due date, scheduling, or recurrence.</p>
-  <label class="block text-sm/6 font-medium text-gray-900 dark:text-white mt-2">Event type
-    <div class="mt-2">
-      <input type="text" name="eventType" value="{{ event_type_input }}"
-             placeholder="e.g. rain"
-             class="block w-full rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 placeholder:text-gray-400 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:placeholder:text-gray-500 dark:focus:outline-indigo-500" />
-    </div>
-  </label>
-  <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">If this matches a checklist template's event type, that template's checklist items are added as children automatically when this is created.</p>
+  {% call event_type_field(event_type_input) %}{% endcall %}
 </div>
 <script>
 (function() {

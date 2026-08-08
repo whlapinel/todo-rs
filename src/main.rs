@@ -34,6 +34,7 @@ use handlers::json_api::users::{get_user, list_users, update_user};
 use handlers::web_ui::assigned_items::assigned_items_page;
 use handlers::web_ui::checklists::*;
 use handlers::web_ui::dashboard::*;
+use handlers::web_ui::events::*;
 use handlers::web_ui::hello_world::hello_world;
 use handlers::web_ui::items::*;
 use handlers::web_ui::login::login_page;
@@ -59,6 +60,15 @@ fn build_web_router() -> Router {
         .route("/items/:item_id/edit", get(item_edit_page))
         .route("/items/:item_id/children", get(children_fragment))
         .route("/items/:item_id/save-as-checklist", post(save_as_checklist))
+        .route("/events", get(events_page).post(create_event_form))
+        .route("/events/new", get(new_event_page))
+        .route(
+            "/events/:item_id",
+            get(event_detail_page)
+                .put(update_event_form)
+                .delete(delete_event_form),
+        )
+        .route("/events/:item_id/edit", get(event_edit_page))
         .route("/dashboard", get(dashboard_page))
         .route("/dashboard/items/:item_id", put(toggle_item_complete))
         .route(
