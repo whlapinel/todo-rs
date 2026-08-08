@@ -39,6 +39,7 @@ use handlers::web_ui::items::*;
 use handlers::web_ui::login::login_page;
 use handlers::web_ui::simple_lists::*;
 use handlers::web_ui::tasks::*;
+use handlers::web_ui::team_events::*;
 use handlers::web_ui::team_items::*;
 use handlers::web_ui::team_tasks::*;
 use handlers::web_ui::teams::*;
@@ -73,6 +74,21 @@ fn build_web_router() -> Router {
                 .delete(delete_event_form),
         )
         .route("/events/:item_id/edit", get(event_edit_page))
+        .route(
+            "/team-events/:team_id",
+            get(team_events_page).post(create_team_event_form),
+        )
+        .route("/team-events/:team_id/new", get(new_team_event_page))
+        .route(
+            "/team-events/:team_id/:item_id",
+            get(team_event_detail_page)
+                .put(update_team_event_form)
+                .delete(delete_team_event_form),
+        )
+        .route(
+            "/team-events/:team_id/:item_id/edit",
+            get(team_event_edit_page),
+        )
         .route("/tasks", get(tasks_page).post(create_task_form))
         .route("/tasks/new", get(new_task_page))
         .route("/tasks/batch", post(create_tasks_batch))

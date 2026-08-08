@@ -8,6 +8,7 @@ pub mod login;
 pub mod nav;
 pub mod simple_lists;
 pub mod tasks;
+pub mod team_events;
 pub mod team_items;
 pub mod team_tasks;
 pub mod teams;
