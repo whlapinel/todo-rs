@@ -13,6 +13,9 @@ pub enum ItemType {
     Task,
     Event,
     Template,
+    /// A bare checkable name with no scheduling machinery — no due date, scheduled
+    /// window, recurrence, or due-offset. Enforced by `Item::validate`.
+    Simple,
 }
 
 impl ItemType {
@@ -21,6 +24,25 @@ impl ItemType {
             ItemType::Task => "TASK",
             ItemType::Event => "EVENT",
             ItemType::Template => "TEMPLATE",
+            ItemType::Simple => "SIMPLE",
+        }
+    }
+
+    /// Display label for the "Kind" badge shown in `items`/`team_items` detail views.
+    pub fn label(&self) -> &'static str {
+        match self {
+            ItemType::Task => "Task",
+            ItemType::Event => "Event",
+            ItemType::Template => "Template",
+            ItemType::Simple => "Simple",
+        }
+    }
+
+    /// Color passed to `macros::badge` for the "Kind" badge.
+    pub fn badge_color(&self) -> &'static str {
+        match self {
+            ItemType::Event => "indigo",
+            _ => "gray",
         }
     }
 }
@@ -39,6 +61,7 @@ impl FromStr for ItemType {
             "TASK" => Ok(ItemType::Task),
             "EVENT" => Ok(ItemType::Event),
             "TEMPLATE" => Ok(ItemType::Template),
+            "SIMPLE" => Ok(ItemType::Simple),
             other => Err(format!("unknown item type: {other}")),
         }
     }
@@ -60,7 +83,6 @@ pub struct Item {
     pub has_due_time: bool,
     pub has_scheduled_time: bool,
     pub has_end_time: bool,
-    pub has_tasks: bool,
     pub has_children: bool,
     pub item_type: ItemType,
     pub event_type: Option<String>,
@@ -73,7 +95,6 @@ impl Item {
         Self {
             user_id: Some(user_id.to_string()),
             name: name.to_string(),
-            has_tasks: true,
             ..Self::default()
         }
     }
@@ -82,9 +103,58 @@ impl Item {
         Self {
             team_id: Some(team_id.to_string()),
             name: name.to_string(),
-            has_tasks: true,
             ..Self::default()
         }
+    }
+
+    /// Thin `item_type`-setting sugar over `new_user_item`/`new_team_item` — kept
+    /// separate from the owner constructors above since "who owns this" and "what kind
+    /// is this" are independent axes. Note these only control an item's *initial*
+    /// defaults: `create_item`/`update_item` overlay every field from caller params
+    /// unconditionally afterward, so a caller can still hand a `Simple` item a due date
+    /// this way — `validate()` below is the actual enforcement point, called once the
+    /// full item is assembled.
+    pub fn new_task(user_id: &str, name: &str) -> Self {
+        Self::new_user_item(user_id, name)
+    }
+
+    pub fn new_event(user_id: &str, name: &str) -> Self {
+        Self {
+            item_type: ItemType::Event,
+            ..Self::new_user_item(user_id, name)
+        }
+    }
+
+    pub fn new_simple(user_id: &str, name: &str) -> Self {
+        Self {
+            item_type: ItemType::Simple,
+            ..Self::new_user_item(user_id, name)
+        }
+    }
+
+    /// Enforces the one cross-field invariant `ItemType` currently implies: a `Simple`
+    /// item is defined by *not* having scheduling machinery, so it can't carry a due
+    /// date, scheduled window, recurrence, or due-offset. Called by the service layer
+    /// once an `Item` is fully assembled, right before it's persisted — a constructor
+    /// alone can't guarantee this, since callers overlay fields onto a freshly
+    /// constructed item afterward (see the constructors above).
+    pub fn validate(&self) -> Result<(), String> {
+        if self.item_type != ItemType::Simple {
+            return Ok(());
+        }
+        if self.due_date.is_some()
+            || self.scheduled_date.is_some()
+            || self.scheduled_end_date.is_some()
+        {
+            return Err("simple items can't have a due date or scheduled window".to_string());
+        }
+        if self.recurrence.is_some() {
+            return Err("simple items can't recur".to_string());
+        }
+        if self.due_offset_days.is_some() {
+            return Err("simple items can't have a due offset".to_string());
+        }
+        Ok(())
     }
 
     /// If this item is complete and recurring, returns the next occurrence
@@ -167,7 +237,7 @@ mod tests {
         assert_eq!(item.user_id, Some("u1".to_string()));
         assert_eq!(item.name, "Buy milk");
         assert!(item.team_id.is_none());
-        assert!(item.has_tasks);
+        assert_eq!(item.item_type, ItemType::Task);
     }
 
     #[test]
@@ -176,7 +246,68 @@ mod tests {
         assert_eq!(item.team_id, Some("t1".to_string()));
         assert_eq!(item.name, "Deploy server");
         assert!(item.user_id.is_none());
-        assert!(item.has_tasks);
+        assert_eq!(item.item_type, ItemType::Task);
+    }
+
+    #[test]
+    fn new_simple_sets_simple_item_type() {
+        let item = Item::new_simple("u1", "Milk");
+        assert_eq!(item.item_type, ItemType::Simple);
+        assert!(item.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_simple_item_with_due_date() {
+        let mut item = Item::new_simple("u1", "Milk");
+        item.due_date = Some(Utc::now());
+        assert!(item.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_simple_item_with_scheduled_date() {
+        let mut item = Item::new_simple("u1", "Milk");
+        item.scheduled_date = Some(Utc::now());
+        assert!(item.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_simple_item_with_scheduled_end_date() {
+        let mut item = Item::new_simple("u1", "Milk");
+        item.scheduled_end_date = Some(Utc::now());
+        assert!(item.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_simple_item_with_recurrence() {
+        let mut item = Item::new_simple("u1", "Milk");
+        item.recurrence = Some("every day".to_string());
+        assert!(item.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_simple_item_with_due_offset_days() {
+        let mut item = Item::new_simple("u1", "Milk");
+        item.due_offset_days = Some(1);
+        assert!(item.validate().is_err());
+    }
+
+    #[test]
+    fn validate_allows_task_with_all_scheduling_fields() {
+        let mut item = Item::new_task("u1", "Water plants");
+        item.due_date = Some(Utc::now());
+        item.scheduled_date = Some(Utc::now());
+        item.scheduled_end_date = Some(Utc::now());
+        item.recurrence = Some("every day".to_string());
+        item.due_offset_days = Some(1);
+        assert!(item.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_allows_event_with_all_scheduling_fields() {
+        let mut item = Item::new_event("u1", "Team offsite");
+        item.due_date = Some(Utc::now());
+        item.scheduled_date = Some(Utc::now());
+        assert!(item.validate().is_ok());
     }
 
     #[test]

@@ -20,23 +20,16 @@
     <div class="flex items-center gap-x-2">
       <input type="text" name="name" placeholder="New item" required
              class="flex-1 rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 placeholder:text-gray-400 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:placeholder:text-gray-500 dark:focus:outline-indigo-500" />
-      <input type="date" name="dueDate"
-             class="rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:focus:outline-indigo-500" />
-      <input type="time" name="dueTime"
-             class="rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:focus:outline-indigo-500" />
+      <span class="scheduling-fields flex items-center gap-x-2">
+        <input type="date" name="dueDate"
+               class="rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:focus:outline-indigo-500" />
+        <input type="time" name="dueTime"
+               class="rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:focus:outline-indigo-500" />
+      </span>
     </div>
-    <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Type
-      <div class="mt-2 grid grid-cols-1">
-        <select name="hasTasks"
-                class="col-start-1 row-start-1 block w-full appearance-none rounded-md bg-white py-1.5 pr-8 pl-3 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:*:bg-gray-800 dark:focus:outline-indigo-500">
-          <option value="tasks" selected>Task list</option>
-          <option value="simple">Simple item</option>
-        </select>
-      </div>
-    </label>
+    {% call macros::kind_fields("TASK", blank_event_type_input) %}{% endcall %}
     {% call macros::recurrence_fields(true, blank_recurrence, blank_recurrence_basis, blank_due_offset_days_input) %}{% endcall %}
     {% call macros::scheduled_fields(blank_scheduled_date_input, blank_scheduled_time_input, blank_scheduled_end_date_input, blank_scheduled_end_time_input) %}{% endcall %}
-    {% call macros::event_fields(false, blank_event_type_input) %}{% endcall %}
     {% call macros::button_primary("Add item") %}{% endcall %}
   </form>
 

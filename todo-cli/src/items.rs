@@ -7,8 +7,9 @@ fn parse_item_type_flag(s: &str) -> ItemType {
     match s.to_lowercase().as_str() {
         "task" => ItemType::Task,
         "event" => ItemType::Event,
+        "simple" => ItemType::Simple,
         _ => {
-            eprintln!("error: --item-type must be 'task' or 'event'");
+            eprintln!("error: --item-type must be 'task', 'event', or 'simple'");
             std::process::exit(1);
         }
     }
@@ -38,7 +39,7 @@ pub enum ItemsCommand {
             help = "Days from the top-level item's due date (child items only; negative = before, positive = after)"
         )]
         due_offset_days: Option<i32>,
-        #[arg(long, help = "Item kind: 'task' (default) or 'event'")]
+        #[arg(long, help = "Item kind: 'task' (default), 'event', or 'simple'")]
         item_type: Option<String>,
         #[arg(
             long,

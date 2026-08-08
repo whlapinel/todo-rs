@@ -101,10 +101,13 @@ prl items add "Pack bag" --parent <parent-item-id> --due-offset-days -1
 prl items add "Team offsite" --item-type event --due 2026-09-01
 prl items add "Rain today" --item-type event --event-type rain
 prl items add "Write report" --scheduled 2026-06-18 --scheduled-end 2026-06-20
+prl items add "Milk" --item-type simple
 ```
 
-`--item-type` is `task` (default) or `event` — events are calendar-style items,
-distinguished from tasks mainly for display purposes. `--event-type` is a free-text
+`--item-type` is `task` (default), `event`, or `simple` — events are calendar-style
+items, distinguished from tasks mainly for display purposes; simple items are a bare
+checkable name with no due date, scheduled window, recurrence, or due offset (the
+server rejects any of those on a `simple` item). `--event-type` is a free-text
 category (e.g. `rain`); if it matches a checklist template's own event type, that
 template's checklist items are automatically added as children the moment the item
 is created. Checklist templates themselves aren't yet manageable from `prl` (web UI

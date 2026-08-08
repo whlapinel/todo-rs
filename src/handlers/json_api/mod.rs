@@ -25,6 +25,7 @@ fn to_domain_item_type(
         todo_server_sdk::model::ItemType::Task => crate::domain::item::ItemType::Task,
         todo_server_sdk::model::ItemType::Event => crate::domain::item::ItemType::Event,
         todo_server_sdk::model::ItemType::Template => crate::domain::item::ItemType::Template,
+        todo_server_sdk::model::ItemType::Simple => crate::domain::item::ItemType::Simple,
     })
 }
 
@@ -33,5 +34,6 @@ fn to_sdk_item_type(t: crate::domain::item::ItemType) -> todo_server_sdk::model:
         crate::domain::item::ItemType::Task => todo_server_sdk::model::ItemType::Task,
         crate::domain::item::ItemType::Event => todo_server_sdk::model::ItemType::Event,
         crate::domain::item::ItemType::Template => todo_server_sdk::model::ItemType::Template,
+        crate::domain::item::ItemType::Simple => todo_server_sdk::model::ItemType::Simple,
     }
 }

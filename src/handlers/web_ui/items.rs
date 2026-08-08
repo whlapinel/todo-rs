@@ -37,7 +37,6 @@ pub struct ItemForm {
     recurrence: Option<String>,
     recurrence_basis: Option<String>,
     due_offset_days: Option<String>,
-    has_tasks: Option<String>,
     parent_item_id: Option<String>,
     item_type: Option<String>,
     event_type: Option<String>,
@@ -84,14 +83,6 @@ fn overlay_bool(form_value: &Option<String>, current: bool) -> bool {
     match form_value.as_deref() {
         Some("true") => true,
         Some("false") => false,
-        _ => current,
-    }
-}
-
-fn overlay_has_tasks(form_value: &Option<String>, current: bool) -> bool {
-    match form_value.as_deref() {
-        Some("simple") => false,
-        Some("tasks") => true,
         _ => current,
     }
 }
@@ -151,7 +142,12 @@ fn overlay_due_date(
     match form_date {
         None => current,
         Some(s) if s.trim().is_empty() => None,
-        Some(s) => combine_local_to_utc(s.trim(), form_time.as_deref(), tz_offset_minutes, end_of_day()),
+        Some(s) => combine_local_to_utc(
+            s.trim(),
+            form_time.as_deref(),
+            tz_offset_minutes,
+            end_of_day(),
+        ),
     }
 }
 
@@ -164,7 +160,12 @@ fn overlay_scheduled_date(
     match form_date {
         None => current,
         Some(s) if s.trim().is_empty() => None,
-        Some(s) => combine_local_to_utc(s.trim(), form_time.as_deref(), tz_offset_minutes, start_of_day()),
+        Some(s) => combine_local_to_utc(
+            s.trim(),
+            form_time.as_deref(),
+            tz_offset_minutes,
+            start_of_day(),
+        ),
     }
 }
 
@@ -177,16 +178,30 @@ fn overlay_scheduled_end_date(
     match form_date {
         None => current,
         Some(s) if s.trim().is_empty() => None,
-        Some(s) => combine_local_to_utc(s.trim(), form_time.as_deref(), tz_offset_minutes, end_of_day()),
+        Some(s) => combine_local_to_utc(
+            s.trim(),
+            form_time.as_deref(),
+            tz_offset_minutes,
+            end_of_day(),
+        ),
     }
 }
 
-fn create_params_from_form(user_id: &str, form: &ItemForm, tz: i32) -> item_service::CreateItemParams {
+fn create_params_from_form(
+    user_id: &str,
+    form: &ItemForm,
+    tz: i32,
+) -> item_service::CreateItemParams {
     item_service::CreateItemParams {
         user_id: user_id.to_string(),
         name: form.name.clone().unwrap_or_default(),
         due_date: overlay_due_date(&form.due_date, &form.due_time, tz, None),
-        scheduled_date: overlay_scheduled_date(&form.scheduled_date, &form.scheduled_time, tz, None),
+        scheduled_date: overlay_scheduled_date(
+            &form.scheduled_date,
+            &form.scheduled_time,
+            tz,
+            None,
+        ),
         scheduled_end_date: overlay_scheduled_end_date(
             &form.scheduled_end_date,
             &form.scheduled_end_time,
@@ -198,12 +213,10 @@ fn create_params_from_form(user_id: &str, form: &ItemForm, tz: i32) -> item_serv
         recurrence_basis: non_empty(&form.recurrence_basis),
         has_due_time: form.due_time.as_deref().map(|t| !t.trim().is_empty()),
         has_scheduled_time: form.scheduled_time.as_deref().map(|t| !t.trim().is_empty()),
-        has_end_time: form.scheduled_end_time.as_deref().map(|t| !t.trim().is_empty()),
-        has_tasks: match form.has_tasks.as_deref() {
-            Some("simple") => Some(false),
-            Some("tasks") => Some(true),
-            _ => None,
-        },
+        has_end_time: form
+            .scheduled_end_time
+            .as_deref()
+            .map(|t| !t.trim().is_empty()),
         parent_item_id: non_empty(&form.parent_item_id),
         item_type: parse_item_type(&form.item_type),
         event_type: non_empty(&form.event_type),
@@ -245,9 +258,14 @@ fn update_params_from_form(
         recurrence: overlay_str(&form.recurrence, current.recurrence.clone()),
         recurrence_basis: overlay_str(&form.recurrence_basis, current.recurrence_basis.clone()),
         has_due_time: Some(overlay_has_due_time(&form.due_time, current.has_due_time)),
-        has_scheduled_time: Some(overlay_has_due_time(&form.scheduled_time, current.has_scheduled_time)),
-        has_end_time: Some(overlay_has_due_time(&form.scheduled_end_time, current.has_end_time)),
-        has_tasks: Some(overlay_has_tasks(&form.has_tasks, current.has_tasks)),
+        has_scheduled_time: Some(overlay_has_due_time(
+            &form.scheduled_time,
+            current.has_scheduled_time,
+        )),
+        has_end_time: Some(overlay_has_due_time(
+            &form.scheduled_end_time,
+            current.has_end_time,
+        )),
         parent_item_id: current.parent_item_id.clone(),
         item_type: parse_item_type(&form.item_type),
         event_type: overlay_str(&form.event_type, current.event_type.clone()),
@@ -316,7 +334,6 @@ struct DetailFields {
     id: String,
     name: String,
     complete: bool,
-    has_tasks: bool,
     is_top_level: bool,
     due_date_input: String,
     due_time_input: String,
@@ -327,7 +344,7 @@ struct DetailFields {
     recurrence: Option<String>,
     recurrence_basis: Option<String>,
     due_offset_days_input: String,
-    is_event: bool,
+    item_type_str: &'static str,
     event_type_input: String,
     /// Set only on the fragment returned by a successful save (never on a plain page load),
     /// so the confirmation message appears exactly once per save and isn't still there on
@@ -342,7 +359,9 @@ impl DetailFields {
             .map(|d| d.format("%Y-%m-%d").to_string())
             .unwrap_or_default();
         let due_time_input = if item.has_due_time {
-            local_due_date.map(|d| d.format("%H:%M").to_string()).unwrap_or_default()
+            local_due_date
+                .map(|d| d.format("%H:%M").to_string())
+                .unwrap_or_default()
         } else {
             String::new()
         };
@@ -351,7 +370,9 @@ impl DetailFields {
             .map(|d| d.format("%Y-%m-%d").to_string())
             .unwrap_or_default();
         let scheduled_time_input = if item.has_scheduled_time {
-            local_scheduled_date.map(|d| d.format("%H:%M").to_string()).unwrap_or_default()
+            local_scheduled_date
+                .map(|d| d.format("%H:%M").to_string())
+                .unwrap_or_default()
         } else {
             String::new()
         };
@@ -360,7 +381,9 @@ impl DetailFields {
             .map(|d| d.format("%Y-%m-%d").to_string())
             .unwrap_or_default();
         let scheduled_end_time_input = if item.has_end_time {
-            local_scheduled_end_date.map(|d| d.format("%H:%M").to_string()).unwrap_or_default()
+            local_scheduled_end_date
+                .map(|d| d.format("%H:%M").to_string())
+                .unwrap_or_default()
         } else {
             String::new()
         };
@@ -368,7 +391,6 @@ impl DetailFields {
             id: item.id.clone(),
             name: item.name.clone(),
             complete: item.complete,
-            has_tasks: item.has_tasks,
             is_top_level: item.parent_item_id.is_none(),
             due_date_input,
             due_time_input,
@@ -379,7 +401,7 @@ impl DetailFields {
             recurrence: item.recurrence.clone(),
             recurrence_basis: item.recurrence_basis.clone(),
             due_offset_days_input: format_offset_input(item.due_offset_days),
-            is_event: item.item_type == ItemType::Event,
+            item_type_str: item.item_type.as_str(),
             event_type_input: item.event_type.clone().unwrap_or_default(),
             just_saved,
         }
@@ -404,7 +426,6 @@ struct DetailView {
     id: String,
     complete: bool,
     toggle_complete_json: String,
-    has_tasks: bool,
     due_date: Option<String>,
     scheduled_date: Option<String>,
     scheduled_end_date: Option<String>,
@@ -412,7 +433,8 @@ struct DetailView {
     recurrence: Option<String>,
     recurrence_basis_label: String,
     offset_label: Option<String>,
-    is_event: bool,
+    kind_label: &'static str,
+    kind_color: &'static str,
     event_type: Option<String>,
 }
 
@@ -455,7 +477,6 @@ impl DetailView {
             id: item.id.clone(),
             complete: item.complete,
             toggle_complete_json: (!item.complete).to_string(),
-            has_tasks: item.has_tasks,
             due_date,
             scheduled_date,
             scheduled_end_date,
@@ -463,7 +484,8 @@ impl DetailView {
             recurrence: item.recurrence.clone(),
             recurrence_basis_label: recurrence_basis_label(&item.recurrence_basis),
             offset_label,
-            is_event: item.item_type == ItemType::Event,
+            kind_label: item.item_type.label(),
+            kind_color: item.item_type.badge_color(),
             event_type: item.event_type.clone(),
         }
     }
@@ -533,7 +555,9 @@ async fn render_scope_fragment(
 ) -> Result<Html<String>, ItemError> {
     let (items, empty_message) = if let Some(parent_id) = parent_item_id {
         (
-            repo.list_children(parent_id).await.map_err(ItemError::from)?,
+            repo.list_children(parent_id)
+                .await
+                .map_err(ItemError::from)?,
             "No sub-items yet.",
         )
     } else {
@@ -564,14 +588,18 @@ pub async fn items_page(
     Query(q): Query<ShowCompleteQuery>,
 ) -> Result<Html<String>, ItemError> {
     let show_complete = q.show_complete.is_some();
-    let items = repo.list(&auth_user.user_id).await.map_err(ItemError::from)?;
+    let items = repo
+        .list(&auth_user.user_id)
+        .await
+        .map_err(ItemError::from)?;
     let rows = render_rows(&items, show_complete, tz)?;
-    render(ItemsListPageTemplate { rows, show_complete })
+    render(ItemsListPageTemplate {
+        rows,
+        show_complete,
+    })
 }
 
-pub async fn new_item_page(
-    Query(q): Query<ShowCompleteQuery>,
-) -> Result<Html<String>, ItemError> {
+pub async fn new_item_page(Query(q): Query<ShowCompleteQuery>) -> Result<Html<String>, ItemError> {
     render(NewItemPageTemplate {
         show_complete: q.show_complete.is_some(),
         blank_recurrence: None,
@@ -632,7 +660,10 @@ pub async fn children_fragment(
     repo.get(&auth_user.user_id, &item_id)
         .await
         .map_err(ItemError::from)?;
-    let children = repo.list_children(&item_id).await.map_err(ItemError::from)?;
+    let children = repo
+        .list_children(&item_id)
+        .await
+        .map_err(ItemError::from)?;
     let rows = render_rows(&children, true, tz)?;
     render(RowsFragmentTemplate {
         rows,
@@ -796,4 +827,3 @@ pub async fn save_as_checklist(
         r#"<span class="text-xs text-green-600">Saved</span>"#.to_string(),
     ))
 }
-

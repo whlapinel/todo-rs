@@ -7,7 +7,7 @@
                class="block w-full rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 placeholder:text-gray-400 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:placeholder:text-gray-500 dark:focus:outline-indigo-500" />
       </div>
     </label>
-    <div class="flex items-end gap-x-4">
+    <div class="scheduling-fields flex items-end gap-x-4">
       <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Due date
         <div class="mt-2">
           <input type="date" name="dueDate" value="{{ due_date_input }}"
@@ -21,21 +21,8 @@
         </div>
       </label>
     </div>
+    {% call macros::kind_fields(item_type_str, event_type_input) %}{% endcall %}
     {% call macros::scheduled_fields(scheduled_date_input, scheduled_time_input, scheduled_end_date_input, scheduled_end_time_input) %}{% endcall %}
-    <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Type
-      <div class="mt-2 grid grid-cols-1">
-        <select name="hasTasks"
-                class="col-start-1 row-start-1 block w-full appearance-none rounded-md bg-white py-1.5 pr-8 pl-3 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:*:bg-gray-800 dark:focus:outline-indigo-500">
-          {% if has_tasks %}
-          <option value="tasks" selected>Task list</option>
-          <option value="simple">Simple item</option>
-          {% else %}
-          <option value="tasks">Task list</option>
-          <option value="simple" selected>Simple item</option>
-          {% endif %}
-        </select>
-      </div>
-    </label>
     <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Status
       <div class="mt-2 grid grid-cols-1">
         <select name="complete"
@@ -51,7 +38,6 @@
       </div>
     </label>
     {% call macros::recurrence_fields(is_top_level, recurrence, recurrence_basis, due_offset_days_input) %}{% endcall %}
-    {% call macros::event_fields(is_event, event_type_input) %}{% endcall %}
     <div class="flex items-center gap-x-3">
       {% call macros::button_primary("Save") %}{% endcall %}
       {% if just_saved %}

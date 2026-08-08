@@ -142,7 +142,6 @@ fn row_to_item(row: &sqlx::sqlite::SqliteRow) -> Item {
         has_due_time: row.get::<Option<i64>, _>("has_due_time").unwrap_or(0) != 0,
         has_scheduled_time: row.get::<Option<i64>, _>("has_scheduled_time").unwrap_or(0) != 0,
         has_end_time: row.get::<Option<i64>, _>("has_end_time").unwrap_or(0) != 0,
-        has_tasks: row.get::<Option<i64>, _>("has_tasks").unwrap_or(1) != 0,
         has_children: row.get::<Option<i64>, _>("has_children").unwrap_or(0) != 0,
         item_type: row
             .get::<Option<String>, _>("item_type")
@@ -184,7 +183,6 @@ pub async fn create_pool(url: &str) -> Result<SqlitePool, sqlx::Error> {
             has_due_time INTEGER NOT NULL DEFAULT 0,
             has_scheduled_time INTEGER NOT NULL DEFAULT 0,
             has_end_time INTEGER NOT NULL DEFAULT 0,
-            has_tasks INTEGER NOT NULL DEFAULT 1,
             item_type TEXT NOT NULL DEFAULT 'TASK',
             event_type TEXT,
             due_offset_days INTEGER,

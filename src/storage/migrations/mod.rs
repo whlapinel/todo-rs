@@ -1,7 +1,9 @@
+mod has_tasks_to_simple;
 mod item_type_event_type;
 mod scheduled_end_date;
 
 use async_trait::async_trait;
+use has_tasks_to_simple::HasTasksToSimple;
 use item_type_event_type::ItemTypeEventType;
 use scheduled_end_date::ScheduledEndDate;
 use sqlx::{Row, SqlitePool, SqliteConnection};
@@ -38,7 +40,11 @@ async fn column_exists(
 }
 
 fn all_migrations() -> Vec<Box<dyn Migration>> {
-    vec![Box::new(ItemTypeEventType), Box::new(ScheduledEndDate)]
+    vec![
+        Box::new(ItemTypeEventType),
+        Box::new(ScheduledEndDate),
+        Box::new(HasTasksToSimple),
+    ]
 }
 
 pub async fn run_migrations(pool: &SqlitePool) -> Result<(), MigrationError> {
@@ -136,6 +142,67 @@ mod tests {
         pool
     }
 
+    async fn pre_simple_schema_pool() -> SqlitePool {
+        let pool = memory_pool().await;
+        sqlx::query(
+            "CREATE TABLE items (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                due_date INTEGER,
+                scheduled_date INTEGER,
+                scheduled_end_date INTEGER,
+                has_scheduled_time INTEGER NOT NULL DEFAULT 0,
+                has_end_time INTEGER NOT NULL DEFAULT 0,
+                has_tasks INTEGER NOT NULL DEFAULT 1,
+                item_type TEXT NOT NULL DEFAULT 'TASK',
+                event_type TEXT
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool
+    }
+
+    #[tokio::test]
+    async fn backfills_simple_item_type_and_drops_has_tasks() {
+        let pool = pre_simple_schema_pool().await;
+        sqlx::query(
+            "INSERT INTO items (id, name, has_tasks, item_type) VALUES \
+             ('1', 'Milk', 0, 'TASK'), \
+             ('2', 'Water plants', 1, 'TASK'), \
+             ('3', 'checklist child', 0, 'TEMPLATE')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        run_migrations(&pool).await.unwrap();
+
+        let item_type_1: String = sqlx::query_scalar("SELECT item_type FROM items WHERE id = '1'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(item_type_1, "SIMPLE");
+
+        let item_type_2: String = sqlx::query_scalar("SELECT item_type FROM items WHERE id = '2'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(item_type_2, "TASK");
+
+        // TEMPLATE rows keep their own type — has_tasks = 0 there is for unrelated
+        // reasons (checklist children never expose due-date fields regardless).
+        let item_type_3: String = sqlx::query_scalar("SELECT item_type FROM items WHERE id = '3'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(item_type_3, "TEMPLATE");
+
+        let mut conn = pool.acquire().await.unwrap();
+        assert!(!column_exists(&mut conn, "items", "has_tasks").await.unwrap());
+    }
+
     #[tokio::test]
     async fn migrates_old_schema_and_backfills_item_type() {
         let pool = old_schema_pool().await;
@@ -162,7 +229,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 2);
+        assert_eq!(applied_count, 3);
     }
 
     #[tokio::test]
@@ -175,7 +242,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 2);
+        assert_eq!(applied_count, 3);
     }
 
     #[tokio::test]
@@ -189,6 +256,6 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 2);
+        assert_eq!(applied_count, 3);
     }
 }

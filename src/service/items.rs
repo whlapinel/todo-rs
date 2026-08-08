@@ -25,7 +25,6 @@ pub struct CreateItemParams {
     pub has_due_time: Option<bool>,
     pub has_scheduled_time: Option<bool>,
     pub has_end_time: Option<bool>,
-    pub has_tasks: Option<bool>,
     pub parent_item_id: Option<String>,
     pub item_type: Option<ItemType>,
     pub event_type: Option<String>,
@@ -61,7 +60,14 @@ pub async fn create_item(
             "scheduledEndDate cannot be before scheduledDate".to_string(),
         ));
     }
-    let mut item = Item::new_user_item(&params.user_id, &params.name);
+    let mut item = match params.item_type.unwrap_or_default() {
+        ItemType::Simple => Item::new_simple(&params.user_id, &params.name),
+        ItemType::Event => Item::new_event(&params.user_id, &params.name),
+        ItemType::Task => Item::new_task(&params.user_id, &params.name),
+        // Unreachable via user input (rejected above); the "child of a template"
+        // auto-promotion below is what actually produces a Template item.
+        ItemType::Template => Item::new_user_item(&params.user_id, &params.name),
+    };
     item.due_date = params.due_date;
     item.scheduled_date = params.scheduled_date;
     item.scheduled_end_date = params.scheduled_end_date;
@@ -71,9 +77,7 @@ pub async fn create_item(
     item.has_due_time = params.has_due_time.unwrap_or(false);
     item.has_scheduled_time = params.has_scheduled_time.unwrap_or(false);
     item.has_end_time = params.has_end_time.unwrap_or(false);
-    item.has_tasks = params.has_tasks.unwrap_or(true);
     item.parent_item_id = params.parent_item_id.clone();
-    item.item_type = params.item_type.unwrap_or_default();
     item.event_type = params.event_type.clone();
     item.due_offset_days = params.due_offset_days;
 
@@ -84,6 +88,7 @@ pub async fn create_item(
     {
         item.item_type = ItemType::Template;
     }
+    item.validate().map_err(ItemError::Invalid)?;
     if let Some(ref pattern) = item.recurrence
         && let Ok(rule) = recurrence::parse(pattern)
     {
@@ -138,7 +143,6 @@ pub struct UpdateItemParams {
     pub has_due_time: Option<bool>,
     pub has_scheduled_time: Option<bool>,
     pub has_end_time: Option<bool>,
-    pub has_tasks: Option<bool>,
     pub parent_item_id: Option<String>,
     pub item_type: Option<ItemType>,
     pub event_type: Option<String>,
@@ -178,7 +182,14 @@ pub async fn update_item(
 
     let current = repo.get(&params.user_id, &params.item_id).await?;
 
-    let mut item = Item::new_user_item(&params.user_id, &params.name);
+    let item_type = params.item_type.unwrap_or(current.item_type);
+    let mut item = match item_type {
+        ItemType::Simple => Item::new_simple(&params.user_id, &params.name),
+        ItemType::Event => Item::new_event(&params.user_id, &params.name),
+        ItemType::Task => Item::new_task(&params.user_id, &params.name),
+        ItemType::Template => Item::new_user_item(&params.user_id, &params.name),
+    };
+    item.item_type = item_type;
     item.id = params.item_id.clone();
     item.complete = params.complete;
     item.due_date = params.due_date;
@@ -189,12 +200,11 @@ pub async fn update_item(
     item.has_due_time = params.has_due_time.unwrap_or(false);
     item.has_scheduled_time = params.has_scheduled_time.unwrap_or(false);
     item.has_end_time = params.has_end_time.unwrap_or(false);
-    item.has_tasks = params.has_tasks.unwrap_or(true);
     item.parent_item_id = params.parent_item_id.clone();
-    item.item_type = params.item_type.unwrap_or(current.item_type);
     item.event_type = params.event_type.clone();
     item.due_offset_days = params.due_offset_days;
     item.assigned_to_user_id = current.assigned_to_user_id.clone();
+    item.validate().map_err(ItemError::Invalid)?;
 
     let tz_offset = params.timezone_offset_minutes.unwrap_or(0);
     if let Some((next_item, next_anchor)) = item.next_recurrence(chrono::Utc::now(), tz_offset) {

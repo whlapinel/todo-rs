@@ -144,19 +144,17 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: "boolean",
             description: "Whether scheduledEndDate includes a specific time",
           },
-          hasTasks: {
-            type: "boolean",
-            description: "Whether this item can have sub-tasks",
-          },
           parentItemId: {
             type: "string",
             description: "ID of the parent item (for sub-tasks)",
           },
           itemType: {
             type: "string",
-            enum: ["TASK", "EVENT"],
+            enum: ["TASK", "EVENT", "SIMPLE"],
             description:
-              "TASK (default) is due-date-driven; EVENT is scheduled-date-primary, for calendar-style items.",
+              "TASK (default) is due-date-driven; EVENT is scheduled-date-primary, for calendar-style items; " +
+              "SIMPLE is a bare checkable name with no due date, scheduled window, recurrence, or due offset " +
+              "(the server rejects any of those on a SIMPLE item).",
           },
           eventType: {
             type: "string",
@@ -199,11 +197,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           hasDueTime: { type: "boolean" },
           hasScheduledTime: { type: "boolean" },
           hasEndTime: { type: "boolean" },
-          hasTasks: { type: "boolean" },
           parentItemId: { type: "string" },
           itemType: {
             type: "string",
-            enum: ["TASK", "EVENT"],
+            enum: ["TASK", "EVENT", "SIMPLE"],
             description: "Omit to leave the item's current kind unchanged.",
           },
           eventType: { type: "string" },
@@ -390,13 +387,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           hasDueTime: { type: "boolean" },
           hasScheduledTime: { type: "boolean" },
           hasEndTime: { type: "boolean" },
-          hasTasks: { type: "boolean" },
           parentItemId: { type: "string" },
           itemType: {
             type: "string",
-            enum: ["TASK", "EVENT"],
+            enum: ["TASK", "EVENT", "SIMPLE"],
             description:
-              "TASK (default) is due-date-driven; EVENT is scheduled-date-primary, for calendar-style items.",
+              "TASK (default) is due-date-driven; EVENT is scheduled-date-primary, for calendar-style items; " +
+              "SIMPLE is a bare checkable name with no due date, scheduled window, recurrence, or due offset " +
+              "(the server rejects any of those on a SIMPLE item).",
           },
           eventType: {
             type: "string",
@@ -433,11 +431,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           hasDueTime: { type: "boolean" },
           hasScheduledTime: { type: "boolean" },
           hasEndTime: { type: "boolean" },
-          hasTasks: { type: "boolean" },
           parentItemId: { type: "string" },
           itemType: {
             type: "string",
-            enum: ["TASK", "EVENT"],
+            enum: ["TASK", "EVENT", "SIMPLE"],
             description: "Omit to leave the item's current kind unchanged.",
           },
           eventType: { type: "string" },
@@ -523,7 +520,6 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         if (args.hasDueTime !== undefined) body.hasDueTime = args.hasDueTime;
         if (args.hasScheduledTime !== undefined) body.hasScheduledTime = args.hasScheduledTime;
         if (args.hasEndTime !== undefined) body.hasEndTime = args.hasEndTime;
-        if (args.hasTasks !== undefined) body.hasTasks = args.hasTasks;
         if (args.parentItemId) body.parentItemId = args.parentItemId;
         if (args.itemType) body.itemType = args.itemType;
         if (args.eventType) body.eventType = args.eventType;
@@ -547,7 +543,6 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         if (args.hasDueTime !== undefined) body.hasDueTime = args.hasDueTime;
         if (args.hasScheduledTime !== undefined) body.hasScheduledTime = args.hasScheduledTime;
         if (args.hasEndTime !== undefined) body.hasEndTime = args.hasEndTime;
-        if (args.hasTasks !== undefined) body.hasTasks = args.hasTasks;
         if (args.parentItemId) body.parentItemId = args.parentItemId;
         if (args.itemType) body.itemType = args.itemType;
         if (args.eventType !== undefined) body.eventType = args.eventType;
@@ -640,7 +635,6 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         if (args.hasDueTime !== undefined) body.hasDueTime = args.hasDueTime;
         if (args.hasScheduledTime !== undefined) body.hasScheduledTime = args.hasScheduledTime;
         if (args.hasEndTime !== undefined) body.hasEndTime = args.hasEndTime;
-        if (args.hasTasks !== undefined) body.hasTasks = args.hasTasks;
         if (args.parentItemId) body.parentItemId = args.parentItemId;
         if (args.itemType) body.itemType = args.itemType;
         if (args.eventType) body.eventType = args.eventType;
@@ -665,7 +659,6 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         if (args.hasDueTime !== undefined) body.hasDueTime = args.hasDueTime;
         if (args.hasScheduledTime !== undefined) body.hasScheduledTime = args.hasScheduledTime;
         if (args.hasEndTime !== undefined) body.hasEndTime = args.hasEndTime;
-        if (args.hasTasks !== undefined) body.hasTasks = args.hasTasks;
         if (args.parentItemId) body.parentItemId = args.parentItemId;
         if (args.itemType) body.itemType = args.itemType;
         if (args.eventType !== undefined) body.eventType = args.eventType;

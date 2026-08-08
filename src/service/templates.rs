@@ -25,7 +25,6 @@ pub async fn create_template(
         item.recurrence = source.recurrence;
         item.recurrence_basis = source.recurrence_basis;
         item.has_due_time = source.has_due_time;
-        item.has_tasks = source.has_tasks;
         item.event_type = source.event_type;
         item.due_offset_days = source.due_offset_days;
         // deadline intentionally not copied — templates have no dates

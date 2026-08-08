@@ -37,7 +37,6 @@ pub struct TeamItemForm {
     recurrence: Option<String>,
     recurrence_basis: Option<String>,
     due_offset_days: Option<String>,
-    has_tasks: Option<String>,
     parent_item_id: Option<String>,
     item_type: Option<String>,
     event_type: Option<String>,
@@ -81,14 +80,6 @@ fn overlay_bool(form_value: &Option<String>, current: bool) -> bool {
     match form_value.as_deref() {
         Some("true") => true,
         Some("false") => false,
-        _ => current,
-    }
-}
-
-fn overlay_has_tasks(form_value: &Option<String>, current: bool) -> bool {
-    match form_value.as_deref() {
-        Some("simple") => false,
-        Some("tasks") => true,
         _ => current,
     }
 }
@@ -189,11 +180,6 @@ fn create_params_from_form(
         has_due_time: form.due_time.as_deref().map(|t| !t.trim().is_empty()),
         has_scheduled_time: form.scheduled_time.as_deref().map(|t| !t.trim().is_empty()),
         has_end_time: form.scheduled_end_time.as_deref().map(|t| !t.trim().is_empty()),
-        has_tasks: match form.has_tasks.as_deref() {
-            Some("simple") => Some(false),
-            Some("tasks") => Some(true),
-            _ => None,
-        },
         parent_item_id: non_empty(&form.parent_item_id),
         item_type: parse_item_type(&form.item_type),
         event_type: non_empty(&form.event_type),
@@ -238,7 +224,6 @@ fn update_params_from_form(
         has_due_time: Some(overlay_has_due_time(&form.due_time, current.has_due_time)),
         has_scheduled_time: Some(overlay_has_due_time(&form.scheduled_time, current.has_scheduled_time)),
         has_end_time: Some(overlay_has_due_time(&form.scheduled_end_time, current.has_end_time)),
-        has_tasks: Some(overlay_has_tasks(&form.has_tasks, current.has_tasks)),
         parent_item_id: current.parent_item_id.clone(),
         item_type: parse_item_type(&form.item_type),
         event_type: overlay_str(&form.event_type, current.event_type.clone()),
@@ -335,7 +320,6 @@ struct DetailFields {
     team_id: String,
     name: String,
     complete: bool,
-    has_tasks: bool,
     is_top_level: bool,
     due_date_input: String,
     due_time_input: String,
@@ -346,7 +330,7 @@ struct DetailFields {
     recurrence: Option<String>,
     recurrence_basis: Option<String>,
     due_offset_days_input: String,
-    is_event: bool,
+    item_type_str: &'static str,
     event_type_input: String,
     assignee_options: Vec<(String, String)>,
     assigned_to_user_id: Option<String>,
@@ -393,7 +377,6 @@ impl DetailFields {
             team_id: team_id.to_string(),
             name: item.name.clone(),
             complete: item.complete,
-            has_tasks: item.has_tasks,
             is_top_level: item.parent_item_id.is_none(),
             due_date_input,
             due_time_input,
@@ -404,7 +387,7 @@ impl DetailFields {
             recurrence: item.recurrence.clone(),
             recurrence_basis: item.recurrence_basis.clone(),
             due_offset_days_input: format_offset_input(item.due_offset_days),
-            is_event: item.item_type == ItemType::Event,
+            item_type_str: item.item_type.as_str(),
             event_type_input: item.event_type.clone().unwrap_or_default(),
             assignee_options,
             assigned_to_user_id: item.assigned_to_user_id.clone(),
@@ -432,7 +415,6 @@ struct DetailView {
     team_id: String,
     complete: bool,
     toggle_complete_json: String,
-    has_tasks: bool,
     due_date: Option<String>,
     scheduled_date: Option<String>,
     scheduled_end_date: Option<String>,
@@ -440,7 +422,8 @@ struct DetailView {
     recurrence: Option<String>,
     recurrence_basis_label: String,
     offset_label: Option<String>,
-    is_event: bool,
+    kind_label: &'static str,
+    kind_color: &'static str,
     event_type: Option<String>,
     assignee_name: Option<String>,
 }
@@ -485,7 +468,6 @@ impl DetailView {
             team_id: team_id.to_string(),
             complete: item.complete,
             toggle_complete_json: (!item.complete).to_string(),
-            has_tasks: item.has_tasks,
             due_date,
             scheduled_date,
             scheduled_end_date,
@@ -493,7 +475,8 @@ impl DetailView {
             recurrence: item.recurrence.clone(),
             recurrence_basis_label: recurrence_basis_label(&item.recurrence_basis),
             offset_label,
-            is_event: item.item_type == ItemType::Event,
+            kind_label: item.item_type.label(),
+            kind_color: item.item_type.badge_color(),
             event_type: item.event_type.clone(),
             assignee_name: item
                 .assigned_to_user_id

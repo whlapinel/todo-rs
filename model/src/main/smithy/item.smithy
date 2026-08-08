@@ -6,6 +6,7 @@ enum ItemType {
     TASK
     EVENT
     TEMPLATE
+    SIMPLE
 }
 
 resource Item {
@@ -24,7 +25,6 @@ resource Item {
         hasDueTime: Boolean
         hasScheduledTime: Boolean
         hasEndTime: Boolean
-        hasTasks: Boolean
         parentItemId: String
         hasChildren: Boolean
         itemType: ItemType
@@ -66,8 +66,6 @@ operation CreateItem {
         $hasScheduledTime
 
         $hasEndTime
-
-        $hasTasks
 
         $parentItemId
 
@@ -127,8 +125,6 @@ operation GetItem {
 
         $hasEndTime
 
-        $hasTasks
-
         $parentItemId
 
         $hasChildren
@@ -180,8 +176,6 @@ operation UpdateItem {
         $hasScheduledTime
 
         $hasEndTime
-
-        $hasTasks
 
         $parentItemId
 
@@ -238,7 +232,6 @@ structure ItemSummary for Item {
     $hasDueTime
     $hasScheduledTime
     $hasEndTime
-    $hasTasks
     $parentItemId
     $hasChildren
     $itemType

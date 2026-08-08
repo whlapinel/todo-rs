@@ -50,7 +50,6 @@ pub async fn list_templates(
             has_due_time: Some(i.has_due_time),
             has_scheduled_time: Some(i.has_scheduled_time),
             has_end_time: Some(i.has_end_time),
-            has_tasks: Some(i.has_tasks),
             parent_item_id: i.parent_item_id,
             has_children: Some(i.has_children),
             item_type: Some(to_sdk_item_type(i.item_type)),

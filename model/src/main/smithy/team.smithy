@@ -18,7 +18,6 @@ resource TeamItem {
         hasDueTime: Boolean
         hasScheduledTime: Boolean
         hasEndTime: Boolean
-        hasTasks: Boolean
         parentItemId: String
         hasChildren: Boolean
         itemType: ItemType
@@ -60,8 +59,6 @@ operation CreateTeamItem {
         $hasScheduledTime
 
         $hasEndTime
-
-        $hasTasks
 
         $parentItemId
 
@@ -123,8 +120,6 @@ operation GetTeamItem {
 
         $hasEndTime
 
-        $hasTasks
-
         $parentItemId
 
         $hasChildren
@@ -176,8 +171,6 @@ operation UpdateTeamItem {
         $hasScheduledTime
 
         $hasEndTime
-
-        $hasTasks
 
         $parentItemId
 
@@ -236,7 +229,6 @@ structure TeamItemSummary for TeamItem {
     $hasDueTime
     $hasScheduledTime
     $hasEndTime
-    $hasTasks
     $parentItemId
     $hasChildren
     $itemType

@@ -310,7 +310,6 @@ pub async fn create_checklist_child_form(
         user_id: auth_user.user_id.clone(),
         name: form.name,
         parent_item_id: Some(template_id.clone()),
-        has_tasks: Some(false),
         due_offset_days: parse_offset(&form.due_offset_days),
         ..Default::default()
     };
@@ -382,7 +381,6 @@ pub async fn update_checklist_child_form(
         has_due_time: Some(false),
         has_scheduled_time: Some(false),
         has_end_time: Some(false),
-        has_tasks: Some(false),
         parent_item_id: Some(template_id.clone()),
         item_type: Some(ItemType::Task),
         event_type: current.event_type.clone(),
@@ -450,7 +448,6 @@ pub async fn use_checklist_form(
         due_date,
         recurrence: template.recurrence.clone(),
         recurrence_basis: template.recurrence_basis.clone(),
-        has_tasks: Some(template.has_tasks),
         timezone_offset_minutes: Some(tz),
         ..Default::default()
     };
