@@ -80,6 +80,10 @@ fn build_web_router() -> Router {
         )
         .route("/team-events/:team_id/new", get(new_team_event_page))
         .route(
+            "/team-events/:team_id/calendar",
+            get(team_events_calendar_page),
+        )
+        .route(
             "/team-events/:team_id/:item_id",
             get(team_event_detail_page)
                 .put(update_team_event_form)
