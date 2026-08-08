@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}Events Calendar · Todo{% endblock %}
+{% block content %}
+<div class="space-y-4">
+  <div class="flex flex-wrap items-center justify-between gap-3 border-b border-gray-200 pb-4 dark:border-white/10">
+    <h1 class="text-base font-semibold text-gray-900 dark:text-white">
+      <time datetime="{{ month_iso }}">{{ month_label }}</time>
+    </h1>
+    <div class="flex items-center gap-x-3">
+      <div class="flex items-center rounded-md bg-white shadow-xs outline -outline-offset-1 outline-gray-300 dark:bg-white/10 dark:shadow-none dark:outline-white/5">
+        <a href="/web/events/calendar?year={{ prev_year }}&month={{ prev_month }}"
+           class="flex h-9 w-9 items-center justify-center rounded-l-md text-gray-400 hover:bg-gray-50 hover:text-gray-500 dark:hover:bg-white/10 dark:hover:text-white">
+          <span class="sr-only">Previous month</span>
+          <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" class="size-5">
+            <path fill-rule="evenodd" clip-rule="evenodd" d="M11.78 5.22a.75.75 0 0 1 0 1.06L8.06 10l3.72 3.72a.75.75 0 1 1-1.06 1.06l-4.25-4.25a.75.75 0 0 1 0-1.06l4.25-4.25a.75.75 0 0 1 1.06 0Z" />
+          </svg>
+        </a>
+        <span class="h-5 w-px bg-gray-300 dark:bg-white/10"></span>
+        <a href="/web/events/calendar?year={{ next_year }}&month={{ next_month }}"
+           class="flex h-9 w-9 items-center justify-center rounded-r-md text-gray-400 hover:bg-gray-50 hover:text-gray-500 dark:hover:bg-white/10 dark:hover:text-white">
+          <span class="sr-only">Next month</span>
+          <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" class="size-5">
+            <path fill-rule="evenodd" clip-rule="evenodd" d="M8.22 5.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 0 1-1.06-1.06L11.94 10 8.22 6.28a.75.75 0 0 1 0-1.06Z" />
+          </svg>
+        </a>
+      </div>
+      <a href="/web/events" hx-target="#page" hx-select="#page" hx-swap="innerHTML"
+         class="inline-flex items-center justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-xs inset-ring inset-ring-gray-300 hover:bg-gray-50 dark:bg-white/10 dark:text-white dark:shadow-none dark:inset-ring-white/5 dark:hover:bg-white/20">List view</a>
+      <a href="/web/events/new" hx-target="#page" hx-select="#page" hx-swap="innerHTML"
+         class="inline-flex items-center justify-center rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-xs hover:bg-indigo-500 dark:bg-indigo-500 dark:shadow-none dark:hover:bg-indigo-400">New event</a>
+    </div>
+  </div>
+
+  <div class="overflow-hidden shadow-sm ring-1 ring-black/5 dark:shadow-none dark:ring-white/5">
+    <div class="grid grid-cols-7 gap-px border-b border-gray-300 bg-gray-200 text-center text-xs/6 font-semibold text-gray-700 dark:border-white/5 dark:bg-white/15 dark:text-gray-300">
+      <div class="bg-white py-2 dark:bg-gray-900">Mon</div>
+      <div class="bg-white py-2 dark:bg-gray-900">Tue</div>
+      <div class="bg-white py-2 dark:bg-gray-900">Wed</div>
+      <div class="bg-white py-2 dark:bg-gray-900">Thu</div>
+      <div class="bg-white py-2 dark:bg-gray-900">Fri</div>
+      <div class="bg-white py-2 dark:bg-gray-900">Sat</div>
+      <div class="bg-white py-2 dark:bg-gray-900">Sun</div>
+    </div>
+    <div class="grid grid-cols-7 grid-rows-6 gap-px bg-gray-200 text-xs/6 text-gray-700 dark:bg-white/10 dark:text-gray-300">
+      {% for day in days %}
+      <div class="relative min-h-24 {% if day.is_current_month %}bg-white dark:bg-gray-900{% else %}bg-gray-50 dark:bg-gray-800/50{% endif %} px-2 py-2">
+        <time datetime="{{ day.date }}"
+              class="relative {% if !day.is_current_month %}opacity-50{% endif %} {% if day.is_today %}flex size-6 items-center justify-center rounded-full bg-indigo-600 font-semibold text-white dark:bg-indigo-500{% endif %}">{{ day.day_number }}</time>
+        {% if !day.events.is_empty() %}
+        <ol class="mt-1 space-y-1">
+          {% for ev in day.events %}
+          <li>
+            <a href="/web/events/{{ ev.id }}" hx-target="#page" hx-select="#page" hx-swap="innerHTML" class="group flex">
+              <p class="flex-auto truncate font-medium text-gray-900 group-hover:text-indigo-600 dark:text-white dark:group-hover:text-indigo-400">{{ ev.name }}</p>
+              {% if let Some(t) = ev.time_label %}<span class="ml-2 hidden flex-none text-gray-500 group-hover:text-indigo-600 xl:block dark:text-gray-400 dark:group-hover:text-indigo-400">{{ t }}</span>{% endif %}
+            </a>
+          </li>
+          {% endfor %}
+        </ol>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+{% endblock %}

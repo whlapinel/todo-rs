@@ -62,6 +62,7 @@ fn build_web_router() -> Router {
         .route("/items/:item_id/save-as-checklist", post(save_as_checklist))
         .route("/events", get(events_page).post(create_event_form))
         .route("/events/new", get(new_event_page))
+        .route("/events/calendar", get(events_calendar_page))
         .route(
             "/events/:item_id",
             get(event_detail_page)

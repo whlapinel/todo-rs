@@ -6,7 +6,7 @@ use crate::storage::sqlite::{ItemRepo, RepoError};
 use askama::Template;
 use axum::extract::{Extension, Form, Path, Query};
 use axum::response::{Html, IntoResponse, Response};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Datelike, NaiveDate, Utc};
 use std::sync::Arc;
 
 fn render<T: Template>(t: T) -> Result<Html<String>, ItemError> {
@@ -479,6 +479,32 @@ struct EventEditPageTemplate {
     fields: String,
 }
 
+struct CalendarEventEntry {
+    id: String,
+    name: String,
+    time_label: Option<String>,
+}
+
+struct CalendarDay {
+    date: String,
+    day_number: u32,
+    is_current_month: bool,
+    is_today: bool,
+    events: Vec<CalendarEventEntry>,
+}
+
+#[derive(Template)]
+#[template(path = "events/calendar_page.html")]
+struct EventsCalendarPageTemplate {
+    month_label: String,
+    month_iso: String,
+    prev_year: i32,
+    prev_month: u32,
+    next_year: i32,
+    next_month: u32,
+    days: Vec<CalendarDay>,
+}
+
 // ---- shared rendering helpers ------------------------------------------------
 
 fn render_rows(items: &[Item], show_complete: bool, tz: i32) -> Result<Vec<String>, ItemError> {
@@ -512,6 +538,79 @@ async fn list_events(repo: &Arc<dyn ItemRepo>, user_id: &str) -> Result<Vec<Item
     Ok(items)
 }
 
+fn prev_month(year: i32, month: u32) -> (i32, u32) {
+    if month == 1 { (year - 1, 12) } else { (year, month - 1) }
+}
+
+fn next_month(year: i32, month: u32) -> (i32, u32) {
+    if month == 12 { (year + 1, 1) } else { (year, month + 1) }
+}
+
+/// The date each event displays under: `scheduled_date` if set, else `due_date` — same
+/// scheduled-primary fallback `sort_key`/`list_events` above use for the flat list, kept
+/// consistent so an event lands on the same day in both views. `calendar_has_time` mirrors it:
+/// whichever field supplied the date is also the field whose `has_*_time` flag decides
+/// whether a time label is shown.
+fn calendar_date(item: &Item) -> Option<DateTime<Utc>> {
+    item.scheduled_date.or(item.due_date)
+}
+
+fn calendar_has_time(item: &Item) -> bool {
+    if item.scheduled_date.is_some() {
+        item.has_scheduled_time
+    } else {
+        item.has_due_time
+    }
+}
+
+/// Builds the 42-cell (6-week, Monday-start) grid for `year`/`month`, bucketing `items` by
+/// local calendar day via `calendar_date`. Always 6 rows regardless of how many the month
+/// actually spans, matching the fixed `grid-rows-6` layout of the vendored Tailwind Plus
+/// component this view is adapted from.
+fn build_calendar_days(
+    year: i32,
+    month: u32,
+    items: &[Item],
+    tz: i32,
+    today: NaiveDate,
+) -> Vec<CalendarDay> {
+    let first_of_month = NaiveDate::from_ymd_opt(year, month, 1).unwrap();
+    let leading = first_of_month.weekday().num_days_from_monday();
+    let grid_start = first_of_month - chrono::Duration::days(leading as i64);
+
+    let mut by_date: std::collections::HashMap<NaiveDate, Vec<CalendarEventEntry>> =
+        std::collections::HashMap::new();
+    for item in items {
+        if let Some(dt) = calendar_date(item) {
+            let local = to_local(dt, tz);
+            let time_label = calendar_has_time(item).then(|| local.format("%H:%M").to_string());
+            by_date
+                .entry(local.date_naive())
+                .or_default()
+                .push(CalendarEventEntry {
+                    id: item.id.clone(),
+                    name: item.name.clone(),
+                    time_label,
+                });
+        }
+    }
+
+    let mut days = Vec::with_capacity(42);
+    for i in 0..42i64 {
+        let date = grid_start + chrono::Duration::days(i);
+        let mut events = by_date.remove(&date).unwrap_or_default();
+        events.sort_by(|a, b| a.time_label.cmp(&b.time_label));
+        days.push(CalendarDay {
+            date: date.format("%Y-%m-%d").to_string(),
+            day_number: date.day(),
+            is_current_month: date.month() == month && date.year() == year,
+            is_today: date == today,
+            events,
+        });
+    }
+    days
+}
+
 // ---- handlers -----------------------------------------------------------------
 
 #[derive(serde::Deserialize)]
@@ -532,6 +631,44 @@ pub async fn events_page(
     render(EventsListPageTemplate {
         rows,
         show_complete,
+    })
+}
+
+#[derive(serde::Deserialize)]
+pub struct CalendarQuery {
+    year: Option<i32>,
+    month: Option<u32>,
+}
+
+pub async fn events_calendar_page(
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    TzOffset(tz): TzOffset,
+    Query(q): Query<CalendarQuery>,
+) -> Result<Html<String>, ItemError> {
+    let today = to_local(Utc::now(), tz).date_naive();
+    let year = q.year.unwrap_or_else(|| today.year());
+    let month = q
+        .month
+        .filter(|m| (1..=12).contains(m))
+        .unwrap_or_else(|| today.month());
+
+    let items = list_events(&repo, &auth_user.user_id).await?;
+    let days = build_calendar_days(year, month, &items, tz, today);
+    let (prev_year, prev_month) = prev_month(year, month);
+    let (next_year, next_month) = next_month(year, month);
+
+    render(EventsCalendarPageTemplate {
+        month_label: NaiveDate::from_ymd_opt(year, month, 1)
+            .unwrap()
+            .format("%B %Y")
+            .to_string(),
+        month_iso: format!("{year:04}-{month:02}"),
+        prev_year,
+        prev_month,
+        next_year,
+        next_month,
+        days,
     })
 }
 

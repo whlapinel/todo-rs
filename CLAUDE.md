@@ -152,6 +152,12 @@ Screens: `items.rs` (personal items, `/web/items`), `dashboard.rs` (`/web/dashbo
 
 The tz offset (`new Date().getTimezoneOffset()`) is sent as an `X-Tz-Offset-Minutes` **header** (via a `htmx:configRequest` listener in `base.html`), not a form/query parameter — a parameter there previously leaked into `hx-push-url`'d URLs and broke `hx-select="#page"` navigation. A `tz_offset` cookie (set on every page load) is the fallback for non-htmx requests (bookmarks, hard refresh). See `TzOffset` in `src/handlers/web_ui/mod.rs`.
 
+### Tailwind Plus component library (`.vendor/tailwind-plus/`, gitignored)
+
+The user has a Tailwind Plus subscription and downloads component source as zips from their Google Drive when a restyle needs a specific component (this is how the items/team-items/checklists/dashboard/teams/assigned-items Tailwind Plus restyle commits got their markup). `.vendor/tailwind-plus/application-ui-v4/` is the extracted `application-ui-v4.zip` (Tailwind Plus's "Application UI" category) — not committed (`.gitignore`'d, `/.vendor/`), so it must be re-fetched from Drive in a fresh clone or a session that hasn't pulled it down yet. Layout: `html/<category>/<component-group>/NN-variant-name.html` (plain HTML + Tailwind classes, no framework), with sibling `react/` and `vue/` trees for the same components — **always use the `html/` tree**, never `react/`/`vue/`, since this app has no browser-side framework (see the Full Pipeline section above: server-rendered Askama + htmx only). E.g. the month-view calendar used for the Events calendar view is `html/data-display/calendars/02-month-view.html`.
+
+If `.vendor/tailwind-plus/` is missing, ask the user which Drive file to pull (they'll usually know, or it can be found by searching Drive for `application-ui-v4.zip` / similarly-named category zips) rather than assuming — there's no guarantee the same category zip covers whatever component is needed next.
+
 ### CLI (`todo-cli/`)
 
 A standalone Rust crate that builds the `prl` binary. Async (`#[tokio::main]`), uses the generated `todo-client` crate directly rather than hand-rolled `reqwest`/JSON structs. `client.rs` builds a `todo_client::Client` via `Config::builder().endpoint_url(...).bearer_token(Token::new(token, None)).build()` — the `@httpBearerAuth` trait (see Smithy section above) generates that `bearer_token` method, so there's no hand-written request interceptor. Config stored at `~/.config/prl/config.toml`. See `docs/prl-user-guide.md` for usage.

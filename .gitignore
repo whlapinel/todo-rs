@@ -21,3 +21,7 @@ model/build/
 *.db
 
 .env
+
+# Tailwind Plus component source, downloaded from the user's Google Drive — see CLAUDE.md's
+# "Tailwind Plus component library" section.
+/.vendor/
