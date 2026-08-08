@@ -38,6 +38,7 @@ use handlers::web_ui::events::*;
 use handlers::web_ui::hello_world::hello_world;
 use handlers::web_ui::items::*;
 use handlers::web_ui::login::login_page;
+use handlers::web_ui::simple_lists::*;
 use handlers::web_ui::tasks::*;
 use handlers::web_ui::team_items::*;
 use handlers::web_ui::teams::*;
@@ -88,6 +89,27 @@ fn build_web_router() -> Router {
         .route(
             "/tasks/:item_id/save-as-checklist",
             post(save_task_as_checklist),
+        )
+        .route(
+            "/simple-lists",
+            get(simple_lists_page).post(create_simple_item_form),
+        )
+        .route("/simple-lists/new", get(new_simple_item_page))
+        .route("/simple-lists/batch", post(create_simple_items_batch))
+        .route(
+            "/simple-lists/:item_id",
+            get(simple_item_detail_page)
+                .put(update_simple_item_form)
+                .delete(delete_simple_item_form),
+        )
+        .route("/simple-lists/:item_id/edit", get(simple_item_edit_page))
+        .route(
+            "/simple-lists/:item_id/children",
+            get(simple_item_children_fragment),
+        )
+        .route(
+            "/simple-lists/:item_id/save-as-checklist",
+            post(save_simple_item_as_checklist),
         )
         .route("/dashboard", get(dashboard_page))
         .route("/dashboard/items/:item_id", put(toggle_item_complete))

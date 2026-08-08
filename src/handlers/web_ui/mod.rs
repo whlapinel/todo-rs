@@ -7,6 +7,7 @@ pub mod hello_world;
 pub mod items;
 pub mod login;
 pub mod nav;
+pub mod simple_lists;
 pub mod tasks;
 pub mod team_items;
 pub mod teams;

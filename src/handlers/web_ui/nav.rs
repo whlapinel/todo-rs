@@ -75,7 +75,8 @@ struct NavTemplate {
 /// plan's roadmap, Stages 5-7). Templates always points at the personal `/checklists`
 /// screen regardless of context — team-scoped templates don't exist yet either (Stage 8).
 /// Personal Tasks points at the dedicated `/tasks` screen (Stage 2) rather than the interim
-/// `/items?kind=task` filter Stage 1 used.
+/// `/items?kind=task` filter Stage 1 used. Personal Simple Lists now points at the dedicated
+/// `/simple-lists` screen (Stage 3) the same way.
 fn section_href(section: SidebarSection, ctx: &ActiveContext) -> String {
     match (section, ctx) {
         (SidebarSection::Tasks, ActiveContext::Personal) => "/web/tasks".to_string(),
@@ -87,7 +88,7 @@ fn section_href(section: SidebarSection, ctx: &ActiveContext) -> String {
             format!("/web/team-items/{id}?kind=event")
         }
         (SidebarSection::SimpleLists, ActiveContext::Personal) => {
-            "/web/items?kind=simple".to_string()
+            "/web/simple-lists".to_string()
         }
         (SidebarSection::SimpleLists, ActiveContext::Team(id)) => {
             format!("/web/team-items/{id}?kind=simple")
