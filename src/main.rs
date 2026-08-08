@@ -41,6 +41,7 @@ use handlers::web_ui::simple_lists::*;
 use handlers::web_ui::tasks::*;
 use handlers::web_ui::team_events::*;
 use handlers::web_ui::team_items::*;
+use handlers::web_ui::team_simple_lists::*;
 use handlers::web_ui::team_tasks::*;
 use handlers::web_ui::teams::*;
 use handlers::web_ui::templates::*;
@@ -191,6 +192,32 @@ fn build_web_router() -> Router {
         .route(
             "/team-items/:team_id/:item_id/children",
             get(team_item_children_fragment),
+        )
+        .route(
+            "/team-simple-lists/:team_id",
+            get(team_simple_lists_page).post(create_team_simple_item_form),
+        )
+        .route(
+            "/team-simple-lists/:team_id/new",
+            get(new_team_simple_item_page),
+        )
+        .route(
+            "/team-simple-lists/:team_id/batch",
+            post(create_team_simple_items_batch),
+        )
+        .route(
+            "/team-simple-lists/:team_id/:item_id",
+            get(team_simple_item_detail_page)
+                .put(update_team_simple_item_form)
+                .delete(delete_team_simple_item_form),
+        )
+        .route(
+            "/team-simple-lists/:team_id/:item_id/edit",
+            get(team_simple_item_edit_page),
+        )
+        .route(
+            "/team-simple-lists/:team_id/:item_id/children",
+            get(team_simple_item_children_fragment),
         )
         .route(
             "/team-tasks/:team_id",
