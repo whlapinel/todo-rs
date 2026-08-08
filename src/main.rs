@@ -32,7 +32,6 @@ use handlers::json_api::teams::{
 use handlers::json_api::templates::{create_template, list_templates};
 use handlers::json_api::users::{get_user, list_users, update_user};
 use handlers::web_ui::assigned_items::assigned_items_page;
-use handlers::web_ui::checklists::*;
 use handlers::web_ui::dashboard::*;
 use handlers::web_ui::events::*;
 use handlers::web_ui::hello_world::hello_world;
@@ -42,6 +41,7 @@ use handlers::web_ui::simple_lists::*;
 use handlers::web_ui::tasks::*;
 use handlers::web_ui::team_items::*;
 use handlers::web_ui::teams::*;
+use handlers::web_ui::templates::*;
 use todo_server_sdk::{PeoplesRepublicOfLists, PeoplesRepublicOfListsConfig};
 use tower::ServiceBuilder;
 use tower_cookies::CookieManagerLayer;
@@ -61,7 +61,7 @@ fn build_web_router() -> Router {
         )
         .route("/items/:item_id/edit", get(item_edit_page))
         .route("/items/:item_id/children", get(children_fragment))
-        .route("/items/:item_id/save-as-checklist", post(save_as_checklist))
+        .route("/items/:item_id/save-as-template", post(save_as_template))
         .route("/events", get(events_page).post(create_event_form))
         .route("/events/new", get(new_event_page))
         .route("/events/calendar", get(events_calendar_page))
@@ -87,8 +87,8 @@ fn build_web_router() -> Router {
             get(task_children_fragment),
         )
         .route(
-            "/tasks/:item_id/save-as-checklist",
-            post(save_task_as_checklist),
+            "/tasks/:item_id/save-as-template",
+            post(save_task_as_template),
         )
         .route(
             "/simple-lists",
@@ -108,8 +108,8 @@ fn build_web_router() -> Router {
             get(simple_item_children_fragment),
         )
         .route(
-            "/simple-lists/:item_id/save-as-checklist",
-            post(save_simple_item_as_checklist),
+            "/simple-lists/:item_id/save-as-template",
+            post(save_simple_item_as_template),
         )
         .route("/dashboard", get(dashboard_page))
         .route("/dashboard/items/:item_id", put(toggle_item_complete))
@@ -119,30 +119,30 @@ fn build_web_router() -> Router {
         )
         .route("/assigned-items", get(assigned_items_page))
         .route(
-            "/checklists",
-            get(checklists_page).post(create_checklist_form),
+            "/templates",
+            get(templates_page).post(create_template_form),
         )
         .route(
-            "/checklists/:template_id",
-            get(checklist_detail_page)
-                .post(create_checklist_child_form)
-                .delete(delete_checklist_form),
+            "/templates/:template_id",
+            get(template_detail_page)
+                .post(create_template_child_form)
+                .delete(delete_template_form),
         )
         .route(
-            "/checklists/:template_id/items",
-            get(checklist_children_fragment),
+            "/templates/:template_id/items",
+            get(template_children_fragment),
         )
         .route(
-            "/checklists/:template_id/items/:item_id",
-            get(checklist_child_detail_page)
-                .put(update_checklist_child_form)
-                .delete(delete_checklist_child_form),
+            "/templates/:template_id/items/:item_id",
+            get(template_child_detail_page)
+                .put(update_template_child_form)
+                .delete(delete_template_child_form),
         )
         .route(
-            "/checklists/:template_id/items/:item_id/edit",
-            get(checklist_child_edit_page),
+            "/templates/:template_id/items/:item_id/edit",
+            get(template_child_edit_page),
         )
-        .route("/checklists/:template_id/use", post(use_checklist_form))
+        .route("/templates/:template_id/use", post(use_template_form))
         .route("/teams", get(teams_page).post(create_team_form))
         .route("/teams/:team_id", get(team_detail_page))
         .route("/teams/:team_id/invite", post(invite_team_member_form))

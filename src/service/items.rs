@@ -49,7 +49,7 @@ pub async fn create_item(
     }
     if params.item_type == Some(ItemType::Template) {
         return Err(ItemError::Invalid(
-            "item_type Template can only be set via the checklist-template creation flow"
+            "item_type Template can only be set via the template creation flow"
                 .to_string(),
         ));
     }
@@ -112,9 +112,9 @@ pub async fn create_item(
     }
     let item_id = repo.create(&item).await?;
 
-    // An event-typed item can auto-instantiate matching checklist templates'
-    // children onto itself — same mechanism the checklist "Use" flow already
-    // uses, just triggered by event_type matching instead of a manual click.
+    // An event-typed item can auto-instantiate matching templates'
+    // children onto itself — same mechanism the templates screen's "Use" flow
+    // already uses, just triggered by event_type matching instead of a manual click.
     if let Some(ref event_type) = item.event_type {
         let tz_offset = params.timezone_offset_minutes.unwrap_or(0);
         let root_date = item.due_date.or(item.scheduled_date);
@@ -168,7 +168,7 @@ pub async fn update_item(
     }
     if params.item_type == Some(ItemType::Template) {
         return Err(ItemError::Invalid(
-            "item_type Template can only be set via the checklist-template creation flow"
+            "item_type Template can only be set via the template creation flow"
                 .to_string(),
         ));
     }
@@ -289,8 +289,8 @@ pub(crate) fn clone_children<'a>(
 
 /// Recursively copies the subtree under `template_parent_id` onto `new_parent_id`, leaving
 /// the template itself untouched (unlike `clone_children`, nothing is deleted — the template
-/// must stay reusable for the next "Use" click). Used by `web_ui::checklists::use_checklist`
-/// when instantiating a real item from a checklist template.
+/// must stay reusable for the next "Use" click). Used by `web_ui::templates::use_template_form`
+/// when instantiating a real item from a template.
 ///
 /// Same fixed-root-offset semantics as `clone_children`: every descendant's deadline is
 /// `deadline_from_offset(root_due_date, tz_offset_minutes)`, measured from the single new
@@ -333,7 +333,7 @@ pub(crate) fn copy_template_children<'a>(
 /// converting each descendant into a `Template`-typed row — the mirror image of
 /// `copy_template_children` above (which copies FROM a template TO a real item; this copies
 /// FROM a real item TO a template). Used by `service::templates::create_template` when a
-/// "save as checklist" request names a `source_item_id`, so the resulting template actually
+/// "save as template" request names a `source_item_id`, so the resulting template actually
 /// reflects that item's children, not just its own fields.
 ///
 /// `due_offset_days` rides along unchanged (that's what lets `copy_template_children` later

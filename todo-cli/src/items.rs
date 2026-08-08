@@ -43,7 +43,7 @@ pub enum ItemsCommand {
         item_type: Option<String>,
         #[arg(
             long,
-            help = "Event category, e.g. 'rain' — auto-triggers matching checklist templates"
+            help = "Event category, e.g. 'rain' — auto-triggers matching templates"
         )]
         event_type: Option<String>,
         #[arg(long, help = "Scheduled start: YYYY-MM-DD or Unix timestamp")]

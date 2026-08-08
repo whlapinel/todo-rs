@@ -1,5 +1,4 @@
 pub mod assigned_items;
-pub mod checklists;
 pub mod dashboard;
 pub mod error;
 pub mod events;
@@ -11,6 +10,7 @@ pub mod simple_lists;
 pub mod tasks;
 pub mod team_items;
 pub mod teams;
+pub mod templates;
 
 use async_trait::async_trait;
 use axum::extract::FromRequestParts;

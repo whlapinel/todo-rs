@@ -839,7 +839,7 @@ pub async fn delete_task_form(
     Ok(Html(String::new()))
 }
 
-pub async fn save_task_as_checklist(
+pub async fn save_task_as_template(
     Path(item_id): Path<String>,
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,

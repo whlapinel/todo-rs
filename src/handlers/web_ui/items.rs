@@ -752,7 +752,7 @@ pub async fn children_fragment(
 }
 
 /// Redirect back to the items list (via the `hx-redirect` header, same mechanism
-/// `use_checklist_form` uses) after a create from the standalone `/items/new` page.
+/// `use_template_form` uses) after a create from the standalone `/items/new` page.
 fn redirect_to_items(show_complete: bool) -> Response {
     let location = if show_complete {
         "/web/items?showComplete=1".to_string()
@@ -884,7 +884,7 @@ pub async fn delete_item_form(
     Ok(Html(String::new()))
 }
 
-pub async fn save_as_checklist(
+pub async fn save_as_template(
     Path(item_id): Path<String>,
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,

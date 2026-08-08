@@ -510,7 +510,7 @@ pub async fn delete_simple_item_form(
     Ok(Html(String::new()))
 }
 
-pub async fn save_simple_item_as_checklist(
+pub async fn save_simple_item_as_template(
     Path(item_id): Path<String>,
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,

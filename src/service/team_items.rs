@@ -95,7 +95,7 @@ pub async fn create_team_item(
     }
     let item_id = repo.create(&item).await?;
 
-    // Checklist templates are a personal-item concept (scoped to the requester,
+    // Templates are a personal-item concept (scoped to the requester,
     // not the team), but a team event can still trigger one onto itself — same
     // mechanism as service::items::create_item's trigger step.
     if let Some(ref event_type) = item.event_type {

@@ -72,7 +72,7 @@ struct NavTemplate {
 ///
 /// Team-side Tasks/Events/SimpleLists are an interim `?kind=` filter on the generic
 /// `/team-items/:team_id` screen (no dedicated team-scoped screens exist yet — see the nav
-/// plan's roadmap, Stages 5-7). Templates always points at the personal `/checklists`
+/// plan's roadmap, Stages 5-7). Templates always points at the personal `/templates`
 /// screen regardless of context — team-scoped templates don't exist yet either (Stage 8).
 /// Personal Tasks points at the dedicated `/tasks` screen (Stage 2) rather than the interim
 /// `/items?kind=task` filter Stage 1 used. Personal Simple Lists now points at the dedicated
@@ -93,7 +93,7 @@ fn section_href(section: SidebarSection, ctx: &ActiveContext) -> String {
         (SidebarSection::SimpleLists, ActiveContext::Team(id)) => {
             format!("/web/team-items/{id}?kind=simple")
         }
-        (SidebarSection::Templates, _) => "/web/checklists".to_string(),
+        (SidebarSection::Templates, _) => "/web/templates".to_string(),
         (SidebarSection::None, ActiveContext::Personal) => "/web/items".to_string(),
         (SidebarSection::None, ActiveContext::Team(id)) => format!("/web/team-items/{id}"),
     }

@@ -19,8 +19,8 @@
   <div>
     <div class="flex items-center justify-between mb-2">
       <h3 class="text-base/7 font-semibold text-gray-900 dark:text-white">Sub-items</h3>
-      <button hx-post="/web/items/{{ id }}/save-as-checklist" hx-target="this" hx-select="unset" hx-swap="outerHTML"
-              class="cursor-pointer text-sm text-gray-400 hover:text-gray-700 dark:text-gray-500 dark:hover:text-gray-300">Save as checklist</button>
+      <button hx-post="/web/items/{{ id }}/save-as-template" hx-target="this" hx-select="unset" hx-swap="outerHTML"
+              class="cursor-pointer text-sm text-gray-400 hover:text-gray-700 dark:text-gray-500 dark:hover:text-gray-300">Save as template</button>
     </div>
     <ul id="children-list" class="divide-y divide-gray-100 rounded-lg border border-gray-200 bg-white px-4 dark:divide-white/5 dark:border-white/10 dark:bg-gray-800/50"
         hx-get="/web/items/{{ id }}/children" hx-trigger="load"

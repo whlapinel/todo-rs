@@ -32,14 +32,14 @@ fn parse_use_due_date(date: &str, tz_offset_minutes: i32) -> Option<DateTime<Utc
 // ---- templates --------------------------------------------------------------
 
 #[derive(Template)]
-#[template(path = "checklists/row.html")]
-struct ChecklistRow {
+#[template(path = "templates/row.html")]
+struct TemplateRow {
     id: String,
     name: String,
     recurrence: Option<String>,
 }
 
-impl ChecklistRow {
+impl TemplateRow {
     fn from_item(item: &Item) -> Self {
         Self {
             id: item.id.clone(),
@@ -50,21 +50,21 @@ impl ChecklistRow {
 }
 
 #[derive(Template)]
-#[template(path = "checklists/list_page.html")]
-struct ChecklistsListPageTemplate {
+#[template(path = "templates/list_page.html")]
+struct TemplatesListPageTemplate {
     rows: Vec<String>,
     nav_html: String,
 }
 
 #[derive(Template)]
-#[template(path = "checklists/rows_fragment.html")]
-struct ChecklistsRowsFragmentTemplate {
+#[template(path = "templates/rows_fragment.html")]
+struct TemplatesRowsFragmentTemplate {
     rows: Vec<String>,
 }
 
 #[derive(Template)]
-#[template(path = "checklists/child_row.html")]
-struct ChecklistChildRow {
+#[template(path = "templates/child_row.html")]
+struct TemplateChildRow {
     template_id: String,
     id: String,
     name: String,
@@ -80,7 +80,7 @@ fn format_offset_label(due_offset_days: Option<i32>) -> String {
     }
 }
 
-impl ChecklistChildRow {
+impl TemplateChildRow {
     fn from_item(template_id: &str, item: &Item) -> Self {
         Self {
             template_id: template_id.to_string(),
@@ -92,22 +92,22 @@ impl ChecklistChildRow {
 }
 
 #[derive(Template)]
-#[template(path = "checklists/children_fragment.html")]
+#[template(path = "templates/children_fragment.html")]
 struct ChildrenFragmentTemplate {
     rows: Vec<String>,
 }
 
 #[derive(Template)]
-#[template(path = "checklists/detail_page.html")]
-struct ChecklistDetailPageTemplate {
+#[template(path = "templates/detail_page.html")]
+struct TemplateDetailPageTemplate {
     id: String,
     name: String,
     nav_html: String,
 }
 
 #[derive(Template)]
-#[template(path = "checklists/child_detail_fields.html")]
-struct ChecklistChildDetailFields {
+#[template(path = "templates/child_detail_fields.html")]
+struct TemplateChildDetailFields {
     template_id: String,
     id: String,
     name: String,
@@ -117,7 +117,7 @@ struct ChecklistChildDetailFields {
     just_saved: bool,
 }
 
-impl ChecklistChildDetailFields {
+impl TemplateChildDetailFields {
     fn from_item(template_id: &str, item: &Item, just_saved: bool) -> Self {
         Self {
             template_id: template_id.to_string(),
@@ -132,18 +132,18 @@ impl ChecklistChildDetailFields {
     }
 }
 
-/// Read-only counterpart to `ChecklistChildDetailFields` — just the offset label, since
+/// Read-only counterpart to `TemplateChildDetailFields` — just the offset label, since
 /// that's the only thing besides the name (already shown via `<h1>`) the edit form sets.
-/// No complete-toggle: checklist children have no `complete` concept in their form at all
-/// (see `update_checklist_child_form`, which hardcodes it to `false`).
+/// No complete-toggle: template children have no `complete` concept in their form at all
+/// (see `update_template_child_form`, which hardcodes it to `false`).
 #[derive(Template)]
-#[template(path = "checklists/child_detail_view.html")]
-struct ChecklistChildDetailView {
+#[template(path = "templates/child_detail_view.html")]
+struct TemplateChildDetailView {
     id: String,
     offset_label: String,
 }
 
-impl ChecklistChildDetailView {
+impl TemplateChildDetailView {
     fn from_item(item: &Item) -> Self {
         Self {
             id: item.id.clone(),
@@ -153,8 +153,8 @@ impl ChecklistChildDetailView {
 }
 
 #[derive(Template)]
-#[template(path = "checklists/child_detail_page.html")]
-struct ChecklistChildDetailPageTemplate {
+#[template(path = "templates/child_detail_page.html")]
+struct TemplateChildDetailPageTemplate {
     template_id: String,
     id: String,
     name: String,
@@ -163,8 +163,8 @@ struct ChecklistChildDetailPageTemplate {
 }
 
 #[derive(Template)]
-#[template(path = "checklists/child_edit_page.html")]
-struct ChecklistChildEditPageTemplate {
+#[template(path = "templates/child_edit_page.html")]
+struct TemplateChildEditPageTemplate {
     template_id: String,
     id: String,
     name: String,
@@ -174,27 +174,27 @@ struct ChecklistChildEditPageTemplate {
 
 // ---- shared rendering helpers ------------------------------------------------
 
-fn render_checklist_rows(templates: &[Item]) -> Result<Vec<String>, ItemError> {
+fn render_template_rows(templates: &[Item]) -> Result<Vec<String>, ItemError> {
     templates
         .iter()
-        .map(|i| ChecklistRow::from_item(i).render())
+        .map(|i| TemplateRow::from_item(i).render())
         .collect::<Result<Vec<_>, _>>()
         .map_err(ItemError::from)
 }
 
-async fn render_checklists_rows_fragment(
+async fn render_templates_rows_fragment(
     repo: &Arc<dyn ItemRepo>,
     user_id: &str,
 ) -> Result<Html<String>, ItemError> {
     let templates = repo.list_templates(user_id).await.map_err(ItemError::from)?;
-    let rows = render_checklist_rows(&templates)?;
-    render(ChecklistsRowsFragmentTemplate { rows })
+    let rows = render_template_rows(&templates)?;
+    render(TemplatesRowsFragmentTemplate { rows })
 }
 
 fn render_children_rows(template_id: &str, children: &[Item]) -> Result<Vec<String>, ItemError> {
     children
         .iter()
-        .map(|i| ChecklistChildRow::from_item(template_id, i).render())
+        .map(|i| TemplateChildRow::from_item(template_id, i).render())
         .collect::<Result<Vec<_>, _>>()
         .map_err(ItemError::from)
 }
@@ -210,7 +210,7 @@ async fn render_children_fragment(
 
 // ---- handlers -----------------------------------------------------------------
 
-pub async fn checklists_page(
+pub async fn templates_page(
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(team_repo): Extension<Arc<dyn TeamRepo>>,
@@ -219,7 +219,7 @@ pub async fn checklists_page(
         .list_templates(&auth_user.user_id)
         .await
         .map_err(ItemError::from)?;
-    let rows = render_checklist_rows(&templates)?;
+    let rows = render_template_rows(&templates)?;
     let nav_html = nav::build_nav_html(
         &team_repo,
         &auth_user.user_id,
@@ -227,20 +227,20 @@ pub async fn checklists_page(
         SidebarSection::Templates,
     )
     .await?;
-    render(ChecklistsListPageTemplate { rows, nav_html })
+    render(TemplatesListPageTemplate { rows, nav_html })
 }
 
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CreateChecklistForm {
+pub struct CreateTemplateForm {
     name: String,
     event_type: Option<String>,
 }
 
-pub async fn create_checklist_form(
+pub async fn create_template_form(
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
-    Form(form): Form<CreateChecklistForm>,
+    Form(form): Form<CreateTemplateForm>,
 ) -> Result<Html<String>, ItemError> {
     let event_type = form
         .event_type
@@ -258,10 +258,10 @@ pub async fn create_checklist_form(
         },
     )
     .await?;
-    render_checklists_rows_fragment(&repo, &auth_user.user_id).await
+    render_templates_rows_fragment(&repo, &auth_user.user_id).await
 }
 
-pub async fn delete_checklist_form(
+pub async fn delete_template_form(
     Path(template_id): Path<String>,
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
@@ -270,7 +270,7 @@ pub async fn delete_checklist_form(
     Ok(Html(String::new()))
 }
 
-pub async fn checklist_detail_page(
+pub async fn template_detail_page(
     Path(template_id): Path<String>,
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
@@ -287,20 +287,20 @@ pub async fn checklist_detail_page(
         SidebarSection::Templates,
     )
     .await?;
-    render(ChecklistDetailPageTemplate {
+    render(TemplateDetailPageTemplate {
         id: template.id,
         name: template.name,
         nav_html,
     })
 }
 
-pub async fn checklist_children_fragment(
+pub async fn template_children_fragment(
     Path(template_id): Path<String>,
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
 ) -> Result<Html<String>, ItemError> {
     // Ownership gate: list_children itself isn't scoped by user, so confirm the caller owns
-    // the checklist before listing its items.
+    // the template before listing its items.
     repo.get(&auth_user.user_id, &template_id)
         .await
         .map_err(ItemError::from)?;
@@ -309,7 +309,7 @@ pub async fn checklist_children_fragment(
 
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ChecklistChildForm {
+pub struct TemplateChildForm {
     name: String,
     due_offset_days: Option<String>,
 }
@@ -322,11 +322,11 @@ fn parse_offset(form_value: &Option<String>) -> Option<i32> {
         .and_then(|s| s.parse().ok())
 }
 
-pub async fn create_checklist_child_form(
+pub async fn create_template_child_form(
     Path(template_id): Path<String>,
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
-    Form(form): Form<ChecklistChildForm>,
+    Form(form): Form<TemplateChildForm>,
 ) -> Result<Html<String>, ItemError> {
     let params = item_service::CreateItemParams {
         user_id: auth_user.user_id.clone(),
@@ -339,7 +339,7 @@ pub async fn create_checklist_child_form(
     render_children_fragment(&repo, &template_id).await
 }
 
-pub async fn checklist_child_detail_page(
+pub async fn template_child_detail_page(
     Path((template_id, item_id)): Path<(String, String)>,
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
@@ -349,7 +349,7 @@ pub async fn checklist_child_detail_page(
         .get(&auth_user.user_id, &item_id)
         .await
         .map_err(ItemError::from)?;
-    let view = ChecklistChildDetailView::from_item(&item).render()?;
+    let view = TemplateChildDetailView::from_item(&item).render()?;
     let nav_html = nav::build_nav_html(
         &team_repo,
         &auth_user.user_id,
@@ -357,7 +357,7 @@ pub async fn checklist_child_detail_page(
         SidebarSection::Templates,
     )
     .await?;
-    render(ChecklistChildDetailPageTemplate {
+    render(TemplateChildDetailPageTemplate {
         template_id,
         id: item.id,
         name: item.name,
@@ -366,7 +366,7 @@ pub async fn checklist_child_detail_page(
     })
 }
 
-pub async fn checklist_child_edit_page(
+pub async fn template_child_edit_page(
     Path((template_id, item_id)): Path<(String, String)>,
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
@@ -376,7 +376,7 @@ pub async fn checklist_child_edit_page(
         .get(&auth_user.user_id, &item_id)
         .await
         .map_err(ItemError::from)?;
-    let fields = ChecklistChildDetailFields::from_item(&template_id, &item, false).render()?;
+    let fields = TemplateChildDetailFields::from_item(&template_id, &item, false).render()?;
     let nav_html = nav::build_nav_html(
         &team_repo,
         &auth_user.user_id,
@@ -384,7 +384,7 @@ pub async fn checklist_child_edit_page(
         SidebarSection::Templates,
     )
     .await?;
-    render(ChecklistChildEditPageTemplate {
+    render(TemplateChildEditPageTemplate {
         template_id,
         id: item.id,
         name: item.name,
@@ -393,11 +393,11 @@ pub async fn checklist_child_edit_page(
     })
 }
 
-pub async fn update_checklist_child_form(
+pub async fn update_template_child_form(
     Path((template_id, item_id)): Path<(String, String)>,
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
-    Form(form): Form<ChecklistChildForm>,
+    Form(form): Form<TemplateChildForm>,
 ) -> Result<Html<String>, ItemError> {
     let current = repo
         .get(&auth_user.user_id, &item_id)
@@ -433,15 +433,15 @@ pub async fn update_checklist_child_form(
         .await
         .map_err(ItemError::from)?;
     // Same dual-purpose response as items::update_item_form: the row half serves a row-level
-    // PUT (none exist for checklist children today, but keeps this consistent with the
+    // PUT (none exist for template children today, but keeps this consistent with the
     // items.rs pattern it mirrors), the fields half serves this handler's own edit form,
-    // which targets/selects only `#checklist-item-{id}-fields` and ignores the rest.
-    let row = ChecklistChildRow::from_item(&template_id, &updated).render()?;
-    let fields = ChecklistChildDetailFields::from_item(&template_id, &updated, true).render()?;
+    // which targets/selects only `#template-item-{id}-fields` and ignores the rest.
+    let row = TemplateChildRow::from_item(&template_id, &updated).render()?;
+    let fields = TemplateChildDetailFields::from_item(&template_id, &updated, true).render()?;
     Ok(Html(format!("{row}{fields}")))
 }
 
-pub async fn delete_checklist_child_form(
+pub async fn delete_template_child_form(
     Path((_template_id, item_id)): Path<(String, String)>,
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
@@ -452,17 +452,17 @@ pub async fn delete_checklist_child_form(
 
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct UseChecklistForm {
+pub struct UseTemplateForm {
     name: Option<String>,
     due_date: Option<String>,
 }
 
-pub async fn use_checklist_form(
+pub async fn use_template_form(
     Path(template_id): Path<String>,
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     TzOffset(tz): TzOffset,
-    Form(form): Form<UseChecklistForm>,
+    Form(form): Form<UseTemplateForm>,
 ) -> Result<Response, ItemError> {
     let template = repo
         .get(&auth_user.user_id, &template_id)
