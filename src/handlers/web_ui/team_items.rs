@@ -43,6 +43,8 @@ pub struct TeamItemForm {
     event_type: Option<String>,
     assigned_to_user_id: Option<String>,
     show_complete: Option<String>,
+    /// See `web_ui::items::ItemForm::redirect` — same mechanism, mirrored here.
+    redirect: Option<String>,
 }
 
 fn non_empty(v: &Option<String>) -> Option<String> {
@@ -514,6 +516,13 @@ struct TeamItemsListPageTemplate {
     team_id: String,
     rows: Vec<String>,
     show_complete: bool,
+}
+
+#[derive(Template)]
+#[template(path = "team_items/new_page.html")]
+struct NewTeamItemPageTemplate {
+    team_id: String,
+    show_complete: bool,
     assignee_options: Vec<(String, String)>,
     blank_recurrence: Option<String>,
     blank_recurrence_basis: Option<String>,
@@ -624,11 +633,24 @@ pub async fn team_items_page(
         .map_err(ItemError::from)?;
     let names = names_for(&teams, &team_id, &auth_user.user_id).await?;
     let rows = render_rows(&items, &team_id, &names, show_complete, tz)?;
-    let assignee_options = active_member_options(&teams, &team_id, &auth_user.user_id).await?;
     render(TeamItemsListPageTemplate {
         team_id,
         rows,
         show_complete,
+    })
+}
+
+pub async fn new_team_item_page(
+    Path(team_id): Path<String>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Query(q): Query<ShowCompleteQuery>,
+) -> Result<Html<String>, ItemError> {
+    require_active_member(&teams, &team_id, &auth_user.user_id).await?;
+    let assignee_options = active_member_options(&teams, &team_id, &auth_user.user_id).await?;
+    render(NewTeamItemPageTemplate {
+        team_id,
+        show_complete: q.show_complete.is_some(),
         assignee_options,
         blank_recurrence: None,
         blank_recurrence_basis: Some("SCHEDULED_DATE".to_string()),
@@ -699,6 +721,24 @@ pub async fn team_item_children_fragment(
     })
 }
 
+/// Redirect back to a team's items list (via the `hx-redirect` header) after a create from the
+/// standalone `/team-items/:team_id/new` page. Mirrors `web_ui::items::redirect_to_items`.
+fn redirect_to_team_items(team_id: &str, show_complete: bool) -> Response {
+    let location = if show_complete {
+        format!("/web/team-items/{team_id}?showComplete=1")
+    } else {
+        format!("/web/team-items/{team_id}")
+    };
+    (
+        [(
+            axum::http::header::HeaderName::from_static("hx-redirect"),
+            location,
+        )],
+        Html(String::new()),
+    )
+        .into_response()
+}
+
 pub async fn create_team_item_form(
     Path(team_id): Path<String>,
     Extension(auth_user): Extension<AuthUser>,
@@ -706,12 +746,16 @@ pub async fn create_team_item_form(
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     TzOffset(tz): TzOffset,
     Form(form): Form<TeamItemForm>,
-) -> Result<Html<String>, ItemError> {
+) -> Result<Response, ItemError> {
     let show_complete = form.show_complete.is_some();
+    let redirect = form.redirect.is_some();
     let params = create_params_from_form(&team_id, &form, tz);
     let parent_item_id = params.parent_item_id.clone();
     team_item_service::create_team_item(&repo, &teams, &auth_user.user_id, params).await?;
-    render_scope_fragment(
+    if redirect {
+        return Ok(redirect_to_team_items(&team_id, show_complete));
+    }
+    Ok(render_scope_fragment(
         &repo,
         &teams,
         &team_id,
@@ -720,7 +764,8 @@ pub async fn create_team_item_form(
         show_complete,
         tz,
     )
-    .await
+    .await?
+    .into_response())
 }
 
 #[derive(serde::Deserialize, Debug, Default)]
@@ -729,6 +774,7 @@ pub struct BatchForm {
     names: String,
     parent_item_id: Option<String>,
     show_complete: Option<String>,
+    redirect: Option<String>,
 }
 
 pub async fn create_team_items_batch(
@@ -738,7 +784,7 @@ pub async fn create_team_items_batch(
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     TzOffset(tz): TzOffset,
     Form(form): Form<BatchForm>,
-) -> Result<Html<String>, ItemError> {
+) -> Result<Response, ItemError> {
     let parent_item_id = non_empty(&form.parent_item_id);
     for line in form.names.lines() {
         let name = line.trim();
@@ -754,7 +800,10 @@ pub async fn create_team_items_batch(
         };
         team_item_service::create_team_item(&repo, &teams, &auth_user.user_id, params).await?;
     }
-    render_scope_fragment(
+    if form.redirect.is_some() {
+        return Ok(redirect_to_team_items(&team_id, form.show_complete.is_some()));
+    }
+    Ok(render_scope_fragment(
         &repo,
         &teams,
         &team_id,
@@ -763,7 +812,8 @@ pub async fn create_team_items_batch(
         form.show_complete.is_some(),
         tz,
     )
-    .await
+    .await?
+    .into_response())
 }
 
 pub async fn update_team_item_form(

@@ -42,6 +42,12 @@ pub struct ItemForm {
     item_type: Option<String>,
     event_type: Option<String>,
     show_complete: Option<String>,
+    /// Present (any non-empty value) only on the standalone `/items/new` page's forms — tells
+    /// `create_item_form`/`create_items_batch` to redirect back to the items list via the
+    /// `hx-redirect` header instead of returning the row-scope fragment those handlers also
+    /// serve for the "add sub-item" form on `items/detail_page.html` (which has no `#page` to
+    /// select and must keep getting the `#children-list` fragment back).
+    redirect: Option<String>,
 }
 
 fn non_empty(v: &Option<String>) -> Option<String> {
@@ -475,6 +481,12 @@ struct RowsFragmentTemplate {
 struct ItemsListPageTemplate {
     rows: Vec<String>,
     show_complete: bool,
+}
+
+#[derive(Template)]
+#[template(path = "items/new_page.html")]
+struct NewItemPageTemplate {
+    show_complete: bool,
     blank_recurrence: Option<String>,
     blank_recurrence_basis: Option<String>,
     blank_due_offset_days_input: String,
@@ -554,9 +566,14 @@ pub async fn items_page(
     let show_complete = q.show_complete.is_some();
     let items = repo.list(&auth_user.user_id).await.map_err(ItemError::from)?;
     let rows = render_rows(&items, show_complete, tz)?;
-    render(ItemsListPageTemplate {
-        rows,
-        show_complete,
+    render(ItemsListPageTemplate { rows, show_complete })
+}
+
+pub async fn new_item_page(
+    Query(q): Query<ShowCompleteQuery>,
+) -> Result<Html<String>, ItemError> {
+    render(NewItemPageTemplate {
+        show_complete: q.show_complete.is_some(),
         blank_recurrence: None,
         blank_recurrence_basis: Some("SCHEDULED_DATE".to_string()),
         blank_due_offset_days_input: String::new(),
@@ -623,24 +640,47 @@ pub async fn children_fragment(
     })
 }
 
+/// Redirect back to the items list (via the `hx-redirect` header, same mechanism
+/// `use_checklist_form` uses) after a create from the standalone `/items/new` page.
+fn redirect_to_items(show_complete: bool) -> Response {
+    let location = if show_complete {
+        "/web/items?showComplete=1".to_string()
+    } else {
+        "/web/items".to_string()
+    };
+    (
+        [(
+            axum::http::header::HeaderName::from_static("hx-redirect"),
+            location,
+        )],
+        Html(String::new()),
+    )
+        .into_response()
+}
+
 pub async fn create_item_form(
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     TzOffset(tz): TzOffset,
     Form(form): Form<ItemForm>,
-) -> Result<Html<String>, ItemError> {
+) -> Result<Response, ItemError> {
     let show_complete = form.show_complete.is_some();
+    let redirect = form.redirect.is_some();
     let params = create_params_from_form(&auth_user.user_id, &form, tz);
     let parent_item_id = params.parent_item_id.clone();
     item_service::create_item(&repo, params).await?;
-    render_scope_fragment(
+    if redirect {
+        return Ok(redirect_to_items(show_complete));
+    }
+    Ok(render_scope_fragment(
         &repo,
         &auth_user.user_id,
         parent_item_id.as_deref(),
         show_complete,
         tz,
     )
-    .await
+    .await?
+    .into_response())
 }
 
 #[derive(serde::Deserialize, Debug, Default)]
@@ -649,6 +689,7 @@ pub struct BatchForm {
     names: String,
     parent_item_id: Option<String>,
     show_complete: Option<String>,
+    redirect: Option<String>,
 }
 
 pub async fn create_items_batch(
@@ -656,7 +697,7 @@ pub async fn create_items_batch(
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     TzOffset(tz): TzOffset,
     Form(form): Form<BatchForm>,
-) -> Result<Html<String>, ItemError> {
+) -> Result<Response, ItemError> {
     let parent_item_id = non_empty(&form.parent_item_id);
     for line in form.names.lines() {
         let name = line.trim();
@@ -672,14 +713,18 @@ pub async fn create_items_batch(
         };
         item_service::create_item(&repo, params).await?;
     }
-    render_scope_fragment(
+    if form.redirect.is_some() {
+        return Ok(redirect_to_items(form.show_complete.is_some()));
+    }
+    Ok(render_scope_fragment(
         &repo,
         &auth_user.user_id,
         parent_item_id.as_deref(),
         form.show_complete.is_some(),
         tz,
     )
-    .await
+    .await?
+    .into_response())
 }
 
 pub async fn update_item_form(

@@ -48,6 +48,7 @@ fn build_web_router() -> Router {
     Router::new()
         .route("/test", get(hello_world))
         .route("/items", get(items_page).post(create_item_form))
+        .route("/items/new", get(new_item_page))
         .route("/items/batch", post(create_items_batch))
         .route(
             "/items/:item_id",
@@ -99,6 +100,7 @@ fn build_web_router() -> Router {
             "/team-items/:team_id",
             get(team_items_page).post(create_team_item_form),
         )
+        .route("/team-items/:team_id/new", get(new_team_item_page))
         .route(
             "/team-items/:team_id/batch",
             post(create_team_items_batch),
