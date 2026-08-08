@@ -40,6 +40,7 @@ use handlers::web_ui::login::login_page;
 use handlers::web_ui::simple_lists::*;
 use handlers::web_ui::tasks::*;
 use handlers::web_ui::team_items::*;
+use handlers::web_ui::team_tasks::*;
 use handlers::web_ui::teams::*;
 use handlers::web_ui::templates::*;
 use todo_server_sdk::{PeoplesRepublicOfLists, PeoplesRepublicOfListsConfig};
@@ -170,6 +171,29 @@ fn build_web_router() -> Router {
         .route(
             "/team-items/:team_id/:item_id/children",
             get(team_item_children_fragment),
+        )
+        .route(
+            "/team-tasks/:team_id",
+            get(team_tasks_page).post(create_team_task_form),
+        )
+        .route("/team-tasks/:team_id/new", get(new_team_task_page))
+        .route(
+            "/team-tasks/:team_id/batch",
+            post(create_team_tasks_batch),
+        )
+        .route(
+            "/team-tasks/:team_id/:item_id",
+            get(team_task_detail_page)
+                .put(update_team_task_form)
+                .delete(delete_team_task_form),
+        )
+        .route(
+            "/team-tasks/:team_id/:item_id/edit",
+            get(team_task_edit_page),
+        )
+        .route(
+            "/team-tasks/:team_id/:item_id/children",
+            get(team_task_children_fragment),
         )
         // Without this, a path under /web/ that doesn't match any route above falls through
         // to the outer router's fallback_service (the SPA's frontend/dist/index.html) — a

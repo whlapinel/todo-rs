@@ -70,18 +70,20 @@ struct NavTemplate {
 /// That shared derivation is what makes "switching team preserves the current section" (a
 /// locked-in product decision) fall out for free rather than needing special-case code.
 ///
-/// Team-side Tasks/Events/SimpleLists are an interim `?kind=` filter on the generic
-/// `/team-items/:team_id` screen (no dedicated team-scoped screens exist yet — see the nav
-/// plan's roadmap, Stages 5-7). Templates always points at the personal `/templates`
+/// Team-side Events/SimpleLists are still an interim `?kind=` filter on the generic
+/// `/team-items/:team_id` screen (no dedicated screens exist yet for those — see the nav
+/// plan's roadmap, Stages 6-7). Templates always points at the personal `/templates`
 /// screen regardless of context — team-scoped templates don't exist yet either (Stage 8).
 /// Personal Tasks points at the dedicated `/tasks` screen (Stage 2) rather than the interim
 /// `/items?kind=task` filter Stage 1 used. Personal Simple Lists now points at the dedicated
-/// `/simple-lists` screen (Stage 3) the same way.
+/// `/simple-lists` screen (Stage 3) the same way. Team Tasks now points at the dedicated
+/// `/team-tasks/:team_id` screen (Stage 5) rather than the interim `/team-items/:team_id?kind=task`
+/// filter.
 fn section_href(section: SidebarSection, ctx: &ActiveContext) -> String {
     match (section, ctx) {
         (SidebarSection::Tasks, ActiveContext::Personal) => "/web/tasks".to_string(),
         (SidebarSection::Tasks, ActiveContext::Team(id)) => {
-            format!("/web/team-items/{id}?kind=task")
+            format!("/web/team-tasks/{id}")
         }
         (SidebarSection::Events, ActiveContext::Personal) => "/web/events".to_string(),
         (SidebarSection::Events, ActiveContext::Team(id)) => {

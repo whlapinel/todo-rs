@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}{{ name }} · Todo{% endblock %}
+{% block content %}
+<div class="space-y-6">
+  <div class="md:flex md:items-center md:justify-between">
+    <div class="min-w-0 flex-1">
+      <h2 class="text-2xl/7 font-bold text-gray-900 sm:truncate sm:text-3xl sm:tracking-tight dark:text-white">{{ name }}</h2>
+    </div>
+    <div class="mt-4 flex items-center gap-x-3 md:mt-0 md:ml-4">
+      <a href="/web/team-tasks/{{ team_id }}/{{ id }}/edit" hx-target="#page" hx-select="#page" hx-swap="innerHTML"
+         class="inline-flex items-center justify-center rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-xs hover:bg-indigo-500 dark:bg-indigo-500 dark:shadow-none dark:hover:bg-indigo-400">Edit</a>
+      <a href="/web/team-tasks/{{ team_id }}" hx-target="#page" hx-select="#page" hx-swap="innerHTML"
+         class="inline-flex items-center justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-xs inset-ring inset-ring-gray-300 hover:bg-gray-50 dark:bg-white/10 dark:text-white dark:shadow-none dark:inset-ring-white/5 dark:hover:bg-white/20">Back to tasks</a>
+    </div>
+  </div>
+
+  {{ view|safe }}
+
+  <div>
+    <h3 class="text-base/7 font-semibold text-gray-900 dark:text-white mb-2">Sub-items</h3>
+    <ul id="children-list" class="divide-y divide-gray-100 rounded-lg border border-gray-200 bg-white px-4 dark:divide-white/5 dark:border-white/10 dark:bg-gray-800/50"
+        hx-get="/web/team-tasks/{{ team_id }}/{{ id }}/children" hx-trigger="load"
+        hx-target="this" hx-select="unset" hx-swap="innerHTML"></ul>
+
+    <form hx-post="/web/team-tasks/{{ team_id }}" hx-target="#children-list" hx-select="unset" hx-swap="innerHTML"
+          hx-on::after-request="if(event.detail.successful) this.reset()"
+          class="mt-4 flex items-end gap-x-2">
+      <input type="hidden" name="parentItemId" value="{{ id }}" />
+      <label class="flex-1 block text-sm/6 font-medium text-gray-900 dark:text-white">New sub-item
+        <div class="mt-2">
+          <input type="text" name="name" placeholder="Name" required
+                 class="block w-full rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 placeholder:text-gray-400 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:placeholder:text-gray-500 dark:focus:outline-indigo-500" />
+        </div>
+      </label>
+      <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Offset days
+        <div class="mt-2">
+          <input type="number" name="dueOffsetDays"
+                 class="block w-20 rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:focus:outline-indigo-500" />
+        </div>
+      </label>
+      <button type="submit" class="inline-flex items-center justify-center rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-xs hover:bg-indigo-500 dark:bg-indigo-500 dark:shadow-none dark:hover:bg-indigo-400">Add</button>
+    </form>
+  </div>
+</div>
+{% endblock %}
