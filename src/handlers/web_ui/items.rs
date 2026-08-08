@@ -292,15 +292,18 @@ struct ItemRow {
 
 impl ItemRow {
     fn from_item(item: &Item, tz: i32) -> Self {
-        let offset_label = item
-            .parent_item_id
-            .as_ref()
-            .map(|_| match item.due_offset_days {
-                Some(0) => "on due date".to_string(),
-                Some(n) if n > 0 => format!("+{n}d"),
-                Some(n) => format!("{n}d"),
-                None => "no offset".to_string(),
-            });
+        let offset_label = match item.item_type {
+            ItemType::Simple => None,
+            _ => item
+                .parent_item_id
+                .as_ref()
+                .map(|_| match item.due_offset_days {
+                    Some(0) => "on due date".to_string(),
+                    Some(n) if n > 0 => format!("+{n}d"),
+                    Some(n) => format!("{n}d"),
+                    None => "no offset".to_string(),
+                }),
+        };
         Self {
             id: item.id.clone(),
             name: item.name.clone(),
@@ -464,15 +467,18 @@ impl DetailView {
                 local.format("%Y-%m-%d").to_string()
             }
         });
-        let offset_label = item
-            .parent_item_id
-            .as_ref()
-            .map(|_| match item.due_offset_days {
-                Some(0) => "on due date".to_string(),
-                Some(n) if n > 0 => format!("+{n}d"),
-                Some(n) => format!("{n}d"),
-                None => "no offset".to_string(),
-            });
+        let offset_label = match item.item_type {
+            ItemType::Simple => None,
+            _ => item
+                .parent_item_id
+                .as_ref()
+                .map(|_| match item.due_offset_days {
+                    Some(0) => "on due date".to_string(),
+                    Some(n) if n > 0 => format!("+{n}d"),
+                    Some(n) => format!("{n}d"),
+                    None => "no offset".to_string(),
+                }),
+        };
         Self {
             id: item.id.clone(),
             complete: item.complete,

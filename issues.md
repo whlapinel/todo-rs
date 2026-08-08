@@ -1,6 +1,5 @@
-- Major bug: "Assigned to me" has the same bug as dashboard page had, where team-owned items are treated as user-owned items
-- Item should have team name for team-owned items so we don't have to fetch in order to display in "from __" field
-- Potential long term issue: are we duplicating code unnecessarily between items and team items? risk of code drift, and different logic when it should be consistent between the two repos?  Should consolidate where feasible. There's also duplication on frontend e.g. between dashboard and assigned to me pages.
+- I don't like the word "kind" for ItemType. let's just call it type (assuming it still needs to show up anywhere after we split up the generic items path)
+- Potential long term issue: are we duplicating code unnecessarily between items and team items? risk of code drift, and different logic when it should be consistent between the two repos?  Should consolidate where feasible. 
 - Potential major bug: it appears that when marking recurring items complete, only the parent item is deleted, which would orphan all child items.
     - Furthermore, not sure I want to just delete the completed item. Might want to keep it actually. When we show completed items, any recurring item doesn't show up because it was deleted.
 - Shows warning on top-level item "If the top-level item recurs, this due date is recalculated from the offset below — manual edits here won't persist across recurrences."
