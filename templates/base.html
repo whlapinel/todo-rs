@@ -6,6 +6,14 @@
   <title>{% block title %}Todo{% endblock %}</title>
   <link rel="stylesheet" href="/web/static/style.css" />
   <script>
+    // Read before body paints so the desktop sidebar renders already-collapsed on load
+    // when that's the stored preference — applying the class after paint would cause a
+    // visible layout shift (sidebar flashes open, then snaps shut).
+    if (localStorage.getItem("sidebarCollapsed") === "1") {
+      document.documentElement.classList.add("sidebar-collapsed");
+    }
+  </script>
+  <script>
     // Fallback for the tzOffsetMinutes header (see the htmx:configRequest listener below):
     // that header only exists on htmx-issued requests, so a raw full-page load (bookmark,
     // hard refresh, typed URL) never carries one. This cookie, sent automatically on every
@@ -18,7 +26,7 @@
 <body class="bg-gray-50 text-gray-900 dark:bg-gray-900 dark:text-white" hx-boost="true" hx-target="#page" hx-select="#page" hx-swap="innerHTML">
   {% block header %}{{ nav_html|safe }}{% endblock %}
 
-  <main id="page" class="lg:pl-72">
+  <main id="page">
     <div class="max-w-7xl mx-auto px-4 py-8 sm:px-6 lg:px-8">
       {% block content %}{% endblock %}
     </div>
@@ -29,6 +37,20 @@
     document.body.addEventListener("htmx:configRequest", function (evt) {
       evt.detail.headers["X-Tz-Offset-Minutes"] = new Date().getTimezoneOffset();
     });
+
+    // Desktop-only sidebar collapse. #page never reserves space for the sidebar and never
+    // changes on toggle — the sidebar (styles/input.css's #sidebar-desktop rules) is a
+    // fixed-position overlay on its own stacking plane (z-30, above #page's implicit
+    // z-auto) that slides via `transform`, not `width`/`padding`, so toggling can never
+    // reflow #page's own box. On narrower desktop widths the expanded sidebar can overlap
+    // #page's centered content — accepted deliberately in favor of zero layout shift.
+    // Persisted to localStorage and re-applied synchronously in <head> (above) so a
+    // fresh/non-boosted page load never flashes one state before the other.
+    function toggleSidebar() {
+      var collapsed = !document.documentElement.classList.contains("sidebar-collapsed");
+      document.documentElement.classList.toggle("sidebar-collapsed", collapsed);
+      localStorage.setItem("sidebarCollapsed", collapsed ? "1" : "0");
+    }
   </script>
 </body>
 </html>

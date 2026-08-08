@@ -7,6 +7,14 @@
         <path d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" stroke-linecap="round" stroke-linejoin="round" />
       </svg>
     </button>
+    <button type="button" onclick="toggleSidebar()"
+            class="hidden -m-2.5 p-2.5 text-gray-700 hover:text-gray-900 lg:flex dark:text-gray-400 dark:hover:text-white">
+      <span class="sr-only">Toggle sidebar</span>
+      <svg id="sidebar-toggle-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"
+           class="size-5 transition-transform duration-200">
+        <path d="M15.75 19.5 8.25 12l7.5-7.5" stroke-linecap="round" stroke-linejoin="round" />
+      </svg>
+    </button>
     <a href="/web/items" class="shrink-0 text-sm font-semibold text-gray-900 dark:text-white">Todo</a>
     <nav class="flex flex-1 items-center gap-x-2 overflow-x-auto">
       <a href="{{ me_href }}"
@@ -20,7 +28,7 @@
   </div>
 </header>
 
-<div class="hidden lg:fixed lg:inset-y-0 lg:top-16 lg:z-30 lg:flex lg:w-72 lg:flex-col">
+<div id="sidebar-desktop" class="hidden lg:fixed lg:inset-y-0 lg:top-16 lg:left-0 lg:z-30 lg:flex lg:w-72 lg:flex-col">
   <div class="flex grow flex-col gap-y-5 overflow-y-auto border-r border-gray-200 bg-white pt-6 pb-4 dark:border-white/10 dark:bg-gray-900">
     {% include "nav_sidebar_inner.html" %}
   </div>

@@ -9,3 +9,27 @@
 .toast-fade {
   animation: toast-fade 2.5s ease-in forwards;
 }
+
+/* Desktop sidebar collapse (base.html's toggleSidebar()/nav.html's #sidebar-desktop).
+   #page is untouched by any of this — the sidebar is a fixed-position overlay that
+   slides via `transform` (a compositor-only property, no layout recalculation) rather
+   than `width`/`padding`, so toggling never moves or reflows #page's own box, even
+   during the transition. When expanded it can overlap #page's content on narrower
+   desktop widths; that's accepted deliberately (see base.html's comment) in favor of
+   #page never shifting. */
+#sidebar-desktop {
+  transition: transform 200ms ease-in-out;
+}
+
+@media (min-width: 1024px) {
+  html.sidebar-collapsed #sidebar-desktop {
+    transform: translateX(-100%);
+    /* Without this, the off-screen sidebar's links would still sit in tab order and
+       remain keyboard-focusable even though translateX has moved them out of view. */
+    visibility: hidden;
+  }
+}
+
+html.sidebar-collapsed #sidebar-toggle-icon {
+  transform: rotate(180deg);
+}
