@@ -329,6 +329,39 @@ pub(crate) fn copy_template_children<'a>(
     })
 }
 
+/// Recursively copies the subtree under `source_parent_id` onto `new_template_parent_id`,
+/// converting each descendant into a `Template`-typed row — the mirror image of
+/// `copy_template_children` above (which copies FROM a template TO a real item; this copies
+/// FROM a real item TO a template). Used by `service::templates::create_template` when a
+/// "save as checklist" request names a `source_item_id`, so the resulting template actually
+/// reflects that item's children, not just its own fields.
+///
+/// `due_offset_days` rides along unchanged (that's what lets `copy_template_children` later
+/// recompute each child's deadline when the template is used); dates themselves are cleared,
+/// matching `create_template`'s "templates have no dates" rule for the root.
+pub(crate) fn copy_children_as_template<'a>(
+    repo: &'a Arc<dyn ItemRepo>,
+    source_parent_id: &'a str,
+    new_template_parent_id: &'a str,
+) -> Pin<Box<dyn Future<Output = Result<(), RepoError>> + Send + 'a>> {
+    Box::pin(async move {
+        let children = repo.list_children(source_parent_id).await?;
+        for child in children {
+            let mut new_child = child.clone();
+            new_child.id = String::new();
+            new_child.parent_item_id = Some(new_template_parent_id.to_string());
+            new_child.complete = false;
+            new_child.item_type = ItemType::Template;
+            new_child.due_date = None;
+            new_child.scheduled_date = None;
+            new_child.scheduled_end_date = None;
+            let new_child_id = repo.create(&new_child).await?;
+            copy_children_as_template(repo, &child.id, &new_child_id).await?;
+        }
+        Ok(())
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

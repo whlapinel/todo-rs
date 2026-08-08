@@ -1,5 +1,5 @@
 use crate::domain::item::{Item, ItemType};
-use crate::service::items::ItemError;
+use crate::service::items::{copy_children_as_template, ItemError};
 use crate::storage::sqlite::ItemRepo;
 use std::sync::Arc;
 
@@ -19,8 +19,9 @@ pub async fn create_template(
     let mut item = Item::new_user_item(&params.user_id, &params.name);
     item.item_type = ItemType::Template;
 
-    if let Some(source_id) = params.source_item_id {
-        let source = repo.get(&params.user_id, &source_id).await?;
+    let source_id = params.source_item_id;
+    if let Some(source_id) = &source_id {
+        let source = repo.get(&params.user_id, source_id).await?;
         item.name = source.name;
         item.recurrence = source.recurrence;
         item.recurrence_basis = source.recurrence_basis;
@@ -34,5 +35,81 @@ pub async fn create_template(
     }
 
     let template_id = repo.create(&item).await?;
+
+    if let Some(source_id) = &source_id {
+        copy_children_as_template(repo, source_id, &template_id).await?;
+    }
+
     Ok(template_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::sqlite::MockItemRepo;
+
+    #[tokio::test]
+    async fn create_template_from_source_copies_its_children() {
+        let mut mock = MockItemRepo::new();
+
+        mock.expect_get()
+            .withf(|user_id: &str, item_id: &str| user_id == "u1" && item_id == "src")
+            .times(1)
+            .returning(|_, _| {
+                Ok(Item {
+                    id: "src".to_string(),
+                    user_id: Some("u1".to_string()),
+                    name: "Move house".to_string(),
+                    ..Item::default()
+                })
+            });
+
+        mock.expect_create()
+            .withf(|item: &Item| item.parent_item_id.is_none() && item.item_type == ItemType::Template)
+            .times(1)
+            .returning(|_| Ok("tpl1".to_string()));
+
+        mock.expect_list_children()
+            .withf(|parent_id: &str| parent_id == "src")
+            .times(1)
+            .returning(|_| {
+                Ok(vec![Item {
+                    id: "child1".to_string(),
+                    parent_item_id: Some("src".to_string()),
+                    name: "Pack boxes".to_string(),
+                    due_offset_days: Some(-3),
+                    ..Item::default()
+                }])
+            });
+
+        mock.expect_create()
+            .withf(|item: &Item| {
+                item.parent_item_id.as_deref() == Some("tpl1")
+                    && item.item_type == ItemType::Template
+                    && item.due_offset_days == Some(-3)
+            })
+            .times(1)
+            .returning(|_| Ok("child-tpl1".to_string()));
+
+        mock.expect_list_children()
+            .withf(|parent_id: &str| parent_id == "child1")
+            .times(1)
+            .returning(|_| Ok(vec![]));
+
+        let repo: Arc<dyn ItemRepo> = Arc::new(mock);
+
+        let template_id = create_template(
+            &repo,
+            CreateTemplateParams {
+                user_id: "u1".to_string(),
+                name: "Move house".to_string(),
+                source_item_id: Some("src".to_string()),
+                event_type: None,
+            },
+        )
+        .await
+        .expect("should create template with copied children");
+
+        assert_eq!(template_id, "tpl1");
+    }
 }
