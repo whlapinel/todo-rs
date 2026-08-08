@@ -264,6 +264,55 @@ operation ListTeamItems {
     ]
 }
 
+@http(method: "POST", uri: "/teams/{teamId}/templates")
+operation CreateTeamTemplate {
+    input := {
+        @required
+        @httpLabel
+        teamId: String
+
+        @required
+        @notProperty
+        name: String
+
+        @notProperty
+        sourceItemId: String
+
+        @notProperty
+        eventType: String
+    }
+
+    output := {
+        @required
+        @notProperty
+        templateId: String
+    }
+
+    errors: [
+        PeoplesRepublicOfListsError
+    ]
+}
+
+@readonly
+@http(method: "GET", uri: "/teams/{teamId}/templates")
+operation ListTeamTemplates {
+    input := {
+        @required
+        @httpLabel
+        teamId: String
+    }
+
+    output := {
+        @required
+        @notProperty
+        items: Items
+    }
+
+    errors: [
+        PeoplesRepublicOfListsError
+    ]
+}
+
 structure TeamMemberSummary {
     @required
     userId: String

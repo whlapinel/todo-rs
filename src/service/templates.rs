@@ -1,6 +1,7 @@
 use crate::domain::item::{Item, ItemType};
 use crate::service::items::{copy_children_as_template, ItemError};
-use crate::storage::sqlite::ItemRepo;
+use crate::service::team_items::require_active_member;
+use crate::storage::sqlite::{ItemRepo, TeamRepo};
 use std::sync::Arc;
 
 #[derive(Debug, Default)]
@@ -22,6 +23,53 @@ pub async fn create_template(
     let source_id = params.source_item_id;
     if let Some(source_id) = &source_id {
         let source = repo.get(&params.user_id, source_id).await?;
+        item.name = source.name;
+        item.recurrence = source.recurrence;
+        item.recurrence_basis = source.recurrence_basis;
+        item.has_due_time = source.has_due_time;
+        item.event_type = source.event_type;
+        item.due_offset_days = source.due_offset_days;
+        // deadline intentionally not copied — templates have no dates
+    }
+    if params.event_type.is_some() {
+        item.event_type = params.event_type;
+    }
+
+    let template_id = repo.create(&item).await?;
+
+    if let Some(source_id) = &source_id {
+        copy_children_as_template(repo, source_id, &template_id).await?;
+    }
+
+    Ok(template_id)
+}
+
+#[derive(Debug, Default)]
+pub struct CreateTeamTemplateParams {
+    pub team_id: String,
+    pub requester_user_id: String,
+    pub name: String,
+    pub source_item_id: Option<String>,
+    pub event_type: Option<String>,
+}
+
+/// Team-scoped twin of `create_template` above. Reuses `copy_children_as_template`
+/// unchanged — it already just `child.clone()`s before overwriting template-specific
+/// fields, so it carries over whichever of `user_id`/`team_id` the source subtree had.
+pub async fn create_team_template(
+    repo: &Arc<dyn ItemRepo>,
+    teams: &Arc<dyn TeamRepo>,
+    params: CreateTeamTemplateParams,
+) -> Result<String, ItemError> {
+    require_active_member(teams, &params.team_id, &params.requester_user_id).await?;
+
+    let mut item = Item::new_team_item(&params.team_id, &params.name);
+    item.item_type = ItemType::Template;
+
+    let source_id = params.source_item_id;
+    if let Some(source_id) = &source_id {
+        // get_team_item (not get) confirms the source item actually belongs to this team.
+        let source = repo.get_team_item(&params.team_id, source_id).await?;
         item.name = source.name;
         item.recurrence = source.recurrence;
         item.recurrence_basis = source.recurrence_basis;

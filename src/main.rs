@@ -25,6 +25,7 @@ use handlers::json_api::items::{
 use handlers::json_api::team_items::{
     create_team_item, delete_team_item, get_team_item, list_team_items, update_team_item,
 };
+use handlers::json_api::team_templates::{create_team_template, list_team_templates};
 use handlers::json_api::teams::{
     accept_team_invite, create_team, get_team, invite_team_member, leave_team, list_team_members,
     list_teams,
@@ -43,6 +44,7 @@ use handlers::web_ui::team_events::*;
 use handlers::web_ui::team_items::*;
 use handlers::web_ui::team_simple_lists::*;
 use handlers::web_ui::team_tasks::*;
+use handlers::web_ui::team_templates::*;
 use handlers::web_ui::teams::*;
 use handlers::web_ui::templates::*;
 use todo_server_sdk::{PeoplesRepublicOfLists, PeoplesRepublicOfListsConfig};
@@ -242,6 +244,46 @@ fn build_web_router() -> Router {
             "/team-tasks/:team_id/:item_id/children",
             get(team_task_children_fragment),
         )
+        .route(
+            "/team-tasks/:team_id/:item_id/save-as-template",
+            post(save_team_task_as_template),
+        )
+        .route(
+            "/team-events/:team_id/:item_id/save-as-template",
+            post(save_team_event_as_template),
+        )
+        .route(
+            "/team-simple-lists/:team_id/:item_id/save-as-template",
+            post(save_team_simple_item_as_template),
+        )
+        .route(
+            "/team-templates/:team_id",
+            get(team_templates_page).post(create_team_template_form),
+        )
+        .route(
+            "/team-templates/:team_id/:template_id",
+            get(team_template_detail_page)
+                .post(create_team_template_child_form)
+                .delete(delete_team_template_form),
+        )
+        .route(
+            "/team-templates/:team_id/:template_id/items",
+            get(team_template_children_fragment),
+        )
+        .route(
+            "/team-templates/:team_id/:template_id/items/:item_id",
+            get(team_template_child_detail_page)
+                .put(update_team_template_child_form)
+                .delete(delete_team_template_child_form),
+        )
+        .route(
+            "/team-templates/:team_id/:template_id/items/:item_id/edit",
+            get(team_template_child_edit_page),
+        )
+        .route(
+            "/team-templates/:team_id/:template_id/use",
+            post(use_team_template_form),
+        )
         // Without this, a path under /web/ that doesn't match any route above falls through
         // to the outer router's fallback_service (the SPA's frontend/dist/index.html) — a
         // different document with no #page element, which silently renders blank when a
@@ -298,6 +340,8 @@ async fn main() {
         .update_team_item(update_team_item)
         .delete_team_item(delete_team_item)
         .list_team_items(list_team_items)
+        .create_team_template(create_team_template)
+        .list_team_templates(list_team_templates)
         .build_unchecked();
 
     let api = ServiceBuilder::new()

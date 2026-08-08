@@ -17,5 +17,7 @@ service PeoplesRepublicOfLists {
         UpdateTeamItem
         DeleteTeamItem
         ListTeamItems
+        CreateTeamTemplate
+        ListTeamTemplates
     ]
 }

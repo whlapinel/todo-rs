@@ -268,6 +268,19 @@ impl ItemRepo for SqliteItemRepo {
             .map(|rows| rows.iter().map(row_to_item).collect())
     }
 
+    async fn list_team_templates(&self, team_id: &str) -> Result<Vec<Item>, RepoError> {
+        let q = format!(
+            "{ITEM_SELECT} FROM items WHERE team_id = ? AND item_type = 'TEMPLATE' AND parent_item_id IS NULL \
+             ORDER BY name ASC"
+        );
+        sqlx::query(&q)
+            .bind(team_id)
+            .fetch_all(&self.0)
+            .await
+            .map_err(db_err)
+            .map(|rows| rows.iter().map(row_to_item).collect())
+    }
+
     async fn list_assigned(&self, user_id: &str) -> Result<Vec<Item>, RepoError> {
         let q = format!(
             "{ITEM_SELECT} FROM items WHERE assigned_to_user_id = ? \

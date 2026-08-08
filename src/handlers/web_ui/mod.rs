@@ -12,6 +12,7 @@ pub mod team_events;
 pub mod team_items;
 pub mod team_simple_lists;
 pub mod team_tasks;
+pub mod team_templates;
 pub mod teams;
 pub mod templates;
 

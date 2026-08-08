@@ -70,18 +70,12 @@ struct NavTemplate {
 /// That shared derivation is what makes "switching team preserves the current section" (a
 /// locked-in product decision) fall out for free rather than needing special-case code.
 ///
-/// Templates always points at the personal `/templates` screen regardless of context —
-/// team-scoped templates don't exist yet (Stage 8). Personal Tasks points at the dedicated
-/// `/tasks` screen (Stage 2) rather than the interim `/items?kind=task` filter Stage 1 used.
-/// Personal Simple Lists now points at the dedicated `/simple-lists` screen (Stage 3) the
-/// same way. Team Tasks now points at the dedicated `/team-tasks/:team_id` screen (Stage 5)
-/// rather than the interim `/team-items/:team_id?kind=task` filter, Team Events now points
-/// at the dedicated `/team-events/:team_id` screen (Stage 6) rather than
-/// `/team-items/:team_id?kind=event`, and Team Simple Lists now points at the dedicated
-/// `/team-simple-lists/:team_id` screen (Stage 7) rather than `/team-items/:team_id?kind=simple`
-/// — every section now has a dedicated screen in both contexts, so no `?kind=` interim
+/// Every section now has a fully dedicated screen in both contexts, so no `?kind=` interim
 /// filter is used by this function anymore (the generic `/team-items`/`/items` catch-alls
 /// themselves are untouched and still support it directly, just no longer linked to here).
+/// Templates was the last holdout — team-scoped templates (Stage 8) added
+/// `/team-templates/:team_id`, so Templates/Team(id) no longer falls back to the personal
+/// `/templates` screen either.
 fn section_href(section: SidebarSection, ctx: &ActiveContext) -> String {
     match (section, ctx) {
         (SidebarSection::Tasks, ActiveContext::Personal) => "/web/tasks".to_string(),
@@ -98,7 +92,10 @@ fn section_href(section: SidebarSection, ctx: &ActiveContext) -> String {
         (SidebarSection::SimpleLists, ActiveContext::Team(id)) => {
             format!("/web/team-simple-lists/{id}")
         }
-        (SidebarSection::Templates, _) => "/web/templates".to_string(),
+        (SidebarSection::Templates, ActiveContext::Personal) => "/web/templates".to_string(),
+        (SidebarSection::Templates, ActiveContext::Team(id)) => {
+            format!("/web/team-templates/{id}")
+        }
         (SidebarSection::None, ActiveContext::Personal) => "/web/items".to_string(),
         (SidebarSection::None, ActiveContext::Team(id)) => format!("/web/team-items/{id}"),
     }

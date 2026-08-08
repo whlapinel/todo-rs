@@ -95,13 +95,14 @@ pub async fn create_team_item(
     }
     let item_id = repo.create(&item).await?;
 
-    // Templates are a personal-item concept (scoped to the requester,
-    // not the team), but a team event can still trigger one onto itself — same
-    // mechanism as service::items::create_item's trigger step.
+    // Considers both the requester's personal templates and the team's own —
+    // same mechanism as service::items::create_item's trigger step, plus
+    // the team-scoped template library from Stage 8.
     if let Some(ref event_type) = item.event_type {
         let tz_offset = params.timezone_offset_minutes.unwrap_or(0);
         let root_date = item.due_date.or(item.scheduled_date);
-        let templates = repo.list_templates(requester_user_id).await?;
+        let mut templates = repo.list_templates(requester_user_id).await?;
+        templates.extend(repo.list_team_templates(&params.team_id).await?);
         for tpl in templates
             .iter()
             .filter(|t| t.event_type.as_deref() == Some(event_type.as_str()))

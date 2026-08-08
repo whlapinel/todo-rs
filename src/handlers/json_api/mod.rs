@@ -1,6 +1,7 @@
 pub mod invites;
 pub mod items;
 pub mod team_items;
+pub mod team_templates;
 pub mod teams;
 pub mod templates;
 pub mod users;
