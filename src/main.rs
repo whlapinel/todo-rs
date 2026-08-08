@@ -38,6 +38,7 @@ use handlers::web_ui::events::*;
 use handlers::web_ui::hello_world::hello_world;
 use handlers::web_ui::items::*;
 use handlers::web_ui::login::login_page;
+use handlers::web_ui::tasks::*;
 use handlers::web_ui::team_items::*;
 use handlers::web_ui::teams::*;
 use todo_server_sdk::{PeoplesRepublicOfLists, PeoplesRepublicOfListsConfig};
@@ -70,6 +71,24 @@ fn build_web_router() -> Router {
                 .delete(delete_event_form),
         )
         .route("/events/:item_id/edit", get(event_edit_page))
+        .route("/tasks", get(tasks_page).post(create_task_form))
+        .route("/tasks/new", get(new_task_page))
+        .route("/tasks/batch", post(create_tasks_batch))
+        .route(
+            "/tasks/:item_id",
+            get(task_detail_page)
+                .put(update_task_form)
+                .delete(delete_task_form),
+        )
+        .route("/tasks/:item_id/edit", get(task_edit_page))
+        .route(
+            "/tasks/:item_id/children",
+            get(task_children_fragment),
+        )
+        .route(
+            "/tasks/:item_id/save-as-checklist",
+            post(save_task_as_checklist),
+        )
         .route("/dashboard", get(dashboard_page))
         .route("/dashboard/items/:item_id", put(toggle_item_complete))
         .route(

@@ -74,9 +74,11 @@ struct NavTemplate {
 /// `/team-items/:team_id` screen (no dedicated team-scoped screens exist yet — see the nav
 /// plan's roadmap, Stages 5-7). Templates always points at the personal `/checklists`
 /// screen regardless of context — team-scoped templates don't exist yet either (Stage 8).
+/// Personal Tasks points at the dedicated `/tasks` screen (Stage 2) rather than the interim
+/// `/items?kind=task` filter Stage 1 used.
 fn section_href(section: SidebarSection, ctx: &ActiveContext) -> String {
     match (section, ctx) {
-        (SidebarSection::Tasks, ActiveContext::Personal) => "/web/items?kind=task".to_string(),
+        (SidebarSection::Tasks, ActiveContext::Personal) => "/web/tasks".to_string(),
         (SidebarSection::Tasks, ActiveContext::Team(id)) => {
             format!("/web/team-items/{id}?kind=task")
         }
