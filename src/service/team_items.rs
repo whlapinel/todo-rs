@@ -1,6 +1,6 @@
 use crate::domain::item::{Item, ItemType};
 use crate::domain::recurrence;
-use crate::service::items::{clone_children, copy_template_children, ItemError};
+use crate::service::items::{clone_children, copy_template_children, item_anchor, sync_offset_children, ItemError};
 use crate::storage::sqlite::{ItemRepo, TeamRepo};
 use chrono::{DateTime, Utc};
 use std::sync::Arc;
@@ -100,7 +100,7 @@ pub async fn create_team_item(
     // the team-scoped template library from Stage 8.
     if let Some(ref event_type) = item.event_type {
         let tz_offset = params.timezone_offset_minutes.unwrap_or(0);
-        let root_date = item.due_date.or(item.scheduled_date);
+        let root_date = item_anchor(&item);
         let mut templates = repo.list_templates(requester_user_id).await?;
         templates.extend(repo.list_team_templates(&params.team_id).await?);
         for tpl in templates
@@ -265,5 +265,11 @@ pub async fn update_team_item(
     }
 
     repo.update_team_item(&item).await?;
+    let (old_anchor, new_anchor) = (item_anchor(&current), item_anchor(&item));
+    if let Some(new_anchor) = new_anchor
+        && Some(new_anchor) != old_anchor
+    {
+        sync_offset_children(repo, &item.id, new_anchor, tz_offset).await?;
+    }
     Ok(())
 }

@@ -117,7 +117,7 @@ pub async fn create_item(
     // already uses, just triggered by event_type matching instead of a manual click.
     if let Some(ref event_type) = item.event_type {
         let tz_offset = params.timezone_offset_minutes.unwrap_or(0);
-        let root_date = item.due_date.or(item.scheduled_date);
+        let root_date = item_anchor(&item);
         let templates = repo.list_templates(&params.user_id).await?;
         for tpl in templates
             .iter()
@@ -215,6 +215,12 @@ pub async fn update_item(
     }
 
     repo.update(&item).await?;
+    let (old_anchor, new_anchor) = (item_anchor(&current), item_anchor(&item));
+    if let Some(new_anchor) = new_anchor
+        && Some(new_anchor) != old_anchor
+    {
+        sync_offset_children(repo, &item.id, new_anchor, tz_offset).await?;
+    }
     Ok(())
 }
 
@@ -282,6 +288,44 @@ pub(crate) fn clone_children<'a>(
             )
             .await?;
             repo.delete(&child.id).await?;
+        }
+        Ok(())
+    })
+}
+
+/// An item's own reference date for anything measured relative to it (offset children,
+/// template auto-trigger copies) — `due_date` if set, else `scheduled_date`, else neither.
+pub(crate) fn item_anchor(item: &Item) -> Option<DateTime<Utc>> {
+    item.due_date.or(item.scheduled_date)
+}
+
+/// Recomputes `due_date` for every descendant of `parent_item_id` that has its own
+/// `due_offset_days` set, measured against `new_anchor` — called after a plain edit to the
+/// parent's own anchor date (see `item_anchor`), independent of recurrence. Unlike
+/// `clone_children`, this updates children in place (same ids, no re-parenting) and skips any
+/// child that has no `due_offset_days` — an independently-dated child isn't derived from the
+/// parent, so a parent edit shouldn't touch it. Same fixed-root-offset semantics as
+/// `clone_children` otherwise: every descendant, not just direct children, is measured against
+/// the same `new_anchor`, not chained through an intermediate parent's own (already-recomputed)
+/// date.
+pub(crate) fn sync_offset_children<'a>(
+    repo: &'a Arc<dyn ItemRepo>,
+    parent_item_id: &'a str,
+    new_anchor: DateTime<Utc>,
+    tz_offset_minutes: i32,
+) -> Pin<Box<dyn Future<Output = Result<(), RepoError>> + Send + 'a>> {
+    Box::pin(async move {
+        let children = repo.list_children(parent_item_id).await?;
+        for mut child in children {
+            if child.due_offset_days.is_some() {
+                child.due_date = child.deadline_from_offset(new_anchor, tz_offset_minutes);
+                if child.team_id.is_some() {
+                    repo.update_team_item(&child).await?;
+                } else {
+                    repo.update(&child).await?;
+                }
+            }
+            sync_offset_children(repo, &child.id, new_anchor, tz_offset_minutes).await?;
         }
         Ok(())
     })
@@ -623,5 +667,130 @@ mod tests {
         .expect_err("should reject end before start");
 
         assert!(matches!(err, ItemError::Invalid(_)));
+    }
+
+    #[tokio::test]
+    async fn update_item_plain_edit_syncs_offset_children_leaving_non_offset_children_untouched() {
+        let mut mock = MockItemRepo::new();
+
+        let old_due = DateTime::parse_from_rfc3339("2026-01-10T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let new_due = DateTime::parse_from_rfc3339("2026-01-17T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let manual_child_due = DateTime::parse_from_rfc3339("2026-01-05T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        mock.expect_get().returning(move |_, _| {
+            Ok(Item {
+                id: "item1".to_string(),
+                user_id: Some("u1".to_string()),
+                due_date: Some(old_due),
+                ..Item::default()
+            })
+        });
+
+        mock.expect_update()
+            .withf(move |item: &Item| item.id == "item1" && item.due_date == Some(new_due))
+            .times(1)
+            .returning(|_| Ok(()));
+
+        mock.expect_list_children()
+            .withf(|parent_id: &str| parent_id == "item1")
+            .times(1)
+            .returning(move |_| {
+                Ok(vec![
+                    Item {
+                        id: "offset-child".to_string(),
+                        parent_item_id: Some("item1".to_string()),
+                        due_offset_days: Some(3),
+                        ..Item::default()
+                    },
+                    Item {
+                        id: "manual-child".to_string(),
+                        parent_item_id: Some("item1".to_string()),
+                        due_date: Some(manual_child_due),
+                        ..Item::default()
+                    },
+                ])
+            });
+
+        let expected_offset_child_due =
+            recurrence::apply_end_of_day(new_due + chrono::Duration::days(3), 0);
+        mock.expect_update()
+            .withf(move |item: &Item| {
+                item.id == "offset-child" && item.due_date == Some(expected_offset_child_due)
+            })
+            .times(1)
+            .returning(|_| Ok(()));
+
+        // manual-child has no due_offset_days, so it must never be passed to `update` at all —
+        // no expectation is set up for it; mockall panics on any unmatched call.
+        mock.expect_list_children()
+            .withf(|parent_id: &str| parent_id == "offset-child")
+            .times(1)
+            .returning(|_| Ok(vec![]));
+        mock.expect_list_children()
+            .withf(|parent_id: &str| parent_id == "manual-child")
+            .times(1)
+            .returning(|_| Ok(vec![]));
+
+        let repo: Arc<dyn ItemRepo> = Arc::new(mock);
+
+        update_item(
+            &repo,
+            UpdateItemParams {
+                user_id: "u1".to_string(),
+                item_id: "item1".to_string(),
+                name: "Rescheduled".to_string(),
+                due_date: Some(new_due),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("should update and sync offset children only");
+    }
+
+    #[tokio::test]
+    async fn update_item_plain_edit_skips_sync_when_anchor_unchanged() {
+        let mut mock = MockItemRepo::new();
+
+        let due = DateTime::parse_from_rfc3339("2026-01-10T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        mock.expect_get().returning(move |_, _| {
+            Ok(Item {
+                id: "item1".to_string(),
+                user_id: Some("u1".to_string()),
+                due_date: Some(due),
+                ..Item::default()
+            })
+        });
+
+        mock.expect_update()
+            .withf(move |item: &Item| item.id == "item1" && item.due_date == Some(due))
+            .times(1)
+            .returning(|_| Ok(()));
+
+        // Anchor (due_date) is unchanged, so sync_offset_children must never run —
+        // no list_children expectation is set up; mockall panics on any unmatched call.
+
+        let repo: Arc<dyn ItemRepo> = Arc::new(mock);
+
+        update_item(
+            &repo,
+            UpdateItemParams {
+                user_id: "u1".to_string(),
+                item_id: "item1".to_string(),
+                name: "Renamed only".to_string(),
+                due_date: Some(due),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("should update without touching children");
     }
 }
