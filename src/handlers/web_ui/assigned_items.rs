@@ -7,6 +7,7 @@ use crate::storage::sqlite::{ItemRepo, TeamRepo};
 use askama::Template;
 use axum::extract::Extension;
 use axum::response::Html;
+use chrono::Utc;
 use std::sync::Arc;
 
 use crate::handlers::web_ui::TzOffset;
@@ -22,6 +23,7 @@ struct AssignedItemRow {
     name: String,
     complete: bool,
     due_date: Option<String>,
+    overdue: bool,
     detail_link: String,
     toggle_complete_json: String,
 }
@@ -49,6 +51,7 @@ impl AssignedItemRow {
             due_date: item
                 .due_date
                 .map(|d| to_local(d, tz).format("%Y-%m-%d %H:%M").to_string()),
+            overdue: item.is_overdue(Utc::now()),
             toggle_complete_json: (!item.complete).to_string(),
         })
     }

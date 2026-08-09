@@ -320,6 +320,7 @@ struct TeamEventRow {
     scheduled_date: Option<String>,
     scheduled_end_date: Option<String>,
     due_date: Option<String>,
+    overdue: bool,
     event_type: Option<String>,
     has_children: bool,
     recurrence: Option<String>,
@@ -353,6 +354,7 @@ impl TeamEventRow {
             due_date: item
                 .due_date
                 .map(|d| to_local(d, tz).format("%Y-%m-%d %H:%M").to_string()),
+            overdue: item.is_overdue(Utc::now()),
             event_type: item.event_type.clone(),
             has_children: item.has_children,
             recurrence: item.recurrence.clone(),
@@ -462,6 +464,7 @@ struct TeamEventDetailView {
     scheduled_date: Option<String>,
     scheduled_end_date: Option<String>,
     due_date: Option<String>,
+    overdue: bool,
     event_type: Option<String>,
     recurrence: Option<String>,
     recurrence_basis_label: String,
@@ -502,6 +505,7 @@ impl TeamEventDetailView {
             scheduled_date,
             scheduled_end_date,
             due_date,
+            overdue: item.is_overdue(Utc::now()),
             event_type: item.event_type.clone(),
             recurrence: item.recurrence.clone(),
             recurrence_basis_label: recurrence_basis_label(&item.recurrence_basis),

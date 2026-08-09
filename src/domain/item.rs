@@ -225,6 +225,13 @@ impl Item {
             )
         })
     }
+
+    /// An incomplete item whose `due_date` has passed. `scheduled_date` never factors in here
+    /// — "overdue" is a deadline concept, not a planning-window one (see the Scheduled
+    /// start/end section of CLAUDE.md for that distinction).
+    pub fn is_overdue(&self, now: DateTime<Utc>) -> bool {
+        !self.complete && self.due_date.is_some_and(|d| d < now)
+    }
 }
 
 #[cfg(test)]
@@ -450,5 +457,37 @@ mod tests {
             deadline.date_naive(),
             (root_deadline + Duration::days(1)).date_naive()
         );
+    }
+
+    fn utc(s: &str) -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc)
+    }
+
+    #[test]
+    fn is_overdue_true_when_incomplete_and_due_date_past() {
+        let mut item = Item::new_user_item("u1", "Pay rent");
+        item.due_date = Some(utc("2020-01-01T00:00:00Z"));
+        assert!(item.is_overdue(utc("2026-01-01T00:00:00Z")));
+    }
+
+    #[test]
+    fn is_overdue_false_when_due_date_in_future() {
+        let mut item = Item::new_user_item("u1", "Pay rent");
+        item.due_date = Some(utc("2030-01-01T00:00:00Z"));
+        assert!(!item.is_overdue(utc("2026-01-01T00:00:00Z")));
+    }
+
+    #[test]
+    fn is_overdue_false_when_no_due_date() {
+        let item = Item::new_user_item("u1", "Pay rent");
+        assert!(!item.is_overdue(utc("2026-01-01T00:00:00Z")));
+    }
+
+    #[test]
+    fn is_overdue_false_when_complete_even_if_due_date_past() {
+        let mut item = Item::new_user_item("u1", "Pay rent");
+        item.due_date = Some(utc("2020-01-01T00:00:00Z"));
+        item.complete = true;
+        assert!(!item.is_overdue(utc("2026-01-01T00:00:00Z")));
     }
 }

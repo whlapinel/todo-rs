@@ -11,7 +11,7 @@
     <div class="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1">
       {% if let Some(p) = parent_name %}<span class="text-indigo-600 dark:text-indigo-400">[{{ p }}]</span>{% endif %}
       {% if let Some(badge) = from_badge %}<span class="text-indigo-600 dark:text-indigo-400">[{{ badge }}]</span>{% endif %}
-      {% if let Some(d) = due_date %}<span>{{ d }}</span>{% endif %}
+      {% if let Some(d) = due_date %}<span class="{% if overdue %}text-red-600 dark:text-red-400{% endif %}">Due: {{ d }}</span>{% endif %}
     </div>
     {% if can_delete %}
     <button hx-delete="{{ detail_link }}"

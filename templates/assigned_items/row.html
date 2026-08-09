@@ -8,6 +8,6 @@
        class="min-w-0 flex-1 truncate {% if complete %}line-through text-gray-400 dark:text-gray-500{% else %}text-gray-900 dark:text-white{% endif %}">{{ name }}</a>
   </div>
   <div class="mt-1 min-h-4 pl-7 text-xs text-gray-500 dark:text-gray-400">
-    {% if let Some(d) = due_date %}{{ d }}{% endif %}
+    {% if let Some(d) = due_date %}<span class="{% if overdue %}text-red-600 dark:text-red-400{% endif %}">Due: {{ d }}</span>{% endif %}
   </div>
 </li>

@@ -292,6 +292,7 @@ struct TaskRow {
     name: String,
     complete: bool,
     due_date: Option<String>,
+    overdue: bool,
     scheduled_date: Option<String>,
     has_children: bool,
     offset_label: Option<String>,
@@ -308,6 +309,7 @@ impl TaskRow {
             due_date: item
                 .due_date
                 .map(|d| to_local(d, tz).format("%Y-%m-%d %H:%M").to_string()),
+            overdue: item.is_overdue(Utc::now()),
             scheduled_date: item.scheduled_date.map(|d| {
                 let local = to_local(d, tz);
                 if item.has_scheduled_time {
@@ -414,6 +416,7 @@ struct TaskDetailView {
     complete: bool,
     toggle_complete_json: String,
     due_date: Option<String>,
+    overdue: bool,
     scheduled_date: Option<String>,
     scheduled_end_date: Option<String>,
     is_top_level: bool,
@@ -454,6 +457,7 @@ impl TaskDetailView {
             complete: item.complete,
             toggle_complete_json: (!item.complete).to_string(),
             due_date,
+            overdue: item.is_overdue(Utc::now()),
             scheduled_date,
             scheduled_end_date,
             is_top_level: item.parent_item_id.is_none(),

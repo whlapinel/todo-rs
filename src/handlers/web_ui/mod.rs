@@ -50,18 +50,23 @@ where
             .and_then(|v| v.to_str().ok())
             .and_then(|s| s.trim().parse::<i32>().ok());
 
-        let from_cookie = from_header.is_none().then(|| {
-            parts
-                .headers
-                .get(axum::http::header::COOKIE)
-                .and_then(|v| v.to_str().ok())
-                .and_then(|s| {
-                    s.split(';').find_map(|part| {
-                        part.trim().strip_prefix("tz_offset=").map(|v| v.to_string())
+        let from_cookie = from_header
+            .is_none()
+            .then(|| {
+                parts
+                    .headers
+                    .get(axum::http::header::COOKIE)
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|s| {
+                        s.split(';').find_map(|part| {
+                            part.trim()
+                                .strip_prefix("tz_offset=")
+                                .map(|v| v.to_string())
+                        })
                     })
-                })
-                .and_then(|v| v.trim().parse::<i32>().ok())
-        }).flatten();
+                    .and_then(|v| v.trim().parse::<i32>().ok())
+            })
+            .flatten();
 
         Ok(TzOffset(from_header.or(from_cookie).unwrap_or(0)))
     }
@@ -70,6 +75,9 @@ where
 /// Converts a UTC instant to the user's local wall-clock time (same `local = utc - offset`
 /// convention as `domain::recurrence::apply_end_of_day`) and formats it for display — due
 /// dates are stored and computed in UTC, but should always be *shown* in local time.
-pub fn to_local(dt: chrono::DateTime<chrono::Utc>, tz_offset_minutes: i32) -> chrono::DateTime<chrono::Utc> {
+pub fn to_local(
+    dt: chrono::DateTime<chrono::Utc>,
+    tz_offset_minutes: i32,
+) -> chrono::DateTime<chrono::Utc> {
     dt - chrono::Duration::minutes(tz_offset_minutes as i64)
 }
