@@ -108,11 +108,13 @@ prl items add "Milk" --item-type simple
 items, distinguished from tasks mainly for display purposes; simple items are a bare
 checkable name with no due date, scheduled window, recurrence, or due offset (the
 server rejects any of those on a `simple` item). `--event-type` is a free-text
-category (e.g. `rain`); if it matches a checklist template's own event type, that
-template's checklist items are automatically added as children the moment the item
-is created. Checklist templates themselves aren't yet manageable from `prl` (web UI
-or MCP server only), but any item created via `prl items add --event-type ...` can
-still trigger one that already exists.
+category (e.g. `rain`), only valid on `--item-type event` (the server rejects it on
+tasks and simple items — `prl` itself checks this too and errors before sending the
+request); if it matches a checklist template's own event type, that template's
+checklist items are automatically added as children the moment the item is created.
+Checklist templates themselves aren't yet manageable from `prl` (web UI or MCP server
+only), but an event created via `prl items add --item-type event --event-type ...`
+can still trigger one that already exists.
 
 `--due`, `--scheduled`, and `--scheduled-end` all accept `YYYY-MM-DD` or a Unix
 timestamp. `--due` is the deadline (drives recurrence and offset-based child due

@@ -139,6 +139,19 @@ impl Item {
     /// alone can't guarantee this, since callers overlay fields onto a freshly
     /// constructed item afterward (see the constructors above).
     pub fn validate(&self) -> Result<(), String> {
+        // event_type is the auto-trigger match key (see create_item/create_team_item):
+        // only an Event actually "occurs" in a way that can fire a matching template, so
+        // it's the one type allowed to carry it. Template is also allowed here (it's the
+        // trigger's match *target*, set today via create_template — a path that never
+        // calls validate() — but permitting it too means this check stays correct even if
+        // that changes later) rather than carving out an exemption tied to today's call
+        // graph.
+        if self.event_type.is_some()
+            && self.item_type != ItemType::Event
+            && self.item_type != ItemType::Template
+        {
+            return Err("event_type can only be set on event or template items".to_string());
+        }
         if self.item_type != ItemType::Simple {
             return Ok(());
         }
@@ -314,6 +327,35 @@ mod tests {
         let mut item = Item::new_event("u1", "Team offsite");
         item.due_date = Some(Utc::now());
         item.scheduled_date = Some(Utc::now());
+        assert!(item.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_allows_event_with_event_type() {
+        let mut item = Item::new_event("u1", "Storm watch");
+        item.event_type = Some("rain".to_string());
+        assert!(item.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_task_with_event_type() {
+        let mut item = Item::new_task("u1", "Water plants");
+        item.event_type = Some("rain".to_string());
+        assert!(item.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_simple_item_with_event_type() {
+        let mut item = Item::new_simple("u1", "Milk");
+        item.event_type = Some("rain".to_string());
+        assert!(item.validate().is_err());
+    }
+
+    #[test]
+    fn validate_allows_template_with_event_type() {
+        let mut item = Item::new_user_item("u1", "Rain prep");
+        item.item_type = ItemType::Template;
+        item.event_type = Some("rain".to_string());
         assert!(item.validate().is_ok());
     }
 

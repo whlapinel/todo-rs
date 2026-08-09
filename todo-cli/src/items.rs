@@ -43,7 +43,7 @@ pub enum ItemsCommand {
         item_type: Option<String>,
         #[arg(
             long,
-            help = "Event category, e.g. 'rain' — auto-triggers matching templates"
+            help = "Event category, e.g. 'rain' — auto-triggers matching templates (requires --item-type event)"
         )]
         event_type: Option<String>,
         #[arg(long, help = "Scheduled start: YYYY-MM-DD or Unix timestamp")]
@@ -113,6 +113,12 @@ pub async fn cmd_items(client: &Client, cmd: ItemsCommand, user_id: Option<Strin
             if parent.is_some() && recurrence.is_some() {
                 eprintln!(
                     "error: --recurrence can't be combined with --parent — child items can't have their own recurrence; use --due-offset-days instead"
+                );
+                std::process::exit(1);
+            }
+            if event_type.is_some() && item_type.as_deref().map(str::to_lowercase).as_deref() != Some("event") {
+                eprintln!(
+                    "error: --event-type can only be used with --item-type event — only events can auto-trigger a matching template"
                 );
                 std::process::exit(1);
             }

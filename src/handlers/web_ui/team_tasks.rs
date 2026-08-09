@@ -53,7 +53,6 @@ pub struct TeamTaskForm {
     recurrence_basis: Option<String>,
     due_offset_days: Option<String>,
     parent_item_id: Option<String>,
-    event_type: Option<String>,
     assigned_to_user_id: Option<String>,
     show_complete: Option<String>,
     /// Present only on the standalone `/team-tasks/:team_id/new` page's forms — see
@@ -212,7 +211,6 @@ fn create_params_from_form(team_id: &str, form: &TeamTaskForm, tz: i32) -> Creat
             .map(|t| !t.trim().is_empty()),
         parent_item_id: non_empty(&form.parent_item_id),
         item_type: Some(ItemType::Task),
-        event_type: non_empty(&form.event_type),
         due_offset_days: form
             .due_offset_days
             .as_deref()
@@ -221,6 +219,7 @@ fn create_params_from_form(team_id: &str, form: &TeamTaskForm, tz: i32) -> Creat
             .and_then(|s| s.parse().ok()),
         assigned_to_user_id: non_empty(&form.assigned_to_user_id),
         timezone_offset_minutes: Some(tz),
+        ..Default::default()
     }
 }
 
@@ -262,13 +261,13 @@ fn update_params_from_form(
         )),
         parent_item_id: current.parent_item_id.clone(),
         item_type: Some(ItemType::Task),
-        event_type: overlay_str(&form.event_type, current.event_type.clone()),
         due_offset_days: overlay_i32(&form.due_offset_days, current.due_offset_days),
         assigned_to_user_id: overlay_str(
             &form.assigned_to_user_id,
             current.assigned_to_user_id.clone(),
         ),
         timezone_offset_minutes: Some(tz),
+        ..Default::default()
     }
 }
 
@@ -400,7 +399,6 @@ struct TeamTaskDetailFields {
     recurrence: Option<String>,
     recurrence_basis: Option<String>,
     due_offset_days_input: String,
-    event_type_input: String,
     assignee_options: Vec<(String, String)>,
     assigned_to_user_id: Option<String>,
     /// Set only on the fragment returned by a successful save — see `items.rs`'s
@@ -464,7 +462,6 @@ impl TeamTaskDetailFields {
             recurrence: item.recurrence.clone(),
             recurrence_basis: item.recurrence_basis.clone(),
             due_offset_days_input: format_offset_input(item.due_offset_days),
-            event_type_input: item.event_type.clone().unwrap_or_default(),
             assignee_options,
             assigned_to_user_id: item.assigned_to_user_id.clone(),
             just_saved,
@@ -489,7 +486,6 @@ struct TeamTaskDetailView {
     recurrence: Option<String>,
     recurrence_basis_label: String,
     offset_label: Option<String>,
-    event_type: Option<String>,
     assignee_name: Option<String>,
 }
 
@@ -532,7 +528,6 @@ impl TeamTaskDetailView {
             recurrence: item.recurrence.clone(),
             recurrence_basis_label: recurrence_basis_label(&item.recurrence_basis),
             offset_label: offset_label_for(item),
-            event_type: item.event_type.clone(),
             assignee_name: item
                 .assigned_to_user_id
                 .as_ref()
@@ -566,7 +561,6 @@ struct NewTeamTaskPageTemplate {
     blank_recurrence: Option<String>,
     blank_recurrence_basis: Option<String>,
     blank_due_offset_days_input: String,
-    blank_event_type_input: String,
     blank_scheduled_date_input: String,
     blank_scheduled_time_input: String,
     blank_scheduled_end_date_input: String,
@@ -719,7 +713,6 @@ pub async fn new_team_task_page(
         blank_recurrence: None,
         blank_recurrence_basis: Some("SCHEDULED_DATE".to_string()),
         blank_due_offset_days_input: String::new(),
-        blank_event_type_input: String::new(),
         blank_scheduled_date_input: String::new(),
         blank_scheduled_time_input: String::new(),
         blank_scheduled_end_date_input: String::new(),

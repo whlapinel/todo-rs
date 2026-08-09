@@ -36,7 +36,6 @@ pub struct SimpleItemForm {
     name: Option<String>,
     complete: Option<String>,
     parent_item_id: Option<String>,
-    event_type: Option<String>,
     show_complete: Option<String>,
     /// Present only on the standalone `/simple-lists/new` page's forms — see `items.rs`'s
     /// identical field for the full rationale.
@@ -48,14 +47,6 @@ fn non_empty(v: &Option<String>) -> Option<String> {
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string())
-}
-
-fn overlay_str(form_value: &Option<String>, current: Option<String>) -> Option<String> {
-    match form_value {
-        None => current,
-        Some(s) if s.trim().is_empty() => None,
-        Some(s) => Some(s.trim().to_string()),
-    }
 }
 
 fn overlay_required_str(form_value: &Option<String>, current: &str) -> String {
@@ -83,7 +74,6 @@ fn create_params_from_form(
         complete: form.complete.as_deref().map(|s| s == "true"),
         parent_item_id: non_empty(&form.parent_item_id),
         item_type: Some(ItemType::Simple),
-        event_type: non_empty(&form.event_type),
         ..Default::default()
     }
 }
@@ -101,7 +91,6 @@ fn update_params_from_form(
         complete: overlay_bool(&form.complete, current.complete),
         parent_item_id: current.parent_item_id.clone(),
         item_type: Some(ItemType::Simple),
-        event_type: overlay_str(&form.event_type, current.event_type.clone()),
         ..Default::default()
     }
 }
@@ -136,7 +125,6 @@ struct SimpleItemDetailFields {
     id: String,
     name: String,
     complete: bool,
-    event_type_input: String,
     /// Set only on the fragment returned by a successful save — see `items.rs`'s
     /// `DetailFields.just_saved` for the full rationale.
     just_saved: bool,
@@ -148,7 +136,6 @@ impl SimpleItemDetailFields {
             id: item.id.clone(),
             name: item.name.clone(),
             complete: item.complete,
-            event_type_input: item.event_type.clone().unwrap_or_default(),
             just_saved,
         }
     }
@@ -162,7 +149,6 @@ struct SimpleItemDetailView {
     id: String,
     complete: bool,
     toggle_complete_json: String,
-    event_type: Option<String>,
 }
 
 impl SimpleItemDetailView {
@@ -171,7 +157,6 @@ impl SimpleItemDetailView {
             id: item.id.clone(),
             complete: item.complete,
             toggle_complete_json: (!item.complete).to_string(),
-            event_type: item.event_type.clone(),
         }
     }
 }
@@ -195,7 +180,6 @@ struct SimpleListsListPageTemplate {
 #[template(path = "simple_lists/new_page.html")]
 struct NewSimpleItemPageTemplate {
     show_complete: bool,
-    blank_event_type_input: String,
     nav_html: String,
 }
 
@@ -308,7 +292,6 @@ pub async fn new_simple_item_page(
     .await?;
     render(NewSimpleItemPageTemplate {
         show_complete: q.show_complete.is_some(),
-        blank_event_type_input: String::new(),
         nav_html,
     })
 }

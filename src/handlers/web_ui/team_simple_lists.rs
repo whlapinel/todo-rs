@@ -43,7 +43,6 @@ pub struct TeamSimpleItemForm {
     name: Option<String>,
     complete: Option<String>,
     parent_item_id: Option<String>,
-    event_type: Option<String>,
     assigned_to_user_id: Option<String>,
     show_complete: Option<String>,
     /// Present only on the standalone `/team-simple-lists/:team_id/new` page's forms — see
@@ -88,7 +87,6 @@ fn create_params_from_form(team_id: &str, form: &TeamSimpleItemForm) -> CreateTe
         complete: form.complete.as_deref().map(|s| s == "true"),
         parent_item_id: non_empty(&form.parent_item_id),
         item_type: Some(ItemType::Simple),
-        event_type: non_empty(&form.event_type),
         assigned_to_user_id: non_empty(&form.assigned_to_user_id),
         ..Default::default()
     }
@@ -107,7 +105,6 @@ fn update_params_from_form(
         complete: overlay_bool(&form.complete, current.complete),
         parent_item_id: current.parent_item_id.clone(),
         item_type: Some(ItemType::Simple),
-        event_type: overlay_str(&form.event_type, current.event_type.clone()),
         assigned_to_user_id: overlay_str(
             &form.assigned_to_user_id,
             current.assigned_to_user_id.clone(),
@@ -191,7 +188,6 @@ struct TeamSimpleItemDetailFields {
     team_id: String,
     name: String,
     complete: bool,
-    event_type_input: String,
     assignee_options: Vec<(String, String)>,
     assigned_to_user_id: Option<String>,
     /// Set only on the fragment returned by a successful save — see `items.rs`'s
@@ -211,7 +207,6 @@ impl TeamSimpleItemDetailFields {
             team_id: team_id.to_string(),
             name: item.name.clone(),
             complete: item.complete,
-            event_type_input: item.event_type.clone().unwrap_or_default(),
             assignee_options,
             assigned_to_user_id: item.assigned_to_user_id.clone(),
             just_saved,
@@ -228,7 +223,6 @@ struct TeamSimpleItemDetailView {
     team_id: String,
     complete: bool,
     toggle_complete_json: String,
-    event_type: Option<String>,
     assignee_name: Option<String>,
 }
 
@@ -239,7 +233,6 @@ impl TeamSimpleItemDetailView {
             team_id: team_id.to_string(),
             complete: item.complete,
             toggle_complete_json: (!item.complete).to_string(),
-            event_type: item.event_type.clone(),
             assignee_name: item
                 .assigned_to_user_id
                 .as_ref()
@@ -270,7 +263,6 @@ struct NewTeamSimpleItemPageTemplate {
     team_id: String,
     show_complete: bool,
     assignee_options: Vec<(String, String)>,
-    blank_event_type_input: String,
     nav_html: String,
 }
 
@@ -408,7 +400,6 @@ pub async fn new_team_simple_item_page(
         team_id,
         show_complete: q.show_complete.is_some(),
         assignee_options,
-        blank_event_type_input: String::new(),
         nav_html,
     })
 }

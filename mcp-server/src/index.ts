@@ -159,7 +159,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           eventType: {
             type: "string",
             description:
-              "Free-text category (e.g. 'rain'). If it matches a checklist template's own eventType, that template's children are automatically copied onto this item when it's created.",
+              "Free-text category (e.g. 'rain'). Only valid on itemType EVENT — the server rejects it on any other item type. If it matches a checklist template's own eventType, that template's children are automatically copied onto this item when it's created.",
           },
           dueOffsetDays: {
             type: "number",
@@ -399,7 +399,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           eventType: {
             type: "string",
             description:
-              "Free-text category (e.g. 'rain'). If it matches a checklist template's own eventType, that template's children are automatically copied onto this item when it's created.",
+              "Free-text category (e.g. 'rain'). Only valid on itemType EVENT — the server rejects it on any other item type. If it matches a checklist template's own eventType, that template's children are automatically copied onto this item when it's created.",
           },
           dueOffsetDays: {
             type: "number",
