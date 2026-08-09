@@ -1,21 +1,21 @@
-<li id="item-{{ id }}" class="flex items-center justify-between gap-x-3 py-2">
-  <div class="flex items-center gap-x-3 min-w-0">
+<li id="item-{{ id }}" class="py-2">
+  <div class="flex items-center gap-x-3">
     <input type="checkbox" {% if complete %}checked{% endif %}
            hx-put="/web/team-simple-lists/{{ team_id }}/{{ id }}" hx-vals='{"complete": "{{ toggle_complete_json }}"}'
            hx-target="#item-{{ id }}" hx-select="#item-{{ id }}" hx-swap="outerHTML"
            class="shrink-0 size-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-600 dark:border-white/20 dark:bg-white/5" />
     <a href="/web/team-simple-lists/{{ team_id }}/{{ id }}" hx-target="#page" hx-select="#page" hx-swap="innerHTML"
-       class="truncate {% if complete %}line-through text-gray-400 dark:text-gray-500{% else %}text-gray-900 dark:text-white{% endif %}">
+       class="min-w-0 flex-1 truncate {% if complete %}line-through text-gray-400 dark:text-gray-500{% else %}text-gray-900 dark:text-white{% endif %}">
       {% if has_children %}<span class="text-gray-400 dark:text-gray-500">&#9656;</span>{% endif %} {{ name }}
     </a>
-    {% if let Some(assignee) = assignee_name %}
-    <span class="text-xs text-indigo-600 shrink-0 dark:text-indigo-400">[{{ assignee }}]</span>
-    {% endif %}
   </div>
-  <div class="flex items-center gap-x-3 text-xs text-gray-500 shrink-0 dark:text-gray-400">
+  <div class="mt-1 flex items-center gap-x-3 pl-7 text-xs text-gray-500 dark:text-gray-400">
+    <div class="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1">
+      {% if let Some(assignee) = assignee_name %}<span class="text-indigo-600 dark:text-indigo-400">[{{ assignee }}]</span>{% endif %}
+    </div>
     <button hx-delete="/web/team-simple-lists/{{ team_id }}/{{ id }}"
             hx-confirm="Delete {{ name }}{% if has_children %} and all its sub-items{% endif %}?"
             hx-target="#item-{{ id }}" hx-select="unset" hx-swap="outerHTML swap:200ms"
-            class="cursor-pointer text-red-600 hover:text-red-500 dark:text-red-400 dark:hover:text-red-300">Delete</button>
+            class="shrink-0 cursor-pointer text-red-600 hover:text-red-500 dark:text-red-400 dark:hover:text-red-300">Delete</button>
   </div>
 </li>

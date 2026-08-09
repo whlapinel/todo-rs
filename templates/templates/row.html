@@ -1,8 +1,8 @@
 <li id="template-{{ id }}" class="py-3 space-y-2">
   <div class="flex items-center justify-between gap-x-3">
     <a href="/web/templates/{{ id }}" hx-target="#page" hx-select="#page" hx-swap="innerHTML"
-       class="text-gray-900 hover:text-indigo-600 dark:text-white dark:hover:text-indigo-400">{{ name }}</a>
-    <div class="flex items-center gap-x-3 text-xs">
+       class="min-w-0 flex-1 truncate text-gray-900 hover:text-indigo-600 dark:text-white dark:hover:text-indigo-400">{{ name }}</a>
+    <div class="flex shrink-0 items-center gap-x-3 text-xs">
       {% if let Some(r) = recurrence %}<span class="text-gray-400 dark:text-gray-500" title="repeats">&#8635; {{ r }}</span>{% endif %}
       <button hx-delete="/web/templates/{{ id }}" hx-confirm="Delete template {{ name }}?"
               hx-target="#template-{{ id }}" hx-select="unset" hx-swap="outerHTML swap:200ms"
