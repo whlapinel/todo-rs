@@ -508,7 +508,7 @@ pub async fn use_template_form(
     Ok((
         [(
             axum::http::header::HeaderName::from_static("hx-redirect"),
-            format!("/web/items/{new_item_id}"),
+            format!("/web/tasks/{new_item_id}"),
         )],
         Html(String::new()),
     )

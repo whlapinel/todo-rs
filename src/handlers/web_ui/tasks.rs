@@ -676,6 +676,27 @@ pub async fn task_edit_page(
     })
 }
 
+/// Renders a parent item's children as `TaskRow`s — children of any dedicated screen's item
+/// (Task, Event, Simple) are always plain `Task`-typed, so this is reused directly by
+/// `events.rs`/`team_events.rs` (which have no children concept of their own) rather than
+/// duplicating `TaskRow`/its template there. Callers are responsible for their own
+/// ownership gate before calling this (see `task_children_fragment` below).
+pub(crate) async fn render_children_fragment(
+    repo: &Arc<dyn ItemRepo>,
+    parent_item_id: &str,
+    tz: i32,
+) -> Result<Html<String>, ItemError> {
+    let children = repo
+        .list_children(parent_item_id)
+        .await
+        .map_err(ItemError::from)?;
+    let rows = render_rows(&children, true, tz)?;
+    render(TaskRowsFragmentTemplate {
+        rows,
+        empty_message: "No sub-items yet.".to_string(),
+    })
+}
+
 pub async fn task_children_fragment(
     Path(item_id): Path<String>,
     Extension(auth_user): Extension<AuthUser>,
@@ -687,15 +708,7 @@ pub async fn task_children_fragment(
     repo.get(&auth_user.user_id, &item_id)
         .await
         .map_err(ItemError::from)?;
-    let children = repo
-        .list_children(&item_id)
-        .await
-        .map_err(ItemError::from)?;
-    let rows = render_rows(&children, true, tz)?;
-    render(TaskRowsFragmentTemplate {
-        rows,
-        empty_message: "No sub-items yet.".to_string(),
-    })
+    render_children_fragment(&repo, &item_id, tz).await
 }
 
 /// Redirect back to the tasks list (via the `hx-redirect` header, same mechanism

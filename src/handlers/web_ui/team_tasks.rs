@@ -787,6 +787,31 @@ pub async fn team_task_edit_page(
     })
 }
 
+/// Renders a parent item's children as `TeamTaskRow`s — mirrors
+/// `tasks::render_children_fragment` team-scoped; reused directly by `team_events.rs`
+/// (which has no children concept of its own) since a team item's children are always
+/// plain `Task`-typed regardless of their parent's type. Callers are responsible for their
+/// own membership/ownership gate before calling this (see `team_task_children_fragment`).
+pub(crate) async fn render_children_fragment(
+    repo: &Arc<dyn ItemRepo>,
+    teams: &Arc<dyn TeamRepo>,
+    team_id: &str,
+    parent_item_id: &str,
+    requester_user_id: &str,
+    tz: i32,
+) -> Result<Html<String>, ItemError> {
+    let children = repo
+        .list_children(parent_item_id)
+        .await
+        .map_err(ItemError::from)?;
+    let names = names_for(teams, team_id, requester_user_id).await?;
+    let rows = render_rows(&children, team_id, &names, true, tz)?;
+    render(TeamTaskRowsFragmentTemplate {
+        rows,
+        empty_message: "No sub-items yet.".to_string(),
+    })
+}
+
 pub async fn team_task_children_fragment(
     Path((team_id, item_id)): Path<(String, String)>,
     Extension(auth_user): Extension<AuthUser>,
@@ -800,16 +825,7 @@ pub async fn team_task_children_fragment(
     repo.get_team_item(&team_id, &item_id)
         .await
         .map_err(ItemError::from)?;
-    let children = repo
-        .list_children(&item_id)
-        .await
-        .map_err(ItemError::from)?;
-    let names = names_for(&teams, &team_id, &auth_user.user_id).await?;
-    let rows = render_rows(&children, &team_id, &names, true, tz)?;
-    render(TeamTaskRowsFragmentTemplate {
-        rows,
-        empty_message: "No sub-items yet.".to_string(),
-    })
+    render_children_fragment(&repo, &teams, &team_id, &item_id, &auth_user.user_id, tz).await
 }
 
 /// Redirect back to the team's tasks list (via the `hx-redirect` header) after a create from

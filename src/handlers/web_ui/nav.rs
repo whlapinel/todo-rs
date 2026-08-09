@@ -27,21 +27,6 @@ pub enum SidebarSection {
     None,
 }
 
-impl SidebarSection {
-    /// Maps the interim `?kind=` query param (see items.rs/team_items.rs) to a section.
-    /// Only task/simple/event are reachable this way — Template-typed items never appear in
-    /// a generic items/team-items listing at all (excluded at the storage layer), so there is
-    /// no `"template"` case here.
-    pub fn from_kind(kind: Option<&str>) -> Self {
-        match kind {
-            Some("task") => SidebarSection::Tasks,
-            Some("simple") => SidebarSection::SimpleLists,
-            Some("event") => SidebarSection::Events,
-            _ => SidebarSection::None,
-        }
-    }
-}
-
 struct TeamPill {
     name: String,
     href: String,
@@ -70,12 +55,13 @@ struct NavTemplate {
 /// That shared derivation is what makes "switching team preserves the current section" (a
 /// locked-in product decision) fall out for free rather than needing special-case code.
 ///
-/// Every section now has a fully dedicated screen in both contexts, so no `?kind=` interim
-/// filter is used by this function anymore (the generic `/team-items`/`/items` catch-alls
-/// themselves are untouched and still support it directly, just no longer linked to here).
-/// Templates was the last holdout — team-scoped templates (Stage 8) added
-/// `/team-templates/:team_id`, so Templates/Team(id) no longer falls back to the personal
-/// `/templates` screen either.
+/// Every section now has a fully dedicated screen in both contexts — Templates was the
+/// last holdout (team-scoped templates, Stage 8). `SidebarSection::None` (pages with no
+/// single natural section: Dashboard, Assigned-to-me, the Teams list) falls back to the
+/// Dashboard for Personal and the Tasks screen for Team — Tasks is the canonical "default
+/// landing type" for a team context wherever a generic entry point is needed, consistent
+/// with `ItemType`'s own default variant (Stage 10 retired the generic `/items`/
+/// `/team-items` catch-alls this used to fall back to).
 fn section_href(section: SidebarSection, ctx: &ActiveContext) -> String {
     match (section, ctx) {
         (SidebarSection::Tasks, ActiveContext::Personal) => "/web/tasks".to_string(),
@@ -96,8 +82,8 @@ fn section_href(section: SidebarSection, ctx: &ActiveContext) -> String {
         (SidebarSection::Templates, ActiveContext::Team(id)) => {
             format!("/web/team-templates/{id}")
         }
-        (SidebarSection::None, ActiveContext::Personal) => "/web/items".to_string(),
-        (SidebarSection::None, ActiveContext::Team(id)) => format!("/web/team-items/{id}"),
+        (SidebarSection::None, ActiveContext::Personal) => "/web/dashboard".to_string(),
+        (SidebarSection::None, ActiveContext::Team(id)) => format!("/web/team-tasks/{id}"),
     }
 }
 

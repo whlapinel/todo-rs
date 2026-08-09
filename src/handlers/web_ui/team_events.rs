@@ -1,6 +1,7 @@
 use crate::auth::AuthUser;
 use crate::domain::item::{Item, ItemType};
 use crate::handlers::web_ui::nav::{self, ActiveContext, SidebarSection};
+use crate::handlers::web_ui::team_tasks;
 use crate::handlers::web_ui::{TzOffset, to_local};
 use crate::service::error::ItemError;
 use crate::service::team_items::{
@@ -982,6 +983,61 @@ pub async fn delete_team_event_form(
     team_item_service::delete_team_item(&repo, &teams, &auth_user.user_id, &team_id, &item_id)
         .await?;
     Ok(Html(String::new()))
+}
+
+/// A team event's own sub-items are always plain `Task`-typed (same as a team task's own
+/// children), so this reuses `team_tasks::render_children_fragment` rather than duplicating
+/// `TeamTaskRow`/its template here — see that function's doc comment.
+pub async fn team_event_children_fragment(
+    Path((team_id, item_id)): Path<(String, String)>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    TzOffset(tz): TzOffset,
+) -> Result<Html<String>, ItemError> {
+    require_active_member(&teams, &team_id, &auth_user.user_id).await?;
+    // Ownership gate: list_children isn't scoped by team, so confirm the parent actually
+    // belongs to this team before listing its children (mirrors team_tasks.rs's equivalent).
+    repo.get_team_item(&team_id, &item_id)
+        .await
+        .map_err(ItemError::from)?;
+    team_tasks::render_children_fragment(&repo, &teams, &team_id, &item_id, &auth_user.user_id, tz)
+        .await
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamEventChildForm {
+    name: String,
+    due_offset_days: Option<String>,
+}
+
+pub async fn create_team_event_child_form(
+    Path((team_id, item_id)): Path<(String, String)>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    TzOffset(tz): TzOffset,
+    Form(form): Form<TeamEventChildForm>,
+) -> Result<Html<String>, ItemError> {
+    require_active_member(&teams, &team_id, &auth_user.user_id).await?;
+    let params = CreateTeamItemParams {
+        team_id: team_id.clone(),
+        name: form.name,
+        parent_item_id: Some(item_id.clone()),
+        item_type: Some(ItemType::Task),
+        due_offset_days: form
+            .due_offset_days
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .and_then(|s| s.parse().ok()),
+        timezone_offset_minutes: Some(tz),
+        ..Default::default()
+    };
+    team_item_service::create_team_item(&repo, &teams, &auth_user.user_id, params).await?;
+    team_tasks::render_children_fragment(&repo, &teams, &team_id, &item_id, &auth_user.user_id, tz)
+        .await
 }
 
 pub async fn save_team_event_as_template(

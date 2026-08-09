@@ -1,5 +1,5 @@
 use crate::auth::AuthUser;
-use crate::domain::item::Item;
+use crate::domain::item::{Item, ItemType};
 use crate::handlers::web_ui::nav::{self, ActiveContext, SidebarSection};
 use crate::handlers::web_ui::to_local;
 use crate::service::error::ItemError;
@@ -19,18 +19,31 @@ fn render<T: Template>(t: T) -> Result<Html<String>, ItemError> {
 #[template(path = "assigned_items/row.html")]
 struct AssignedItemRow {
     id: String,
-    team_id: String,
     name: String,
     complete: bool,
     due_date: Option<String>,
+    detail_link: String,
     toggle_complete_json: String,
+}
+
+/// Team-scoped dedicated-screen URL for `item`, dispatched by its actual type — every row
+/// on this page always has a `team_id` (assignment is a team-item-only concept), so this
+/// only needs the team-owned half of `dashboard.rs`'s equivalent `detail_url`.
+fn detail_url(item: &Item, team_id: &str) -> String {
+    match item.item_type {
+        ItemType::Task => format!("/web/team-tasks/{team_id}/{}", item.id),
+        ItemType::Event => format!("/web/team-events/{team_id}/{}", item.id),
+        ItemType::Simple => format!("/web/team-simple-lists/{team_id}/{}", item.id),
+        ItemType::Template => format!("/web/team-templates/{team_id}/{}", item.id),
+    }
 }
 
 impl AssignedItemRow {
     fn from_item(item: &Item, tz: i32) -> Option<Self> {
+        let team_id = item.team_id.clone()?;
         Some(Self {
             id: item.id.clone(),
-            team_id: item.team_id.clone()?,
+            detail_link: detail_url(item, &team_id),
             name: item.name.clone(),
             complete: item.complete,
             due_date: item

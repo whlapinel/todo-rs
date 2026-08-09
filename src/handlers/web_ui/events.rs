@@ -1,8 +1,10 @@
 use crate::auth::AuthUser;
 use crate::domain::item::{Item, ItemType};
 use crate::handlers::web_ui::nav::{self, ActiveContext, SidebarSection};
+use crate::handlers::web_ui::tasks;
 use crate::handlers::web_ui::{TzOffset, to_local};
 use crate::service::items::{self as item_service, ItemError};
+use crate::service::templates::{self as template_service, CreateTemplateParams};
 use crate::storage::sqlite::{ItemRepo, RepoError, TeamRepo};
 use askama::Template;
 use axum::extract::{Extension, Form, Path, Query};
@@ -867,4 +869,77 @@ pub async fn delete_event_form(
     require_event(current)?;
     item_service::delete_item(&repo, &auth_user.user_id, &item_id).await?;
     Ok(Html(String::new()))
+}
+
+/// An event's own sub-items are always plain `Task`-typed (same as a Task's own children),
+/// so this reuses `tasks::render_children_fragment` rather than duplicating `TaskRow`/its
+/// template here — see that function's doc comment.
+pub async fn event_children_fragment(
+    Path(item_id): Path<String>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    TzOffset(tz): TzOffset,
+) -> Result<Html<String>, ItemError> {
+    // Ownership gate: list_children itself isn't scoped by user, so confirm the caller owns
+    // the parent before listing its children.
+    repo.get(&auth_user.user_id, &item_id)
+        .await
+        .map_err(ItemError::from)?;
+    tasks::render_children_fragment(&repo, &item_id, tz).await
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EventChildForm {
+    name: String,
+    due_offset_days: Option<String>,
+}
+
+pub async fn create_event_child_form(
+    Path(item_id): Path<String>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    TzOffset(tz): TzOffset,
+    Form(form): Form<EventChildForm>,
+) -> Result<Html<String>, ItemError> {
+    let params = item_service::CreateItemParams {
+        user_id: auth_user.user_id.clone(),
+        name: form.name,
+        parent_item_id: Some(item_id.clone()),
+        item_type: Some(ItemType::Task),
+        due_offset_days: form
+            .due_offset_days
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .and_then(|s| s.parse().ok()),
+        timezone_offset_minutes: Some(tz),
+        ..Default::default()
+    };
+    item_service::create_item(&repo, params).await?;
+    tasks::render_children_fragment(&repo, &item_id, tz).await
+}
+
+pub async fn save_event_as_template(
+    Path(item_id): Path<String>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+) -> Result<Html<String>, ItemError> {
+    let item = repo
+        .get(&auth_user.user_id, &item_id)
+        .await
+        .map_err(ItemError::from)?;
+    template_service::create_template(
+        &repo,
+        CreateTemplateParams {
+            user_id: auth_user.user_id.clone(),
+            name: item.name.clone(),
+            source_item_id: Some(item_id),
+            event_type: None,
+        },
+    )
+    .await?;
+    Ok(Html(
+        r#"<span class="text-xs text-green-600">Saved</span>"#.to_string(),
+    ))
 }

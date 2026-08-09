@@ -525,7 +525,7 @@ pub async fn use_team_template_form(
     Ok((
         [(
             axum::http::header::HeaderName::from_static("hx-redirect"),
-            format!("/web/team-items/{team_id}/{new_item_id}"),
+            format!("/web/team-tasks/{team_id}/{new_item_id}"),
         )],
         Html(String::new()),
     )

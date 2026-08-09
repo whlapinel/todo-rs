@@ -1,4 +1,5 @@
 use crate::auth::AuthUser;
+use crate::domain::item::{Item, ItemType};
 use crate::handlers::web_ui::nav::{self, ActiveContext, SidebarSection};
 use crate::handlers::web_ui::{TzOffset, to_local};
 use crate::service::items::{self as item_service, ItemError};
@@ -47,31 +48,39 @@ struct DashboardRow {
     from_badge: Option<String>,
     can_delete: bool,
     toggle_target: String,
-    // Team items don't have a web_ui detail page yet (Stage 3) — route those to the SPA's
-    // still-functional `/teams/:teamId/items/:itemId` view instead of `/web/items/:id`,
-    // which is scoped to personal items and would 404 for a team-owned id.
+    // Every item type now has its own dedicated web_ui screen (personal and team-scoped) —
+    // this links straight there rather than to any generic catch-all.
     detail_link: String,
-    // `detail_link` above crosses into a different app (the SPA) for team items, which needs
-    // a real full-page load to boot its own JS — boosting it would try to hx-select="#page"
-    // out of the SPA's index.html, which has no such element (it has #app), and blank the
-    // page. Only personal-item links stay boosted for the smooth in-app swap.
-    is_team_item: bool,
     toggle_complete_json: String,
+}
+
+/// Dedicated-screen URL for `item`, dispatched by its actual type — shared by both this
+/// row's own `detail_link`/delete target and `assigned_items.rs`'s equivalent (team-only
+/// subset there).
+fn detail_url(item: &Item) -> String {
+    match (&item.team_id, item.item_type) {
+        (Some(team_id), ItemType::Task) => format!("/web/team-tasks/{team_id}/{}", item.id),
+        (Some(team_id), ItemType::Event) => format!("/web/team-events/{team_id}/{}", item.id),
+        (Some(team_id), ItemType::Simple) => {
+            format!("/web/team-simple-lists/{team_id}/{}", item.id)
+        }
+        (Some(team_id), ItemType::Template) => {
+            format!("/web/team-templates/{team_id}/{}", item.id)
+        }
+        (None, ItemType::Task) => format!("/web/tasks/{}", item.id),
+        (None, ItemType::Event) => format!("/web/events/{}", item.id),
+        (None, ItemType::Simple) => format!("/web/simple-lists/{}", item.id),
+        (None, ItemType::Template) => format!("/web/templates/{}", item.id),
+    }
 }
 
 impl DashboardRow {
     fn from_due_item(di: &DueItem, tz: i32) -> Self {
         let item = &di.item;
         let is_team_item = item.team_id.is_some();
-        let (toggle_target, detail_link) = match &item.team_id {
-            Some(team_id) => (
-                format!("/web/dashboard/team-items/{team_id}/{}", item.id),
-                format!("/teams/{team_id}/items/{}", item.id),
-            ),
-            None => (
-                format!("/web/dashboard/items/{}", item.id),
-                format!("/web/items/{}", item.id),
-            ),
+        let toggle_target = match &item.team_id {
+            Some(team_id) => format!("/web/dashboard/team-items/{team_id}/{}", item.id),
+            None => format!("/web/dashboard/items/{}", item.id),
         };
         // Personal items returned by `list_due` are always the caller's own (the query
         // scopes on `user_id = ?`), so the delete affordance only ever applies to those —
@@ -86,8 +95,7 @@ impl DashboardRow {
             from_badge: item.team_id.as_ref().map(|team_id| format!("from team {team_id}")),
             can_delete: !is_team_item,
             toggle_target,
-            detail_link,
-            is_team_item,
+            detail_link: detail_url(item),
             toggle_complete_json: (!item.complete).to_string(),
         }
     }

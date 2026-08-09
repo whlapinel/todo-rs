@@ -36,12 +36,10 @@ use handlers::web_ui::assigned_items::assigned_items_page;
 use handlers::web_ui::dashboard::*;
 use handlers::web_ui::events::*;
 use handlers::web_ui::hello_world::hello_world;
-use handlers::web_ui::items::*;
 use handlers::web_ui::login::login_page;
 use handlers::web_ui::simple_lists::*;
 use handlers::web_ui::tasks::*;
 use handlers::web_ui::team_events::*;
-use handlers::web_ui::team_items::*;
 use handlers::web_ui::team_simple_lists::*;
 use handlers::web_ui::team_tasks::*;
 use handlers::web_ui::team_templates::*;
@@ -55,18 +53,6 @@ use tower_http::services::ServeDir;
 fn build_web_router() -> Router {
     Router::new()
         .route("/test", get(hello_world))
-        .route("/items", get(items_page).post(create_item_form))
-        .route("/items/new", get(new_item_page))
-        .route("/items/batch", post(create_items_batch))
-        .route(
-            "/items/:item_id",
-            get(item_detail_page)
-                .put(update_item_form)
-                .delete(delete_item_form),
-        )
-        .route("/items/:item_id/edit", get(item_edit_page))
-        .route("/items/:item_id/children", get(children_fragment))
-        .route("/items/:item_id/save-as-template", post(save_as_template))
         .route("/events", get(events_page).post(create_event_form))
         .route("/events/new", get(new_event_page))
         .route("/events/calendar", get(events_calendar_page))
@@ -77,6 +63,14 @@ fn build_web_router() -> Router {
                 .delete(delete_event_form),
         )
         .route("/events/:item_id/edit", get(event_edit_page))
+        .route(
+            "/events/:item_id/children",
+            get(event_children_fragment).post(create_event_child_form),
+        )
+        .route(
+            "/events/:item_id/save-as-template",
+            post(save_event_as_template),
+        )
         .route(
             "/team-events/:team_id",
             get(team_events_page).post(create_team_event_form),
@@ -95,6 +89,10 @@ fn build_web_router() -> Router {
         .route(
             "/team-events/:team_id/:item_id/edit",
             get(team_event_edit_page),
+        )
+        .route(
+            "/team-events/:team_id/:item_id/children",
+            get(team_event_children_fragment).post(create_team_event_child_form),
         )
         .route("/tasks", get(tasks_page).post(create_task_form))
         .route("/tasks/new", get(new_task_page))
@@ -172,29 +170,6 @@ fn build_web_router() -> Router {
         .route("/teams/:team_id/invite", post(invite_team_member_form))
         .route("/teams/:team_id/accept", post(accept_team_invite_form))
         .route("/teams/:team_id/leave", post(leave_team_form))
-        .route(
-            "/team-items/:team_id",
-            get(team_items_page).post(create_team_item_form),
-        )
-        .route("/team-items/:team_id/new", get(new_team_item_page))
-        .route(
-            "/team-items/:team_id/batch",
-            post(create_team_items_batch),
-        )
-        .route(
-            "/team-items/:team_id/:item_id",
-            get(team_item_detail_page)
-                .put(update_team_item_form)
-                .delete(delete_team_item_form),
-        )
-        .route(
-            "/team-items/:team_id/:item_id/edit",
-            get(team_item_edit_page),
-        )
-        .route(
-            "/team-items/:team_id/:item_id/children",
-            get(team_item_children_fragment),
-        )
         .route(
             "/team-simple-lists/:team_id",
             get(team_simple_lists_page).post(create_team_simple_item_form),
@@ -378,7 +353,7 @@ async fn main() {
             let public_web_router = build_public_web_router();
 
             Router::new()
-                .route("/", get(|| async { Redirect::to("/web/items") }))
+                .route("/", get(|| async { Redirect::to("/web/dashboard") }))
                 .nest("/api", api_router)
                 .nest("/auth", auth_router)
                 .nest("/web", web_router.merge(public_web_router))
@@ -426,7 +401,7 @@ async fn main() {
             let public_web_router = build_public_web_router();
 
             Router::new()
-                .route("/", get(|| async { Redirect::to("/web/items") }))
+                .route("/", get(|| async { Redirect::to("/web/dashboard") }))
                 .nest("/auth", auth_router)
                 .nest("/api", api_router)
                 .nest("/web", web_router.merge(public_web_router))
