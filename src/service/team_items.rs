@@ -2,8 +2,8 @@ use crate::domain::item::{Item, ItemKind, ItemType, Recurrence, Schedule, TeamAs
 use crate::domain::recurrence;
 use crate::service::activity_log::reverse_entry;
 use crate::service::items::{
-    clone_children, copy_template_children, has_incomplete_children, is_pure_complete_toggle,
-    item_anchor, sync_offset_children, ItemError,
+    archive_recurrence, clone_children, copy_template_children, has_incomplete_children,
+    is_pure_complete_toggle, item_anchor, sync_offset_children, ItemError,
 };
 use crate::service::teams::require_team_admin;
 use crate::storage::sqlite::{ActivityLogRepo, ItemRepo, TeamRepo};
@@ -444,7 +444,8 @@ pub async fn update_team_item(
     if let Some((next_item, next_anchor)) = item.next_recurrence(chrono::Utc::now(), tz_offset) {
         let next_id = repo.create(&next_item).await?;
         clone_children(repo, &item.id, &next_id, next_anchor, tz_offset).await?;
-        repo.delete(&item.id).await?;
+        archive_recurrence(&mut item);
+        repo.update_team_item(&item).await?;
         return Ok(());
     }
 
@@ -1149,9 +1150,16 @@ mod tests {
             .expect_create()
             .times(1)
             .returning(|_| Ok("item1-next".to_string()));
+        // The just-completed occurrence is kept as history (not deleted) with its own
+        // recurrence config stripped so it can't independently re-fire.
         items
-            .expect_delete()
-            .withf(|id: &str| id == "item1")
+            .expect_update_team_item()
+            .withf(|item: &Item| {
+                item.id == "item1"
+                    && item.complete
+                    && item.recurrence_pattern().is_none()
+                    && item.recurrence_basis().is_none()
+            })
             .times(1)
             .returning(|_| Ok(()));
 

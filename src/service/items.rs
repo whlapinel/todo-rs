@@ -266,7 +266,8 @@ pub async fn update_item(
     if let Some((next_item, next_anchor)) = item.next_recurrence(chrono::Utc::now(), tz_offset) {
         let next_id = repo.create(&next_item).await?;
         clone_children(repo, &item.id, &next_id, next_anchor, tz_offset).await?;
-        repo.delete(&item.id).await?;
+        archive_recurrence(&mut item);
+        repo.update(&item).await?;
         return Ok(());
     }
 
@@ -350,6 +351,20 @@ pub(crate) fn clone_children<'a>(
         }
         Ok(())
     })
+}
+
+/// Strips the recurrence pattern/basis from a just-completed recurring item before it's kept
+/// as a history row (see `update_item`/`update_team_item`) instead of being deleted. Without
+/// this, un-completing the archived row from its own detail page (its read-only checkbox is
+/// still a valid PUT target) and completing it again would call `next_recurrence` a second
+/// time, spawning a duplicate "next occurrence" alongside the one already created by the
+/// original completion. `due_offset_days` is left alone — it only matters on a *child* item,
+/// and this always runs on the top-level item that actually recurred.
+pub(crate) fn archive_recurrence(item: &mut Item) {
+    if let Some(recurrence) = item.item_type.recurrence_mut() {
+        recurrence.pattern = None;
+        recurrence.basis = None;
+    }
 }
 
 /// An item's own reference date for anything measured relative to it (offset children,
@@ -750,8 +765,15 @@ mod tests {
             .times(1)
             .returning(|_| Ok(()));
 
-        mock.expect_delete()
-            .withf(|id: &str| id == "item1")
+        // The just-completed occurrence is kept as history (not deleted) with its own
+        // recurrence config stripped so it can't independently re-fire.
+        mock.expect_update()
+            .withf(|item: &Item| {
+                item.id == "item1"
+                    && item.complete
+                    && item.recurrence_pattern().is_none()
+                    && item.recurrence_basis().is_none()
+            })
             .times(1)
             .returning(|_| Ok(()));
 
