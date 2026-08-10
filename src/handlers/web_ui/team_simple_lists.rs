@@ -42,6 +42,7 @@ fn require_team_simple(item: Item) -> Result<Item, ItemError> {
 #[serde(rename_all = "camelCase")]
 pub struct TeamSimpleItemForm {
     name: Option<String>,
+    description: Option<String>,
     parent_item_id: Option<String>,
     /// Set on the standalone `/team-simple-lists/:team_id/new` page's create forms and on
     /// every edit form's "Save and close" submission — see `tasks.rs`'s identical field for
@@ -63,10 +64,19 @@ fn overlay_required_str(form_value: &Option<String>, current: &str) -> String {
     }
 }
 
+fn overlay_str(form_value: &Option<String>, current: Option<String>) -> Option<String> {
+    match form_value {
+        None => current,
+        Some(s) if s.trim().is_empty() => None,
+        Some(s) => Some(s.trim().to_string()),
+    }
+}
+
 fn create_params_from_form(team_id: &str, form: &TeamSimpleItemForm) -> CreateTeamItemParams {
     CreateTeamItemParams {
         team_id: team_id.to_string(),
         name: form.name.clone().unwrap_or_default(),
+        description: non_empty(&form.description),
         parent_item_id: non_empty(&form.parent_item_id),
         item_type: Some(ItemKind::Simple),
         ..Default::default()
@@ -83,6 +93,7 @@ fn update_params_from_form(
         team_id: team_id.to_string(),
         item_id: item_id.to_string(),
         name: overlay_required_str(&form.name, &current.name),
+        description: overlay_str(&form.description, current.description.clone()),
         complete: false,
         parent_item_id: current.parent_item_id.clone(),
         item_type: Some(ItemKind::Simple),
@@ -118,6 +129,7 @@ struct TeamSimpleItemDetailFields {
     id: String,
     team_id: String,
     name: String,
+    description: String,
     /// Set only on the fragment returned by a successful save — see `items.rs`'s
     /// `DetailFields.just_saved` for the full rationale.
     just_saved: bool,
@@ -129,6 +141,7 @@ impl TeamSimpleItemDetailFields {
             id: item.id.clone(),
             team_id: team_id.to_string(),
             name: item.name.clone(),
+            description: item.description.clone().unwrap_or_default(),
             just_saved,
         }
     }
@@ -164,6 +177,7 @@ struct TeamSimpleItemDetailPageTemplate {
     id: String,
     team_id: String,
     name: String,
+    description: Option<String>,
     nav_html: String,
 }
 
@@ -293,6 +307,7 @@ pub async fn team_simple_item_detail_page(
         id: item.id,
         team_id,
         name: item.name,
+        description: item.description.clone(),
         nav_html,
     })
 }
@@ -471,6 +486,7 @@ pub async fn update_team_simple_item_form(
             id: updated.id.clone(),
             team_id,
             name: updated.name.clone(),
+            description: updated.description.clone(),
             nav_html,
         })?
         .into_response());

@@ -109,6 +109,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         properties: {
           userId: { type: "string" },
           name: { type: "string", description: "Title of the todo item" },
+          description: { type: "string", description: "Free-form notes, longer than name" },
           dueDate: {
             type: "string",
             description: "ISO 8601 date/time string for the due date",
@@ -185,6 +186,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           userId: { type: "string" },
           itemId: { type: "string" },
           name: { type: "string" },
+          description: {
+            type: "string",
+            description: "Free-form notes, longer than name. Omit to leave unchanged; send an empty string to clear it.",
+          },
           complete: { type: "boolean" },
           dueDate: { type: "string", description: "ISO 8601 date/time string" },
           scheduledDate: { type: "string", description: "ISO 8601 date/time string" },
@@ -431,6 +436,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         properties: {
           teamId: { type: "string" },
           name: { type: "string" },
+          description: { type: "string", description: "Free-form notes, longer than name" },
           dueDate: { type: "string", description: "ISO 8601 date/time string" },
           scheduledDate: { type: "string", description: "ISO 8601 date/time string" },
           scheduledEndDate: { type: "string", description: "ISO 8601 date/time string" },
@@ -480,6 +486,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           teamId: { type: "string" },
           itemId: { type: "string" },
           name: { type: "string" },
+          description: {
+            type: "string",
+            description: "Free-form notes, longer than name. Omit to leave unchanged; send an empty string to clear it.",
+          },
           complete: { type: "boolean" },
           dueDate: { type: "string", description: "ISO 8601 date/time string" },
           scheduledDate: { type: "string", description: "ISO 8601 date/time string" },
@@ -574,6 +584,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
 
       case "create_item": {
         const body: Record<string, unknown> = { name: args.name };
+        if (args.description) body.description = args.description;
         if (args.dueDate) body.dueDate = toEpochSecs(args.dueDate as string);
         if (args.scheduledDate) body.scheduledDate = toEpochSecs(args.scheduledDate as string);
         if (args.scheduledEndDate) body.scheduledEndDate = toEpochSecs(args.scheduledEndDate as string);
@@ -598,6 +609,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           name: args.name,
           complete: args.complete,
         };
+        if (args.description !== undefined) body.description = args.description;
         if (args.dueDate) body.dueDate = toEpochSecs(args.dueDate as string);
         if (args.scheduledDate) body.scheduledDate = toEpochSecs(args.scheduledDate as string);
         if (args.scheduledEndDate) body.scheduledEndDate = toEpochSecs(args.scheduledEndDate as string);
@@ -715,6 +727,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
 
       case "create_team_item": {
         const body: Record<string, unknown> = { name: args.name };
+        if (args.description) body.description = args.description;
         if (args.dueDate) body.dueDate = toEpochSecs(args.dueDate as string);
         if (args.scheduledDate) body.scheduledDate = toEpochSecs(args.scheduledDate as string);
         if (args.scheduledEndDate) body.scheduledEndDate = toEpochSecs(args.scheduledEndDate as string);
@@ -741,6 +754,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           name: args.name,
           complete: args.complete,
         };
+        if (args.description !== undefined) body.description = args.description;
         if (args.dueDate) body.dueDate = toEpochSecs(args.dueDate as string);
         if (args.scheduledDate) body.scheduledDate = toEpochSecs(args.scheduledDate as string);
         if (args.scheduledEndDate) body.scheduledEndDate = toEpochSecs(args.scheduledEndDate as string);

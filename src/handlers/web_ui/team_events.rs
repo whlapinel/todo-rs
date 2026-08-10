@@ -47,6 +47,7 @@ fn require_team_event(item: Item) -> Result<Item, ItemError> {
 #[serde(rename_all = "camelCase")]
 pub struct TeamEventForm {
     name: Option<String>,
+    description: Option<String>,
     scheduled_date: Option<String>,
     scheduled_time: Option<String>,
     scheduled_end_date: Option<String>,
@@ -183,6 +184,7 @@ fn create_params_from_form(team_id: &str, form: &TeamEventForm, tz: i32) -> Crea
     CreateTeamItemParams {
         team_id: team_id.to_string(),
         name: form.name.clone().unwrap_or_default(),
+        description: non_empty(&form.description),
         due_date: overlay_due_date(&form.due_date, &form.due_time, tz, None),
         scheduled_date: overlay_scheduled_date(
             &form.scheduled_date,
@@ -229,6 +231,7 @@ fn update_params_from_form(
         team_id: team_id.to_string(),
         item_id: item_id.to_string(),
         name: overlay_required_str(&form.name, &current.name),
+        description: overlay_str(&form.description, current.description.clone()),
         due_date: overlay_due_date(&form.due_date, &form.due_time, tz, current.due_date()),
         scheduled_date: overlay_scheduled_date(
             &form.scheduled_date,
@@ -334,6 +337,7 @@ struct TeamEventDetailFields {
     id: String,
     team_id: String,
     name: String,
+    description: String,
     complete: bool,
     scheduled_date_input: String,
     scheduled_time_input: String,
@@ -388,6 +392,7 @@ impl TeamEventDetailFields {
             id: item.id.clone(),
             team_id: team_id.to_string(),
             name: item.name.clone(),
+            description: item.description.clone().unwrap_or_default(),
             complete: item.complete,
             scheduled_date_input,
             scheduled_time_input,
@@ -410,6 +415,7 @@ impl TeamEventDetailFields {
 struct TeamEventDetailView {
     id: String,
     team_id: String,
+    description: Option<String>,
     complete: bool,
     toggle_complete_json: String,
     scheduled_date: Option<String>,
@@ -450,6 +456,7 @@ impl TeamEventDetailView {
         Self {
             id: item.id.clone(),
             team_id: team_id.to_string(),
+            description: item.description.clone(),
             complete: item.complete,
             toggle_complete_json: (!item.complete).to_string(),
             scheduled_date,
@@ -1029,6 +1036,7 @@ pub async fn save_team_event_as_template(
             team_id,
             requester_user_id: auth_user.user_id,
             name: item.name.clone(),
+            description: None,
             source_item_id: Some(item_id),
             event_type: None,
         },

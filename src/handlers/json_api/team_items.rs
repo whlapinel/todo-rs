@@ -58,6 +58,7 @@ pub async fn create_team_item(
         CreateTeamItemParams {
             team_id: input.team_id,
             name: input.name,
+            description: input.description,
             due_date,
             scheduled_date,
             scheduled_end_date,
@@ -108,6 +109,7 @@ pub async fn get_team_item(
         .map(|dt| SmithyDateTime::from_secs(dt.timestamp()));
     Ok(output::GetTeamItemOutput {
         name: item.name.clone(),
+        description: item.description.clone(),
         due_date,
         scheduled_date,
         scheduled_end_date,
@@ -154,6 +156,7 @@ pub async fn update_team_item(
             team_id: input.team_id,
             item_id: input.item_id,
             name: input.name,
+            description: input.description,
             due_date,
             scheduled_date,
             scheduled_end_date,
@@ -228,6 +231,7 @@ pub async fn list_team_items(
         .map(|i| todo_server_sdk::model::TeamItemSummary {
             item_id: Some(i.id.clone()),
             name: Some(i.name.clone()),
+            description: i.description.clone(),
             due_date: i
                 .due_date()
                 .map(|dt| SmithyDateTime::from_secs(dt.timestamp())),

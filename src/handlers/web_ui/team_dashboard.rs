@@ -155,6 +155,7 @@ pub async fn toggle_team_dashboard_item_complete(
         team_id: team_id.clone(),
         item_id: item_id.clone(),
         name: current.name.clone(),
+        description: current.description.clone(),
         due_date: current.due_date(),
         scheduled_date: current.scheduled_date(),
         scheduled_end_date: current.scheduled_end_date(),

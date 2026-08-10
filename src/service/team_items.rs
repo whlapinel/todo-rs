@@ -23,6 +23,7 @@ pub struct UpdateTeamItemContext {
 pub struct CreateTeamItemParams {
     pub team_id: String,
     pub name: String,
+    pub description: Option<String>,
     pub due_date: Option<DateTime<Utc>>,
     pub scheduled_date: Option<DateTime<Utc>>,
     pub scheduled_end_date: Option<DateTime<Utc>>,
@@ -151,6 +152,7 @@ pub async fn create_team_item(
     );
     item.complete = params.complete.unwrap_or(false);
     item.parent_item_id = params.parent_item_id.clone();
+    item.description = params.description.clone();
     item.validate().map_err(ItemError::Invalid)?;
 
     if let Some(pattern) = item.recurrence_pattern()
@@ -271,6 +273,7 @@ pub struct UpdateTeamItemParams {
     pub team_id: String,
     pub item_id: String,
     pub name: String,
+    pub description: Option<String>,
     pub due_date: Option<DateTime<Utc>>,
     pub scheduled_date: Option<DateTime<Utc>>,
     pub scheduled_end_date: Option<DateTime<Utc>>,
@@ -375,6 +378,7 @@ pub async fn update_team_item(
     item.id = params.item_id.clone();
     item.complete = params.complete;
     item.parent_item_id = params.parent_item_id.clone();
+    item.description = params.description.clone();
     item.item_type = build_item_type(
         kind,
         schedule,

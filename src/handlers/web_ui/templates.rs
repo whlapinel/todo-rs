@@ -102,6 +102,7 @@ struct ChildrenFragmentTemplate {
 struct TemplateDetailPageTemplate {
     id: String,
     name: String,
+    description: Option<String>,
     event_type: Option<String>,
     nav_html: String,
 }
@@ -111,6 +112,7 @@ struct TemplateDetailPageTemplate {
 struct TemplateEditPageTemplate {
     id: String,
     name: String,
+    description: String,
     event_type: String,
     nav_html: String,
 }
@@ -244,6 +246,7 @@ pub async fn templates_page(
 #[serde(rename_all = "camelCase")]
 pub struct CreateTemplateForm {
     name: String,
+    description: Option<String>,
     event_type: Option<String>,
 }
 
@@ -258,11 +261,18 @@ pub async fn create_template_form(
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string);
+    let description = form
+        .description
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
     template_service::create_template(
         &repo,
         CreateTemplateParams {
             user_id: auth_user.user_id.clone(),
             name: form.name,
+            description,
             source_item_id: None,
             event_type,
         },
@@ -301,6 +311,7 @@ pub async fn template_detail_page(
     render(TemplateDetailPageTemplate {
         id: template.id,
         name: template.name,
+        description: template.description.clone(),
         event_type,
         nav_html,
     })
@@ -327,6 +338,7 @@ pub async fn template_edit_page(
     render(TemplateEditPageTemplate {
         id: template.id,
         name: template.name,
+        description: template.description.clone().unwrap_or_default(),
         event_type,
         nav_html,
     })
@@ -336,6 +348,7 @@ pub async fn template_edit_page(
 #[serde(rename_all = "camelCase")]
 pub struct UpdateTemplateForm {
     name: String,
+    description: Option<String>,
     event_type: Option<String>,
 }
 
@@ -352,12 +365,19 @@ pub async fn update_template_form(
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string);
+    let description = form
+        .description
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
     template_service::update_template(
         &repo,
         UpdateTemplateParams {
             user_id: auth_user.user_id.clone(),
             template_id: template_id.clone(),
             name: form.name.trim().to_string(),
+            description,
             event_type,
         },
     )
@@ -377,6 +397,7 @@ pub async fn update_template_form(
     render(TemplateDetailPageTemplate {
         id: template.id,
         name: template.name,
+        description: template.description.clone(),
         event_type,
         nav_html,
     })
@@ -506,6 +527,7 @@ pub async fn update_template_child_form(
         user_id: auth_user.user_id.clone(),
         item_id: item_id.clone(),
         name,
+        description: current.description.clone(),
         due_date: None,
         scheduled_date: None,
         scheduled_end_date: None,

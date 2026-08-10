@@ -20,6 +20,7 @@ pub async fn create_team_template(
             team_id: input.team_id,
             requester_user_id: auth_user.user_id,
             name: input.name,
+            description: input.description,
             source_item_id: input.source_item_id,
             event_type: input.event_type,
         },
@@ -57,6 +58,7 @@ pub async fn list_team_templates(
         .map(|i| todo_server_sdk::model::ItemSummary {
             item_id: Some(i.id.clone()),
             name: Some(i.name.clone()),
+            description: i.description.clone(),
             due_date: None,
             scheduled_date: None,
             scheduled_end_date: None,

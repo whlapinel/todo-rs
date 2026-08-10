@@ -46,6 +46,7 @@ pub async fn create_item(
         item_service::CreateItemParams {
             user_id: input.user_id,
             name: input.name,
+            description: input.description,
             due_date,
             scheduled_date,
             scheduled_end_date,
@@ -89,6 +90,7 @@ pub async fn update_item(
             user_id: input.user_id,
             item_id: input.item_id,
             name: input.name,
+            description: input.description,
             due_date,
             scheduled_date,
             scheduled_end_date,
@@ -142,6 +144,7 @@ pub async fn get_item(
         .map(|dt| SmithyDateTime::from_secs(dt.timestamp()));
     Ok(output::GetItemOutput {
         name: item.name.clone(),
+        description: item.description.clone(),
         due_date,
         scheduled_date,
         scheduled_end_date,
@@ -178,6 +181,7 @@ pub async fn list_items(
         .map(|i| todo_server_sdk::model::ItemSummary {
             item_id: Some(i.id.clone()),
             name: Some(i.name.clone()),
+            description: i.description.clone(),
             due_date: i
                 .due_date()
                 .map(|dt| SmithyDateTime::from_secs(dt.timestamp())),

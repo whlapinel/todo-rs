@@ -1,4 +1,5 @@
 mod activity_log;
+mod add_item_description;
 mod add_item_points;
 mod add_team_member_role;
 mod has_tasks_to_simple;
@@ -7,6 +8,7 @@ mod scheduled_end_date;
 mod team_member_points;
 
 use activity_log::ActivityLog;
+use add_item_description::AddItemDescription;
 use add_item_points::AddItemPoints;
 use add_team_member_role::AddTeamMemberRole;
 use async_trait::async_trait;
@@ -56,6 +58,7 @@ fn all_migrations() -> Vec<Box<dyn Migration>> {
         Box::new(AddItemPoints),
         Box::new(ActivityLog),
         Box::new(TeamMemberPoints),
+        Box::new(AddItemDescription),
     ]
 }
 
@@ -155,6 +158,7 @@ mod tests {
             "CREATE TABLE items (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
+                description TEXT,
                 due_date INTEGER,
                 scheduled_date INTEGER,
                 scheduled_end_date INTEGER,
@@ -288,7 +292,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 7);
+        assert_eq!(applied_count, 8);
     }
 
     #[tokio::test]
@@ -301,7 +305,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 7);
+        assert_eq!(applied_count, 8);
     }
 
     #[tokio::test]
@@ -315,6 +319,6 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 7);
+        assert_eq!(applied_count, 8);
     }
 }

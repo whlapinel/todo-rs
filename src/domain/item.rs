@@ -227,6 +227,13 @@ impl ItemType {
 /// web UI so the browser blocks the common case before a round-trip is needed.
 pub const MAX_NAME_LENGTH: usize = 200;
 
+/// Max length (in `char`s) allowed for `Item::description`, enforced the same way as
+/// `MAX_NAME_LENGTH` above but considerably larger — this is free-form notes text, not
+/// a title. Unlike most other fields, `description` is a plain `Item` field rather than
+/// something living inside `ItemType`'s variants: it applies uniformly to every kind
+/// (Task/Event/Template/Simple), so there's no per-variant payload to attach it to.
+pub const MAX_DESCRIPTION_LENGTH: usize = 5000;
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Item {
     pub id: String,
@@ -234,6 +241,7 @@ pub struct Item {
     pub team_id: Option<String>,
     pub parent_item_id: Option<String>,
     pub name: String,
+    pub description: Option<String>,
     pub complete: bool,
     pub has_children: bool,
     pub item_type: ItemType,
@@ -351,6 +359,15 @@ impl Item {
         }
         if self.name.chars().count() > MAX_NAME_LENGTH {
             return Err(format!("name must be {MAX_NAME_LENGTH} characters or fewer"));
+        }
+        if self
+            .description
+            .as_ref()
+            .is_some_and(|d| d.chars().count() > MAX_DESCRIPTION_LENGTH)
+        {
+            return Err(format!(
+                "description must be {MAX_DESCRIPTION_LENGTH} characters or fewer"
+            ));
         }
         // Simple items are bare checkable-off-nothing names: create or delete, no
         // completion concept at all (unlike Task/Event, which support it).
@@ -547,6 +564,20 @@ mod tests {
     #[test]
     fn validate_allows_name_at_max_length() {
         let item = Item::new_task("u1", &"a".repeat(MAX_NAME_LENGTH));
+        assert!(item.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_description_over_max_length() {
+        let mut item = Item::new_task("u1", "Task");
+        item.description = Some("a".repeat(MAX_DESCRIPTION_LENGTH + 1));
+        assert!(item.validate().is_err());
+    }
+
+    #[test]
+    fn validate_allows_description_at_max_length() {
+        let mut item = Item::new_task("u1", "Task");
+        item.description = Some("a".repeat(MAX_DESCRIPTION_LENGTH));
         assert!(item.validate().is_ok());
     }
 

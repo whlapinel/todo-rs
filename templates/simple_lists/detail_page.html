@@ -14,6 +14,10 @@
     </div>
   </div>
 
+  {% if let Some(d) = description %}
+  <p class="text-sm whitespace-pre-wrap text-gray-700 dark:text-gray-300">{{ d }}</p>
+  {% endif %}
+
   <div>
     <h3 class="text-base/7 font-semibold text-gray-900 dark:text-white mb-2">Sub-items</h3>
     <ul id="children-list" class="divide-y divide-gray-100 rounded-lg border border-gray-200 bg-white px-4 dark:divide-white/5 dark:border-white/10 dark:bg-gray-800/50"

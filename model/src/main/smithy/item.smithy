@@ -16,6 +16,7 @@ resource Item {
     }
     properties: {
         name: String
+        description: String
         dueDate: Timestamp
         scheduledDate: Timestamp
         scheduledEndDate: Timestamp
@@ -48,6 +49,8 @@ operation CreateItem {
 
         @required
         $name
+
+        $description
 
         $dueDate
 
@@ -106,6 +109,8 @@ operation GetItem {
         @required
         $name
 
+        $description
+
         $dueDate
 
         $scheduledDate
@@ -157,6 +162,8 @@ operation UpdateItem {
 
         @required
         $name
+
+        $description
 
         $dueDate
 
@@ -223,6 +230,7 @@ list Items {
 structure ItemSummary for Item {
     $itemId
     $name
+    $description
     $dueDate
     $scheduledDate
     $scheduledEndDate
@@ -276,6 +284,9 @@ operation CreateTemplate {
         @required
         @notProperty
         name: String
+
+        @notProperty
+        description: String
 
         @notProperty
         sourceItemId: String

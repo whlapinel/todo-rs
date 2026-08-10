@@ -16,6 +16,7 @@ pub use crate::service::error::ItemError;
 pub struct CreateItemParams {
     pub user_id: String,
     pub name: String,
+    pub description: Option<String>,
     pub due_date: Option<DateTime<Utc>>,
     pub scheduled_date: Option<DateTime<Utc>>,
     pub scheduled_end_date: Option<DateTime<Utc>>,
@@ -122,6 +123,7 @@ pub async fn create_item(
     item.item_type = build_item_type(kind, schedule, recurrence_data, params.event_type.clone());
     item.complete = params.complete.unwrap_or(false);
     item.parent_item_id = params.parent_item_id.clone();
+    item.description = params.description.clone();
 
     item.validate().map_err(ItemError::Invalid)?;
 
@@ -174,6 +176,7 @@ pub struct UpdateItemParams {
     pub user_id: String,
     pub item_id: String,
     pub name: String,
+    pub description: Option<String>,
     pub due_date: Option<DateTime<Utc>>,
     pub scheduled_date: Option<DateTime<Utc>>,
     pub scheduled_end_date: Option<DateTime<Utc>>,
@@ -254,6 +257,7 @@ pub async fn update_item(
     item.id = params.item_id.clone();
     item.complete = params.complete;
     item.parent_item_id = params.parent_item_id.clone();
+    item.description = params.description.clone();
     item.validate().map_err(ItemError::Invalid)?;
 
     if current.complete && !is_pure_complete_toggle(&current, &item) {
@@ -398,6 +402,7 @@ pub(crate) async fn has_incomplete_children(
 /// `current`'s DB-populated value.
 pub(crate) fn is_pure_complete_toggle(current: &Item, item: &Item) -> bool {
     current.name == item.name
+        && current.description == item.description
         && current.due_date() == item.due_date()
         && current.scheduled_date() == item.scheduled_date()
         && current.scheduled_end_date() == item.scheduled_end_date()

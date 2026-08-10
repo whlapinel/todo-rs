@@ -43,6 +43,7 @@ fn require_team_task(item: Item) -> Result<Item, ItemError> {
 #[serde(rename_all = "camelCase")]
 pub struct TeamTaskForm {
     name: Option<String>,
+    description: Option<String>,
     due_date: Option<String>,
     due_time: Option<String>,
     scheduled_date: Option<String>,
@@ -194,6 +195,7 @@ fn create_params_from_form(team_id: &str, form: &TeamTaskForm, tz: i32) -> Creat
     CreateTeamItemParams {
         team_id: team_id.to_string(),
         name: form.name.clone().unwrap_or_default(),
+        description: non_empty(&form.description),
         due_date: overlay_due_date(&form.due_date, &form.due_time, tz, None),
         scheduled_date: overlay_scheduled_date(
             &form.scheduled_date,
@@ -247,6 +249,7 @@ fn update_params_from_form(
         team_id: team_id.to_string(),
         item_id: item_id.to_string(),
         name: overlay_required_str(&form.name, &current.name),
+        description: overlay_str(&form.description, current.description.clone()),
         due_date: overlay_due_date(&form.due_date, &form.due_time, tz, current.due_date()),
         scheduled_date: overlay_scheduled_date(
             &form.scheduled_date,
@@ -409,6 +412,7 @@ struct TeamTaskDetailFields {
     id: String,
     team_id: String,
     name: String,
+    description: String,
     complete: bool,
     is_top_level: bool,
     due_date_input: String,
@@ -477,6 +481,7 @@ impl TeamTaskDetailFields {
             id: item.id.clone(),
             team_id: team_id.to_string(),
             name: item.name.clone(),
+            description: item.description.clone().unwrap_or_default(),
             complete: item.complete,
             is_top_level: item.parent_item_id.is_none(),
             due_date_input,
@@ -504,6 +509,7 @@ impl TeamTaskDetailFields {
 struct TeamTaskDetailView {
     id: String,
     team_id: String,
+    description: Option<String>,
     complete: bool,
     toggle_complete_json: String,
     due_date: Option<String>,
@@ -546,6 +552,7 @@ impl TeamTaskDetailView {
         Self {
             id: item.id.clone(),
             team_id: team_id.to_string(),
+            description: item.description.clone(),
             complete: item.complete,
             toggle_complete_json: (!item.complete).to_string(),
             due_date,
@@ -1086,6 +1093,7 @@ pub async fn save_team_task_as_template(
             team_id,
             requester_user_id: auth_user.user_id,
             name: item.name.clone(),
+            description: None,
             source_item_id: Some(item_id),
             event_type: None,
         },

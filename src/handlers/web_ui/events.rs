@@ -37,6 +37,7 @@ fn require_event(item: Item) -> Result<Item, ItemError> {
 #[serde(rename_all = "camelCase")]
 pub struct EventForm {
     name: Option<String>,
+    description: Option<String>,
     scheduled_date: Option<String>,
     scheduled_time: Option<String>,
     scheduled_end_date: Option<String>,
@@ -176,6 +177,7 @@ fn create_params_from_form(
     item_service::CreateItemParams {
         user_id: user_id.to_string(),
         name: form.name.clone().unwrap_or_default(),
+        description: non_empty(&form.description),
         due_date: overlay_due_date(&form.due_date, &form.due_time, tz, None),
         scheduled_date: overlay_scheduled_date(
             &form.scheduled_date,
@@ -217,6 +219,7 @@ fn update_params_from_form(
         user_id: user_id.to_string(),
         item_id: item_id.to_string(),
         name: overlay_required_str(&form.name, &current.name),
+        description: overlay_str(&form.description, current.description.clone()),
         due_date: overlay_due_date(&form.due_date, &form.due_time, tz, current.due_date()),
         scheduled_date: overlay_scheduled_date(
             &form.scheduled_date,
@@ -316,6 +319,7 @@ impl EventRow {
 struct EventDetailFields {
     id: String,
     name: String,
+    description: String,
     complete: bool,
     scheduled_date_input: String,
     scheduled_time_input: String,
@@ -369,6 +373,7 @@ impl EventDetailFields {
         Self {
             id: item.id.clone(),
             name: item.name.clone(),
+            description: item.description.clone().unwrap_or_default(),
             complete: item.complete,
             scheduled_date_input,
             scheduled_time_input,
@@ -391,6 +396,7 @@ impl EventDetailFields {
 #[template(path = "events/detail_view.html")]
 struct EventDetailView {
     id: String,
+    description: Option<String>,
     complete: bool,
     toggle_complete_json: String,
     scheduled_date: Option<String>,
@@ -430,6 +436,7 @@ impl EventDetailView {
         });
         Self {
             id: item.id.clone(),
+            description: item.description.clone(),
             complete: item.complete,
             toggle_complete_json: (!item.complete).to_string(),
             scheduled_date,
@@ -960,6 +967,7 @@ pub async fn save_event_as_template(
         CreateTemplateParams {
             user_id: auth_user.user_id.clone(),
             name: item.name.clone(),
+            description: None,
             source_item_id: Some(item_id),
             event_type: None,
         },

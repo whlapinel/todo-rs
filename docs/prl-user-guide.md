@@ -102,7 +102,11 @@ prl items add "Team offsite" --item-type event --due 2026-09-01
 prl items add "Rain today" --item-type event --event-type rain
 prl items add "Write report" --scheduled 2026-06-18 --scheduled-end 2026-06-20
 prl items add "Milk" --item-type simple
+prl items add "Trip planning" --description "Book flights, hotel, and rental car"
 ```
+
+`--description` is free-form notes text (up to 5000 characters), separate from the
+required `name`, and valid on every item type/kind.
 
 `--item-type` is `task` (default), `event`, or `simple` — events are calendar-style
 items, distinguished from tasks mainly for display purposes; simple items are a bare

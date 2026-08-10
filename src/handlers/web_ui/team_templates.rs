@@ -130,6 +130,7 @@ struct TeamTemplateDetailPageTemplate {
     team_id: String,
     id: String,
     name: String,
+    description: Option<String>,
     event_type: Option<String>,
     nav_html: String,
 }
@@ -140,6 +141,7 @@ struct TeamTemplateEditPageTemplate {
     team_id: String,
     id: String,
     name: String,
+    description: String,
     event_type: String,
     nav_html: String,
 }
@@ -279,6 +281,7 @@ pub async fn team_templates_page(
 #[serde(rename_all = "camelCase")]
 pub struct CreateTeamTemplateForm {
     name: String,
+    description: Option<String>,
     event_type: Option<String>,
 }
 
@@ -295,6 +298,12 @@ pub async fn create_team_template_form(
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string);
+    let description = form
+        .description
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
     template_service::create_team_template(
         &repo,
         &teams,
@@ -302,6 +311,7 @@ pub async fn create_team_template_form(
             team_id: team_id.clone(),
             requester_user_id: auth_user.user_id.clone(),
             name: form.name,
+            description,
             source_item_id: None,
             event_type,
         },
@@ -340,6 +350,7 @@ pub async fn team_template_detail_page(
         team_id,
         id: template.id,
         name: template.name,
+        description: template.description.clone(),
         event_type,
         nav_html,
     })
@@ -365,6 +376,7 @@ pub async fn team_template_edit_page(
         team_id,
         id: template.id,
         name: template.name,
+        description: template.description.clone().unwrap_or_default(),
         event_type,
         nav_html,
     })
@@ -374,6 +386,7 @@ pub async fn team_template_edit_page(
 #[serde(rename_all = "camelCase")]
 pub struct UpdateTeamTemplateForm {
     name: String,
+    description: Option<String>,
     event_type: Option<String>,
 }
 
@@ -390,6 +403,12 @@ pub async fn update_team_template_form(
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string);
+    let description = form
+        .description
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
     template_service::update_team_template(
         &repo,
         &teams,
@@ -398,6 +417,7 @@ pub async fn update_team_template_form(
             requester_user_id: auth_user.user_id.clone(),
             template_id: template_id.clone(),
             name: form.name.trim().to_string(),
+            description,
             event_type,
         },
     )
@@ -415,6 +435,7 @@ pub async fn update_team_template_form(
         team_id,
         id: template.id,
         name: template.name,
+        description: template.description.clone(),
         event_type,
         nav_html,
     })
@@ -538,6 +559,7 @@ pub async fn update_team_template_child_form(
         team_id: team_id.clone(),
         item_id: item_id.clone(),
         name,
+        description: current.description.clone(),
         complete: false,
         parent_item_id: Some(template_id.clone()),
         item_type: Some(ItemKind::Task),

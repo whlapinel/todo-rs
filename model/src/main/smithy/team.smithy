@@ -9,6 +9,7 @@ resource TeamItem {
     }
     properties: {
         name: String
+        description: String
         dueDate: Timestamp
         scheduledDate: Timestamp
         scheduledEndDate: Timestamp
@@ -42,6 +43,8 @@ operation CreateTeamItem {
 
         @required
         $name
+
+        $description
 
         $dueDate
 
@@ -104,6 +107,8 @@ operation GetTeamItem {
         @required
         $name
 
+        $description
+
         $dueDate
 
         $scheduledDate
@@ -157,6 +162,8 @@ operation UpdateTeamItem {
 
         @required
         $name
+
+        $description
 
         $dueDate
 
@@ -227,6 +234,7 @@ list TeamItems {
 structure TeamItemSummary for TeamItem {
     $itemId
     $name
+    $description
     $dueDate
     $scheduledDate
     $scheduledEndDate
@@ -282,6 +290,9 @@ operation CreateTeamTemplate {
         @required
         @notProperty
         name: String
+
+        @notProperty
+        description: String
 
         @notProperty
         sourceItemId: String

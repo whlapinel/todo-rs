@@ -25,6 +25,8 @@ pub enum ItemsCommand {
     /// Add a new item
     Add {
         name: String,
+        #[arg(long, help = "Free-form notes, longer than name")]
+        description: Option<String>,
         #[arg(long, help = "Due date: YYYY-MM-DD or Unix timestamp")]
         due: Option<String>,
         #[arg(long, help = "Parent item ID")]
@@ -101,6 +103,7 @@ pub async fn cmd_items(client: &Client, cmd: ItemsCommand, user_id: Option<Strin
         }
         ItemsCommand::Add {
             name,
+            description,
             due,
             parent,
             recurrence,
@@ -124,6 +127,9 @@ pub async fn cmd_items(client: &Client, cmd: ItemsCommand, user_id: Option<Strin
             }
             let uid = require_user(user_id);
             let mut req = client.create_item().user_id(uid).name(name);
+            if let Some(d) = description {
+                req = req.description(d);
+            }
             if let Some(ref s) = due {
                 let due_date = parse_date(s).unwrap_or_else(|e| {
                     eprintln!("{e}");
@@ -181,6 +187,9 @@ pub async fn cmd_items(client: &Client, cmd: ItemsCommand, user_id: Option<Strin
                 .name(item.name())
                 .complete(true)
                 .due_date(item.due_date().cloned().unwrap());
+            if let Some(d) = item.description() {
+                req = req.description(d);
+            }
             if let Some(r) = item.recurrence() {
                 req = req.recurrence(r);
             }
@@ -274,6 +283,7 @@ pub async fn cmd_items(client: &Client, cmd: ItemsCommand, user_id: Option<Strin
             );
             println!("id:         {item_id}");
             println!("name:       {}", item.name());
+            println!("description: {}", item.description().unwrap_or("-"));
             println!("complete:   {}", item.complete());
             println!("due:        {}", fmt_date_opt(item.due_date()));
             println!("scheduled:  {}", fmt_date_opt(item.scheduled_date()));

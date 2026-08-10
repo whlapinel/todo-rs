@@ -8,6 +8,7 @@ use std::sync::Arc;
 pub struct CreateTemplateParams {
     pub user_id: String,
     pub name: String,
+    pub description: Option<String>,
     pub source_item_id: Option<String>,
     pub event_type: Option<String>,
 }
@@ -21,6 +22,7 @@ pub async fn create_template(
     let mut schedule = Schedule::default();
     let mut recurrence = Recurrence::default();
     let mut event_type = None;
+    let mut description = params.description.clone();
 
     let source_id = params.source_item_id;
     if let Some(source_id) = &source_id {
@@ -38,6 +40,9 @@ pub async fn create_template(
         schedule.has_due_time = source.has_due_time();
         event_type = source.event_type();
         item.name = source.name;
+        if description.is_none() {
+            description = source.description.clone();
+        }
         // deadline intentionally not copied — templates have no dates
     }
     if params.event_type.is_some() {
@@ -48,6 +53,7 @@ pub async fn create_template(
         recurrence,
         event_type,
     };
+    item.description = description;
 
     let template_id = repo.create(&item).await?;
 
@@ -63,12 +69,14 @@ pub struct UpdateTemplateParams {
     pub user_id: String,
     pub template_id: String,
     pub name: String,
+    pub description: Option<String>,
     pub event_type: Option<String>,
 }
 
-/// Edits a template's own fields — `name` and `event_type`, the only two things the
-/// create form (`create_template` above) lets a caller set directly. `schedule`/`recurrence`
-/// (only ever populated by copying a source item at creation time) ride along unchanged.
+/// Edits a template's own fields — `name`, `description`, and `event_type`, the only
+/// things the create form (`create_template` above) lets a caller set directly.
+/// `schedule`/`recurrence` (only ever populated by copying a source item at creation
+/// time) ride along unchanged.
 pub async fn update_template(
     repo: &Arc<dyn ItemRepo>,
     params: UpdateTemplateParams,
@@ -80,6 +88,7 @@ pub async fn update_template(
 
     let mut item = current;
     item.name = params.name;
+    item.description = params.description;
     if let ItemType::Template { event_type, .. } = &mut item.item_type {
         *event_type = params.event_type;
     }
@@ -93,6 +102,7 @@ pub struct CreateTeamTemplateParams {
     pub team_id: String,
     pub requester_user_id: String,
     pub name: String,
+    pub description: Option<String>,
     pub source_item_id: Option<String>,
     pub event_type: Option<String>,
 }
@@ -111,6 +121,7 @@ pub async fn create_team_template(
     let mut schedule = Schedule::default();
     let mut recurrence = Recurrence::default();
     let mut event_type = None;
+    let mut description = params.description.clone();
 
     let source_id = params.source_item_id;
     if let Some(source_id) = &source_id {
@@ -129,6 +140,9 @@ pub async fn create_team_template(
         schedule.has_due_time = source.has_due_time();
         event_type = source.event_type();
         item.name = source.name;
+        if description.is_none() {
+            description = source.description.clone();
+        }
         // deadline intentionally not copied — templates have no dates
     }
     if params.event_type.is_some() {
@@ -139,6 +153,7 @@ pub async fn create_team_template(
         recurrence,
         event_type,
     };
+    item.description = description;
 
     let template_id = repo.create(&item).await?;
 
@@ -155,6 +170,7 @@ pub struct UpdateTeamTemplateParams {
     pub requester_user_id: String,
     pub template_id: String,
     pub name: String,
+    pub description: Option<String>,
     pub event_type: Option<String>,
 }
 
@@ -173,6 +189,7 @@ pub async fn update_team_template(
 
     let mut item = current;
     item.name = params.name;
+    item.description = params.description;
     if let ItemType::Template { event_type, .. } = &mut item.item_type {
         *event_type = params.event_type;
     }
@@ -250,6 +267,7 @@ mod tests {
             CreateTemplateParams {
                 user_id: "u1".to_string(),
                 name: "Move house".to_string(),
+                description: None,
                 source_item_id: Some("src".to_string()),
                 event_type: None,
             },
@@ -284,6 +302,7 @@ mod tests {
             CreateTemplateParams {
                 user_id: "u1".to_string(),
                 name: "Groceries".to_string(),
+                description: None,
                 source_item_id: Some("src".to_string()),
                 event_type: None,
             },
@@ -328,6 +347,7 @@ mod tests {
                 team_id: "team1".to_string(),
                 requester_user_id: "u1".to_string(),
                 name: "Groceries".to_string(),
+                description: None,
                 source_item_id: Some("src".to_string()),
                 event_type: None,
             },
@@ -375,6 +395,7 @@ mod tests {
                 user_id: "u1".to_string(),
                 template_id: "tpl1".to_string(),
                 name: "New name".to_string(),
+                description: None,
                 event_type: Some("rain".to_string()),
             },
         )
@@ -411,6 +432,7 @@ mod tests {
                 user_id: "u1".to_string(),
                 template_id: "item1".to_string(),
                 name: "New name".to_string(),
+                description: None,
                 event_type: None,
             },
         )
@@ -469,6 +491,7 @@ mod tests {
                 requester_user_id: "u1".to_string(),
                 template_id: "tpl1".to_string(),
                 name: "New name".to_string(),
+                description: None,
                 event_type: Some("rain".to_string()),
             },
         )
