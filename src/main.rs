@@ -40,6 +40,7 @@ use handlers::web_ui::login::login_page;
 use handlers::web_ui::simple_lists::*;
 use handlers::web_ui::tasks::*;
 use handlers::web_ui::team_activity::*;
+use handlers::web_ui::team_dashboard::*;
 use handlers::web_ui::team_events::*;
 use handlers::web_ui::team_simple_lists::*;
 use handlers::web_ui::team_tasks::*;
@@ -136,6 +137,11 @@ fn build_web_router() -> Router {
             put(toggle_team_item_complete),
         )
         .route("/assigned-items", get(assigned_items_page))
+        .route("/team-dashboard/:team_id", get(team_dashboard_page))
+        .route(
+            "/team-dashboard/:team_id/items/:item_id",
+            put(toggle_team_dashboard_item_complete),
+        )
         .route(
             "/templates",
             get(templates_page).post(create_template_form),

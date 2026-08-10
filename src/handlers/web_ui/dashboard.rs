@@ -21,7 +21,7 @@ fn render<T: Template>(t: T) -> Result<Html<String>, ItemError> {
 /// `domain::recurrence::apply_end_of_day`. "All" and "All with due date" both return an
 /// unrestricted range here — the latter's extra "must have a due date at all" condition is a
 /// separate post-filter applied by the caller, not a date-range concern.
-fn preset_range(preset: &str, now: DateTime<Utc>, tz_offset_minutes: i32) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
+pub(crate) fn preset_range(preset: &str, now: DateTime<Utc>, tz_offset_minutes: i32) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
     let offset = Duration::minutes(tz_offset_minutes as i64);
     let local_now = now - offset;
     let local_date = local_now.date_naive();
@@ -58,7 +58,7 @@ struct DashboardRow {
 /// Dedicated-screen URL for `item`, dispatched by its actual type — shared by both this
 /// row's own `detail_link`/delete target and `assigned_items.rs`'s equivalent (team-only
 /// subset there).
-fn detail_url(item: &Item) -> String {
+pub(crate) fn detail_url(item: &Item) -> String {
     match (&item.team_id, item.kind()) {
         (Some(team_id), ItemKind::Task) => format!("/web/team-tasks/{team_id}/{}", item.id),
         (Some(team_id), ItemKind::Event) => format!("/web/team-events/{team_id}/{}", item.id),
@@ -103,7 +103,7 @@ impl DashboardRow {
     }
 }
 
-const PRESETS: [&str; 6] = ["All", "All with due date", "Today", "This Week", "Next 30 Days", "Overdue"];
+pub(crate) const PRESETS: [&str; 6] = ["All", "All with due date", "Today", "This Week", "Next 30 Days", "Overdue"];
 
 #[derive(Template)]
 #[template(path = "dashboard/page.html")]

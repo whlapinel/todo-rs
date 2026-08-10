@@ -257,6 +257,43 @@ impl ItemRepo for SqliteItemRepo {
         })
     }
 
+    async fn list_due_team_items(
+        &self,
+        team_id: &str,
+        due_date_after: Option<i64>,
+        due_date_before: Option<i64>,
+    ) -> Result<Vec<DueItem>, RepoError> {
+        sqlx::query(
+            "SELECT items.id, items.user_id, items.team_id, items.parent_item_id, items.name, items.due_date, items.scheduled_date, items.scheduled_end_date,
+                    items.complete, items.recurrence, items.recurrence_basis, items.has_due_time, items.has_scheduled_time, items.has_end_time,
+                    items.item_type, items.event_type, items.due_offset_days, items.assigned_to_user_id, items.points,
+                    COALESCE(parent.name, '') AS parent_name,
+                    EXISTS(SELECT 1 FROM items c WHERE c.parent_item_id = items.id) AS has_children
+             FROM items
+             LEFT JOIN items parent ON items.parent_item_id = parent.id
+             WHERE items.team_id = ?
+               AND (? IS NULL OR items.due_date >= ?)
+               AND (? IS NULL OR items.due_date <= ?)
+             ORDER BY COALESCE(items.due_date, 9999999999999) ASC",
+        )
+        .bind(team_id)
+        .bind(due_date_after)
+        .bind(due_date_after)
+        .bind(due_date_before)
+        .bind(due_date_before)
+        .fetch_all(&self.0)
+        .await
+        .map_err(db_err)
+        .map(|rows| {
+            rows.iter()
+                .map(|row| DueItem {
+                    item: row_to_item(row),
+                    parent_name: row.get("parent_name"),
+                })
+                .collect()
+        })
+    }
+
     async fn list_templates(&self, user_id: &str) -> Result<Vec<Item>, RepoError> {
         let q = format!(
             "{ITEM_SELECT} FROM items WHERE user_id = ? AND item_type = 'TEMPLATE' AND parent_item_id IS NULL \

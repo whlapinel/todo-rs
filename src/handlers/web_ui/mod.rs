@@ -7,6 +7,7 @@ pub mod nav;
 pub mod simple_lists;
 pub mod tasks;
 pub mod team_activity;
+pub mod team_dashboard;
 pub mod team_events;
 pub mod team_simple_lists;
 pub mod team_tasks;
