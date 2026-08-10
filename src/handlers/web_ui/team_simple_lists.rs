@@ -12,7 +12,6 @@ use crate::storage::sqlite::{ActivityLogRepo, ItemRepo, TeamRepo};
 use askama::Template;
 use axum::extract::{Extension, Form, Path, Query};
 use axum::response::{Html, IntoResponse, Response};
-use std::collections::HashMap;
 use std::sync::Arc;
 
 fn render<T: Template>(t: T) -> Result<Html<String>, ItemError> {
@@ -36,20 +35,15 @@ fn require_team_simple(item: Item) -> Result<Item, ItemError> {
 //
 // Deliberately no date/scheduling/recurrence/offset fields anywhere in this module —
 // `Item::validate` rejects all of those for `ItemType::Simple`, so there is nothing for a
-// form on this screen to ever legitimately set. Mirrors `simple_lists.rs`'s helper set plus
-// `team_tasks.rs`'s choice to add an "Assign to" dropdown for the team-scoped screen.
+// form on this screen to ever legitimately set. Mirrors `simple_lists.rs`'s helper set.
+// Simple items never carry assignment/points either (Task-only — see
+// `service::team_items::build_item_type`), so this form has no fields for those.
 #[derive(serde::Deserialize, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct TeamSimpleItemForm {
     name: Option<String>,
     complete: Option<String>,
     parent_item_id: Option<String>,
-    assigned_to_user_id: Option<String>,
-    /// Admin-only — the service layer strips/preserves this for non-admins regardless of
-    /// what's submitted. No `<input>` renders this yet on either form (Stage 7 adds the
-    /// actual template work); the parsing exists now so that stage only has to touch
-    /// templates, not this module.
-    points: Option<String>,
     show_complete: Option<String>,
     /// Present only on the standalone `/team-simple-lists/:team_id/new` page's forms — see
     /// `items.rs`'s identical field for the full rationale.
@@ -61,14 +55,6 @@ fn non_empty(v: &Option<String>) -> Option<String> {
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string())
-}
-
-fn overlay_str(form_value: &Option<String>, current: Option<String>) -> Option<String> {
-    match form_value {
-        None => current,
-        Some(s) if s.trim().is_empty() => None,
-        Some(s) => Some(s.trim().to_string()),
-    }
 }
 
 fn overlay_required_str(form_value: &Option<String>, current: &str) -> String {
@@ -86,14 +72,6 @@ fn overlay_bool(form_value: &Option<String>, current: bool) -> bool {
     }
 }
 
-fn overlay_i32(form_value: &Option<String>, current: Option<i32>) -> Option<i32> {
-    match form_value {
-        None => current,
-        Some(s) if s.trim().is_empty() => None,
-        Some(s) => s.trim().parse().ok().or(current),
-    }
-}
-
 fn create_params_from_form(team_id: &str, form: &TeamSimpleItemForm) -> CreateTeamItemParams {
     CreateTeamItemParams {
         team_id: team_id.to_string(),
@@ -101,13 +79,6 @@ fn create_params_from_form(team_id: &str, form: &TeamSimpleItemForm) -> CreateTe
         complete: form.complete.as_deref().map(|s| s == "true"),
         parent_item_id: non_empty(&form.parent_item_id),
         item_type: Some(ItemKind::Simple),
-        assigned_to_user_id: non_empty(&form.assigned_to_user_id),
-        points: form
-            .points
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .and_then(|s| s.parse().ok()),
         ..Default::default()
     }
 }
@@ -125,50 +96,8 @@ fn update_params_from_form(
         complete: overlay_bool(&form.complete, current.complete),
         parent_item_id: current.parent_item_id.clone(),
         item_type: Some(ItemKind::Simple),
-        assigned_to_user_id: overlay_str(
-            &form.assigned_to_user_id,
-            current.assigned_to_user_id(),
-        ),
-        points: overlay_i32(&form.points, current.points()),
         ..Default::default()
     }
-}
-
-/// (user_id, display name) for every *active* member of `team_id` — the assignee dropdown's
-/// candidate list, mirroring `team_tasks.rs`'s `active_member_options`.
-async fn active_member_options(
-    teams: &Arc<dyn TeamRepo>,
-    team_id: &str,
-    requester_user_id: &str,
-) -> Result<Vec<(String, String)>, ItemError> {
-    let members = team_service::list_team_members(teams, team_id, requester_user_id).await?;
-    Ok(members
-        .into_iter()
-        .filter(|m| m.status == "ACTIVE")
-        .map(|m| {
-            (
-                m.user.id,
-                format!("{} {}", m.user.first_name, m.user.last_name),
-            )
-        })
-        .collect())
-}
-
-async fn names_for(
-    teams: &Arc<dyn TeamRepo>,
-    team_id: &str,
-    requester_user_id: &str,
-) -> Result<HashMap<String, String>, ItemError> {
-    let members = team_service::list_team_members(teams, team_id, requester_user_id).await?;
-    Ok(members
-        .into_iter()
-        .map(|m| {
-            (
-                m.user.id.clone(),
-                format!("{} {}", m.user.first_name, m.user.last_name),
-            )
-        })
-        .collect())
 }
 
 // ---- templates --------------------------------------------------------------
@@ -181,21 +110,17 @@ struct TeamSimpleItemRow {
     name: String,
     complete: bool,
     has_children: bool,
-    assignee_name: Option<String>,
     toggle_complete_json: String,
 }
 
 impl TeamSimpleItemRow {
-    fn from_item(item: &Item, team_id: &str, names: &HashMap<String, String>) -> Self {
+    fn from_item(item: &Item, team_id: &str) -> Self {
         Self {
             id: item.id.clone(),
             team_id: team_id.to_string(),
             name: item.name.clone(),
             complete: item.complete,
             has_children: item.has_children,
-            assignee_name: item
-                .assigned_to_user_id()
-                .map(|id| names.get(&id).cloned().unwrap_or(id)),
             toggle_complete_json: (!item.complete).to_string(),
         }
     }
@@ -208,36 +133,18 @@ struct TeamSimpleItemDetailFields {
     team_id: String,
     name: String,
     complete: bool,
-    assignee_options: Vec<(String, String)>,
-    assigned_to_user_id: Option<String>,
-    is_top_level: bool,
-    /// Gates the admin-only `points` input — see `macros::points_field` and
-    /// `service::teams::is_team_admin`.
-    is_team_admin: bool,
-    points_input: String,
     /// Set only on the fragment returned by a successful save — see `items.rs`'s
     /// `DetailFields.just_saved` for the full rationale.
     just_saved: bool,
 }
 
 impl TeamSimpleItemDetailFields {
-    fn from_item(
-        item: &Item,
-        team_id: &str,
-        assignee_options: Vec<(String, String)>,
-        is_team_admin: bool,
-        just_saved: bool,
-    ) -> Self {
+    fn from_item(item: &Item, team_id: &str, just_saved: bool) -> Self {
         Self {
             id: item.id.clone(),
             team_id: team_id.to_string(),
             name: item.name.clone(),
             complete: item.complete,
-            assignee_options,
-            assigned_to_user_id: item.assigned_to_user_id(),
-            is_top_level: item.parent_item_id.is_none(),
-            is_team_admin,
-            points_input: item.points().map(|p| p.to_string()).unwrap_or_default(),
             just_saved,
         }
     }
@@ -252,19 +159,15 @@ struct TeamSimpleItemDetailView {
     team_id: String,
     complete: bool,
     toggle_complete_json: String,
-    assignee_name: Option<String>,
 }
 
 impl TeamSimpleItemDetailView {
-    fn from_item(item: &Item, team_id: &str, names: &HashMap<String, String>) -> Self {
+    fn from_item(item: &Item, team_id: &str) -> Self {
         Self {
             id: item.id.clone(),
             team_id: team_id.to_string(),
             complete: item.complete,
             toggle_complete_json: (!item.complete).to_string(),
-            assignee_name: item
-                .assigned_to_user_id()
-                .map(|id| names.get(&id).cloned().unwrap_or(id)),
         }
     }
 }
@@ -292,9 +195,6 @@ struct TeamSimpleListsListPageTemplate {
 struct NewTeamSimpleItemPageTemplate {
     team_id: String,
     show_complete: bool,
-    assignee_options: Vec<(String, String)>,
-    is_team_admin: bool,
-    blank_points_input: String,
     nav_html: String,
 }
 
@@ -321,16 +221,11 @@ struct TeamSimpleItemEditPageTemplate {
 
 // ---- shared rendering helpers ------------------------------------------------
 
-fn render_rows(
-    items: &[Item],
-    team_id: &str,
-    names: &HashMap<String, String>,
-    show_complete: bool,
-) -> Result<Vec<String>, ItemError> {
+fn render_rows(items: &[Item], team_id: &str, show_complete: bool) -> Result<Vec<String>, ItemError> {
     items
         .iter()
         .filter(|i| show_complete || !i.complete)
-        .map(|i| TeamSimpleItemRow::from_item(i, team_id, names).render())
+        .map(|i| TeamSimpleItemRow::from_item(i, team_id).render())
         .collect::<Result<Vec<_>, _>>()
         .map_err(ItemError::from)
 }
@@ -352,9 +247,7 @@ async fn list_team_simple_items(
 
 async fn render_scope_fragment(
     repo: &Arc<dyn ItemRepo>,
-    teams: &Arc<dyn TeamRepo>,
     team_id: &str,
-    requester_user_id: &str,
     parent_item_id: Option<&str>,
     show_complete: bool,
 ) -> Result<Html<String>, ItemError> {
@@ -371,8 +264,7 @@ async fn render_scope_fragment(
             "No items yet.",
         )
     };
-    let names = names_for(teams, team_id, requester_user_id).await?;
-    let rows = render_rows(&items, team_id, &names, parent_item_id.is_some() || show_complete)?;
+    let rows = render_rows(&items, team_id, parent_item_id.is_some() || show_complete)?;
     render(TeamSimpleItemRowsFragmentTemplate {
         rows,
         empty_message: empty_message.to_string(),
@@ -397,8 +289,7 @@ pub async fn team_simple_lists_page(
     require_active_member(&teams, &team_id, &auth_user.user_id).await?;
     let show_complete = q.show_complete.is_some();
     let items = list_team_simple_items(&repo, &team_id).await?;
-    let names = names_for(&teams, &team_id, &auth_user.user_id).await?;
-    let rows = render_rows(&items, &team_id, &names, show_complete)?;
+    let rows = render_rows(&items, &team_id, show_complete)?;
     let points = team_service::member_points(&teams, &team_id, &auth_user.user_id).await?;
     let nav_html = nav::build_nav_html(
         &teams,
@@ -423,8 +314,6 @@ pub async fn new_team_simple_item_page(
     Query(q): Query<ShowCompleteQuery>,
 ) -> Result<Html<String>, ItemError> {
     require_active_member(&teams, &team_id, &auth_user.user_id).await?;
-    let assignee_options = active_member_options(&teams, &team_id, &auth_user.user_id).await?;
-    let is_team_admin = team_service::is_team_admin(&teams, &team_id, &auth_user.user_id).await;
     let nav_html = nav::build_nav_html(
         &teams,
         &auth_user.user_id,
@@ -435,9 +324,6 @@ pub async fn new_team_simple_item_page(
     render(NewTeamSimpleItemPageTemplate {
         team_id,
         show_complete: q.show_complete.is_some(),
-        assignee_options,
-        is_team_admin,
-        blank_points_input: String::new(),
         nav_html,
     })
 }
@@ -454,8 +340,7 @@ pub async fn team_simple_item_detail_page(
         .await
         .map_err(ItemError::from)?;
     let item = require_team_simple(item)?;
-    let names = names_for(&teams, &team_id, &auth_user.user_id).await?;
-    let view = TeamSimpleItemDetailView::from_item(&item, &team_id, &names).render()?;
+    let view = TeamSimpleItemDetailView::from_item(&item, &team_id).render()?;
     let nav_html = nav::build_nav_html(
         &teams,
         &auth_user.user_id,
@@ -485,16 +370,7 @@ pub async fn team_simple_item_edit_page(
         .await
         .map_err(ItemError::from)?;
     let item = require_team_simple(item)?;
-    let assignee_options = active_member_options(&teams, &team_id, &auth_user.user_id).await?;
-    let is_team_admin = team_service::is_team_admin(&teams, &team_id, &auth_user.user_id).await;
-    let fields = TeamSimpleItemDetailFields::from_item(
-        &item,
-        &team_id,
-        assignee_options,
-        is_team_admin,
-        false,
-    )
-    .render()?;
+    let fields = TeamSimpleItemDetailFields::from_item(&item, &team_id, false).render()?;
     let nav_html = nav::build_nav_html(
         &teams,
         &auth_user.user_id,
@@ -527,8 +403,7 @@ pub async fn team_simple_item_children_fragment(
         .list_children(&item_id)
         .await
         .map_err(ItemError::from)?;
-    let names = names_for(&teams, &team_id, &auth_user.user_id).await?;
-    let rows = render_rows(&children, &team_id, &names, true)?;
+    let rows = render_rows(&children, &team_id, true)?;
     render(TeamSimpleItemRowsFragmentTemplate {
         rows,
         empty_message: "No sub-items yet.".to_string(),
@@ -569,16 +444,9 @@ pub async fn create_team_simple_item_form(
     if redirect {
         return Ok(redirect_to_team_simple_lists(&team_id, show_complete));
     }
-    Ok(render_scope_fragment(
-        &repo,
-        &teams,
-        &team_id,
-        &auth_user.user_id,
-        parent_item_id.as_deref(),
-        show_complete,
-    )
-    .await?
-    .into_response())
+    Ok(render_scope_fragment(&repo, &team_id, parent_item_id.as_deref(), show_complete)
+        .await?
+        .into_response())
 }
 
 #[derive(serde::Deserialize, Debug, Default)]
@@ -620,9 +488,7 @@ pub async fn create_team_simple_items_batch(
     }
     Ok(render_scope_fragment(
         &repo,
-        &teams,
         &team_id,
-        &auth_user.user_id,
         parent_item_id.as_deref(),
         form.show_complete.is_some(),
     )
@@ -664,19 +530,9 @@ pub async fn update_team_simple_item_form(
         .get_team_item(&team_id, &item_id)
         .await
         .map_err(ItemError::from)?;
-    let names = names_for(&teams, &team_id, &auth_user.user_id).await?;
-    let row = TeamSimpleItemRow::from_item(&updated, &team_id, &names).render()?;
-    let assignee_options = active_member_options(&teams, &team_id, &auth_user.user_id).await?;
-    let is_team_admin = team_service::is_team_admin(&teams, &team_id, &auth_user.user_id).await;
-    let fields = TeamSimpleItemDetailFields::from_item(
-        &updated,
-        &team_id,
-        assignee_options,
-        is_team_admin,
-        true,
-    )
-    .render()?;
-    let view = TeamSimpleItemDetailView::from_item(&updated, &team_id, &names).render()?;
+    let row = TeamSimpleItemRow::from_item(&updated, &team_id).render()?;
+    let fields = TeamSimpleItemDetailFields::from_item(&updated, &team_id, true).render()?;
+    let view = TeamSimpleItemDetailView::from_item(&updated, &team_id).render()?;
     Ok(Html(format!("{row}{fields}{view}")).into_response())
 }
 

@@ -9,10 +9,7 @@
       {% if has_children %}<span class="text-gray-400 dark:text-gray-500">&#9656;</span>{% endif %} {{ name }}
     </a>
   </div>
-  <div class="mt-1 flex items-center gap-x-3 pl-7 text-xs text-gray-500 dark:text-gray-400">
-    <div class="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1">
-      {% if let Some(assignee) = assignee_name %}<span class="text-indigo-600 dark:text-indigo-400">[{{ assignee }}]</span>{% endif %}
-    </div>
+  <div class="mt-1 flex items-center justify-end gap-x-3 pl-7 text-xs text-gray-500 dark:text-gray-400">
     <button hx-delete="/web/team-simple-lists/{{ team_id }}/{{ id }}"
             hx-confirm="Delete {{ name }}{% if has_children %} and all its sub-items{% endif %}?"
             hx-target="#item-{{ id }}" hx-select="unset" hx-swap="outerHTML swap:200ms"

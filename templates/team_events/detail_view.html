@@ -8,12 +8,6 @@
   </div>
   <div class="border-t border-gray-100 dark:border-white/5">
     <dl class="divide-y divide-gray-100 dark:divide-white/5">
-      {% if let Some(a) = assignee_name %}
-      <div class="px-4 py-4 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
-        <dt class="text-sm font-medium text-gray-900 dark:text-gray-100">Assigned to</dt>
-        <dd class="mt-1 text-sm text-gray-700 sm:col-span-2 sm:mt-0 dark:text-gray-300">{{ a }}</dd>
-      </div>
-      {% endif %}
       {% if let Some(d) = scheduled_date %}
       <div class="px-4 py-4 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
         <dt class="text-sm font-medium text-gray-900 dark:text-gray-100">Scheduled start</dt>

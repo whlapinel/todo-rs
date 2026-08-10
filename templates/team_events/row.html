@@ -12,7 +12,6 @@
   <div class="mt-1 flex items-center gap-x-3 pl-7 text-xs text-gray-500 dark:text-gray-400">
     <div class="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1">
       {% if let Some(e) = event_type %}<span>({{ e }})</span>{% endif %}
-      {% if let Some(assignee) = assignee_name %}<span class="text-indigo-600 dark:text-indigo-400">[{{ assignee }}]</span>{% endif %}
       {% if let Some(d) = scheduled_date %}
       <span>Do: {{ d }}{% if let Some(e) = scheduled_end_date %}&ndash;{{ e }}{% endif %}</span>
       {% endif %}
