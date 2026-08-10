@@ -8,7 +8,7 @@ use crate::storage::sqlite::{ItemRepo, RepoError, TeamRepo};
 use askama::Template;
 use axum::extract::{Extension, Form, Path, Query};
 use axum::response::{Html, IntoResponse, Response};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Datelike, NaiveDate, Utc};
 use std::sync::Arc;
 
 fn render<T: Template>(t: T) -> Result<Html<String>, ItemError> {
@@ -515,6 +515,33 @@ struct TaskEditPageTemplate {
     nav_html: String,
 }
 
+struct CalendarTaskEntry {
+    id: String,
+    name: String,
+    time_label: Option<String>,
+}
+
+struct CalendarDay {
+    date: String,
+    day_number: u32,
+    is_current_month: bool,
+    is_today: bool,
+    tasks: Vec<CalendarTaskEntry>,
+}
+
+#[derive(Template)]
+#[template(path = "tasks/calendar_page.html")]
+struct TasksCalendarPageTemplate {
+    month_label: String,
+    month_iso: String,
+    prev_year: i32,
+    prev_month: u32,
+    next_year: i32,
+    next_month: u32,
+    days: Vec<CalendarDay>,
+    nav_html: String,
+}
+
 // ---- shared rendering helpers ------------------------------------------------
 
 fn render_rows(items: &[Item], show_complete: bool, tz: i32) -> Result<Vec<String>, ItemError> {
@@ -538,6 +565,63 @@ async fn list_tasks(repo: &Arc<dyn ItemRepo>, user_id: &str) -> Result<Vec<Item>
     items.retain(|i| i.kind() == ItemKind::Task);
     items.sort_by_key(sort_key);
     Ok(items)
+}
+
+fn prev_month(year: i32, month: u32) -> (i32, u32) {
+    if month == 1 { (year - 1, 12) } else { (year, month - 1) }
+}
+
+fn next_month(year: i32, month: u32) -> (i32, u32) {
+    if month == 12 { (year + 1, 1) } else { (year, month + 1) }
+}
+
+/// Builds the 42-cell (6-week, Monday-start) grid for `year`/`month`, bucketing `items` by
+/// local calendar day off `due_date` — tasks are due-date-primary (unlike Events' scheduled-
+/// window-primary `calendar_date`, see `events.rs`), so no scheduled-date fallback is needed
+/// here. Same fixed 6-row layout as `events.rs`'s `build_calendar_days` for consistency
+/// between the two calendar views.
+fn build_calendar_days(
+    year: i32,
+    month: u32,
+    items: &[Item],
+    tz: i32,
+    today: NaiveDate,
+) -> Vec<CalendarDay> {
+    let first_of_month = NaiveDate::from_ymd_opt(year, month, 1).unwrap();
+    let leading = first_of_month.weekday().num_days_from_monday();
+    let grid_start = first_of_month - chrono::Duration::days(leading as i64);
+
+    let mut by_date: std::collections::HashMap<NaiveDate, Vec<CalendarTaskEntry>> =
+        std::collections::HashMap::new();
+    for item in items {
+        if let Some(dt) = item.due_date() {
+            let local = to_local(dt, tz);
+            let time_label = item.has_due_time().then(|| local.format("%H:%M").to_string());
+            by_date
+                .entry(local.date_naive())
+                .or_default()
+                .push(CalendarTaskEntry {
+                    id: item.id.clone(),
+                    name: item.name.clone(),
+                    time_label,
+                });
+        }
+    }
+
+    let mut days = Vec::with_capacity(42);
+    for i in 0..42i64 {
+        let date = grid_start + chrono::Duration::days(i);
+        let mut tasks = by_date.remove(&date).unwrap_or_default();
+        tasks.sort_by(|a, b| a.time_label.cmp(&b.time_label));
+        days.push(CalendarDay {
+            date: date.format("%Y-%m-%d").to_string(),
+            day_number: date.day(),
+            is_current_month: date.month() == month && date.year() == year,
+            is_today: date == today,
+            tasks,
+        });
+    }
+    days
 }
 
 async fn render_scope_fragment(
@@ -617,6 +701,53 @@ pub async fn new_task_page(
         blank_scheduled_time_input: String::new(),
         blank_scheduled_end_date_input: String::new(),
         blank_scheduled_end_time_input: String::new(),
+        nav_html,
+    })
+}
+
+#[derive(serde::Deserialize)]
+pub struct CalendarQuery {
+    year: Option<i32>,
+    month: Option<u32>,
+}
+
+pub async fn tasks_calendar_page(
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(team_repo): Extension<Arc<dyn TeamRepo>>,
+    TzOffset(tz): TzOffset,
+    Query(q): Query<CalendarQuery>,
+) -> Result<Html<String>, ItemError> {
+    let today = to_local(Utc::now(), tz).date_naive();
+    let year = q.year.unwrap_or_else(|| today.year());
+    let month = q
+        .month
+        .filter(|m| (1..=12).contains(m))
+        .unwrap_or_else(|| today.month());
+
+    let items = list_tasks(&repo, &auth_user.user_id).await?;
+    let days = build_calendar_days(year, month, &items, tz, today);
+    let (prev_year, prev_month) = prev_month(year, month);
+    let (next_year, next_month) = next_month(year, month);
+    let nav_html = nav::build_nav_html(
+        &team_repo,
+        &auth_user.user_id,
+        ActiveContext::Personal,
+        SidebarSection::Tasks,
+    )
+    .await?;
+
+    render(TasksCalendarPageTemplate {
+        month_label: NaiveDate::from_ymd_opt(year, month, 1)
+            .unwrap()
+            .format("%B %Y")
+            .to_string(),
+        month_iso: format!("{year:04}-{month:02}"),
+        prev_year,
+        prev_month,
+        next_year,
+        next_month,
+        days,
         nav_html,
     })
 }

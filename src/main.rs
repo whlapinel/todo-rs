@@ -97,6 +97,7 @@ fn build_web_router() -> Router {
         )
         .route("/tasks", get(tasks_page).post(create_task_form))
         .route("/tasks/new", get(new_task_page))
+        .route("/tasks/calendar", get(tasks_calendar_page))
         .route("/tasks/batch", post(create_tasks_batch))
         .route(
             "/tasks/:item_id",
