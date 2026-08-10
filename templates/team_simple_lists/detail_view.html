@@ -1,9 +1,0 @@
-<div id="item-{{ id }}-view" class="overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm dark:border-white/10 dark:bg-gray-800/50 dark:shadow-none">
-  <div class="flex items-center gap-x-2 px-4 py-4 sm:px-6">
-    <input type="checkbox" {% if complete %}checked{% endif %}
-           hx-put="/web/team-simple-lists/{{ team_id }}/{{ id }}" hx-vals='{"complete": "{{ toggle_complete_json }}"}'
-           hx-target="#item-{{ id }}-view" hx-select="#item-{{ id }}-view" hx-swap="outerHTML"
-           class="size-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-600 dark:border-white/20 dark:bg-white/5" />
-    <label class="text-sm text-gray-900 dark:text-white">{% if complete %}Done{% else %}Not done{% endif %}</label>
-  </div>
-</div>

@@ -1,11 +1,7 @@
 <li id="item-{{ id }}" class="py-2">
   <div class="flex items-center gap-x-3">
-    <input type="checkbox" {% if complete %}checked{% endif %}
-           hx-put="/web/simple-lists/{{ id }}" hx-vals='{"complete": "{{ toggle_complete_json }}"}'
-           hx-target="#item-{{ id }}" hx-select="#item-{{ id }}" hx-swap="outerHTML"
-           class="shrink-0 size-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-600 dark:border-white/20 dark:bg-white/5" />
     <a href="/web/simple-lists/{{ id }}" hx-target="#page" hx-select="#page" hx-swap="innerHTML"
-       class="min-w-0 flex-1 truncate {% if complete %}line-through text-gray-400 dark:text-gray-500{% else %}text-gray-900 dark:text-white{% endif %}">
+       class="min-w-0 flex-1 truncate text-gray-900 dark:text-white">
       {% if has_children %}<span class="text-gray-400 dark:text-gray-500">&#9656;</span>{% endif %} {{ name }}
     </a>
   </div>

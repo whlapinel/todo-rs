@@ -352,6 +352,11 @@ impl Item {
         if self.name.chars().count() > MAX_NAME_LENGTH {
             return Err(format!("name must be {MAX_NAME_LENGTH} characters or fewer"));
         }
+        // Simple items are bare checkable-off-nothing names: create or delete, no
+        // completion concept at all (unlike Task/Event, which support it).
+        if self.complete && self.kind() == ItemKind::Simple {
+            return Err("simple items cannot be marked complete".to_string());
+        }
         Ok(())
     }
 
@@ -543,6 +548,13 @@ mod tests {
     fn validate_allows_name_at_max_length() {
         let item = Item::new_task("u1", &"a".repeat(MAX_NAME_LENGTH));
         assert!(item.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_complete_simple_item() {
+        let mut item = Item::new_simple("u1", "Milk");
+        item.complete = true;
+        assert!(item.validate().is_err());
     }
 
     #[test]
