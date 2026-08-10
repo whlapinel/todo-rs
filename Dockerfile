@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # ── Stage 1: Build Tailwind CSS for the web_ui templates ──────────────────────
 FROM --platform=$BUILDPLATFORM node:22-alpine AS styles-builder
 WORKDIR /build
@@ -29,20 +30,26 @@ WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY todo-server-sdk/ ./todo-server-sdk/
 COPY smithy-rs/rust-runtime/ ./smithy-rs/rust-runtime/
-# Dummy main to cache dependency compilation
-RUN mkdir -p src && echo "fn main() {}" > src/main.rs \
-    && cargo build --release --target x86_64-unknown-linux-gnu \
-    && rm -rf src
 COPY src/ ./src/
 COPY templates/ ./templates/
-RUN touch src/main.rs && cargo build --release --target x86_64-unknown-linux-gnu
+# `task codegen` regenerates todo-server-sdk/ before every docker build, so its
+# COPY layer (and everything after it, including deps) cache-misses on Docker's
+# ordinary layer cache almost every time even when Cargo.lock hasn't changed.
+# BuildKit cache mounts sidestep that: the cargo registry and target dir persist
+# across builds independent of layer invalidation, so deps only actually get
+# rebuilt when they actually change. Since a cache mount's contents don't land
+# in the image, the binary is copied out to a normal path before it unmounts.
+RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry \
+    --mount=type=cache,target=/build/target,id=cargo-target-x86_64 \
+    cargo build --release --target x86_64-unknown-linux-gnu \
+    && cp target/x86_64-unknown-linux-gnu/release/todo /build/todo
 
 # ── Stage 3: Minimal runtime image ───────────────────────────────────────────
 FROM --platform=linux/amd64 debian:bookworm-slim
 # SQLite is statically linked (bundled feature in Cargo.toml), so libsqlite3-0 is not needed.
 RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-COPY --from=rust-builder /build/target/x86_64-unknown-linux-gnu/release/todo ./
+COPY --from=rust-builder /build/todo ./
 COPY --from=styles-builder /build/static/ ./static/
 VOLUME ["/data"]
 ENV TODO_DATABASE_URL=sqlite:///data/todo.db?mode=rwc
