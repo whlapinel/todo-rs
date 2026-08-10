@@ -8,10 +8,16 @@
       <h2 class="text-2xl/7 font-bold text-gray-900 sm:truncate sm:text-3xl sm:tracking-tight dark:text-white">{{ name }}</h2>
     </div>
     <div class="mt-4 flex items-center gap-x-3 md:mt-0 md:ml-4">
+      <a href="/web/templates/{{ id }}/edit" hx-target="#page" hx-select="#page" hx-swap="innerHTML"
+         class="inline-flex items-center justify-center rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-xs hover:bg-indigo-500 dark:bg-indigo-500 dark:shadow-none dark:hover:bg-indigo-400">Edit</a>
       <a href="/web/templates"
          class="inline-flex items-center justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-xs inset-ring inset-ring-gray-300 hover:bg-gray-50 dark:bg-white/10 dark:text-white dark:shadow-none dark:inset-ring-white/5 dark:hover:bg-white/20">Back to templates</a>
     </div>
   </div>
+
+  {% if let Some(et) = event_type %}
+  <p class="text-sm text-gray-500 dark:text-gray-400">Auto-triggered by event type: <span class="font-medium text-gray-700 dark:text-gray-300">{{ et }}</span></p>
+  {% endif %}
 
   <ul id="template-items" class="divide-y divide-gray-100 rounded-lg border border-gray-200 bg-white px-4 dark:divide-white/5 dark:border-white/10 dark:bg-gray-800/50"
       hx-get="/web/templates/{{ id }}/items" hx-trigger="load"

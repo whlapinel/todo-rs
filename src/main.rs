@@ -144,8 +144,10 @@ fn build_web_router() -> Router {
             "/templates/:template_id",
             get(template_detail_page)
                 .post(create_template_child_form)
+                .put(update_template_form)
                 .delete(delete_template_form),
         )
+        .route("/templates/:template_id/edit", get(template_edit_page))
         .route(
             "/templates/:template_id/items",
             get(template_children_fragment),
@@ -243,7 +245,12 @@ fn build_web_router() -> Router {
             "/team-templates/:team_id/:template_id",
             get(team_template_detail_page)
                 .post(create_team_template_child_form)
+                .put(update_team_template_form)
                 .delete(delete_team_template_form),
+        )
+        .route(
+            "/team-templates/:team_id/:template_id/edit",
+            get(team_template_edit_page),
         )
         .route(
             "/team-templates/:team_id/:template_id/items",

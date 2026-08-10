@@ -4,7 +4,7 @@ use crate::domain::recurrence;
 use crate::handlers::web_ui::TzOffset;
 use crate::handlers::web_ui::nav::{self, ActiveContext, SidebarSection};
 use crate::service::items::{self as item_service, ItemError};
-use crate::service::templates::{self as template_service, CreateTemplateParams};
+use crate::service::templates::{self as template_service, CreateTemplateParams, UpdateTemplateParams};
 use crate::storage::sqlite::{ItemRepo, TeamRepo};
 use askama::Template;
 use axum::extract::{Extension, Form, Path};
@@ -102,6 +102,16 @@ struct ChildrenFragmentTemplate {
 struct TemplateDetailPageTemplate {
     id: String,
     name: String,
+    event_type: Option<String>,
+    nav_html: String,
+}
+
+#[derive(Template)]
+#[template(path = "templates/edit_page.html")]
+struct TemplateEditPageTemplate {
+    id: String,
+    name: String,
+    event_type: String,
     nav_html: String,
 }
 
@@ -287,9 +297,87 @@ pub async fn template_detail_page(
         SidebarSection::Templates,
     )
     .await?;
+    let event_type = template.event_type();
     render(TemplateDetailPageTemplate {
         id: template.id,
         name: template.name,
+        event_type,
+        nav_html,
+    })
+}
+
+pub async fn template_edit_page(
+    Path(template_id): Path<String>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(team_repo): Extension<Arc<dyn TeamRepo>>,
+) -> Result<Html<String>, ItemError> {
+    let template = repo
+        .get(&auth_user.user_id, &template_id)
+        .await
+        .map_err(ItemError::from)?;
+    let nav_html = nav::build_nav_html(
+        &team_repo,
+        &auth_user.user_id,
+        ActiveContext::Personal,
+        SidebarSection::Templates,
+    )
+    .await?;
+    let event_type = template.event_type().unwrap_or_default();
+    render(TemplateEditPageTemplate {
+        id: template.id,
+        name: template.name,
+        event_type,
+        nav_html,
+    })
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateTemplateForm {
+    name: String,
+    event_type: Option<String>,
+}
+
+pub async fn update_template_form(
+    Path(template_id): Path<String>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(team_repo): Extension<Arc<dyn TeamRepo>>,
+    Form(form): Form<UpdateTemplateForm>,
+) -> Result<Html<String>, ItemError> {
+    let event_type = form
+        .event_type
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    template_service::update_template(
+        &repo,
+        UpdateTemplateParams {
+            user_id: auth_user.user_id.clone(),
+            template_id: template_id.clone(),
+            name: form.name.trim().to_string(),
+            event_type,
+        },
+    )
+    .await?;
+    let template = repo
+        .get(&auth_user.user_id, &template_id)
+        .await
+        .map_err(ItemError::from)?;
+    let nav_html = nav::build_nav_html(
+        &team_repo,
+        &auth_user.user_id,
+        ActiveContext::Personal,
+        SidebarSection::Templates,
+    )
+    .await?;
+    let event_type = template.event_type();
+    render(TemplateDetailPageTemplate {
+        id: template.id,
+        name: template.name,
+        event_type,
         nav_html,
     })
 }

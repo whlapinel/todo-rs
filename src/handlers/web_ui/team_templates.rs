@@ -7,7 +7,7 @@ use crate::service::error::ItemError;
 use crate::service::items::{self as item_service};
 use crate::service::team_items::{self as team_item_service, require_active_member, CreateTeamItemParams, UpdateTeamItemContext, UpdateTeamItemParams};
 use crate::service::teams as team_service;
-use crate::service::templates::{self as template_service, CreateTeamTemplateParams};
+use crate::service::templates::{self as template_service, CreateTeamTemplateParams, UpdateTeamTemplateParams};
 use crate::storage::sqlite::{ActivityLogRepo, ItemRepo, TeamRepo};
 use askama::Template;
 use axum::extract::{Extension, Form, Path};
@@ -130,6 +130,17 @@ struct TeamTemplateDetailPageTemplate {
     team_id: String,
     id: String,
     name: String,
+    event_type: Option<String>,
+    nav_html: String,
+}
+
+#[derive(Template)]
+#[template(path = "team_templates/edit_page.html")]
+struct TeamTemplateEditPageTemplate {
+    team_id: String,
+    id: String,
+    name: String,
+    event_type: String,
     nav_html: String,
 }
 
@@ -324,10 +335,87 @@ pub async fn team_template_detail_page(
         SidebarSection::Templates,
     )
     .await?;
+    let event_type = template.event_type();
     render(TeamTemplateDetailPageTemplate {
         team_id,
         id: template.id,
         name: template.name,
+        event_type,
+        nav_html,
+    })
+}
+
+pub async fn team_template_edit_page(
+    Path((team_id, template_id)): Path<(String, String)>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+) -> Result<Html<String>, ItemError> {
+    require_active_member(&teams, &team_id, &auth_user.user_id).await?;
+    let template = repo.get_team_item(&team_id, &template_id).await.map_err(ItemError::from)?;
+    let nav_html = nav::build_nav_html(
+        &teams,
+        &auth_user.user_id,
+        ActiveContext::Team(team_id.clone()),
+        SidebarSection::Templates,
+    )
+    .await?;
+    let event_type = template.event_type().unwrap_or_default();
+    render(TeamTemplateEditPageTemplate {
+        team_id,
+        id: template.id,
+        name: template.name,
+        event_type,
+        nav_html,
+    })
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateTeamTemplateForm {
+    name: String,
+    event_type: Option<String>,
+}
+
+pub async fn update_team_template_form(
+    Path((team_id, template_id)): Path<(String, String)>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Form(form): Form<UpdateTeamTemplateForm>,
+) -> Result<Html<String>, ItemError> {
+    let event_type = form
+        .event_type
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    template_service::update_team_template(
+        &repo,
+        &teams,
+        UpdateTeamTemplateParams {
+            team_id: team_id.clone(),
+            requester_user_id: auth_user.user_id.clone(),
+            template_id: template_id.clone(),
+            name: form.name.trim().to_string(),
+            event_type,
+        },
+    )
+    .await?;
+    let template = repo.get_team_item(&team_id, &template_id).await.map_err(ItemError::from)?;
+    let nav_html = nav::build_nav_html(
+        &teams,
+        &auth_user.user_id,
+        ActiveContext::Team(team_id.clone()),
+        SidebarSection::Templates,
+    )
+    .await?;
+    let event_type = template.event_type();
+    render(TeamTemplateDetailPageTemplate {
+        team_id,
+        id: template.id,
+        name: template.name,
+        event_type,
         nav_html,
     })
 }

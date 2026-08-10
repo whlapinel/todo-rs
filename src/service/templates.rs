@@ -59,6 +59,36 @@ pub async fn create_template(
 }
 
 #[derive(Debug, Default)]
+pub struct UpdateTemplateParams {
+    pub user_id: String,
+    pub template_id: String,
+    pub name: String,
+    pub event_type: Option<String>,
+}
+
+/// Edits a template's own fields — `name` and `event_type`, the only two things the
+/// create form (`create_template` above) lets a caller set directly. `schedule`/`recurrence`
+/// (only ever populated by copying a source item at creation time) ride along unchanged.
+pub async fn update_template(
+    repo: &Arc<dyn ItemRepo>,
+    params: UpdateTemplateParams,
+) -> Result<(), ItemError> {
+    let current = repo.get(&params.user_id, &params.template_id).await?;
+    if !matches!(current.item_type, ItemType::Template { .. }) {
+        return Err(ItemError::Invalid("item is not a template".to_string()));
+    }
+
+    let mut item = current;
+    item.name = params.name;
+    if let ItemType::Template { event_type, .. } = &mut item.item_type {
+        *event_type = params.event_type;
+    }
+
+    repo.update(&item).await?;
+    Ok(())
+}
+
+#[derive(Debug, Default)]
 pub struct CreateTeamTemplateParams {
     pub team_id: String,
     pub requester_user_id: String,
@@ -117,6 +147,38 @@ pub async fn create_team_template(
     }
 
     Ok(template_id)
+}
+
+#[derive(Debug, Default)]
+pub struct UpdateTeamTemplateParams {
+    pub team_id: String,
+    pub requester_user_id: String,
+    pub template_id: String,
+    pub name: String,
+    pub event_type: Option<String>,
+}
+
+/// Team-scoped twin of `update_template` above.
+pub async fn update_team_template(
+    repo: &Arc<dyn ItemRepo>,
+    teams: &Arc<dyn TeamRepo>,
+    params: UpdateTeamTemplateParams,
+) -> Result<(), ItemError> {
+    require_active_member(teams, &params.team_id, &params.requester_user_id).await?;
+
+    let current = repo.get_team_item(&params.team_id, &params.template_id).await?;
+    if !matches!(current.item_type, ItemType::Template { .. }) {
+        return Err(ItemError::Invalid("item is not a template".to_string()));
+    }
+
+    let mut item = current;
+    item.name = params.name;
+    if let ItemType::Template { event_type, .. } = &mut item.item_type {
+        *event_type = params.event_type;
+    }
+
+    repo.update_team_item(&item).await?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -273,5 +335,144 @@ mod tests {
         .await;
 
         assert!(matches!(result, Err(ItemError::Invalid(_))));
+    }
+
+    #[tokio::test]
+    async fn update_template_changes_name_and_event_type() {
+        let mut mock = MockItemRepo::new();
+
+        mock.expect_get()
+            .withf(|user_id: &str, item_id: &str| user_id == "u1" && item_id == "tpl1")
+            .times(1)
+            .returning(|_, _| {
+                Ok(Item {
+                    id: "tpl1".to_string(),
+                    user_id: Some("u1".to_string()),
+                    name: "Old name".to_string(),
+                    item_type: ItemType::Template {
+                        schedule: Schedule::default(),
+                        recurrence: Recurrence::default(),
+                        event_type: None,
+                    },
+                    ..Item::default()
+                })
+            });
+
+        mock.expect_update()
+            .withf(|item: &Item| {
+                item.id == "tpl1"
+                    && item.name == "New name"
+                    && matches!(&item.item_type, ItemType::Template { event_type, .. } if event_type.as_deref() == Some("rain"))
+            })
+            .times(1)
+            .returning(|_| Ok(()));
+
+        let repo: Arc<dyn ItemRepo> = Arc::new(mock);
+
+        update_template(
+            &repo,
+            UpdateTemplateParams {
+                user_id: "u1".to_string(),
+                template_id: "tpl1".to_string(),
+                name: "New name".to_string(),
+                event_type: Some("rain".to_string()),
+            },
+        )
+        .await
+        .expect("should update template");
+    }
+
+    #[tokio::test]
+    async fn update_template_rejects_non_template_item() {
+        let mut mock = MockItemRepo::new();
+
+        mock.expect_get()
+            .withf(|user_id: &str, item_id: &str| user_id == "u1" && item_id == "item1")
+            .times(1)
+            .returning(|_, _| {
+                Ok(Item {
+                    id: "item1".to_string(),
+                    user_id: Some("u1".to_string()),
+                    name: "A task".to_string(),
+                    item_type: ItemType::Task {
+                        schedule: Schedule::default(),
+                        recurrence: Recurrence::default(),
+                        team_assignment: None,
+                    },
+                    ..Item::default()
+                })
+            });
+
+        let repo: Arc<dyn ItemRepo> = Arc::new(mock);
+
+        let result = update_template(
+            &repo,
+            UpdateTemplateParams {
+                user_id: "u1".to_string(),
+                template_id: "item1".to_string(),
+                name: "New name".to_string(),
+                event_type: None,
+            },
+        )
+        .await;
+
+        assert!(matches!(result, Err(ItemError::Invalid(_))));
+    }
+
+    #[tokio::test]
+    async fn update_team_template_changes_name_and_event_type() {
+        use crate::storage::sqlite::MockTeamRepo;
+
+        let mut mock = MockItemRepo::new();
+
+        mock.expect_get_team_item()
+            .withf(|team_id: &str, item_id: &str| team_id == "team1" && item_id == "tpl1")
+            .times(1)
+            .returning(|_, _| {
+                Ok(Item {
+                    id: "tpl1".to_string(),
+                    team_id: Some("team1".to_string()),
+                    name: "Old name".to_string(),
+                    item_type: ItemType::Template {
+                        schedule: Schedule::default(),
+                        recurrence: Recurrence::default(),
+                        event_type: None,
+                    },
+                    ..Item::default()
+                })
+            });
+
+        mock.expect_update_team_item()
+            .withf(|item: &Item| {
+                item.id == "tpl1"
+                    && item.name == "New name"
+                    && matches!(&item.item_type, ItemType::Template { event_type, .. } if event_type.as_deref() == Some("rain"))
+            })
+            .times(1)
+            .returning(|_| Ok(()));
+
+        let mut teams = MockTeamRepo::new();
+        teams
+            .expect_member_status()
+            .withf(|team_id: &str, user_id: &str| team_id == "team1" && user_id == "u1")
+            .times(1)
+            .returning(|_, _| Ok(Some("ACTIVE".to_string())));
+
+        let repo: Arc<dyn ItemRepo> = Arc::new(mock);
+        let teams: Arc<dyn TeamRepo> = Arc::new(teams);
+
+        update_team_template(
+            &repo,
+            &teams,
+            UpdateTeamTemplateParams {
+                team_id: "team1".to_string(),
+                requester_user_id: "u1".to_string(),
+                template_id: "tpl1".to_string(),
+                name: "New name".to_string(),
+                event_type: Some("rain".to_string()),
+            },
+        )
+        .await
+        .expect("should update team template");
     }
 }
