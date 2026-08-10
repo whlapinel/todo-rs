@@ -48,8 +48,8 @@ pub struct EventForm {
     recurrence: Option<String>,
     recurrence_basis: Option<String>,
     show_complete: Option<String>,
-    /// Present only on the standalone `/events/new` page's form — see `items.rs`'s identical
-    /// field for the full rationale.
+    /// Set on the standalone `/events/new` page's create form and on every edit form's
+    /// "Save and close" submission — see `tasks.rs`'s identical field for the full rationale.
     redirect: Option<String>,
 }
 
@@ -829,6 +829,7 @@ pub async fn update_event_form(
     Path(item_id): Path<String>,
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(team_repo): Extension<Arc<dyn TeamRepo>>,
     TzOffset(tz): TzOffset,
     Form(form): Form<EventForm>,
 ) -> Result<Response, ItemError> {
@@ -837,10 +838,29 @@ pub async fn update_event_form(
         .await
         .map_err(ItemError::from)?;
     let current = require_event(current)?;
+    let close = form.redirect.is_some();
     let params = update_params_from_form(&auth_user.user_id, &item_id, &current, &form, tz);
     item_service::update_item(&repo, params).await?;
 
     match repo.get(&auth_user.user_id, &item_id).await {
+        Ok(updated) if close => {
+            let view = EventDetailView::from_item(&updated, tz).render()?;
+            let nav_html = nav::build_nav_html(
+                &team_repo,
+                &auth_user.user_id,
+                ActiveContext::Personal,
+                SidebarSection::Events,
+            )
+            .await?;
+            Ok(render(EventDetailPageTemplate {
+                id: updated.id.clone(),
+                name: updated.name.clone(),
+                complete: updated.complete,
+                view,
+                nav_html,
+            })?
+            .into_response())
+        }
         Ok(updated) => {
             let row = EventRow::from_item(&updated, tz).render()?;
             let fields = EventDetailFields::from_item(&updated, tz, true).render()?;

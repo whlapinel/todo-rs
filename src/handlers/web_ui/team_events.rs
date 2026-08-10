@@ -58,8 +58,9 @@ pub struct TeamEventForm {
     recurrence: Option<String>,
     recurrence_basis: Option<String>,
     show_complete: Option<String>,
-    /// Present only on the standalone `/team-events/:team_id/new` page's form — see
-    /// `items.rs`'s identical field for the full rationale.
+    /// Set on the standalone `/team-events/:team_id/new` page's create form and on every edit
+    /// form's "Save and close" submission — see `tasks.rs`'s identical field for the full
+    /// rationale.
     redirect: Option<String>,
 }
 
@@ -886,6 +887,7 @@ pub async fn update_team_event_form(
         .await
         .map_err(ItemError::from)?;
     let current = require_team_event(current)?;
+    let close = form.redirect.is_some();
     let params = update_params_from_form(&team_id, &item_id, &current, &form, tz);
     team_item_service::update_team_item(
         &repo,
@@ -899,6 +901,25 @@ pub async fn update_team_event_form(
     .await?;
 
     match repo.get_team_item(&team_id, &item_id).await {
+        Ok(updated) if close => {
+            let view = TeamEventDetailView::from_item(&updated, &team_id, tz).render()?;
+            let nav_html = nav::build_nav_html(
+                &teams,
+                &auth_user.user_id,
+                ActiveContext::Team(team_id.clone()),
+                SidebarSection::Events,
+            )
+            .await?;
+            Ok(render(TeamEventDetailPageTemplate {
+                id: updated.id.clone(),
+                team_id,
+                name: updated.name.clone(),
+                complete: updated.complete,
+                view,
+                nav_html,
+            })?
+            .into_response())
+        }
         Ok(updated) => {
             let row = TeamEventRow::from_item(&updated, &team_id, tz).render()?;
             let fields = TeamEventDetailFields::from_item(&updated, &team_id, tz, true).render()?;

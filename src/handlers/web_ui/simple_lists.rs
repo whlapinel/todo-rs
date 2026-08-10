@@ -36,8 +36,8 @@ pub struct SimpleItemForm {
     complete: Option<String>,
     parent_item_id: Option<String>,
     show_complete: Option<String>,
-    /// Present only on the standalone `/simple-lists/new` page's forms — see `items.rs`'s
-    /// identical field for the full rationale.
+    /// Set on the standalone `/simple-lists/new` page's create forms and on every edit form's
+    /// "Save and close" submission — see `tasks.rs`'s identical field for the full rationale.
     redirect: Option<String>,
 }
 
@@ -457,6 +457,7 @@ pub async fn update_simple_item_form(
     Path(item_id): Path<String>,
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(team_repo): Extension<Arc<dyn TeamRepo>>,
     Form(form): Form<SimpleItemForm>,
 ) -> Result<Response, ItemError> {
     let current = repo
@@ -464,6 +465,7 @@ pub async fn update_simple_item_form(
         .await
         .map_err(ItemError::from)?;
     let current = require_simple(current)?;
+    let close = form.redirect.is_some();
     let params = update_params_from_form(&auth_user.user_id, &item_id, &current, &form);
     item_service::update_item(&repo, params).await?;
 
@@ -474,6 +476,24 @@ pub async fn update_simple_item_form(
         .get(&auth_user.user_id, &item_id)
         .await
         .map_err(ItemError::from)?;
+    if close {
+        let view = SimpleItemDetailView::from_item(&updated).render()?;
+        let nav_html = nav::build_nav_html(
+            &team_repo,
+            &auth_user.user_id,
+            ActiveContext::Personal,
+            SidebarSection::SimpleLists,
+        )
+        .await?;
+        return Ok(render(SimpleItemDetailPageTemplate {
+            id: updated.id.clone(),
+            name: updated.name.clone(),
+            complete: updated.complete,
+            view,
+            nav_html,
+        })?
+        .into_response());
+    }
     let row = SimpleItemRow::from_item(&updated).render()?;
     let fields = SimpleItemDetailFields::from_item(&updated, true).render()?;
     let view = SimpleItemDetailView::from_item(&updated).render()?;

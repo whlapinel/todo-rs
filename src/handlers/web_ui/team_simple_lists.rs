@@ -44,8 +44,9 @@ pub struct TeamSimpleItemForm {
     complete: Option<String>,
     parent_item_id: Option<String>,
     show_complete: Option<String>,
-    /// Present only on the standalone `/team-simple-lists/:team_id/new` page's forms — see
-    /// `items.rs`'s identical field for the full rationale.
+    /// Set on the standalone `/team-simple-lists/:team_id/new` page's create forms and on
+    /// every edit form's "Save and close" submission — see `tasks.rs`'s identical field for
+    /// the full rationale.
     redirect: Option<String>,
 }
 
@@ -509,6 +510,7 @@ pub async fn update_team_simple_item_form(
         .await
         .map_err(ItemError::from)?;
     let current = require_team_simple(current)?;
+    let close = form.redirect.is_some();
     let params = update_params_from_form(&team_id, &item_id, &current, &form);
     team_item_service::update_team_item(
         &repo,
@@ -529,6 +531,25 @@ pub async fn update_team_simple_item_form(
         .get_team_item(&team_id, &item_id)
         .await
         .map_err(ItemError::from)?;
+    if close {
+        let view = TeamSimpleItemDetailView::from_item(&updated, &team_id).render()?;
+        let nav_html = nav::build_nav_html(
+            &teams,
+            &auth_user.user_id,
+            ActiveContext::Team(team_id.clone()),
+            SidebarSection::SimpleLists,
+        )
+        .await?;
+        return Ok(render(TeamSimpleItemDetailPageTemplate {
+            id: updated.id.clone(),
+            team_id,
+            name: updated.name.clone(),
+            complete: updated.complete,
+            view,
+            nav_html,
+        })?
+        .into_response());
+    }
     let row = TeamSimpleItemRow::from_item(&updated, &team_id).render()?;
     let fields = TeamSimpleItemDetailFields::from_item(&updated, &team_id, true).render()?;
     let view = TeamSimpleItemDetailView::from_item(&updated, &team_id).render()?;

@@ -400,6 +400,10 @@ pub async fn template_children_fragment(
 pub struct TemplateChildForm {
     name: String,
     due_offset_days: Option<String>,
+    /// Set on the child edit form's "Save and close" submission — see `tasks.rs::TaskForm`'s
+    /// identical field for the full rationale. Never present on the create-child form (no
+    /// `<input name="redirect">` there), so `update_template_child_form` is the only reader.
+    redirect: Option<String>,
 }
 
 fn parse_offset(form_value: &Option<String>) -> Option<i32> {
@@ -485,8 +489,10 @@ pub async fn update_template_child_form(
     Path((template_id, item_id)): Path<(String, String)>,
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(team_repo): Extension<Arc<dyn TeamRepo>>,
     Form(form): Form<TemplateChildForm>,
-) -> Result<Html<String>, ItemError> {
+) -> Result<Response, ItemError> {
+    let close = form.redirect.is_some();
     let current = repo
         .get(&auth_user.user_id, &item_id)
         .await
@@ -520,13 +526,31 @@ pub async fn update_template_child_form(
         .get(&auth_user.user_id, &item_id)
         .await
         .map_err(ItemError::from)?;
+    if close {
+        let view = TemplateChildDetailView::from_item(&updated).render()?;
+        let nav_html = nav::build_nav_html(
+            &team_repo,
+            &auth_user.user_id,
+            ActiveContext::Personal,
+            SidebarSection::Templates,
+        )
+        .await?;
+        return Ok(render(TemplateChildDetailPageTemplate {
+            template_id,
+            id: updated.id.clone(),
+            name: updated.name.clone(),
+            view,
+            nav_html,
+        })?
+        .into_response());
+    }
     // Same dual-purpose response as items::update_item_form: the row half serves a row-level
     // PUT (none exist for template children today, but keeps this consistent with the
     // items.rs pattern it mirrors), the fields half serves this handler's own edit form,
     // which targets/selects only `#template-item-{id}-fields` and ignores the rest.
     let row = TemplateChildRow::from_item(&template_id, &updated).render()?;
     let fields = TemplateChildDetailFields::from_item(&template_id, &updated, true).render()?;
-    Ok(Html(format!("{row}{fields}")))
+    Ok(Html(format!("{row}{fields}")).into_response())
 }
 
 pub async fn delete_template_child_form(

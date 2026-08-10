@@ -6,7 +6,7 @@
     <h2 class="text-2xl/7 font-bold text-gray-900 sm:truncate sm:text-3xl sm:tracking-tight dark:text-white">Edit {{ name }}</h2>
   </div>
 
-  <form hx-put="/web/team-templates/{{ team_id }}/{{ id }}" hx-target="#page" hx-select="#page" hx-swap="innerHTML"
+  <form hx-put="/web/team-templates/{{ team_id }}/{{ id }}" hx-target="#page" hx-select="#page" hx-swap="innerHTML" hx-push-url="/web/team-templates/{{ team_id }}/{{ id }}"
         class="max-w-xl space-y-4 rounded-lg border border-gray-200 bg-white p-4 dark:border-white/10 dark:bg-gray-800/50">
     <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Name <span class="text-red-500" aria-hidden="true">*</span>
       <div class="mt-2">
@@ -22,7 +22,7 @@
       <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">When set, creating a new team Event with this same event type automatically copies this template's sub-items onto it.</p>
     </label>
     <div class="flex items-center gap-x-3">
-      <button type="submit" class="inline-flex items-center justify-center rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-xs hover:bg-indigo-500 dark:bg-indigo-500 dark:shadow-none dark:hover:bg-indigo-400">Save</button>
+      <button type="submit" class="inline-flex items-center justify-center rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-xs hover:bg-indigo-500 dark:bg-indigo-500 dark:shadow-none dark:hover:bg-indigo-400">Save and close</button>
       <a href="/web/team-templates/{{ team_id }}/{{ id }}" hx-target="#page" hx-select="#page" hx-swap="innerHTML"
          class="inline-flex items-center justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-xs inset-ring inset-ring-gray-300 hover:bg-gray-50 dark:bg-white/10 dark:text-white dark:shadow-none dark:inset-ring-white/5 dark:hover:bg-white/20">Cancel</a>
     </div>

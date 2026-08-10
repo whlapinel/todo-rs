@@ -1,6 +1,7 @@
 {% import "macros.html" as macros %}
 <div id="item-{{ id }}-fields" class="rounded-lg border border-gray-200 bg-white p-6 space-y-3 dark:border-white/10 dark:bg-gray-800/50">
-  <form hx-put="/web/team-tasks/{{ team_id }}/{{ id }}" hx-target="#item-{{ id }}-fields" hx-select="#item-{{ id }}-fields" hx-swap="outerHTML" class="space-y-3">
+  <form hx-put="/web/team-tasks/{{ team_id }}/{{ id }}" hx-target="#page" hx-select="#page" hx-swap="innerHTML" hx-push-url="/web/team-tasks/{{ team_id }}/{{ id }}" class="space-y-3">
+    <input type="hidden" name="redirect" value="true" />
     <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Name <span class="text-red-500" aria-hidden="true">*</span>
       <div class="mt-2">
         <input type="text" name="name" value="{{ name }}" required maxlength="200"
@@ -50,7 +51,7 @@
     {% call macros::recurrence_fields(is_top_level, recurrence, recurrence_basis, due_offset_days_input) %}{% endcall %}
     {% call macros::points_field(is_team_admin, is_top_level, points_input) %}{% endcall %}
     <div class="flex items-center gap-x-3">
-      {% call macros::button_primary("Save") %}{% endcall %}
+      {% call macros::button_primary("Save and close") %}{% endcall %}
       {% if just_saved %}
       <span class="toast-fade text-sm text-green-600">&#10003; Saved</span>
       {% endif %}

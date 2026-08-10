@@ -436,6 +436,9 @@ pub async fn team_template_children_fragment(
 pub struct TeamTemplateChildForm {
     name: String,
     due_offset_days: Option<String>,
+    /// Set on the child edit form's "Save and close" submission — see `tasks.rs::TaskForm`'s
+    /// identical field for the full rationale. Never present on the create-child form.
+    redirect: Option<String>,
 }
 
 fn parse_offset(form_value: &Option<String>) -> Option<i32> {
@@ -523,7 +526,8 @@ pub async fn update_team_template_child_form(
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(activity_log): Extension<Arc<dyn ActivityLogRepo>>,
     Form(form): Form<TeamTemplateChildForm>,
-) -> Result<Html<String>, ItemError> {
+) -> Result<Response, ItemError> {
+    let close = form.redirect.is_some();
     let current = repo.get_team_item(&team_id, &item_id).await.map_err(ItemError::from)?;
     let name = if form.name.trim().is_empty() {
         current.name.clone()
@@ -543,15 +547,34 @@ pub async fn update_team_template_child_form(
     };
     team_item_service::update_team_item(
         &repo,
-        &UpdateTeamItemContext { teams, activity_log },
+        &UpdateTeamItemContext { teams: teams.clone(), activity_log },
         &auth_user.user_id,
         params,
     )
     .await?;
     let updated = repo.get_team_item(&team_id, &item_id).await.map_err(ItemError::from)?;
+    if close {
+        let view = TeamTemplateChildDetailView::from_item(&updated).render()?;
+        let nav_html = nav::build_nav_html(
+            &teams,
+            &auth_user.user_id,
+            ActiveContext::Team(team_id.clone()),
+            SidebarSection::Templates,
+        )
+        .await?;
+        return Ok(render(TeamTemplateChildDetailPageTemplate {
+            team_id,
+            template_id,
+            id: updated.id.clone(),
+            name: updated.name.clone(),
+            view,
+            nav_html,
+        })?
+        .into_response());
+    }
     let row = TeamTemplateChildRow::from_item(&team_id, &template_id, &updated).render()?;
     let fields = TeamTemplateChildDetailFields::from_item(&team_id, &template_id, &updated, true).render()?;
-    Ok(Html(format!("{row}{fields}")))
+    Ok(Html(format!("{row}{fields}")).into_response())
 }
 
 pub async fn delete_team_template_child_form(

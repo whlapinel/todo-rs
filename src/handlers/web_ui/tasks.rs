@@ -47,8 +47,11 @@ pub struct TaskForm {
     due_offset_days: Option<String>,
     parent_item_id: Option<String>,
     show_complete: Option<String>,
-    /// Present only on the standalone `/tasks/new` page's forms — see `items.rs`'s identical
-    /// field for the full rationale.
+    /// Set on the standalone `/tasks/new` page's create forms (redirect to the list after
+    /// creating) and on every edit form's "Save and close" submission (redirect to the item's
+    /// own detail page after saving) — in both cases, "this form is done, navigate away rather
+    /// than re-rendering in place." Never present on a bare checkbox PUT (those send only
+    /// `complete` via `hx-vals`), so the two call sites never collide on the same field.
     redirect: Option<String>,
 }
 
@@ -803,6 +806,7 @@ pub async fn update_task_form(
     Path(item_id): Path<String>,
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(team_repo): Extension<Arc<dyn TeamRepo>>,
     TzOffset(tz): TzOffset,
     Form(form): Form<TaskForm>,
 ) -> Result<Response, ItemError> {
@@ -811,10 +815,29 @@ pub async fn update_task_form(
         .await
         .map_err(ItemError::from)?;
     let current = require_task(current)?;
+    let close = form.redirect.is_some();
     let params = update_params_from_form(&auth_user.user_id, &item_id, &current, &form, tz);
     item_service::update_item(&repo, params).await?;
 
     match repo.get(&auth_user.user_id, &item_id).await {
+        Ok(updated) if close => {
+            let view = TaskDetailView::from_item(&updated, tz).render()?;
+            let nav_html = nav::build_nav_html(
+                &team_repo,
+                &auth_user.user_id,
+                ActiveContext::Personal,
+                SidebarSection::Tasks,
+            )
+            .await?;
+            Ok(render(TaskDetailPageTemplate {
+                id: updated.id.clone(),
+                name: updated.name.clone(),
+                complete: updated.complete,
+                view,
+                nav_html,
+            })?
+            .into_response())
+        }
         Ok(updated) => {
             let row = TaskRow::from_item(&updated, tz).render()?;
             let fields = TaskDetailFields::from_item(&updated, tz, true).render()?;
