@@ -132,6 +132,7 @@ fn build_web_router() -> Router {
             get(simple_item_children_fragment),
         )
         .route("/dashboard", get(dashboard_page))
+        .route("/dashboard/calendar", get(dashboard_calendar_page))
         .route("/dashboard/items/:item_id", put(toggle_item_complete))
         .route(
             "/dashboard/team-items/:team_id/:item_id",
