@@ -1,8 +1,9 @@
 use crate::auth::AuthUser;
 use crate::domain::item::{Item, ItemKind};
+use crate::handlers::web_ui::dashboard::{detail_url, list_url_for};
 use crate::handlers::web_ui::nav::{self, ActiveContext, SidebarSection};
 use crate::handlers::web_ui::{TzOffset, to_local};
-use crate::service::items::{self as item_service, ItemError};
+use crate::service::items::{self as item_service, item_anchor, ItemError};
 use crate::service::templates::{self as template_service, CreateTemplateParams};
 use crate::storage::sqlite::{ItemRepo, RepoError, TeamRepo};
 use askama::Template;
@@ -303,10 +304,16 @@ struct TaskRow {
     offset_label: Option<String>,
     recurrence: Option<String>,
     toggle_complete_json: String,
+    /// (id, name) of every other item rendered alongside this one in the same list —
+    /// i.e. this item's actual siblings, since `render_rows` is only ever called with a
+    /// single sibling group (a full top-level list or one parent's children) at a time.
+    /// Populates the row's "subordinate under…" picker (see `subordinate_task_form`);
+    /// empty for an only child / sole top-level item.
+    siblings: Vec<(String, String)>,
 }
 
 impl TaskRow {
-    fn from_item(item: &Item, tz: i32) -> Self {
+    fn from_item(item: &Item, siblings: &[&Item], tz: i32) -> Self {
         Self {
             id: item.id.clone(),
             name: item.name.clone(),
@@ -327,6 +334,11 @@ impl TaskRow {
             offset_label: offset_label_for(item),
             recurrence: item.recurrence_pattern(),
             toggle_complete_json: (!item.complete).to_string(),
+            siblings: siblings
+                .iter()
+                .filter(|s| s.id != item.id)
+                .map(|s| (s.id.clone(), s.name.clone()))
+                .collect(),
         }
     }
 }
@@ -552,10 +564,10 @@ struct TasksCalendarPageTemplate {
 // ---- shared rendering helpers ------------------------------------------------
 
 fn render_rows(items: &[Item], show_complete: bool, tz: i32) -> Result<Vec<String>, ItemError> {
-    items
+    let visible: Vec<&Item> = items.iter().filter(|i| show_complete || !i.complete).collect();
+    visible
         .iter()
-        .filter(|i| show_complete || !i.complete)
-        .map(|i| TaskRow::from_item(i, tz).render())
+        .map(|i| TaskRow::from_item(i, &visible, tz).render())
         .collect::<Result<Vec<_>, _>>()
         .map_err(ItemError::from)
 }
@@ -572,6 +584,21 @@ async fn list_tasks(repo: &Arc<dyn ItemRepo>, user_id: &str) -> Result<Vec<Item>
     items.retain(|i| i.kind() == ItemKind::Task);
     items.sort_by_key(sort_key);
     Ok(items)
+}
+
+/// The full sibling group (including the item itself) a given item belongs to — either its
+/// parent's children, or the top-level task list if it has none. Used to rebuild a single
+/// row's "subordinate under…" picker (see `TaskRow`) after an in-place edit, where the caller
+/// only has the one updated item on hand, not the list it was originally rendered alongside.
+async fn sibling_group(
+    repo: &Arc<dyn ItemRepo>,
+    user_id: &str,
+    parent_item_id: Option<&str>,
+) -> Result<Vec<Item>, ItemError> {
+    match parent_item_id {
+        Some(pid) => repo.list_children(pid).await.map_err(ItemError::from),
+        None => list_tasks(repo, user_id).await,
+    }
 }
 
 fn prev_month(year: i32, month: u32) -> (i32, u32) {
@@ -977,7 +1004,11 @@ pub async fn update_task_form(
             .into_response())
         }
         Ok(updated) => {
-            let row = TaskRow::from_item(&updated, tz).render()?;
+            let siblings =
+                sibling_group(&repo, &auth_user.user_id, updated.parent_item_id.as_deref())
+                    .await?;
+            let siblings_ref: Vec<&Item> = siblings.iter().collect();
+            let row = TaskRow::from_item(&updated, &siblings_ref, tz).render()?;
             let fields = TaskDetailFields::from_item(&updated, tz, true).render()?;
             let view = TaskDetailView::from_item(&updated, tz).render()?;
             Ok(Html(format!("{row}{fields}{view}")).into_response())
@@ -1010,6 +1041,198 @@ pub async fn delete_task_form(
     require_task(current)?;
     item_service::delete_item(&repo, &auth_user.user_id, &item_id).await?;
     Ok(Html(String::new()))
+}
+
+/// Walks up `item`'s own parent chain to find its top-level ancestor, then returns that
+/// ancestor's anchor (`due_date.or(scheduled_date)`, via `item_anchor`) — `None` if the
+/// ancestor has neither. `due_offset_days` is always measured from the **top-level** item's
+/// own anchor, never chained through an intermediate parent's own (possibly offset-derived)
+/// deadline — see CLAUDE.md's Recurrence section ("a grandchild's offset is measured from the
+/// same root a direct child's is, not chained through an intermediate parent's own
+/// deadline"). `sync_offset_children`/`clone_children` get this for free because their caller
+/// always passes down one single anchor for an entire cascade; a promote/subordinate has no
+/// such cascade to inherit from; it's the one place a new offset root has to be *found*, so it
+/// has to walk for it explicitly. A no-op (no extra fetch) when `item` is already top-level.
+async fn top_level_anchor(
+    repo: &Arc<dyn ItemRepo>,
+    user_id: &str,
+    item: &Item,
+) -> Result<Option<DateTime<Utc>>, ItemError> {
+    let mut current = item.clone();
+    while let Some(parent_id) = current.parent_item_id.clone() {
+        current = repo.get(user_id, &parent_id).await.map_err(ItemError::from)?;
+    }
+    Ok(item_anchor(&current))
+}
+
+/// Builds the params for a reparent-only update — every other field round-tripped unchanged
+/// from `current`, same convention `dashboard.rs`'s checkbox-toggle handlers already use for
+/// their own single-field updates. Shared by `promote_task_form`/`subordinate_task_form`.
+///
+/// A reparent changes which top-level item a `due_offset_days`-bearing item's own due date is
+/// measured from, so `due_date`/`due_offset_days` aren't simply round-tripped like everything
+/// else here: `offset_anchor` (the new top-level ancestor's own anchor — see
+/// `top_level_anchor`, which callers must resolve *before* calling this, since walking the
+/// parent chain needs `repo` and this function is deliberately kept sync) becomes the new
+/// offset root, and the due date is recomputed against it — the same `deadline_from_offset`
+/// math `sync_offset_children` uses to keep a child's due date pinned to its ancestor, applied
+/// once up front here since a plain reparent doesn't touch `current`'s own anchor and so would
+/// never trigger `update_item`'s own automatic sync otherwise. `new_parent_item_id: None`
+/// (promoting all the way to top level) clears the offset entirely — there's no longer
+/// anything to offset from, and top-level items don't carry one — but leaves the item's
+/// last-known due date alone as its own now-independent deadline rather than blanking it. An
+/// item with no offset in the first place round-trips its due date unchanged either way,
+/// matching `sync_offset_children`'s own "manually-dated child is left alone" rule. If
+/// `offset_anchor` is `None` (the new top-level ancestor has no due/scheduled date of its own),
+/// the due date is cleared (`None`) rather than left stale, since there's nothing left to
+/// compute it against.
+fn reparent_params(
+    user_id: &str,
+    item_id: &str,
+    current: &Item,
+    new_parent_item_id: Option<String>,
+    offset_anchor: Option<DateTime<Utc>>,
+    tz: i32,
+) -> item_service::UpdateItemParams {
+    let (due_date, due_offset_days) = match (current.due_offset_days(), &new_parent_item_id) {
+        (None, _) => (current.due_date(), None),
+        (Some(_), Some(_)) => (
+            offset_anchor.and_then(|anchor| current.deadline_from_offset(anchor, tz)),
+            current.due_offset_days(),
+        ),
+        (Some(_), None) => (current.due_date(), None),
+    };
+    item_service::UpdateItemParams {
+        user_id: user_id.to_string(),
+        item_id: item_id.to_string(),
+        name: current.name.clone(),
+        description: current.description.clone(),
+        due_date,
+        scheduled_date: current.scheduled_date(),
+        scheduled_end_date: current.scheduled_end_date(),
+        complete: current.complete,
+        recurrence: current.recurrence_pattern(),
+        recurrence_basis: current.recurrence_basis(),
+        has_due_time: Some(current.has_due_time()),
+        has_scheduled_time: Some(current.has_scheduled_time()),
+        has_end_time: Some(current.has_end_time()),
+        parent_item_id: new_parent_item_id,
+        item_type: Some(current.kind()),
+        event_type: current.event_type(),
+        due_offset_days,
+        timezone_offset_minutes: Some(tz),
+    }
+}
+
+/// Tells the client to navigate to `location` via a fresh GET — same `hx-redirect` mechanism
+/// `redirect_to_tasks` above uses, reused here because the destination of a promote/subordinate
+/// can be any of the eight dedicated screens (whichever type the new parent turns out to be),
+/// not just this one — see `dashboard::detail_url`/`list_url_for`.
+fn hx_redirect(location: String) -> Response {
+    (
+        [(
+            axum::http::header::HeaderName::from_static("hx-redirect"),
+            location,
+        )],
+        Html(String::new()),
+    )
+        .into_response()
+}
+
+/// Promotes a child item to a sibling of its own parent (i.e. moves it up one level in the
+/// hierarchy) — a no-picker convenience action since the destination is fully determined by
+/// the item's current position. Rejects items that have no parent to promote from.
+pub async fn promote_task_form(
+    Path(item_id): Path<String>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    TzOffset(tz): TzOffset,
+) -> Result<Response, ItemError> {
+    let current = repo
+        .get(&auth_user.user_id, &item_id)
+        .await
+        .map_err(ItemError::from)?;
+    let current = require_task(current)?;
+    let Some(parent_id) = current.parent_item_id.clone() else {
+        return Err(ItemError::Invalid(
+            "item has no parent to promote from".to_string(),
+        ));
+    };
+    let parent = repo
+        .get(&auth_user.user_id, &parent_id)
+        .await
+        .map_err(ItemError::from)?;
+    let grandparent = match parent.parent_item_id {
+        Some(gp_id) => Some(
+            repo.get(&auth_user.user_id, &gp_id)
+                .await
+                .map_err(ItemError::from)?,
+        ),
+        None => None,
+    };
+    let offset_anchor = match &grandparent {
+        Some(gp) => top_level_anchor(&repo, &auth_user.user_id, gp).await?,
+        None => None,
+    };
+    let params = reparent_params(
+        &auth_user.user_id,
+        &item_id,
+        &current,
+        grandparent.as_ref().map(|gp| gp.id.clone()),
+        offset_anchor,
+        tz,
+    );
+    item_service::update_item(&repo, params).await?;
+
+    let location = match &grandparent {
+        Some(gp) => detail_url(gp),
+        None => list_url_for(current.kind(), None),
+    };
+    Ok(hx_redirect(location))
+}
+
+#[derive(serde::Deserialize, Debug)]
+pub struct SubordinateForm {
+    new_parent_id: String,
+}
+
+/// Subordinates a sibling to become a child of another sibling — `new_parent_id` must
+/// currently share this item's own `parent_item_id` (enforced below), so this can only ever
+/// move an item within its existing sibling group, never to an arbitrary item elsewhere in
+/// the tree (and, by construction, can never create a cycle — a sibling can't already be this
+/// item's own ancestor or descendant).
+pub async fn subordinate_task_form(
+    Path(item_id): Path<String>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    TzOffset(tz): TzOffset,
+    Form(form): Form<SubordinateForm>,
+) -> Result<Response, ItemError> {
+    let current = repo
+        .get(&auth_user.user_id, &item_id)
+        .await
+        .map_err(ItemError::from)?;
+    let current = require_task(current)?;
+    let new_parent = repo
+        .get(&auth_user.user_id, &form.new_parent_id)
+        .await
+        .map_err(ItemError::from)?;
+    if new_parent.parent_item_id != current.parent_item_id {
+        return Err(ItemError::Invalid(
+            "target is not a sibling of this item".to_string(),
+        ));
+    }
+    let offset_anchor = top_level_anchor(&repo, &auth_user.user_id, &new_parent).await?;
+    let params = reparent_params(
+        &auth_user.user_id,
+        &item_id,
+        &current,
+        Some(new_parent.id.clone()),
+        offset_anchor,
+        tz,
+    );
+    item_service::update_item(&repo, params).await?;
+    Ok(hx_redirect(detail_url(&new_parent)))
 }
 
 pub async fn save_task_as_template(

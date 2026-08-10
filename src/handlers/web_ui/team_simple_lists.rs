@@ -1,5 +1,6 @@
 use crate::auth::AuthUser;
 use crate::domain::item::{Item, ItemKind};
+use crate::handlers::web_ui::dashboard::{detail_url, list_url_for};
 use crate::handlers::web_ui::nav::{self, ActiveContext, SidebarSection};
 use crate::service::error::ItemError;
 use crate::service::team_items::{
@@ -110,15 +111,23 @@ struct TeamSimpleItemRow {
     team_id: String,
     name: String,
     has_children: bool,
+    /// See `tasks::TaskRow`'s identical field — populates this row's "subordinate under…"
+    /// picker with its actual siblings (the other items rendered in the same list call).
+    siblings: Vec<(String, String)>,
 }
 
 impl TeamSimpleItemRow {
-    fn from_item(item: &Item, team_id: &str) -> Self {
+    fn from_item(item: &Item, team_id: &str, siblings: &[&Item]) -> Self {
         Self {
             id: item.id.clone(),
             team_id: team_id.to_string(),
             name: item.name.clone(),
             has_children: item.has_children,
+            siblings: siblings
+                .iter()
+                .filter(|s| s.id != item.id)
+                .map(|s| (s.id.clone(), s.name.clone()))
+                .collect(),
         }
     }
 }
@@ -178,6 +187,7 @@ struct TeamSimpleItemDetailPageTemplate {
     team_id: String,
     name: String,
     description: Option<String>,
+    is_top_level: bool,
     nav_html: String,
 }
 
@@ -194,9 +204,9 @@ struct TeamSimpleItemEditPageTemplate {
 // ---- shared rendering helpers ------------------------------------------------
 
 fn render_rows(items: &[Item], team_id: &str) -> Result<Vec<String>, ItemError> {
-    items
-        .iter()
-        .map(|i| TeamSimpleItemRow::from_item(i, team_id).render())
+    let all: Vec<&Item> = items.iter().collect();
+    all.iter()
+        .map(|i| TeamSimpleItemRow::from_item(i, team_id, &all).render())
         .collect::<Result<Vec<_>, _>>()
         .map_err(ItemError::from)
 }
@@ -214,6 +224,19 @@ async fn list_team_simple_items(
         .map_err(ItemError::from)?;
     items.retain(|i| i.kind() == ItemKind::Simple);
     Ok(items)
+}
+
+/// The full sibling group (including the item itself) a given item belongs to — see
+/// `tasks::sibling_group`'s identical rationale.
+async fn sibling_group(
+    repo: &Arc<dyn ItemRepo>,
+    team_id: &str,
+    parent_item_id: Option<&str>,
+) -> Result<Vec<Item>, ItemError> {
+    match parent_item_id {
+        Some(pid) => repo.list_children(pid).await.map_err(ItemError::from),
+        None => list_team_simple_items(repo, team_id).await,
+    }
 }
 
 async fn render_scope_fragment(
@@ -304,6 +327,7 @@ pub async fn team_simple_item_detail_page(
     )
     .await?;
     render(TeamSimpleItemDetailPageTemplate {
+        is_top_level: item.parent_item_id.is_none(),
         id: item.id,
         team_id,
         name: item.name,
@@ -483,6 +507,7 @@ pub async fn update_team_simple_item_form(
         )
         .await?;
         return Ok(render(TeamSimpleItemDetailPageTemplate {
+            is_top_level: updated.parent_item_id.is_none(),
             id: updated.id.clone(),
             team_id,
             name: updated.name.clone(),
@@ -491,7 +516,10 @@ pub async fn update_team_simple_item_form(
         })?
         .into_response());
     }
-    let row = TeamSimpleItemRow::from_item(&updated, &team_id).render()?;
+    let siblings =
+        sibling_group(&repo, &team_id, updated.parent_item_id.as_deref()).await?;
+    let siblings_ref: Vec<&Item> = siblings.iter().collect();
+    let row = TeamSimpleItemRow::from_item(&updated, &team_id, &siblings_ref).render()?;
     let fields = TeamSimpleItemDetailFields::from_item(&updated, &team_id, true).render()?;
     Ok(Html(format!("{row}{fields}")).into_response())
 }
@@ -510,4 +538,135 @@ pub async fn delete_team_simple_item_form(
     team_item_service::delete_team_item(&repo, &teams, &auth_user.user_id, &team_id, &item_id)
         .await?;
     Ok(Html(String::new()))
+}
+
+/// Reparent-only update, every other field round-tripped from `current` — see
+/// `simple_lists::reparent_params`. No offset recompute needed here either: Simple items can
+/// never have a `dueOffsetDays` to begin with.
+fn reparent_params(
+    team_id: &str,
+    item_id: &str,
+    current: &Item,
+    new_parent_item_id: Option<String>,
+) -> UpdateTeamItemParams {
+    UpdateTeamItemParams {
+        team_id: team_id.to_string(),
+        item_id: item_id.to_string(),
+        name: current.name.clone(),
+        description: current.description.clone(),
+        complete: false,
+        parent_item_id: new_parent_item_id,
+        item_type: Some(ItemKind::Simple),
+        ..Default::default()
+    }
+}
+
+fn hx_redirect(location: String) -> Response {
+    (
+        [(
+            axum::http::header::HeaderName::from_static("hx-redirect"),
+            location,
+        )],
+        Html(String::new()),
+    )
+        .into_response()
+}
+
+/// Promotes a child item to a sibling of its own parent — see `tasks::promote_task_form`.
+pub async fn promote_team_simple_item_form(
+    Path((team_id, item_id)): Path<(String, String)>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(activity_log): Extension<Arc<dyn ActivityLogRepo>>,
+) -> Result<Response, ItemError> {
+    require_active_member(&teams, &team_id, &auth_user.user_id).await?;
+    let current = repo
+        .get_team_item(&team_id, &item_id)
+        .await
+        .map_err(ItemError::from)?;
+    let current = require_team_simple(current)?;
+    let Some(parent_id) = current.parent_item_id.clone() else {
+        return Err(ItemError::Invalid(
+            "item has no parent to promote from".to_string(),
+        ));
+    };
+    let parent = repo
+        .get_team_item(&team_id, &parent_id)
+        .await
+        .map_err(ItemError::from)?;
+    let grandparent = match parent.parent_item_id {
+        Some(gp_id) => Some(
+            repo.get_team_item(&team_id, &gp_id)
+                .await
+                .map_err(ItemError::from)?,
+        ),
+        None => None,
+    };
+    let params = reparent_params(
+        &team_id,
+        &item_id,
+        &current,
+        grandparent.as_ref().map(|gp| gp.id.clone()),
+    );
+    team_item_service::update_team_item(
+        &repo,
+        &UpdateTeamItemContext {
+            teams: teams.clone(),
+            activity_log,
+        },
+        &auth_user.user_id,
+        params,
+    )
+    .await?;
+
+    let location = match &grandparent {
+        Some(gp) => detail_url(gp),
+        None => list_url_for(ItemKind::Simple, Some(&team_id)),
+    };
+    Ok(hx_redirect(location))
+}
+
+#[derive(serde::Deserialize, Debug)]
+pub struct SubordinateForm {
+    new_parent_id: String,
+}
+
+/// Subordinates a sibling to become a child of another sibling — see
+/// `tasks::subordinate_task_form`.
+pub async fn subordinate_team_simple_item_form(
+    Path((team_id, item_id)): Path<(String, String)>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(activity_log): Extension<Arc<dyn ActivityLogRepo>>,
+    Form(form): Form<SubordinateForm>,
+) -> Result<Response, ItemError> {
+    require_active_member(&teams, &team_id, &auth_user.user_id).await?;
+    let current = repo
+        .get_team_item(&team_id, &item_id)
+        .await
+        .map_err(ItemError::from)?;
+    let current = require_team_simple(current)?;
+    let new_parent = repo
+        .get_team_item(&team_id, &form.new_parent_id)
+        .await
+        .map_err(ItemError::from)?;
+    if new_parent.parent_item_id != current.parent_item_id {
+        return Err(ItemError::Invalid(
+            "target is not a sibling of this item".to_string(),
+        ));
+    }
+    let params = reparent_params(&team_id, &item_id, &current, Some(new_parent.id.clone()));
+    team_item_service::update_team_item(
+        &repo,
+        &UpdateTeamItemContext {
+            teams: teams.clone(),
+            activity_log,
+        },
+        &auth_user.user_id,
+        params,
+    )
+    .await?;
+    Ok(hx_redirect(detail_url(&new_parent)))
 }

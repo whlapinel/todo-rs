@@ -114,6 +114,11 @@ fn build_web_router() -> Router {
             "/tasks/:item_id/save-as-template",
             post(save_task_as_template),
         )
+        .route("/tasks/:item_id/promote", post(promote_task_form))
+        .route(
+            "/tasks/:item_id/subordinate",
+            post(subordinate_task_form),
+        )
         .route(
             "/simple-lists",
             get(simple_lists_page).post(create_simple_item_form),
@@ -130,6 +135,14 @@ fn build_web_router() -> Router {
         .route(
             "/simple-lists/:item_id/children",
             get(simple_item_children_fragment),
+        )
+        .route(
+            "/simple-lists/:item_id/promote",
+            post(promote_simple_item_form),
+        )
+        .route(
+            "/simple-lists/:item_id/subordinate",
+            post(subordinate_simple_item_form),
         )
         .route("/dashboard", get(dashboard_page))
         .route("/dashboard/calendar", get(dashboard_calendar_page))
@@ -215,6 +228,14 @@ fn build_web_router() -> Router {
             get(team_simple_item_children_fragment),
         )
         .route(
+            "/team-simple-lists/:team_id/:item_id/promote",
+            post(promote_team_simple_item_form),
+        )
+        .route(
+            "/team-simple-lists/:team_id/:item_id/subordinate",
+            post(subordinate_team_simple_item_form),
+        )
+        .route(
             "/team-tasks/:team_id",
             get(team_tasks_page).post(create_team_task_form),
         )
@@ -240,6 +261,14 @@ fn build_web_router() -> Router {
         .route(
             "/team-tasks/:team_id/:item_id/save-as-template",
             post(save_team_task_as_template),
+        )
+        .route(
+            "/team-tasks/:team_id/:item_id/promote",
+            post(promote_team_task_form),
+        )
+        .route(
+            "/team-tasks/:team_id/:item_id/subordinate",
+            post(subordinate_team_task_form),
         )
         .route(
             "/team-events/:team_id/:item_id/save-as-template",

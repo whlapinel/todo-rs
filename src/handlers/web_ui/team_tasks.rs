@@ -1,8 +1,10 @@
 use crate::auth::AuthUser;
 use crate::domain::item::{Item, ItemKind};
+use crate::handlers::web_ui::dashboard::{detail_url, list_url_for};
 use crate::handlers::web_ui::nav::{self, ActiveContext, SidebarSection};
 use crate::handlers::web_ui::{TzOffset, to_local};
 use crate::service::error::ItemError;
+use crate::service::items::item_anchor;
 use crate::service::team_items::{
     self as team_item_service, require_active_member, CreateTeamItemParams, UpdateTeamItemContext,
     UpdateTeamItemParams,
@@ -374,10 +376,19 @@ struct TeamTaskRow {
     recurrence: Option<String>,
     assignee_name: Option<String>,
     toggle_complete_json: String,
+    /// See `tasks::TaskRow`'s identical field — populates this row's "subordinate under…"
+    /// picker with its actual siblings (the other items rendered in the same list call).
+    siblings: Vec<(String, String)>,
 }
 
 impl TeamTaskRow {
-    fn from_item(item: &Item, team_id: &str, names: &HashMap<String, String>, tz: i32) -> Self {
+    fn from_item(
+        item: &Item,
+        team_id: &str,
+        names: &HashMap<String, String>,
+        siblings: &[&Item],
+        tz: i32,
+    ) -> Self {
         Self {
             id: item.id.clone(),
             team_id: team_id.to_string(),
@@ -402,6 +413,11 @@ impl TeamTaskRow {
                 .assigned_to_user_id()
                 .map(|id| names.get(&id).cloned().unwrap_or(id)),
             toggle_complete_json: (!item.complete).to_string(),
+            siblings: siblings
+                .iter()
+                .filter(|s| s.id != item.id)
+                .map(|s| (s.id.clone(), s.name.clone()))
+                .collect(),
         }
     }
 }
@@ -636,10 +652,10 @@ fn render_rows(
     show_complete: bool,
     tz: i32,
 ) -> Result<Vec<String>, ItemError> {
-    items
+    let visible: Vec<&Item> = items.iter().filter(|i| show_complete || !i.complete).collect();
+    visible
         .iter()
-        .filter(|i| show_complete || !i.complete)
-        .map(|i| TeamTaskRow::from_item(i, team_id, names, tz).render())
+        .map(|i| TeamTaskRow::from_item(i, team_id, names, &visible, tz).render())
         .collect::<Result<Vec<_>, _>>()
         .map_err(ItemError::from)
 }
@@ -659,6 +675,19 @@ async fn list_team_tasks(repo: &Arc<dyn ItemRepo>, team_id: &str) -> Result<Vec<
     items.retain(|i| i.kind() == ItemKind::Task);
     items.sort_by_key(sort_key);
     Ok(items)
+}
+
+/// The full sibling group (including the item itself) a given item belongs to — see
+/// `tasks::sibling_group`'s identical rationale.
+async fn sibling_group(
+    repo: &Arc<dyn ItemRepo>,
+    team_id: &str,
+    parent_item_id: Option<&str>,
+) -> Result<Vec<Item>, ItemError> {
+    match parent_item_id {
+        Some(pid) => repo.list_children(pid).await.map_err(ItemError::from),
+        None => list_team_tasks(repo, team_id).await,
+    }
 }
 
 async fn render_scope_fragment(
@@ -1028,7 +1057,11 @@ pub async fn update_team_task_form(
         }
         Ok(updated) => {
             let names = names_for(&teams, &team_id, &auth_user.user_id).await?;
-            let row = TeamTaskRow::from_item(&updated, &team_id, &names, tz).render()?;
+            let siblings =
+                sibling_group(&repo, &team_id, updated.parent_item_id.as_deref()).await?;
+            let siblings_ref: Vec<&Item> = siblings.iter().collect();
+            let row =
+                TeamTaskRow::from_item(&updated, &team_id, &names, &siblings_ref, tz).render()?;
             let assignee_options =
                 active_member_options(&teams, &team_id, &auth_user.user_id).await?;
             let is_team_admin =
@@ -1074,6 +1107,191 @@ pub async fn delete_team_task_form(
     team_item_service::delete_team_item(&repo, &teams, &auth_user.user_id, &team_id, &item_id)
         .await?;
     Ok(Html(String::new()))
+}
+
+/// See `tasks::top_level_anchor`'s identical rationale — team-scoped via `get_team_item`.
+async fn top_level_anchor(
+    repo: &Arc<dyn ItemRepo>,
+    team_id: &str,
+    item: &Item,
+) -> Result<Option<DateTime<Utc>>, ItemError> {
+    let mut current = item.clone();
+    while let Some(parent_id) = current.parent_item_id.clone() {
+        current = repo
+            .get_team_item(team_id, &parent_id)
+            .await
+            .map_err(ItemError::from)?;
+    }
+    Ok(item_anchor(&current))
+}
+
+/// Reparent-only update, every other field round-tripped from `current` — see
+/// `tasks::reparent_params` for the full offset-recompute rationale (identical here, just
+/// against `UpdateTeamItemParams`'s wider field set).
+fn reparent_params(
+    team_id: &str,
+    item_id: &str,
+    current: &Item,
+    new_parent_item_id: Option<String>,
+    offset_anchor: Option<DateTime<Utc>>,
+    tz: i32,
+) -> UpdateTeamItemParams {
+    let (due_date, due_offset_days) = match (current.due_offset_days(), &new_parent_item_id) {
+        (None, _) => (current.due_date(), None),
+        (Some(_), Some(_)) => (
+            offset_anchor.and_then(|anchor| current.deadline_from_offset(anchor, tz)),
+            current.due_offset_days(),
+        ),
+        (Some(_), None) => (current.due_date(), None),
+    };
+    UpdateTeamItemParams {
+        team_id: team_id.to_string(),
+        item_id: item_id.to_string(),
+        name: current.name.clone(),
+        description: current.description.clone(),
+        due_date,
+        scheduled_date: current.scheduled_date(),
+        scheduled_end_date: current.scheduled_end_date(),
+        complete: current.complete,
+        recurrence: current.recurrence_pattern(),
+        recurrence_basis: current.recurrence_basis(),
+        has_due_time: Some(current.has_due_time()),
+        has_scheduled_time: Some(current.has_scheduled_time()),
+        has_end_time: Some(current.has_end_time()),
+        parent_item_id: new_parent_item_id,
+        item_type: Some(current.kind()),
+        event_type: current.event_type(),
+        due_offset_days,
+        assigned_to_user_id: current.assigned_to_user_id(),
+        timezone_offset_minutes: Some(tz),
+        points: current.points(),
+    }
+}
+
+fn hx_redirect(location: String) -> Response {
+    (
+        [(
+            axum::http::header::HeaderName::from_static("hx-redirect"),
+            location,
+        )],
+        Html(String::new()),
+    )
+        .into_response()
+}
+
+/// Promotes a child item to a sibling of its own parent — see `tasks::promote_task_form`.
+pub async fn promote_team_task_form(
+    Path((team_id, item_id)): Path<(String, String)>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(activity_log): Extension<Arc<dyn ActivityLogRepo>>,
+    TzOffset(tz): TzOffset,
+) -> Result<Response, ItemError> {
+    require_active_member(&teams, &team_id, &auth_user.user_id).await?;
+    let current = repo
+        .get_team_item(&team_id, &item_id)
+        .await
+        .map_err(ItemError::from)?;
+    let current = require_team_task(current)?;
+    let Some(parent_id) = current.parent_item_id.clone() else {
+        return Err(ItemError::Invalid(
+            "item has no parent to promote from".to_string(),
+        ));
+    };
+    let parent = repo
+        .get_team_item(&team_id, &parent_id)
+        .await
+        .map_err(ItemError::from)?;
+    let grandparent = match parent.parent_item_id {
+        Some(gp_id) => Some(
+            repo.get_team_item(&team_id, &gp_id)
+                .await
+                .map_err(ItemError::from)?,
+        ),
+        None => None,
+    };
+    let offset_anchor = match &grandparent {
+        Some(gp) => top_level_anchor(&repo, &team_id, gp).await?,
+        None => None,
+    };
+    let params = reparent_params(
+        &team_id,
+        &item_id,
+        &current,
+        grandparent.as_ref().map(|gp| gp.id.clone()),
+        offset_anchor,
+        tz,
+    );
+    team_item_service::update_team_item(
+        &repo,
+        &UpdateTeamItemContext {
+            teams: teams.clone(),
+            activity_log,
+        },
+        &auth_user.user_id,
+        params,
+    )
+    .await?;
+
+    let location = match &grandparent {
+        Some(gp) => detail_url(gp),
+        None => list_url_for(current.kind(), Some(&team_id)),
+    };
+    Ok(hx_redirect(location))
+}
+
+#[derive(serde::Deserialize, Debug)]
+pub struct SubordinateForm {
+    new_parent_id: String,
+}
+
+/// Subordinates a sibling to become a child of another sibling — see
+/// `tasks::subordinate_task_form`.
+pub async fn subordinate_team_task_form(
+    Path((team_id, item_id)): Path<(String, String)>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(activity_log): Extension<Arc<dyn ActivityLogRepo>>,
+    TzOffset(tz): TzOffset,
+    Form(form): Form<SubordinateForm>,
+) -> Result<Response, ItemError> {
+    require_active_member(&teams, &team_id, &auth_user.user_id).await?;
+    let current = repo
+        .get_team_item(&team_id, &item_id)
+        .await
+        .map_err(ItemError::from)?;
+    let current = require_team_task(current)?;
+    let new_parent = repo
+        .get_team_item(&team_id, &form.new_parent_id)
+        .await
+        .map_err(ItemError::from)?;
+    if new_parent.parent_item_id != current.parent_item_id {
+        return Err(ItemError::Invalid(
+            "target is not a sibling of this item".to_string(),
+        ));
+    }
+    let offset_anchor = top_level_anchor(&repo, &team_id, &new_parent).await?;
+    let params = reparent_params(
+        &team_id,
+        &item_id,
+        &current,
+        Some(new_parent.id.clone()),
+        offset_anchor,
+        tz,
+    );
+    team_item_service::update_team_item(
+        &repo,
+        &UpdateTeamItemContext {
+            teams: teams.clone(),
+            activity_log,
+        },
+        &auth_user.user_id,
+        params,
+    )
+    .await?;
+    Ok(hx_redirect(detail_url(&new_parent)))
 }
 
 pub async fn save_team_task_as_template(

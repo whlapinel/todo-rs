@@ -1,5 +1,6 @@
 use crate::auth::AuthUser;
 use crate::domain::item::{Item, ItemKind};
+use crate::handlers::web_ui::dashboard::{detail_url, list_url_for};
 use crate::handlers::web_ui::nav::{self, ActiveContext, SidebarSection};
 use crate::service::items::{self as item_service, ItemError};
 use crate::storage::sqlite::{ItemRepo, TeamRepo};
@@ -103,14 +104,22 @@ struct SimpleItemRow {
     id: String,
     name: String,
     has_children: bool,
+    /// See `tasks::TaskRow`'s identical field — populates this row's "subordinate under…"
+    /// picker with its actual siblings (the other items rendered in the same list call).
+    siblings: Vec<(String, String)>,
 }
 
 impl SimpleItemRow {
-    fn from_item(item: &Item) -> Self {
+    fn from_item(item: &Item, siblings: &[&Item]) -> Self {
         Self {
             id: item.id.clone(),
             name: item.name.clone(),
             has_children: item.has_children,
+            siblings: siblings
+                .iter()
+                .filter(|s| s.id != item.id)
+                .map(|s| (s.id.clone(), s.name.clone()))
+                .collect(),
         }
     }
 }
@@ -163,6 +172,7 @@ struct SimpleItemDetailPageTemplate {
     id: String,
     name: String,
     description: Option<String>,
+    is_top_level: bool,
     nav_html: String,
 }
 
@@ -178,9 +188,9 @@ struct SimpleItemEditPageTemplate {
 // ---- shared rendering helpers ------------------------------------------------
 
 fn render_rows(items: &[Item]) -> Result<Vec<String>, ItemError> {
-    items
-        .iter()
-        .map(|i| SimpleItemRow::from_item(i).render())
+    let all: Vec<&Item> = items.iter().collect();
+    all.iter()
+        .map(|i| SimpleItemRow::from_item(i, &all).render())
         .collect::<Result<Vec<_>, _>>()
         .map_err(ItemError::from)
 }
@@ -195,6 +205,19 @@ async fn list_simple_items(
     let mut items = repo.list(user_id).await.map_err(ItemError::from)?;
     items.retain(|i| i.kind() == ItemKind::Simple);
     Ok(items)
+}
+
+/// The full sibling group (including the item itself) a given item belongs to — see
+/// `tasks::sibling_group`'s identical rationale.
+async fn sibling_group(
+    repo: &Arc<dyn ItemRepo>,
+    user_id: &str,
+    parent_item_id: Option<&str>,
+) -> Result<Vec<Item>, ItemError> {
+    match parent_item_id {
+        Some(pid) => repo.list_children(pid).await.map_err(ItemError::from),
+        None => list_simple_items(repo, user_id).await,
+    }
 }
 
 async fn render_scope_fragment(
@@ -271,6 +294,7 @@ pub async fn simple_item_detail_page(
     )
     .await?;
     render(SimpleItemDetailPageTemplate {
+        is_top_level: item.parent_item_id.is_none(),
         id: item.id,
         name: item.name,
         description: item.description.clone(),
@@ -429,6 +453,7 @@ pub async fn update_simple_item_form(
         )
         .await?;
         return Ok(render(SimpleItemDetailPageTemplate {
+            is_top_level: updated.parent_item_id.is_none(),
             id: updated.id.clone(),
             name: updated.name.clone(),
             description: updated.description.clone(),
@@ -436,7 +461,10 @@ pub async fn update_simple_item_form(
         })?
         .into_response());
     }
-    let row = SimpleItemRow::from_item(&updated).render()?;
+    let siblings = sibling_group(&repo, &auth_user.user_id, updated.parent_item_id.as_deref())
+        .await?;
+    let siblings_ref: Vec<&Item> = siblings.iter().collect();
+    let row = SimpleItemRow::from_item(&updated, &siblings_ref).render()?;
     let fields = SimpleItemDetailFields::from_item(&updated, true).render()?;
     Ok(Html(format!("{row}{fields}")).into_response())
 }
@@ -453,4 +481,111 @@ pub async fn delete_simple_item_form(
     require_simple(current)?;
     item_service::delete_item(&repo, &auth_user.user_id, &item_id).await?;
     Ok(Html(String::new()))
+}
+
+/// Reparent-only update, every other field round-tripped from `current` — see
+/// `tasks::reparent_params`. No offset recompute needed here: `Item::validate` rejects
+/// `dueOffsetDays`/any date field outright for `ItemType::Simple`, so a Simple item can never
+/// have one to begin with.
+fn reparent_params(
+    user_id: &str,
+    item_id: &str,
+    current: &Item,
+    new_parent_item_id: Option<String>,
+) -> item_service::UpdateItemParams {
+    item_service::UpdateItemParams {
+        user_id: user_id.to_string(),
+        item_id: item_id.to_string(),
+        name: current.name.clone(),
+        description: current.description.clone(),
+        complete: false,
+        parent_item_id: new_parent_item_id,
+        item_type: Some(ItemKind::Simple),
+        ..Default::default()
+    }
+}
+
+fn hx_redirect(location: String) -> Response {
+    (
+        [(
+            axum::http::header::HeaderName::from_static("hx-redirect"),
+            location,
+        )],
+        Html(String::new()),
+    )
+        .into_response()
+}
+
+/// Promotes a child item to a sibling of its own parent — see `tasks::promote_task_form`.
+pub async fn promote_simple_item_form(
+    Path(item_id): Path<String>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+) -> Result<Response, ItemError> {
+    let current = repo
+        .get(&auth_user.user_id, &item_id)
+        .await
+        .map_err(ItemError::from)?;
+    let current = require_simple(current)?;
+    let Some(parent_id) = current.parent_item_id.clone() else {
+        return Err(ItemError::Invalid(
+            "item has no parent to promote from".to_string(),
+        ));
+    };
+    let parent = repo
+        .get(&auth_user.user_id, &parent_id)
+        .await
+        .map_err(ItemError::from)?;
+    let new_parent_item_id = parent.parent_item_id.clone();
+    let params = reparent_params(&auth_user.user_id, &item_id, &current, new_parent_item_id.clone());
+    item_service::update_item(&repo, params).await?;
+
+    let location = match new_parent_item_id {
+        Some(gp_id) => {
+            let grandparent = repo
+                .get(&auth_user.user_id, &gp_id)
+                .await
+                .map_err(ItemError::from)?;
+            detail_url(&grandparent)
+        }
+        None => list_url_for(ItemKind::Simple, None),
+    };
+    Ok(hx_redirect(location))
+}
+
+#[derive(serde::Deserialize, Debug)]
+pub struct SubordinateForm {
+    new_parent_id: String,
+}
+
+/// Subordinates a sibling to become a child of another sibling — see
+/// `tasks::subordinate_task_form`.
+pub async fn subordinate_simple_item_form(
+    Path(item_id): Path<String>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Form(form): Form<SubordinateForm>,
+) -> Result<Response, ItemError> {
+    let current = repo
+        .get(&auth_user.user_id, &item_id)
+        .await
+        .map_err(ItemError::from)?;
+    let current = require_simple(current)?;
+    let new_parent = repo
+        .get(&auth_user.user_id, &form.new_parent_id)
+        .await
+        .map_err(ItemError::from)?;
+    if new_parent.parent_item_id != current.parent_item_id {
+        return Err(ItemError::Invalid(
+            "target is not a sibling of this item".to_string(),
+        ));
+    }
+    let params = reparent_params(
+        &auth_user.user_id,
+        &item_id,
+        &current,
+        Some(new_parent.id.clone()),
+    );
+    item_service::update_item(&repo, params).await?;
+    Ok(hx_redirect(detail_url(&new_parent)))
 }

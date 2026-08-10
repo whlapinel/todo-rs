@@ -115,6 +115,23 @@ pub(crate) fn detail_url(item: &Item) -> String {
     }
 }
 
+/// Dedicated-screen **list** URL for a given kind/team — `detail_url`'s counterpart for the
+/// case a promote/subordinate reparent (see `tasks.rs`/`team_tasks.rs`/`simple_lists.rs`/
+/// `team_simple_lists.rs`'s `promote_*_form`/`subordinate_*_form`) lands an item at top level,
+/// where there's no single new-parent detail page to redirect to — just the type's own list.
+pub(crate) fn list_url_for(kind: ItemKind, team_id: Option<&str>) -> String {
+    match (team_id, kind) {
+        (Some(team_id), ItemKind::Task) => format!("/web/team-tasks/{team_id}"),
+        (Some(team_id), ItemKind::Event) => format!("/web/team-events/{team_id}"),
+        (Some(team_id), ItemKind::Simple) => format!("/web/team-simple-lists/{team_id}"),
+        (Some(team_id), ItemKind::Template) => format!("/web/team-templates/{team_id}"),
+        (None, ItemKind::Task) => "/web/tasks".to_string(),
+        (None, ItemKind::Event) => "/web/events".to_string(),
+        (None, ItemKind::Simple) => "/web/simple-lists".to_string(),
+        (None, ItemKind::Template) => "/web/templates".to_string(),
+    }
+}
+
 impl DashboardRow {
     fn from_due_item(di: &DueItem, tz: i32) -> Self {
         let item = &di.item;
