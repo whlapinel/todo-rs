@@ -88,6 +88,11 @@ pub struct Item {
     pub event_type: Option<String>,
     pub due_offset_days: Option<i32>,
     pub assigned_to_user_id: Option<String>,
+    /// Team-item-only, top-level-only. Personal items never set this (no
+    /// Smithy exposure on `item.smithy`); `validate()` below rejects it on a
+    /// child. Admin-only enforcement of *who* may set it lives in the
+    /// service layer (`create_team_item`/`update_team_item`), not here.
+    pub points: Option<i32>,
 }
 
 impl Item {
@@ -151,6 +156,14 @@ impl Item {
             && self.item_type != ItemType::Template
         {
             return Err("event_type can only be set on event or template items".to_string());
+        }
+        // Points are top-level-only, same shape as the recurrence+parentItemId
+        // rejection in create_team_item/update_team_item — a child can't carry
+        // its own point value (see CLAUDE.md's Points plan, Stage 2). Type-
+        // agnostic: personal items simply never have points set in the first
+        // place, since CreateItemParams/UpdateItemParams don't expose the field.
+        if self.points.is_some() && self.parent_item_id.is_some() {
+            return Err("child items cannot have points".to_string());
         }
         if self.item_type != ItemType::Simple {
             return Ok(());
@@ -309,6 +322,21 @@ mod tests {
         let mut item = Item::new_simple("u1", "Milk");
         item.due_offset_days = Some(1);
         assert!(item.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_points_on_child() {
+        let mut item = Item::new_team_item("t1", "Subtask");
+        item.parent_item_id = Some("parent1".to_string());
+        item.points = Some(10);
+        assert!(item.validate().is_err());
+    }
+
+    #[test]
+    fn validate_allows_points_on_top_level_item() {
+        let mut item = Item::new_team_item("t1", "Task");
+        item.points = Some(10);
+        assert!(item.validate().is_ok());
     }
 
     #[test]

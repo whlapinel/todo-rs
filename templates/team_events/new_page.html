@@ -39,6 +39,7 @@
     {% call macros::scheduled_fields(blank_scheduled_date_input, blank_scheduled_time_input, blank_scheduled_end_date_input, blank_scheduled_end_time_input) %}{% endcall %}
     {% call macros::event_type_field(blank_event_type_input) %}{% endcall %}
     {% call macros::recurrence_fields(true, blank_recurrence, blank_recurrence_basis, "") %}{% endcall %}
+    {% call macros::points_field(is_team_admin, true, blank_points_input) %}{% endcall %}
     <div class="border-t border-gray-100 pt-3 dark:border-white/5">
       <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Due date <span class="font-normal text-gray-400 dark:text-gray-500">(optional, separate from the scheduled window above)</span>
         <div class="mt-2 flex items-end gap-x-2">

@@ -5,10 +5,10 @@ use crate::handlers::web_ui::TzOffset;
 use crate::handlers::web_ui::nav::{self, ActiveContext, SidebarSection};
 use crate::service::error::ItemError;
 use crate::service::items::{self as item_service};
-use crate::service::team_items::{self as team_item_service, require_active_member, CreateTeamItemParams, UpdateTeamItemParams};
+use crate::service::team_items::{self as team_item_service, require_active_member, CreateTeamItemParams, UpdateTeamItemContext, UpdateTeamItemParams};
 use crate::service::teams as team_service;
 use crate::service::templates::{self as template_service, CreateTeamTemplateParams};
-use crate::storage::sqlite::{ItemRepo, TeamRepo};
+use crate::storage::sqlite::{ActivityLogRepo, ItemRepo, TeamRepo};
 use askama::Template;
 use axum::extract::{Extension, Form, Path};
 use axum::response::{Html, IntoResponse, Response};
@@ -433,6 +433,7 @@ pub async fn update_team_template_child_form(
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(activity_log): Extension<Arc<dyn ActivityLogRepo>>,
     Form(form): Form<TeamTemplateChildForm>,
 ) -> Result<Html<String>, ItemError> {
     let current = repo.get_team_item(&team_id, &item_id).await.map_err(ItemError::from)?;
@@ -452,7 +453,13 @@ pub async fn update_team_template_child_form(
         due_offset_days: parse_offset(&form.due_offset_days),
         ..Default::default()
     };
-    team_item_service::update_team_item(&repo, &teams, &auth_user.user_id, params).await?;
+    team_item_service::update_team_item(
+        &repo,
+        &UpdateTeamItemContext { teams, activity_log },
+        &auth_user.user_id,
+        params,
+    )
+    .await?;
     let updated = repo.get_team_item(&team_id, &item_id).await.map_err(ItemError::from)?;
     let row = TeamTemplateChildRow::from_item(&team_id, &template_id, &updated).render()?;
     let fields = TeamTemplateChildDetailFields::from_item(&team_id, &template_id, &updated, true).render()?;

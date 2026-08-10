@@ -3,8 +3,8 @@ use crate::domain::item::{Item, ItemType};
 use crate::handlers::web_ui::nav::{self, ActiveContext, SidebarSection};
 use crate::handlers::web_ui::{TzOffset, to_local};
 use crate::service::items::{self as item_service, ItemError};
-use crate::service::team_items::{self as team_item_service, UpdateTeamItemParams};
-use crate::storage::sqlite::{DueItem, ItemRepo, RepoError, TeamRepo};
+use crate::service::team_items::{self as team_item_service, UpdateTeamItemContext, UpdateTeamItemParams};
+use crate::storage::sqlite::{ActivityLogRepo, DueItem, ItemRepo, RepoError, TeamRepo};
 use askama::Template;
 use axum::extract::{Extension, Form, Path, Query};
 use axum::response::Html;
@@ -221,6 +221,7 @@ pub async fn toggle_team_item_complete(
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(activity_log): Extension<Arc<dyn ActivityLogRepo>>,
     TzOffset(tz): TzOffset,
     Form(form): Form<ToggleForm>,
 ) -> Result<Html<String>, ItemError> {
@@ -244,8 +245,15 @@ pub async fn toggle_team_item_complete(
         due_offset_days: current.due_offset_days,
         assigned_to_user_id: current.assigned_to_user_id.clone(),
         timezone_offset_minutes: Some(tz),
+        points: current.points,
     };
-    team_item_service::update_team_item(&repo, &teams, &auth_user.user_id, params).await?;
+    team_item_service::update_team_item(
+        &repo,
+        &UpdateTeamItemContext { teams, activity_log },
+        &auth_user.user_id,
+        params,
+    )
+    .await?;
 
     match repo.get_team_item(&team_id, &item_id).await {
         Ok(updated) => render(DashboardRow::from_due_item(

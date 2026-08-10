@@ -2,9 +2,9 @@ use super::{internal, not_found, to_domain_item_type, to_sdk_item_type};
 use crate::auth::AuthUser;
 use crate::service::items::ItemError;
 use crate::service::team_items::{
-    self as team_item_service, CreateTeamItemParams, UpdateTeamItemParams,
+    self as team_item_service, CreateTeamItemParams, UpdateTeamItemContext, UpdateTeamItemParams,
 };
-use crate::storage::sqlite::{ItemRepo, RepoError, TeamRepo, UserRepo};
+use crate::storage::sqlite::{ActivityLogRepo, ItemRepo, RepoError, TeamRepo, UserRepo};
 use std::collections::HashMap;
 use std::sync::Arc;
 use todo_server_sdk::{error, input, output, server, types::DateTime as SmithyDateTime};
@@ -73,6 +73,7 @@ pub async fn create_team_item(
             due_offset_days: input.due_offset_days,
             assigned_to_user_id: input.assigned_to_user_id,
             timezone_offset_minutes: input.timezone_offset_minutes,
+            points: input.points,
         },
     )
     .await
@@ -122,6 +123,7 @@ pub async fn get_team_item(
         event_type: item.event_type,
         due_offset_days: item.due_offset_days,
         assigned_to_user_id: item.assigned_to_user_id,
+        points: item.points,
     })
 }
 
@@ -129,6 +131,7 @@ pub async fn update_team_item(
     input: input::UpdateTeamItemInput,
     server::Extension(repo): server::Extension<Arc<dyn ItemRepo>>,
     server::Extension(teams): server::Extension<Arc<dyn TeamRepo>>,
+    server::Extension(activity_log): server::Extension<Arc<dyn ActivityLogRepo>>,
     server::Extension(auth): server::Extension<AuthUser>,
 ) -> Result<output::UpdateTeamItemOutput, error::UpdateTeamItemError> {
     let due_date = input
@@ -145,7 +148,7 @@ pub async fn update_team_item(
         .map(|d| d.with_timezone(&chrono::Utc));
     team_item_service::update_team_item(
         &repo,
-        &teams,
+        &UpdateTeamItemContext { teams, activity_log },
         &auth.user_id,
         UpdateTeamItemParams {
             team_id: input.team_id,
@@ -166,6 +169,7 @@ pub async fn update_team_item(
             due_offset_days: input.due_offset_days,
             assigned_to_user_id: input.assigned_to_user_id,
             timezone_offset_minutes: input.timezone_offset_minutes,
+            points: input.points,
         },
     )
     .await
@@ -248,6 +252,7 @@ pub async fn list_team_items(
             assigned_to_user_name: i
                 .assigned_to_user_id
                 .map(|id| names.get(&id).unwrap_or(&"<Name>".to_string()).clone()),
+            points: i.points,
         })
         .collect();
     Ok(output::ListTeamItemsOutput { items })

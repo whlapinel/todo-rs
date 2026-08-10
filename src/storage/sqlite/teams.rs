@@ -1,9 +1,10 @@
 use async_trait::async_trait;
+use std::str::FromStr;
 
 use crate::storage::sqlite::{TeamRepo, TeamMemberInfo, TeamWithStatus, RepoError, db_err, not_found, row_to_user};
 use sqlx::{Row, SqlitePool};
 
-use crate::domain::{team::Team};
+use crate::domain::team::{Team, TeamRole};
 
 pub struct SqliteTeamRepo(pub SqlitePool);
 
@@ -18,7 +19,7 @@ impl TeamRepo for SqliteTeamRepo {
             .await
             .map_err(db_err)?;
         sqlx::query(
-            "INSERT INTO team_members (team_id, user_id, status, invited_by) VALUES (?, ?, 'ACTIVE', NULL)",
+            "INSERT INTO team_members (team_id, user_id, status, invited_by, role) VALUES (?, ?, 'ACTIVE', NULL, 'admin')",
         )
         .bind(&id)
         .bind(creator_user_id)
@@ -80,7 +81,7 @@ impl TeamRepo for SqliteTeamRepo {
     async fn list_members(&self, team_id: &str) -> Result<Vec<TeamMemberInfo>, RepoError> {
         sqlx::query(
             "SELECT users.id, users.first_name, users.last_name, users.email, users.google_id,
-                    team_members.status
+                    team_members.status, team_members.role, team_members.points
              FROM team_members
              JOIN users ON team_members.user_id = users.id
              WHERE team_members.team_id = ?
@@ -92,9 +93,14 @@ impl TeamRepo for SqliteTeamRepo {
         .map_err(db_err)
         .map(|rows| {
             rows.iter()
-                .map(|row| TeamMemberInfo {
-                    user: row_to_user(row),
-                    status: row.get("status"),
+                .map(|row| {
+                    let role_str: String = row.get("role");
+                    TeamMemberInfo {
+                        user: row_to_user(row),
+                        status: row.get("status"),
+                        role: TeamRole::from_str(&role_str).unwrap_or_default(),
+                        points: row.get("points"),
+                    }
                 })
                 .collect()
         })
@@ -112,6 +118,76 @@ impl TeamRepo for SqliteTeamRepo {
             .await
             .map_err(db_err)
             .map(|row| row.map(|r| r.get("status")))
+    }
+
+    async fn member_role(
+        &self,
+        team_id: &str,
+        user_id: &str,
+    ) -> Result<Option<TeamRole>, RepoError> {
+        sqlx::query("SELECT role FROM team_members WHERE team_id = ? AND user_id = ?")
+            .bind(team_id)
+            .bind(user_id)
+            .fetch_optional(&self.0)
+            .await
+            .map_err(db_err)
+            .map(|row| {
+                row.map(|r| {
+                    let role_str: String = r.get("role");
+                    TeamRole::from_str(&role_str).unwrap_or_default()
+                })
+            })
+    }
+
+    async fn count_active_admins(&self, team_id: &str) -> Result<i64, RepoError> {
+        sqlx::query(
+            "SELECT COUNT(*) AS n FROM team_members
+             WHERE team_id = ? AND status = 'ACTIVE' AND role = 'admin'",
+        )
+        .bind(team_id)
+        .fetch_one(&self.0)
+        .await
+        .map_err(db_err)
+        .map(|row| row.get("n"))
+    }
+
+    async fn set_member_role(
+        &self,
+        team_id: &str,
+        user_id: &str,
+        role: TeamRole,
+    ) -> Result<(), RepoError> {
+        let rows = sqlx::query(
+            "UPDATE team_members SET role = ? WHERE team_id = ? AND user_id = ?",
+        )
+        .bind(role.as_str())
+        .bind(team_id)
+        .bind(user_id)
+        .execute(&self.0)
+        .await
+        .map_err(db_err)?
+        .rows_affected();
+        if rows == 0 { Err(not_found()) } else { Ok(()) }
+    }
+
+    async fn add_team_points(
+        &self,
+        team_id: &str,
+        user_id: &str,
+        delta: i32,
+    ) -> Result<i64, RepoError> {
+        sqlx::query(
+            "UPDATE team_members SET points = points + ? WHERE team_id = ? AND user_id = ? \
+             RETURNING points",
+        )
+        .bind(delta)
+        .bind(team_id)
+        .bind(user_id)
+        .fetch_optional(&self.0)
+        .await
+        .map_err(db_err)?
+        .map(|row| row.get("points"))
+        .ok_or_else(not_found)
     }
 
     async fn invite(

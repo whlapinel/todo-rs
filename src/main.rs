@@ -7,8 +7,8 @@ mod service;
 mod storage;
 
 use crate::storage::sqlite::{
-    ItemRepo, TeamRepo, UserRepo, create_pool, items::SqliteItemRepo, teams::SqliteTeamRepo,
-    users::SqliteUserRepo,
+    ActivityLogRepo, ItemRepo, TeamRepo, UserRepo, activity_log::SqliteActivityLogRepo,
+    create_pool, items::SqliteItemRepo, teams::SqliteTeamRepo, users::SqliteUserRepo,
 };
 use axum::{
     Extension, Router,
@@ -17,6 +17,7 @@ use axum::{
     response::Redirect,
     routing::{get, post, put},
 };
+use handlers::json_api::activity_log::{list_team_activity_log, undo_activity_log_entry};
 use handlers::json_api::invites::send_app_invite;
 use handlers::json_api::items::{
     create_item, delete_item, get_item, list_assigned_items, list_items, list_items_due,
@@ -28,17 +29,17 @@ use handlers::json_api::team_items::{
 use handlers::json_api::team_templates::{create_team_template, list_team_templates};
 use handlers::json_api::teams::{
     accept_team_invite, create_team, get_team, invite_team_member, leave_team, list_team_members,
-    list_teams,
+    list_teams, set_team_member_role,
 };
 use handlers::json_api::templates::{create_template, list_templates};
 use handlers::json_api::users::{get_user, list_users, update_user};
 use handlers::web_ui::assigned_items::assigned_items_page;
 use handlers::web_ui::dashboard::*;
 use handlers::web_ui::events::*;
-use handlers::web_ui::hello_world::hello_world;
 use handlers::web_ui::login::login_page;
 use handlers::web_ui::simple_lists::*;
 use handlers::web_ui::tasks::*;
+use handlers::web_ui::team_activity::*;
 use handlers::web_ui::team_events::*;
 use handlers::web_ui::team_simple_lists::*;
 use handlers::web_ui::team_tasks::*;
@@ -52,7 +53,6 @@ use tower_http::services::ServeDir;
 
 fn build_web_router() -> Router {
     Router::new()
-        .route("/test", get(hello_world))
         .route("/events", get(events_page).post(create_event_form))
         .route("/events/new", get(new_event_page))
         .route("/events/calendar", get(events_calendar_page))
@@ -171,6 +171,15 @@ fn build_web_router() -> Router {
         .route("/teams/:team_id/accept", post(accept_team_invite_form))
         .route("/teams/:team_id/leave", post(leave_team_form))
         .route(
+            "/teams/:team_id/members/:user_id/role",
+            put(set_team_member_role_form),
+        )
+        .route("/team-activity/:team_id", get(team_activity_page))
+        .route(
+            "/team-activity/:team_id/:entry_id/undo",
+            put(undo_activity_log_entry_form),
+        )
+        .route(
             "/team-simple-lists/:team_id",
             get(team_simple_lists_page).post(create_team_simple_item_form),
         )
@@ -286,7 +295,8 @@ async fn main() {
     let pool = create_pool(&db_url).await.expect("failed to open database");
     let user_repo = Arc::new(SqliteUserRepo(pool.clone())) as Arc<dyn UserRepo>;
     let item_repo = Arc::new(SqliteItemRepo(pool.clone())) as Arc<dyn ItemRepo>;
-    let team_repo = Arc::new(SqliteTeamRepo(pool)) as Arc<dyn TeamRepo>;
+    let team_repo = Arc::new(SqliteTeamRepo(pool.clone())) as Arc<dyn TeamRepo>;
+    let activity_log_repo = Arc::new(SqliteActivityLogRepo(pool)) as Arc<dyn ActivityLogRepo>;
 
     let config = PeoplesRepublicOfListsConfig::builder().build();
     let smithy = PeoplesRepublicOfLists::builder(config)
@@ -309,6 +319,7 @@ async fn main() {
         .invite_team_member(invite_team_member)
         .accept_team_invite(accept_team_invite)
         .leave_team(leave_team)
+        .set_team_member_role(set_team_member_role)
         .send_app_invite(send_app_invite)
         .create_team_item(create_team_item)
         .get_team_item(get_team_item)
@@ -317,12 +328,15 @@ async fn main() {
         .list_team_items(list_team_items)
         .create_team_template(create_team_template)
         .list_team_templates(list_team_templates)
+        .list_team_activity_log(list_team_activity_log)
+        .undo_activity_log_entry(undo_activity_log_entry)
         .build_unchecked();
 
     let api = ServiceBuilder::new()
         .layer(Extension(user_repo.clone()))
         .layer(Extension(item_repo.clone()))
         .layer(Extension(team_repo.clone()))
+        .layer(Extension(activity_log_repo.clone()))
         .map_response(|res: http::Response<_>| res.map(boxed))
         .service(smithy);
 
@@ -349,6 +363,7 @@ async fn main() {
                 .layer(Extension(user_repo.clone()))
                 .layer(Extension(item_repo.clone()))
                 .layer(Extension(team_repo.clone()))
+                .layer(Extension(activity_log_repo.clone()))
                 .layer(middleware::from_fn(auth::caddy_header_middleware));
             let public_web_router = build_public_web_router();
 
@@ -359,6 +374,16 @@ async fn main() {
                 .nest("/web", web_router.merge(public_web_router))
                 .nest_service("/web/static", web_static)
                 .layer(Extension(user_repo))
+                // Must sit outside (added after) both nested routers' own internal
+                // `.layer(middleware::from_fn(caddy_header_middleware))` calls — axum
+                // layers added later wrap outer, so an Extension layered *inside*
+                // build_web_router()/api_router's own chain never actually runs before
+                // caddy_header_middleware's own pre-processing code executes (it only
+                // runs once that middleware calls `next.run()`). The narrow admin
+                // bootstrap sync in caddy_header_middleware reads TeamRepo from
+                // extensions during that pre-processing step, so it needs a copy
+                // that's genuinely outer, same as `user_repo` right above.
+                .layer(Extension(team_repo))
                 .layer(Extension(Arc::new(jwt_secret)))
                 .layer(CookieManagerLayer::new())
         }
@@ -397,6 +422,7 @@ async fn main() {
                 .layer(Extension(user_repo))
                 .layer(Extension(item_repo.clone()))
                 .layer(Extension(team_repo.clone()))
+                .layer(Extension(activity_log_repo))
                 .layer(middleware::from_fn(auth::web_auth_middleware));
             let public_web_router = build_public_web_router();
 

@@ -5,11 +5,12 @@ use crate::handlers::web_ui::team_tasks;
 use crate::handlers::web_ui::{TzOffset, to_local};
 use crate::service::error::ItemError;
 use crate::service::team_items::{
-    self as team_item_service, require_active_member, CreateTeamItemParams, UpdateTeamItemParams,
+    self as team_item_service, require_active_member, CreateTeamItemParams, UpdateTeamItemContext,
+    UpdateTeamItemParams,
 };
 use crate::service::teams as team_service;
 use crate::service::templates::{self as template_service, CreateTeamTemplateParams};
-use crate::storage::sqlite::{ItemRepo, RepoError, TeamRepo};
+use crate::storage::sqlite::{ActivityLogRepo, ItemRepo, RepoError, TeamRepo};
 use askama::Template;
 use axum::extract::{Extension, Form, Path, Query};
 use axum::response::{Html, IntoResponse, Response};
@@ -58,6 +59,11 @@ pub struct TeamEventForm {
     recurrence: Option<String>,
     recurrence_basis: Option<String>,
     assigned_to_user_id: Option<String>,
+    /// Admin-only — the service layer strips/preserves this for non-admins regardless of
+    /// what's submitted. No `<input>` renders this yet on either form (Stage 7 adds the
+    /// actual template work); the parsing exists now so that stage only has to touch
+    /// templates, not this module.
+    points: Option<String>,
     show_complete: Option<String>,
     /// Present only on the standalone `/team-events/:team_id/new` page's form — see
     /// `items.rs`'s identical field for the full rationale.
@@ -91,6 +97,14 @@ fn overlay_bool(form_value: &Option<String>, current: bool) -> bool {
         Some("true") => true,
         Some("false") => false,
         _ => current,
+    }
+}
+
+fn overlay_i32(form_value: &Option<String>, current: Option<i32>) -> Option<i32> {
+    match form_value {
+        None => current,
+        Some(s) if s.trim().is_empty() => None,
+        Some(s) => s.trim().parse().ok().or(current),
     }
 }
 
@@ -211,6 +225,12 @@ fn create_params_from_form(team_id: &str, form: &TeamEventForm, tz: i32) -> Crea
         due_offset_days: None,
         assigned_to_user_id: non_empty(&form.assigned_to_user_id),
         timezone_offset_minutes: Some(tz),
+        points: form
+            .points
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .and_then(|s| s.parse().ok()),
     }
 }
 
@@ -259,6 +279,7 @@ fn update_params_from_form(
             current.assigned_to_user_id.clone(),
         ),
         timezone_offset_minutes: Some(tz),
+        points: overlay_i32(&form.points, current.points),
     }
 }
 
@@ -385,6 +406,12 @@ struct TeamEventDetailFields {
     recurrence_basis: Option<String>,
     assignee_options: Vec<(String, String)>,
     assigned_to_user_id: Option<String>,
+    /// Gates the admin-only `points` input — see `macros::points_field` and
+    /// `service::teams::is_team_admin`. An Event is always top-level (`parentItemId`
+    /// is hardcoded `None` on this screen — see CLAUDE.md's Events section), so unlike
+    /// `team_tasks.rs` there's no `is_top_level` of its own to also gate on.
+    is_team_admin: bool,
+    points_input: String,
     /// Set only on the fragment returned by a successful save — see `items.rs`'s
     /// `DetailFields.just_saved` for the full rationale.
     just_saved: bool,
@@ -395,6 +422,7 @@ impl TeamEventDetailFields {
         item: &Item,
         team_id: &str,
         assignee_options: Vec<(String, String)>,
+        is_team_admin: bool,
         tz: i32,
         just_saved: bool,
     ) -> Self {
@@ -447,6 +475,8 @@ impl TeamEventDetailFields {
             recurrence_basis: item.recurrence_basis.clone(),
             assignee_options,
             assigned_to_user_id: item.assigned_to_user_id.clone(),
+            is_team_admin,
+            points_input: item.points.map(|p| p.to_string()).unwrap_or_default(),
             just_saved,
         }
     }
@@ -530,6 +560,8 @@ struct TeamEventsListPageTemplate {
     team_id: String,
     rows: Vec<String>,
     show_complete: bool,
+    /// The viewer's own point balance on this team — see `service::teams::member_points`.
+    points_label: String,
     nav_html: String,
 }
 
@@ -546,6 +578,8 @@ struct NewTeamEventPageTemplate {
     blank_scheduled_time_input: String,
     blank_scheduled_end_date_input: String,
     blank_scheduled_end_time_input: String,
+    is_team_admin: bool,
+    blank_points_input: String,
     nav_html: String,
 }
 
@@ -555,6 +589,7 @@ struct TeamEventDetailPageTemplate {
     id: String,
     team_id: String,
     name: String,
+    complete: bool,
     view: String,
     nav_html: String,
 }
@@ -729,6 +764,7 @@ pub async fn team_events_page(
     let items = list_team_events(&repo, &team_id).await?;
     let names = names_for(&teams, &team_id, &auth_user.user_id).await?;
     let rows = render_rows(&items, &team_id, &names, show_complete, tz)?;
+    let points = team_service::member_points(&teams, &team_id, &auth_user.user_id).await?;
     let nav_html = nav::build_nav_html(
         &teams,
         &auth_user.user_id,
@@ -740,6 +776,7 @@ pub async fn team_events_page(
         team_id,
         rows,
         show_complete,
+        points_label: format!("{points} pts"),
         nav_html,
     })
 }
@@ -802,6 +839,7 @@ pub async fn new_team_event_page(
 ) -> Result<Html<String>, ItemError> {
     require_active_member(&teams, &team_id, &auth_user.user_id).await?;
     let assignee_options = active_member_options(&teams, &team_id, &auth_user.user_id).await?;
+    let is_team_admin = team_service::is_team_admin(&teams, &team_id, &auth_user.user_id).await;
     let nav_html = nav::build_nav_html(
         &teams,
         &auth_user.user_id,
@@ -820,6 +858,8 @@ pub async fn new_team_event_page(
         blank_scheduled_time_input: String::new(),
         blank_scheduled_end_date_input: String::new(),
         blank_scheduled_end_time_input: String::new(),
+        is_team_admin,
+        blank_points_input: String::new(),
         nav_html,
     })
 }
@@ -850,6 +890,7 @@ pub async fn team_event_detail_page(
         id: item.id,
         team_id,
         name: item.name,
+        complete: item.complete,
         view,
         nav_html,
     })
@@ -869,8 +910,16 @@ pub async fn team_event_edit_page(
         .map_err(ItemError::from)?;
     let item = require_team_event(item)?;
     let assignee_options = active_member_options(&teams, &team_id, &auth_user.user_id).await?;
-    let fields =
-        TeamEventDetailFields::from_item(&item, &team_id, assignee_options, tz, false).render()?;
+    let is_team_admin = team_service::is_team_admin(&teams, &team_id, &auth_user.user_id).await;
+    let fields = TeamEventDetailFields::from_item(
+        &item,
+        &team_id,
+        assignee_options,
+        is_team_admin,
+        tz,
+        false,
+    )
+    .render()?;
     let nav_html = nav::build_nav_html(
         &teams,
         &auth_user.user_id,
@@ -934,6 +983,7 @@ pub async fn update_team_event_form(
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(activity_log): Extension<Arc<dyn ActivityLogRepo>>,
     TzOffset(tz): TzOffset,
     Form(form): Form<TeamEventForm>,
 ) -> Result<Response, ItemError> {
@@ -944,7 +994,16 @@ pub async fn update_team_event_form(
         .map_err(ItemError::from)?;
     let current = require_team_event(current)?;
     let params = update_params_from_form(&team_id, &item_id, &current, &form, tz);
-    team_item_service::update_team_item(&repo, &teams, &auth_user.user_id, params).await?;
+    team_item_service::update_team_item(
+        &repo,
+        &UpdateTeamItemContext {
+            teams: teams.clone(),
+            activity_log,
+        },
+        &auth_user.user_id,
+        params,
+    )
+    .await?;
 
     match repo.get_team_item(&team_id, &item_id).await {
         Ok(updated) => {
@@ -952,9 +1011,17 @@ pub async fn update_team_event_form(
             let row = TeamEventRow::from_item(&updated, &team_id, &names, tz).render()?;
             let assignee_options =
                 active_member_options(&teams, &team_id, &auth_user.user_id).await?;
-            let fields =
-                TeamEventDetailFields::from_item(&updated, &team_id, assignee_options, tz, true)
-                    .render()?;
+            let is_team_admin =
+                team_service::is_team_admin(&teams, &team_id, &auth_user.user_id).await;
+            let fields = TeamEventDetailFields::from_item(
+                &updated,
+                &team_id,
+                assignee_options,
+                is_team_admin,
+                tz,
+                true,
+            )
+            .render()?;
             let view = TeamEventDetailView::from_item(&updated, &team_id, &names, tz).render()?;
             Ok(Html(format!("{row}{fields}{view}")).into_response())
         }

@@ -24,6 +24,7 @@ resource TeamItem {
         eventType: String
         dueOffsetDays: Integer
         assignedToUserId: String
+        points: Integer
     }
     read: GetTeamItem
     list: ListTeamItems
@@ -69,6 +70,8 @@ operation CreateTeamItem {
         $dueOffsetDays
 
         $assignedToUserId
+
+        $points
 
         @notProperty
         timezoneOffsetMinutes: Integer
@@ -131,6 +134,8 @@ operation GetTeamItem {
         $dueOffsetDays
 
         $assignedToUserId
+
+        $points
     }
 
     errors: [
@@ -181,6 +186,8 @@ operation UpdateTeamItem {
         $dueOffsetDays
 
         $assignedToUserId
+
+        $points
 
         @notProperty
         timezoneOffsetMinutes: Integer
@@ -236,6 +243,7 @@ structure TeamItemSummary for TeamItem {
     $dueOffsetDays
     $assignedToUserId
     assignedToUserName: String
+    $points
 }
 
 @input
@@ -325,6 +333,12 @@ structure TeamMemberSummary {
 
     @required
     status: String
+
+    @required
+    role: String
+
+    @required
+    points: Integer
 }
 
 list TeamMembers {
@@ -491,6 +505,36 @@ operation AcceptTeamInvite {
 }
 
 @idempotent
+@http(method: "PUT", uri: "/users/{userId}/teams/{teamId}/members/{targetUserId}/role")
+operation SetTeamMemberRole {
+    input := {
+        @required
+        @httpLabel
+        userId: String
+
+        @required
+        @httpLabel
+        @notProperty
+        teamId: String
+
+        @required
+        @httpLabel
+        @notProperty
+        targetUserId: String
+
+        @required
+        @notProperty
+        role: String
+    }
+
+    output := {}
+
+    errors: [
+        PeoplesRepublicOfListsError
+    ]
+}
+
+@idempotent
 @http(method: "DELETE", uri: "/users/{userId}/teams/{teamId}/membership")
 operation LeaveTeam {
     input := {
@@ -502,6 +546,72 @@ operation LeaveTeam {
         @httpLabel
         @notProperty
         teamId: String
+    }
+
+    output := {}
+
+    errors: [
+        PeoplesRepublicOfListsError
+    ]
+}
+
+structure ActivityLogEntrySummary {
+    @required
+    entryId: String
+
+    @required
+    userId: String
+
+    @required
+    itemId: String
+
+    @required
+    itemName: String
+
+    @required
+    pointsDelta: Integer
+
+    @required
+    reversed: Boolean
+
+    @required
+    createdAt: Timestamp
+}
+
+list ActivityLogEntries {
+    member: ActivityLogEntrySummary
+}
+
+@readonly
+@http(method: "GET", uri: "/teams/{teamId}/activity-log")
+operation ListTeamActivityLog {
+    input := {
+        @required
+        @httpLabel
+        teamId: String
+    }
+
+    output := {
+        @required
+        entries: ActivityLogEntries
+    }
+
+    errors: [
+        PeoplesRepublicOfListsError
+    ]
+}
+
+@idempotent
+@http(method: "PUT", uri: "/teams/{teamId}/activity-log/{entryId}/undo")
+operation UndoActivityLogEntry {
+    input := {
+        @required
+        @httpLabel
+        teamId: String
+
+        @required
+        @httpLabel
+        entryId: String
     }
 
     output := {}

@@ -1,11 +1,19 @@
+mod activity_log;
+mod add_item_points;
+mod add_team_member_role;
 mod has_tasks_to_simple;
 mod item_type_event_type;
 mod scheduled_end_date;
+mod team_member_points;
 
+use activity_log::ActivityLog;
+use add_item_points::AddItemPoints;
+use add_team_member_role::AddTeamMemberRole;
 use async_trait::async_trait;
 use has_tasks_to_simple::HasTasksToSimple;
 use item_type_event_type::ItemTypeEventType;
 use scheduled_end_date::ScheduledEndDate;
+use team_member_points::TeamMemberPoints;
 use sqlx::{Row, SqlitePool, SqliteConnection};
 use thiserror::Error;
 
@@ -44,6 +52,10 @@ fn all_migrations() -> Vec<Box<dyn Migration>> {
         Box::new(ItemTypeEventType),
         Box::new(ScheduledEndDate),
         Box::new(HasTasksToSimple),
+        Box::new(AddTeamMemberRole),
+        Box::new(AddItemPoints),
+        Box::new(ActivityLog),
+        Box::new(TeamMemberPoints),
     ]
 }
 
@@ -105,6 +117,21 @@ mod tests {
         SqlitePoolOptions::new().connect_with(opts).await.unwrap()
     }
 
+    async fn old_team_members_table(pool: &SqlitePool) {
+        sqlx::query(
+            "CREATE TABLE team_members (
+                team_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'PENDING',
+                invited_by TEXT,
+                PRIMARY KEY (team_id, user_id)
+            )",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
     async fn old_schema_pool() -> SqlitePool {
         let pool = memory_pool().await;
         sqlx::query(
@@ -118,6 +145,7 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
+        old_team_members_table(&pool).await;
         pool
     }
 
@@ -133,7 +161,37 @@ mod tests {
                 has_scheduled_time INTEGER NOT NULL DEFAULT 0,
                 has_end_time INTEGER NOT NULL DEFAULT 0,
                 item_type TEXT NOT NULL DEFAULT 'TASK',
-                event_type TEXT
+                event_type TEXT,
+                points INTEGER
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE team_members (
+                team_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'PENDING',
+                invited_by TEXT,
+                role TEXT NOT NULL DEFAULT 'member',
+                points INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (team_id, user_id)
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE activity_log (
+                id TEXT PRIMARY KEY,
+                team_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                item_id TEXT NOT NULL,
+                item_name TEXT NOT NULL,
+                points_delta INTEGER NOT NULL,
+                reversed INTEGER NOT NULL DEFAULT 0,
+                created_at INTEGER NOT NULL
             )",
         )
         .execute(&pool)
@@ -161,6 +219,7 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
+        old_team_members_table(&pool).await;
         pool
     }
 
@@ -229,7 +288,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 3);
+        assert_eq!(applied_count, 7);
     }
 
     #[tokio::test]
@@ -242,7 +301,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 3);
+        assert_eq!(applied_count, 7);
     }
 
     #[tokio::test]
@@ -256,6 +315,6 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 3);
+        assert_eq!(applied_count, 7);
     }
 }

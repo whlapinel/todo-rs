@@ -48,6 +48,7 @@
       </div>
     </label>
     {% call macros::recurrence_fields(is_top_level, recurrence, recurrence_basis, due_offset_days_input) %}{% endcall %}
+    {% call macros::points_field(is_team_admin, is_top_level, points_input) %}{% endcall %}
     <div class="flex items-center gap-x-3">
       {% call macros::button_primary("Save") %}{% endcall %}
       {% if just_saved %}

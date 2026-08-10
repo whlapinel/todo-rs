@@ -1,14 +1,19 @@
-- I don't like the word "kind" for ItemType. let's just call it type (assuming it still needs to show up anywhere after we split up the generic items path)
+- I'm increasingly concerned about the growing size of the catch-all type Item and wish I had started off with Task, Event, SimpleItem, and TaskTemplate. But of course hindsight is 20/20. But I would like to seriously consider an Item Trait implemented by the four now-distinct types. Assuming there's no memory or runtime cost it seems the rational course to take. Lots of work to rewrite I'm sure, but possibly worth it in the long run. I wish I had taken the time to create a really deep domain layer before getting way out there in features and infrastructure because I think it's much harder to do it the other way around.
+- Completing a task should render the page containing the points rather than solely the row (points need updating potentially)
+- Error message doesn't show up when attempting to complete an unassigned item (I see the message in dev tools but not rendered for some reason) 
+- Simple lists should not have "save as template" UI and backend shouldn't allow it
+- Simple lists shouldn't even have "complete" or "done" UI - it's just a list. Can create or delete it, period.
+- Simple lists shouldn't have assignment UI
+- character limit for names
+- add description field with bigger character limit (all types: Simple, Task, Event, Template)
+- Tasks should also get a calendar view
+- Dashboard should get a calendar view combining tasks and events, with a short symbol indicating which is which
+- There should be a dashboard for teams as well, which basically does the same thing
+- Should events have "save as template" ability? Not sure we need event templates, but perhaps. Maybe templates should be called task templates to clarify the narrower purpose if we decide to rule out event templates.
+- Should simple list show assignment field? Simple should be very simple.
+- Team page should have edit button (e.g. editing name should be possible)
 - Potential long term issue: are we duplicating code unnecessarily between items and team items? risk of code drift, and different logic when it should be consistent between the two repos?  Should consolidate where feasible. 
 - Potential major bug: it appears that when marking recurring items complete, only the parent item is deleted, which would orphan all child items.
     - Furthermore, not sure I want to just delete the completed item. Might want to keep it actually. When we show completed items, any recurring item doesn't show up because it was deleted.
 - Shows warning on top-level item "If the top-level item recurs, this due date is recalculated from the offset below — manual edits here won't persist across recurrences."
     - perhaps we should check if an item has parent id before including this warning, if no parent id then it's root and shouldn't have it?
-- UI for adding sub-item should say "add child item" or something instead of being the same "new item" as for a root item
-- Item page should show more info if not all info
-- Team page should have edit button (e.g. editing name should be possible)
-- Children should inherit task-list/simple-list type assignment
-- Should be able to change type from simple to task and back
-- Simple list should not show assignment field
-- In item details screen, General option UI e.g. checklists, teams, etc. should not be shown beneath current item heading, implying that these are per-item actions
-- Offset isn't applied to children when instantiating "using" checklist. E.g. if I use a checklist and assign a due date, the children that have an offset are not assigned a due date accordingly. In fact they seem to be treated as simple items, with UI to add a due date and so forth, hidden.

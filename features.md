@@ -1,0 +1,2 @@
+- Skip current, to avoid marking complete something that wasn't done but still want next recurrence
+- Mass rescheduling

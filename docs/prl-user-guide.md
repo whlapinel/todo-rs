@@ -207,11 +207,25 @@ Requires SMTP to be configured on the server (`TODO_SMTP_USER` and `TODO_SMTP_PA
 
 ## Teams
 
-Teams group users together so they can eventually assign tasks to one
-another. Joining requires mutual agreement: one member invites an existing
-user, and that user must accept before they become an active member. Anyone
-can invite others; you can only remove yourself (decline an invite or leave
-a team you're in) — there's no admin role.
+Teams group users together so they can assign tasks to one another. Joining
+requires mutual agreement: one member invites an existing user, and that
+user must accept before they become an active member. Anyone can invite
+others; you can only remove yourself (decline an invite or leave a team
+you're in).
+
+Each team member has a **role** — `admin` or `member` — and a **points**
+balance, both scoped to that specific team (a user can be an admin of one
+team and a plain member of another). The team's creator becomes its first
+admin automatically. Only an admin can set a `points` value on a top-level
+team item or change another member's role, and a team can never be left
+with zero admins — demoting the last one is rejected.
+
+> **Note:** Team items themselves (create/list/update/delete, including
+> setting `points` or `assignedToUserId`) are not yet manageable from
+> `prl` — use the web UI or MCP server for that (see [Known
+> Issues](../CLAUDE.md#known-issues)). The commands below cover team
+> membership, roles, and the points activity log, all of which `prl` does
+> support today.
 
 ### List your teams
 
@@ -223,7 +237,7 @@ prl teams list
 
 ### Create a team
 
-You become its first (active) member.
+You become its first (active) member and its first admin.
 
 ```sh
 prl teams create "Family"
@@ -231,7 +245,8 @@ prl teams create "Family"
 
 ### List a team's members
 
-You must already be a member (pending or active) of the team.
+You must already be a member (pending or active) of the team. Shows each
+member's status, role, points balance, and name.
 
 ```sh
 prl teams members <team-id>
@@ -258,6 +273,39 @@ If this removes the last member, the team itself is deleted.
 
 ```sh
 prl teams leave <team-id>
+```
+
+### Promote or demote a member
+
+You must already be an admin of the team.
+
+```sh
+prl teams set-role <team-id> <target-user-id> admin
+prl teams set-role <team-id> <target-user-id> member
+```
+
+### View a team's activity log
+
+Every completed, points-bearing team item leaves an entry here (most recent
+first). Completing a team item awards its `points` value to whoever it's
+assigned to; un-completing a non-recurring item automatically reverses that
+award.
+
+```sh
+prl teams activity <team-id>
+```
+
+### Undo a specific activity log entry
+
+Reverses one entry's points directly by ID, independent of the item's
+current state — this is the only way to undo a **recurring** item's
+completion, since completing one deletes the old item row entirely and
+replaces it with the next occurrence. Only the entry's own user (whoever
+earned or lost the points) can undo it, and an already-reversed entry can't
+be undone again.
+
+```sh
+prl teams undo-activity <team-id> <entry-id>
 ```
 
 ---

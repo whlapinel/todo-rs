@@ -19,5 +19,7 @@ service PeoplesRepublicOfLists {
         ListTeamItems
         CreateTeamTemplate
         ListTeamTemplates
+        ListTeamActivityLog
+        UndoActivityLogEntry
     ]
 }

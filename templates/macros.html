@@ -89,6 +89,18 @@
 </div>
 {% endmacro %}
 
+{% macro points_field(is_team_admin, is_top_level, points_input) %}
+{% if is_team_admin && is_top_level %}
+<label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Points
+  <div class="mt-2">
+    <input type="number" name="points" value="{{ points_input }}" min="0"
+           class="block w-full rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 placeholder:text-gray-400 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:placeholder:text-gray-500 dark:focus:outline-indigo-500" />
+  </div>
+</label>
+<p class="mt-1 text-xs text-gray-400 dark:text-gray-500">Awarded to the assignee when this item is completed. Only a team admin can set this.</p>
+{% endif %}
+{% endmacro %}
+
 {% macro event_type_field(event_type_input) %}
 <label class="block text-sm/6 font-medium text-gray-900 dark:text-white mt-2">Event type
   <div class="mt-2">

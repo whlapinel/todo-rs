@@ -42,6 +42,7 @@
     </div>
     {% call macros::scheduled_fields(blank_scheduled_date_input, blank_scheduled_time_input, blank_scheduled_end_date_input, blank_scheduled_end_time_input) %}{% endcall %}
     {% call macros::recurrence_fields(true, blank_recurrence, blank_recurrence_basis, blank_due_offset_days_input) %}{% endcall %}
+    {% call macros::points_field(is_team_admin, true, blank_points_input) %}{% endcall %}
     {% call macros::button_primary("Add task") %}{% endcall %}
   </form>
 

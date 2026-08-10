@@ -1,4 +1,4 @@
-use crate::helpers::{require_user, unwrap_or_exit};
+use crate::helpers::{fmt_date, require_user, unwrap_or_exit};
 use clap::Subcommand;
 use todo_client::Client;
 
@@ -8,7 +8,7 @@ pub enum TeamsCommand {
     List,
     /// Create a new team (you become its first member)
     Create { name: String },
-    /// List a team's members
+    /// List a team's members, their role, and their points balance
     Members { team_id: String },
     /// Invite an existing user to a team
     Invite {
@@ -19,6 +19,17 @@ pub enum TeamsCommand {
     Accept { team_id: String },
     /// Leave a team (or decline a pending invite)
     Leave { team_id: String },
+    /// Promote or demote a team member (you must already be an admin)
+    SetRole {
+        team_id: String,
+        target_user_id: String,
+        /// "admin" or "member"
+        role: String,
+    },
+    /// List a team's points/completion activity log (most recent first)
+    Activity { team_id: String },
+    /// Reverse a specific activity log entry's points (only the entry's own user may do this)
+    UndoActivity { team_id: String, entry_id: String },
 }
 
 pub async fn cmd_teams(client: &Client, cmd: TeamsCommand, user_id: Option<String>) {
@@ -58,11 +69,19 @@ pub async fn cmd_teams(client: &Client, cmd: TeamsCommand, user_id: Option<Strin
                     .await,
                 "list team members",
             );
-            println!("{:<36}  {:<8}  {}", "USER ID", "STATUS", "NAME");
+            println!(
+                "{:<36}  {:<8}  {:<6}  {:>6}  {}",
+                "USER ID", "STATUS", "ROLE", "POINTS", "NAME"
+            );
             for m in out.members() {
                 println!(
-                    "{:<36}  {:<8}  {} {}",
-                    m.user_id(), m.status(), m.first_name(), m.last_name()
+                    "{:<36}  {:<8}  {:<6}  {:>6}  {} {}",
+                    m.user_id(),
+                    m.status(),
+                    m.role(),
+                    m.points(),
+                    m.first_name(),
+                    m.last_name()
                 );
             }
         }
@@ -108,6 +127,66 @@ pub async fn cmd_teams(client: &Client, cmd: TeamsCommand, user_id: Option<Strin
                 "leave team",
             );
             println!("left team {team_id}");
+        }
+        TeamsCommand::SetRole {
+            team_id,
+            target_user_id,
+            role,
+        } => {
+            let uid = require_user(user_id);
+            unwrap_or_exit(
+                client
+                    .set_team_member_role()
+                    .user_id(uid)
+                    .team_id(&team_id)
+                    .target_user_id(&target_user_id)
+                    .role(&role)
+                    .send()
+                    .await,
+                "set team member role",
+            );
+            println!("set {target_user_id}'s role on team {team_id} to {role}");
+        }
+        TeamsCommand::Activity { team_id } => {
+            let out = unwrap_or_exit(
+                client
+                    .list_team_activity_log()
+                    .team_id(&team_id)
+                    .send()
+                    .await,
+                "list team activity log",
+            );
+            if out.entries().is_empty() {
+                println!("(no activity)");
+                return;
+            }
+            println!(
+                "{:<36}  {:<10}  {:<36}  {:>6}  {:<9}  {}",
+                "ENTRY ID", "WHEN", "USER ID", "POINTS", "REVERSED", "ITEM"
+            );
+            for e in out.entries() {
+                println!(
+                    "{:<36}  {:<10}  {:<36}  {:>6}  {:<9}  {}",
+                    e.entry_id(),
+                    fmt_date(e.created_at()),
+                    e.user_id(),
+                    e.points_delta(),
+                    e.reversed(),
+                    e.item_name(),
+                );
+            }
+        }
+        TeamsCommand::UndoActivity { team_id, entry_id } => {
+            unwrap_or_exit(
+                client
+                    .undo_activity_log_entry()
+                    .team_id(&team_id)
+                    .entry_id(&entry_id)
+                    .send()
+                    .await,
+                "undo activity log entry",
+            );
+            println!("reversed activity log entry {entry_id}");
         }
     }
 }

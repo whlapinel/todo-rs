@@ -4,11 +4,12 @@ use crate::handlers::web_ui::nav::{self, ActiveContext, SidebarSection};
 use crate::handlers::web_ui::{TzOffset, to_local};
 use crate::service::error::ItemError;
 use crate::service::team_items::{
-    self as team_item_service, require_active_member, CreateTeamItemParams, UpdateTeamItemParams,
+    self as team_item_service, require_active_member, CreateTeamItemParams, UpdateTeamItemContext,
+    UpdateTeamItemParams,
 };
 use crate::service::teams as team_service;
 use crate::service::templates::{self as template_service, CreateTeamTemplateParams};
-use crate::storage::sqlite::{ItemRepo, RepoError, TeamRepo};
+use crate::storage::sqlite::{ActivityLogRepo, ItemRepo, RepoError, TeamRepo};
 use askama::Template;
 use axum::extract::{Extension, Form, Path, Query};
 use axum::response::{Html, IntoResponse, Response};
@@ -54,6 +55,11 @@ pub struct TeamTaskForm {
     due_offset_days: Option<String>,
     parent_item_id: Option<String>,
     assigned_to_user_id: Option<String>,
+    /// Admin-only — the service layer strips/preserves this for non-admins regardless of
+    /// what's submitted (see `team_item_service::create_team_item`/`update_team_item`). No
+    /// `<input>` renders this yet on either form (Stage 7 adds the actual template work); the
+    /// parsing exists now so that stage only has to touch templates, not this module.
+    points: Option<String>,
     show_complete: Option<String>,
     /// Present only on the standalone `/team-tasks/:team_id/new` page's forms — see
     /// `items.rs`'s identical field for the full rationale.
@@ -219,6 +225,12 @@ fn create_params_from_form(team_id: &str, form: &TeamTaskForm, tz: i32) -> Creat
             .and_then(|s| s.parse().ok()),
         assigned_to_user_id: non_empty(&form.assigned_to_user_id),
         timezone_offset_minutes: Some(tz),
+        points: form
+            .points
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .and_then(|s| s.parse().ok()),
         ..Default::default()
     }
 }
@@ -267,6 +279,11 @@ fn update_params_from_form(
             current.assigned_to_user_id.clone(),
         ),
         timezone_offset_minutes: Some(tz),
+        // No points input renders on this form yet (Stage 7 adds it) — `overlay_i32` falls
+        // back to `current.points` when the form field is absent, so a plain edit here can't
+        // silently wipe it. The service layer's own admin gate is what actually decides
+        // whether a *changed* value would be honored.
+        points: overlay_i32(&form.points, current.points),
         ..Default::default()
     }
 }
@@ -332,6 +349,10 @@ fn offset_label_for(item: &Item) -> Option<String> {
 
 fn format_offset_input(due_offset_days: Option<i32>) -> String {
     due_offset_days.map(|d| d.to_string()).unwrap_or_default()
+}
+
+fn format_points_input(points: Option<i32>) -> String {
+    points.map(|p| p.to_string()).unwrap_or_default()
 }
 
 #[derive(Template)]
@@ -401,6 +422,10 @@ struct TeamTaskDetailFields {
     due_offset_days_input: String,
     assignee_options: Vec<(String, String)>,
     assigned_to_user_id: Option<String>,
+    /// Gates the admin-only `points` input — see `macros::points_field` and
+    /// `service::teams::require_team_admin`, whose result populates this at render time.
+    is_team_admin: bool,
+    points_input: String,
     /// Set only on the fragment returned by a successful save — see `items.rs`'s
     /// `DetailFields.just_saved` for the full rationale.
     just_saved: bool,
@@ -411,6 +436,7 @@ impl TeamTaskDetailFields {
         item: &Item,
         team_id: &str,
         assignee_options: Vec<(String, String)>,
+        is_team_admin: bool,
         tz: i32,
         just_saved: bool,
     ) -> Self {
@@ -464,6 +490,8 @@ impl TeamTaskDetailFields {
             due_offset_days_input: format_offset_input(item.due_offset_days),
             assignee_options,
             assigned_to_user_id: item.assigned_to_user_id.clone(),
+            is_team_admin,
+            points_input: format_points_input(item.points),
             just_saved,
         }
     }
@@ -549,6 +577,8 @@ struct TeamTasksListPageTemplate {
     team_id: String,
     rows: Vec<String>,
     show_complete: bool,
+    /// The viewer's own point balance on this team — see `service::teams::member_points`.
+    points_label: String,
     nav_html: String,
 }
 
@@ -565,6 +595,8 @@ struct NewTeamTaskPageTemplate {
     blank_scheduled_time_input: String,
     blank_scheduled_end_date_input: String,
     blank_scheduled_end_time_input: String,
+    is_team_admin: bool,
+    blank_points_input: String,
     nav_html: String,
 }
 
@@ -574,6 +606,7 @@ struct TeamTaskDetailPageTemplate {
     id: String,
     team_id: String,
     name: String,
+    complete: bool,
     view: String,
     nav_html: String,
 }
@@ -676,6 +709,7 @@ pub async fn team_tasks_page(
     let items = list_team_tasks(&repo, &team_id).await?;
     let names = names_for(&teams, &team_id, &auth_user.user_id).await?;
     let rows = render_rows(&items, &team_id, &names, show_complete, tz)?;
+    let points = team_service::member_points(&teams, &team_id, &auth_user.user_id).await?;
     let nav_html = nav::build_nav_html(
         &teams,
         &auth_user.user_id,
@@ -687,6 +721,7 @@ pub async fn team_tasks_page(
         team_id,
         rows,
         show_complete,
+        points_label: format!("{points} pts"),
         nav_html,
     })
 }
@@ -699,6 +734,7 @@ pub async fn new_team_task_page(
 ) -> Result<Html<String>, ItemError> {
     require_active_member(&teams, &team_id, &auth_user.user_id).await?;
     let assignee_options = active_member_options(&teams, &team_id, &auth_user.user_id).await?;
+    let is_team_admin = team_service::is_team_admin(&teams, &team_id, &auth_user.user_id).await;
     let nav_html = nav::build_nav_html(
         &teams,
         &auth_user.user_id,
@@ -717,6 +753,8 @@ pub async fn new_team_task_page(
         blank_scheduled_time_input: String::new(),
         blank_scheduled_end_date_input: String::new(),
         blank_scheduled_end_time_input: String::new(),
+        is_team_admin,
+        blank_points_input: String::new(),
         nav_html,
     })
 }
@@ -747,6 +785,7 @@ pub async fn team_task_detail_page(
         id: item.id,
         team_id,
         name: item.name,
+        complete: item.complete,
         view,
         nav_html,
     })
@@ -766,8 +805,16 @@ pub async fn team_task_edit_page(
         .map_err(ItemError::from)?;
     let item = require_team_task(item)?;
     let assignee_options = active_member_options(&teams, &team_id, &auth_user.user_id).await?;
-    let fields =
-        TeamTaskDetailFields::from_item(&item, &team_id, assignee_options, tz, false).render()?;
+    let is_team_admin = team_service::is_team_admin(&teams, &team_id, &auth_user.user_id).await;
+    let fields = TeamTaskDetailFields::from_item(
+        &item,
+        &team_id,
+        assignee_options,
+        is_team_admin,
+        tz,
+        false,
+    )
+    .render()?;
     let nav_html = nav::build_nav_html(
         &teams,
         &auth_user.user_id,
@@ -929,6 +976,7 @@ pub async fn update_team_task_form(
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(activity_log): Extension<Arc<dyn ActivityLogRepo>>,
     TzOffset(tz): TzOffset,
     Form(form): Form<TeamTaskForm>,
 ) -> Result<Response, ItemError> {
@@ -939,7 +987,16 @@ pub async fn update_team_task_form(
         .map_err(ItemError::from)?;
     let current = require_team_task(current)?;
     let params = update_params_from_form(&team_id, &item_id, &current, &form, tz);
-    team_item_service::update_team_item(&repo, &teams, &auth_user.user_id, params).await?;
+    team_item_service::update_team_item(
+        &repo,
+        &UpdateTeamItemContext {
+            teams: teams.clone(),
+            activity_log,
+        },
+        &auth_user.user_id,
+        params,
+    )
+    .await?;
 
     match repo.get_team_item(&team_id, &item_id).await {
         Ok(updated) => {
@@ -947,9 +1004,17 @@ pub async fn update_team_task_form(
             let row = TeamTaskRow::from_item(&updated, &team_id, &names, tz).render()?;
             let assignee_options =
                 active_member_options(&teams, &team_id, &auth_user.user_id).await?;
-            let fields =
-                TeamTaskDetailFields::from_item(&updated, &team_id, assignee_options, tz, true)
-                    .render()?;
+            let is_team_admin =
+                team_service::is_team_admin(&teams, &team_id, &auth_user.user_id).await;
+            let fields = TeamTaskDetailFields::from_item(
+                &updated,
+                &team_id,
+                assignee_options,
+                is_team_admin,
+                tz,
+                true,
+            )
+            .render()?;
             let view = TeamTaskDetailView::from_item(&updated, &team_id, &names, tz).render()?;
             Ok(Html(format!("{row}{fields}{view}")).into_response())
         }

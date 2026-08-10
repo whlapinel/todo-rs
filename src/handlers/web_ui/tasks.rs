@@ -498,6 +498,7 @@ struct NewTaskPageTemplate {
 struct TaskDetailPageTemplate {
     id: String,
     name: String,
+    complete: bool,
     view: String,
     nav_html: String,
 }
@@ -640,6 +641,7 @@ pub async fn task_detail_page(
     render(TaskDetailPageTemplate {
         id: item.id,
         name: item.name,
+        complete: item.complete,
         view,
         nav_html,
     })

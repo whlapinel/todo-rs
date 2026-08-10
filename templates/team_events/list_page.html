@@ -4,8 +4,9 @@
 {% block content %}
 <div class="space-y-6">
   <div class="md:flex md:items-center md:justify-between">
-    <div class="min-w-0 flex-1">
+    <div class="min-w-0 flex-1 flex items-center gap-x-3">
       <h2 class="text-2xl/7 font-bold text-gray-900 sm:truncate sm:text-3xl sm:tracking-tight dark:text-white">Events</h2>
+      {% call macros::badge(points_label, "indigo") %}{% endcall %}
     </div>
     <div class="mt-4 flex items-center gap-x-3 md:mt-0 md:ml-4">
       <a href="/web/teams/{{ team_id }}" hx-target="#page" hx-select="#page" hx-swap="innerHTML"

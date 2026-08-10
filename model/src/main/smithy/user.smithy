@@ -28,6 +28,7 @@ resource User {
         InviteTeamMember
         AcceptTeamInvite
         LeaveTeam
+        SetTeamMemberRole
         SendAppInvite
     ]
 }

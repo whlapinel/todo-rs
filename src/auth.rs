@@ -18,7 +18,8 @@ use serde::{Deserialize, Serialize};
 use tower_cookies::{Cookie, Cookies, cookie::SameSite};
 use tracing::info;
 
-use crate::storage::sqlite::{RepoError, UserRepo};
+use crate::domain::team::TeamRole;
+use crate::storage::sqlite::{RepoError, TeamRepo, UserRepo};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -454,6 +455,17 @@ pub async fn caddy_header_middleware(
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string());
 
+    // Space-separated role list injected by caddy-security's `inject headers with
+    // claims` (verified against go-authcrunch v1.1.41's
+    // pkg/authz/authenticate.go:injectHeaders — `strings.Join(usr.Claims.Roles, " ")`).
+    // Used only for the narrow single-team admin bootstrap below.
+    let header_roles: Vec<String> = req
+        .headers()
+        .get("x-token-user-roles")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.split_whitespace().map(|r| r.to_string()).collect())
+        .unwrap_or_default();
+
     let email = match (dev_email, header_email) {
         (Some(e), _) => Some(e),
         (None, Some(e)) => Some(e),
@@ -516,6 +528,57 @@ pub async fn caddy_header_middleware(
             }
         }
     };
+
+    // Narrow, single-team admin bootstrap from caddy-security's injected role header.
+    // Not a general role source — every other team's admin management goes entirely
+    // through the in-app "Manage roles" UI (see CLAUDE.md's per-team roles design).
+    // `header_roles` is only ever populated on the browser-session (x-token-user-email)
+    // path above; the Bearer-JWT/CLI path never carries it, so this is naturally a
+    // no-op there.
+    //
+    // Gated on the team currently having *zero* active admins, not on this user's own
+    // current role — solving the chicken-and-egg bootstrap problem once is the whole
+    // point, and re-checking "is this specific user still admin" on every request
+    // would silently re-promote them straight back after any deliberate in-app
+    // demotion. Once any admin exists (from this sync, `TeamRepo::create`'s
+    // creator-becomes-admin default, or an in-app promotion), the team is
+    // self-sufficient and this sync goes permanently inert for it.
+    if header_roles.iter().any(|r| r == "authp/admin") {
+        if let Ok(bootstrap_team_id) = std::env::var("TODO_BOOTSTRAP_ADMIN_TEAM_ID") {
+            if let Some(teams) = req.extensions().get::<Arc<dyn TeamRepo>>().cloned() {
+                let status = teams
+                    .member_status(&bootstrap_team_id, &auth_user.user_id)
+                    .await
+                    .ok()
+                    .flatten();
+                let admin_count = teams
+                    .count_active_admins(&bootstrap_team_id)
+                    .await
+                    .unwrap_or(0);
+                if status.as_deref() == Some("ACTIVE") && admin_count == 0 {
+                    if let Err(e) = teams
+                        .set_member_role(&bootstrap_team_id, &auth_user.user_id, TeamRole::Admin)
+                        .await
+                    {
+                        tracing::error!(
+                            user_id = %auth_user.user_id,
+                            team_id = %bootstrap_team_id,
+                            "failed to promote bootstrap admin: {e:?}"
+                        );
+                    } else {
+                        tracing::info!(
+                            user_id = %auth_user.user_id,
+                            team_id = %bootstrap_team_id,
+                            "promoted to team admin via caddy-security role bootstrap"
+                        );
+                    }
+                }
+                // Not an active member, the team already has an admin, or a lookup
+                // failed — nothing to do. This sync never creates membership or errors
+                // the request; it only ever promotes once, for a team with no admin.
+            }
+        }
+    }
 
     req.extensions_mut().insert(auth_user);
     next.run(req).await

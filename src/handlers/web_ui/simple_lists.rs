@@ -188,6 +188,7 @@ struct NewSimpleItemPageTemplate {
 struct SimpleItemDetailPageTemplate {
     id: String,
     name: String,
+    complete: bool,
     view: String,
     nav_html: String,
 }
@@ -318,6 +319,7 @@ pub async fn simple_item_detail_page(
     render(SimpleItemDetailPageTemplate {
         id: item.id,
         name: item.name,
+        complete: item.complete,
         view,
         nav_html,
     })

@@ -1,9 +1,10 @@
+pub mod activity_log;
 pub mod teams;
 pub mod users;
 pub mod items;
 use async_trait::async_trait;
 use sqlx::{Row, SqlitePool};
-use crate::domain::{item::Item, team::Team, user::User};
+use crate::domain::{activity_log::ActivityLogEntry, item::Item, team::{Team, TeamRole}, user::User};
 
 pub struct DueItem {
     pub item: Item,
@@ -19,6 +20,8 @@ pub struct TeamWithStatus {
 pub struct TeamMemberInfo {
     pub user: User,
     pub status: String,
+    pub role: TeamRole,
+    pub points: i32,
 }
 
 #[derive(Debug)]
@@ -88,6 +91,31 @@ pub trait TeamRepo: Send + Sync {
         team_id: &str,
         user_id: &str,
     ) -> Result<Option<String>, RepoError>;
+    async fn member_role(
+        &self,
+        team_id: &str,
+        user_id: &str,
+    ) -> Result<Option<TeamRole>, RepoError>;
+    /// Count of `ACTIVE` members with `role = 'admin'` on this team — used to guard
+    /// against demoting a team's last remaining admin.
+    async fn count_active_admins(&self, team_id: &str) -> Result<i64, RepoError>;
+    async fn set_member_role(
+        &self,
+        team_id: &str,
+        user_id: &str,
+        role: TeamRole,
+    ) -> Result<(), RepoError>;
+    /// Adds `delta` (negative to claw back) to `user_id`'s point balance on `team_id`,
+    /// returning the resulting balance. See CLAUDE.md's Points plan, Stage 6 —
+    /// completion awards a positive delta, reversal (automatic on un-complete, or via
+    /// the manual undo endpoint for recurring items) applies the negation of whatever
+    /// the originating `activity_log` entry recorded.
+    async fn add_team_points(
+        &self,
+        team_id: &str,
+        user_id: &str,
+        delta: i32,
+    ) -> Result<i64, RepoError>;
     async fn invite(
         &self,
         team_id: &str,
@@ -97,6 +125,39 @@ pub trait TeamRepo: Send + Sync {
     async fn accept(&self, team_id: &str, user_id: &str) -> Result<(), RepoError>;
     async fn remove_member(&self, team_id: &str, user_id: &str) -> Result<(), RepoError>;
     async fn share_active_team(&self, user_a: &str, user_b: &str) -> Result<bool, RepoError>;
+}
+
+/// Append-mostly completion/points log, kept separate from `ItemRepo`/`TeamRepo`
+/// since it's not a CRUD resource — see CLAUDE.md's per-team roles/points design.
+#[cfg_attr(test, mockall::automock)]
+#[async_trait]
+pub trait ActivityLogRepo: Send + Sync {
+    async fn log_activity(
+        &self,
+        team_id: &str,
+        user_id: &str,
+        item_id: &str,
+        item_name: &str,
+        points_delta: i32,
+    ) -> Result<String, RepoError>;
+    /// Server-capped by the caller — this trait has no pagination concept (the whole
+    /// Smithy model has none; see CLAUDE.md), so `limit` is expected to already be
+    /// clamped (e.g. `.min(100)`) before it reaches here.
+    async fn list_activity_for_team(
+        &self,
+        team_id: &str,
+        limit: i64,
+    ) -> Result<Vec<ActivityLogEntry>, RepoError>;
+    async fn most_recent_unreversed(
+        &self,
+        item_id: &str,
+        user_id: &str,
+    ) -> Result<Option<ActivityLogEntry>, RepoError>;
+    /// Fetches a single entry by id, regardless of team/reversed state — the manual
+    /// undo endpoint (Stage 6) uses this to look up the entry before checking whether
+    /// the caller is actually its own `user_id` and whether it's already reversed.
+    async fn get_entry(&self, entry_id: &str) -> Result<ActivityLogEntry, RepoError>;
+    async fn mark_reversed(&self, entry_id: &str) -> Result<(), RepoError>;
 }
 
 fn db_err(e: sqlx::Error) -> RepoError {
@@ -151,9 +212,27 @@ fn row_to_item(row: &sqlx::sqlite::SqliteRow) -> Item {
         event_type: row.get("event_type"),
         due_offset_days: row.get("due_offset_days"),
         assigned_to_user_id: row.get("assigned_to_user_id"),
+        points: row.get("points"),
     }
 }
 
+
+fn row_to_activity_log_entry(row: &sqlx::sqlite::SqliteRow) -> ActivityLogEntry {
+    let created_at_secs: i64 = row.get("created_at");
+    let reversed: i64 = row.get("reversed");
+    ActivityLogEntry {
+        id: row.get("id"),
+        team_id: row.get("team_id"),
+        user_id: row.get("user_id"),
+        item_id: row.get("item_id"),
+        item_name: row.get("item_name"),
+        points_delta: row.get("points_delta"),
+        reversed: reversed != 0,
+        created_at: chrono::DateTime::from_timestamp(created_at_secs, 0)
+            .unwrap_or_default()
+            .with_timezone(&chrono::Utc),
+    }
+}
 
 pub async fn create_pool(url: &str) -> Result<SqlitePool, sqlx::Error> {
     let pool = SqlitePool::connect(url).await?;
@@ -187,7 +266,8 @@ pub async fn create_pool(url: &str) -> Result<SqlitePool, sqlx::Error> {
             item_type TEXT NOT NULL DEFAULT 'TASK',
             event_type TEXT,
             due_offset_days INTEGER,
-            assigned_to_user_id TEXT
+            assigned_to_user_id TEXT,
+            points INTEGER
         )",
     )
     .execute(&pool)
@@ -201,9 +281,6 @@ pub async fn create_pool(url: &str) -> Result<SqlitePool, sqlx::Error> {
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_items_assigned_to ON items (assigned_to_user_id)")
         .execute(&pool)
         .await?;
-    crate::storage::migrations::run_migrations(&pool)
-        .await
-        .map_err(|crate::storage::migrations::MigrationError::Database(e)| e)?;
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS teams (
             id TEXT PRIMARY KEY,
@@ -218,6 +295,8 @@ pub async fn create_pool(url: &str) -> Result<SqlitePool, sqlx::Error> {
             user_id TEXT NOT NULL,
             status TEXT NOT NULL DEFAULT 'PENDING',
             invited_by TEXT,
+            role TEXT NOT NULL DEFAULT 'member',
+            points INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (team_id, user_id)
         )",
     )
@@ -226,6 +305,34 @@ pub async fn create_pool(url: &str) -> Result<SqlitePool, sqlx::Error> {
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_team_members_user_id ON team_members (user_id)")
         .execute(&pool)
         .await?;
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS activity_log (
+            id TEXT PRIMARY KEY,
+            team_id TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            item_id TEXT NOT NULL,
+            item_name TEXT NOT NULL,
+            points_delta INTEGER NOT NULL,
+            reversed INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER NOT NULL
+        )",
+    )
+    .execute(&pool)
+    .await?;
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_activity_log_team_created ON activity_log (team_id, created_at DESC)",
+    )
+    .execute(&pool)
+    .await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_activity_log_item_id ON activity_log (item_id)")
+        .execute(&pool)
+        .await?;
+    // Every CREATE TABLE/INDEX IF NOT EXISTS baseline statement above must run before
+    // this — migrations may target any of those tables (e.g. AddTeamMemberRole alters
+    // team_members), and on a brand-new DB they wouldn't exist yet otherwise.
+    crate::storage::migrations::run_migrations(&pool)
+        .await
+        .map_err(|crate::storage::migrations::MigrationError::Database(e)| e)?;
     Ok(pool)
 }
 

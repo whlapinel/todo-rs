@@ -1,3 +1,4 @@
+pub mod activity_log;
 pub mod error;
 pub mod items;
 pub mod team_items;

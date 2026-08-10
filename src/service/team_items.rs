@@ -1,9 +1,23 @@
 use crate::domain::item::{Item, ItemType};
 use crate::domain::recurrence;
-use crate::service::items::{clone_children, copy_template_children, item_anchor, sync_offset_children, ItemError};
-use crate::storage::sqlite::{ItemRepo, TeamRepo};
+use crate::service::activity_log::reverse_entry;
+use crate::service::items::{
+    clone_children, copy_template_children, has_incomplete_children, is_pure_complete_toggle,
+    item_anchor, sync_offset_children, ItemError,
+};
+use crate::service::teams::require_team_admin;
+use crate::storage::sqlite::{ActivityLogRepo, ItemRepo, TeamRepo};
 use chrono::{DateTime, Utc};
 use std::sync::Arc;
+
+/// Bundles the extra repos `update_team_item` needs for points award/reversal (see
+/// CLAUDE.md's Points plan, Stage 6), so its own argument list doesn't keep growing.
+/// `create_team_item`/`delete_team_item` never touch points at completion time (see
+/// that module doc), so they keep taking a plain `&Arc<dyn TeamRepo>` instead.
+pub struct UpdateTeamItemContext {
+    pub teams: Arc<dyn TeamRepo>,
+    pub activity_log: Arc<dyn ActivityLogRepo>,
+}
 
 #[derive(Debug, Default)]
 pub struct CreateTeamItemParams {
@@ -24,6 +38,7 @@ pub struct CreateTeamItemParams {
     pub due_offset_days: Option<i32>,
     pub assigned_to_user_id: Option<String>,
     pub timezone_offset_minutes: Option<i32>,
+    pub points: Option<i32>,
 }
 
 /// Moved from `json_api::team_items::create_team_item`.
@@ -70,6 +85,18 @@ pub async fn create_team_item(
     item.due_offset_days = params.due_offset_days;
     item.assigned_to_user_id =
         resolve_assignee(teams, &params.team_id, params.assigned_to_user_id).await?;
+    // Points are admin-of-that-team-only. A non-admin's requested value is
+    // silently dropped rather than rejecting the whole create — the rest of
+    // the request (name, dates, etc.) is still perfectly valid.
+    item.points = if params.points.is_some()
+        && require_team_admin(teams, &params.team_id, requester_user_id)
+            .await
+            .is_ok()
+    {
+        params.points
+    } else {
+        None
+    };
     item.validate().map_err(ItemError::Invalid)?;
 
     if let Some(ref pattern) = item.recurrence
@@ -201,15 +228,18 @@ pub struct UpdateTeamItemParams {
     pub due_offset_days: Option<i32>,
     pub assigned_to_user_id: Option<String>,
     pub timezone_offset_minutes: Option<i32>,
+    pub points: Option<i32>,
 }
 
 /// Moved from `json_api::team_items::update_team_item`.
 pub async fn update_team_item(
     repo: &Arc<dyn ItemRepo>,
-    teams: &Arc<dyn TeamRepo>,
+    ctx: &UpdateTeamItemContext,
     requester_user_id: &str,
     params: UpdateTeamItemParams,
 ) -> Result<(), ItemError> {
+    let teams = &ctx.teams;
+    let activity_log = &ctx.activity_log;
     require_active_member(teams, &params.team_id, requester_user_id).await?;
     if let Some(ref r) = params.recurrence {
         recurrence::parse(r).map_err(ItemError::Invalid)?;
@@ -234,6 +264,15 @@ pub async fn update_team_item(
     }
     let current = repo.get_team_item(&params.team_id, &params.item_id).await?;
 
+    if params.complete
+        && !current.complete
+        && has_incomplete_children(repo, &params.item_id).await?
+    {
+        return Err(ItemError::Invalid(
+            "cannot complete an item with incomplete sub-items".to_string(),
+        ));
+    }
+
     let mut item = Item::new_team_item(&params.team_id, &params.name);
     item.id = params.item_id.clone();
     item.complete = params.complete;
@@ -254,7 +293,75 @@ pub async fn update_team_item(
     } else {
         resolve_assignee(teams, &params.team_id, params.assigned_to_user_id).await?
     };
+    // Points are admin-of-that-team-only. A non-admin's request simply can't
+    // change the existing value — it's preserved as-is rather than erroring
+    // the rest of the (otherwise valid) update.
+    item.points = if require_team_admin(teams, &params.team_id, requester_user_id)
+        .await
+        .is_ok()
+    {
+        params.points
+    } else {
+        current.points
+    };
     item.validate().map_err(ItemError::Invalid)?;
+
+    if current.complete && !is_pure_complete_toggle(&current, &item) {
+        return Err(ItemError::Invalid(
+            "cannot edit a completed item; un-complete it first".to_string(),
+        ));
+    }
+
+    // Team completion validation — unconditional for every team item, not just
+    // points-bearing ones (a real behavior change from before Stage 6; see
+    // CLAUDE.md's Points plan). Checked against the just-resolved `item`, not
+    // `current`, since a request can assign and complete in the same PUT.
+    let just_completed = !current.complete && item.complete;
+    let just_uncompleted = current.complete && !item.complete;
+    if just_completed {
+        match item.assigned_to_user_id.as_deref() {
+            None => {
+                return Err(ItemError::Invalid(
+                    "cannot complete an unassigned team item; assign it first".to_string(),
+                ));
+            }
+            Some(assignee) if assignee != requester_user_id => {
+                return Err(ItemError::Invalid(
+                    "only the assigned user can complete this item".to_string(),
+                ));
+            }
+            _ => {}
+        }
+    }
+
+    // Points award/reversal must run against `current`'s captured identity, strictly
+    // before the recurrence branch below deletes it and creates a successor under a
+    // fresh id — otherwise a recurring item's completion would silently never award
+    // anything (see CLAUDE.md's Points plan, Stage 6, and its cross-stage risk #2).
+    if just_completed
+        && item.parent_item_id.is_none()
+        && let Some(points) = item.points
+    {
+        // Guarded by the match above: a just-completed item always has an assignee.
+        let assignee = item
+            .assigned_to_user_id
+            .clone()
+            .expect("just-completed team item must be assigned");
+        activity_log
+            .log_activity(&params.team_id, &assignee, &current.id, &current.name, points)
+            .await?;
+        teams
+            .add_team_points(&params.team_id, &assignee, points)
+            .await?;
+    }
+    if just_uncompleted
+        && let Some(assignee) = current.assigned_to_user_id.as_deref()
+        && let Some(entry) = activity_log
+            .most_recent_unreversed(&current.id, assignee)
+            .await?
+    {
+        reverse_entry(teams, activity_log, &entry).await?;
+    }
 
     let tz_offset = params.timezone_offset_minutes.unwrap_or(0);
     if let Some((next_item, next_anchor)) = item.next_recurrence(chrono::Utc::now(), tz_offset) {
@@ -272,4 +379,736 @@ pub async fn update_team_item(
         sync_offset_children(repo, &item.id, new_anchor, tz_offset).await?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::activity_log::ActivityLogEntry;
+    use crate::domain::team::TeamRole;
+    use crate::storage::sqlite::{MockActivityLogRepo, MockItemRepo, MockTeamRepo};
+
+    /// A context whose `activity_log` has no expectations set — fine for any test
+    /// whose update never crosses a `complete` transition, since `log_activity`/
+    /// `most_recent_unreversed` are then never called at all; mockall panics if an
+    /// unset expectation is hit, so this doubles as an assertion that a given test
+    /// path stays points-inert.
+    fn ctx(teams: Arc<dyn TeamRepo>) -> UpdateTeamItemContext {
+        UpdateTeamItemContext {
+            teams,
+            activity_log: Arc::new(MockActivityLogRepo::new()),
+        }
+    }
+
+    #[tokio::test]
+    async fn create_team_item_strips_points_for_non_admin() {
+        let mut items = MockItemRepo::new();
+        items
+            .expect_create()
+            .withf(|item: &Item| item.points.is_none())
+            .times(1)
+            .returning(|_| Ok("new-item-id".to_string()));
+
+        let mut teams = MockTeamRepo::new();
+        teams
+            .expect_member_status()
+            .returning(|_, _| Ok(Some("ACTIVE".to_string())));
+        teams
+            .expect_member_role()
+            .returning(|_, _| Ok(Some(TeamRole::Member)));
+
+        let items: Arc<dyn ItemRepo> = Arc::new(items);
+        let teams: Arc<dyn TeamRepo> = Arc::new(teams);
+
+        create_team_item(
+            &items,
+            &teams,
+            "member1",
+            CreateTeamItemParams {
+                team_id: "t1".to_string(),
+                name: "Mow the lawn".to_string(),
+                points: Some(50),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("should create item");
+    }
+
+    #[tokio::test]
+    async fn create_team_item_honors_points_for_admin() {
+        let mut items = MockItemRepo::new();
+        items
+            .expect_create()
+            .withf(|item: &Item| item.points == Some(50))
+            .times(1)
+            .returning(|_| Ok("new-item-id".to_string()));
+
+        let mut teams = MockTeamRepo::new();
+        teams
+            .expect_member_status()
+            .returning(|_, _| Ok(Some("ACTIVE".to_string())));
+        teams
+            .expect_member_role()
+            .returning(|_, _| Ok(Some(TeamRole::Admin)));
+
+        let items: Arc<dyn ItemRepo> = Arc::new(items);
+        let teams: Arc<dyn TeamRepo> = Arc::new(teams);
+
+        create_team_item(
+            &items,
+            &teams,
+            "admin1",
+            CreateTeamItemParams {
+                team_id: "t1".to_string(),
+                name: "Mow the lawn".to_string(),
+                points: Some(50),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("should create item");
+    }
+
+    fn team_item_with_points(id: &str, team_id: &str, points: Option<i32>) -> Item {
+        team_item_with_points_and_assignee(id, team_id, points, None)
+    }
+
+    fn team_item_with_points_and_assignee(
+        id: &str,
+        team_id: &str,
+        points: Option<i32>,
+        assigned_to_user_id: Option<&str>,
+    ) -> Item {
+        Item {
+            id: id.to_string(),
+            team_id: Some(team_id.to_string()),
+            name: "Mow the lawn".to_string(),
+            points,
+            assigned_to_user_id: assigned_to_user_id.map(str::to_string),
+            ..Item::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn update_team_item_preserves_existing_points_for_non_admin() {
+        let mut items = MockItemRepo::new();
+        items
+            .expect_get_team_item()
+            .returning(|_, _| Ok(team_item_with_points("item1", "t1", Some(30))));
+        items
+            .expect_update_team_item()
+            .withf(|item: &Item| item.points == Some(30))
+            .times(1)
+            .returning(|_| Ok(()));
+
+        let mut teams = MockTeamRepo::new();
+        teams
+            .expect_member_status()
+            .returning(|_, _| Ok(Some("ACTIVE".to_string())));
+        teams
+            .expect_member_role()
+            .returning(|_, _| Ok(Some(TeamRole::Member)));
+
+        let items: Arc<dyn ItemRepo> = Arc::new(items);
+        let teams: Arc<dyn TeamRepo> = Arc::new(teams);
+
+        update_team_item(
+            &items,
+            &ctx(teams),
+            "member1",
+            UpdateTeamItemParams {
+                team_id: "t1".to_string(),
+                item_id: "item1".to_string(),
+                name: "Mow the lawn".to_string(),
+                complete: false,
+                points: Some(999),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("should update item");
+    }
+
+    #[tokio::test]
+    async fn update_team_item_honors_new_points_for_admin() {
+        let mut items = MockItemRepo::new();
+        items
+            .expect_get_team_item()
+            .returning(|_, _| Ok(team_item_with_points("item1", "t1", Some(30))));
+        items
+            .expect_update_team_item()
+            .withf(|item: &Item| item.points == Some(999))
+            .times(1)
+            .returning(|_| Ok(()));
+
+        let mut teams = MockTeamRepo::new();
+        teams
+            .expect_member_status()
+            .returning(|_, _| Ok(Some("ACTIVE".to_string())));
+        teams
+            .expect_member_role()
+            .returning(|_, _| Ok(Some(TeamRole::Admin)));
+
+        let items: Arc<dyn ItemRepo> = Arc::new(items);
+        let teams: Arc<dyn TeamRepo> = Arc::new(teams);
+
+        update_team_item(
+            &items,
+            &ctx(teams),
+            "admin1",
+            UpdateTeamItemParams {
+                team_id: "t1".to_string(),
+                item_id: "item1".to_string(),
+                name: "Mow the lawn".to_string(),
+                complete: false,
+                points: Some(999),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("should update item");
+    }
+
+    fn active_member_teams(role: TeamRole) -> Arc<dyn TeamRepo> {
+        let mut teams = MockTeamRepo::new();
+        teams
+            .expect_member_status()
+            .returning(|_, _| Ok(Some("ACTIVE".to_string())));
+        teams.expect_member_role().returning(move |_, _| Ok(Some(role)));
+        Arc::new(teams)
+    }
+
+    #[tokio::test]
+    async fn update_team_item_rejects_completion_with_incomplete_child() {
+        let mut items = MockItemRepo::new();
+        items
+            .expect_get_team_item()
+            .returning(|_, _| Ok(team_item_with_points("item1", "t1", None)));
+        items
+            .expect_list_children()
+            .withf(|parent_id: &str| parent_id == "item1")
+            .times(1)
+            .returning(|_| {
+                Ok(vec![Item {
+                    id: "child1".to_string(),
+                    parent_item_id: Some("item1".to_string()),
+                    complete: false,
+                    ..Item::default()
+                }])
+            });
+
+        let items: Arc<dyn ItemRepo> = Arc::new(items);
+        let teams = active_member_teams(TeamRole::Member);
+
+        let err = update_team_item(
+            &items,
+            &ctx(teams),
+            "member1",
+            UpdateTeamItemParams {
+                team_id: "t1".to_string(),
+                item_id: "item1".to_string(),
+                name: "Mow the lawn".to_string(),
+                complete: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect_err("should reject completing with an incomplete child");
+
+        assert!(matches!(err, ItemError::Invalid(_)));
+    }
+
+    #[tokio::test]
+    async fn update_team_item_allows_completion_when_all_children_complete() {
+        let mut items = MockItemRepo::new();
+        items.expect_get_team_item().returning(|_, _| {
+            Ok(team_item_with_points_and_assignee(
+                "item1",
+                "t1",
+                None,
+                Some("member1"),
+            ))
+        });
+        items
+            .expect_list_children()
+            .withf(|parent_id: &str| parent_id == "item1")
+            .times(1)
+            .returning(|_| {
+                Ok(vec![Item {
+                    id: "child1".to_string(),
+                    parent_item_id: Some("item1".to_string()),
+                    complete: true,
+                    ..Item::default()
+                }])
+            });
+        items
+            .expect_update_team_item()
+            .times(1)
+            .returning(|_| Ok(()));
+
+        let items: Arc<dyn ItemRepo> = Arc::new(items);
+        let teams = active_member_teams(TeamRole::Member);
+
+        update_team_item(
+            &items,
+            &ctx(teams),
+            "member1",
+            UpdateTeamItemParams {
+                team_id: "t1".to_string(),
+                item_id: "item1".to_string(),
+                name: "Mow the lawn".to_string(),
+                complete: true,
+                assigned_to_user_id: Some("member1".to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("should allow completion when all children are complete");
+    }
+
+    #[tokio::test]
+    async fn update_team_item_rejects_field_edit_on_completed_item() {
+        let mut items = MockItemRepo::new();
+        items.expect_get_team_item().returning(|_, _| {
+            Ok(Item {
+                id: "item1".to_string(),
+                team_id: Some("t1".to_string()),
+                name: "Original name".to_string(),
+                complete: true,
+                ..Item::default()
+            })
+        });
+
+        let items: Arc<dyn ItemRepo> = Arc::new(items);
+        let teams = active_member_teams(TeamRole::Member);
+
+        let err = update_team_item(
+            &items,
+            &ctx(teams),
+            "member1",
+            UpdateTeamItemParams {
+                team_id: "t1".to_string(),
+                item_id: "item1".to_string(),
+                name: "Changed name".to_string(),
+                complete: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect_err("should reject editing a field on a completed item");
+
+        assert!(matches!(err, ItemError::Invalid(_)));
+    }
+
+    #[tokio::test]
+    async fn update_team_item_allows_pure_complete_toggle() {
+        let mut items = MockItemRepo::new();
+        items.expect_get_team_item().returning(|_, _| {
+            Ok(Item {
+                id: "item1".to_string(),
+                team_id: Some("t1".to_string()),
+                name: "Same name".to_string(),
+                complete: true,
+                ..Item::default()
+            })
+        });
+        items
+            .expect_update_team_item()
+            .times(1)
+            .returning(|_| Ok(()));
+
+        let items: Arc<dyn ItemRepo> = Arc::new(items);
+        let teams = active_member_teams(TeamRole::Member);
+
+        update_team_item(
+            &items,
+            &ctx(teams),
+            "member1",
+            UpdateTeamItemParams {
+                team_id: "t1".to_string(),
+                item_id: "item1".to_string(),
+                name: "Same name".to_string(),
+                complete: false,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("pure toggle should be allowed on a completed item");
+    }
+
+    #[tokio::test]
+    async fn update_team_item_rejects_completion_of_unassigned_item() {
+        let mut items = MockItemRepo::new();
+        items
+            .expect_get_team_item()
+            .returning(|_, _| Ok(team_item_with_points("item1", "t1", Some(20))));
+        items.expect_list_children().returning(|_| Ok(vec![]));
+
+        let items: Arc<dyn ItemRepo> = Arc::new(items);
+        let teams = active_member_teams(TeamRole::Member);
+
+        let err = update_team_item(
+            &items,
+            &ctx(teams),
+            "member1",
+            UpdateTeamItemParams {
+                team_id: "t1".to_string(),
+                item_id: "item1".to_string(),
+                name: "Mow the lawn".to_string(),
+                complete: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect_err("should reject completing an unassigned team item");
+
+        assert!(matches!(err, ItemError::Invalid(_)));
+    }
+
+    #[tokio::test]
+    async fn update_team_item_rejects_completion_by_non_assignee() {
+        let mut items = MockItemRepo::new();
+        items.expect_get_team_item().returning(|_, _| {
+            Ok(team_item_with_points_and_assignee(
+                "item1",
+                "t1",
+                Some(20),
+                Some("member1"),
+            ))
+        });
+        items.expect_list_children().returning(|_| Ok(vec![]));
+
+        let items: Arc<dyn ItemRepo> = Arc::new(items);
+        let teams = active_member_teams(TeamRole::Member);
+
+        let err = update_team_item(
+            &items,
+            &ctx(teams),
+            "someone-else",
+            UpdateTeamItemParams {
+                team_id: "t1".to_string(),
+                item_id: "item1".to_string(),
+                name: "Mow the lawn".to_string(),
+                complete: true,
+                assigned_to_user_id: Some("member1".to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect_err("should reject completion attempted by someone other than the assignee");
+
+        assert!(matches!(err, ItemError::Invalid(_)));
+    }
+
+    #[tokio::test]
+    async fn update_team_item_awards_points_on_genuine_completion() {
+        let mut items = MockItemRepo::new();
+        items.expect_get_team_item().returning(|_, _| {
+            Ok(team_item_with_points_and_assignee(
+                "item1",
+                "t1",
+                Some(20),
+                Some("member1"),
+            ))
+        });
+        items
+            .expect_update_team_item()
+            .times(1)
+            .returning(|_| Ok(()));
+        items.expect_list_children().returning(|_| Ok(vec![]));
+
+        let mut activity_log = MockActivityLogRepo::new();
+        activity_log
+            .expect_log_activity()
+            .withf(|team_id, user_id, item_id, item_name, points_delta| {
+                team_id == "t1"
+                    && user_id == "member1"
+                    && item_id == "item1"
+                    && item_name == "Mow the lawn"
+                    && *points_delta == 20
+            })
+            .times(1)
+            .returning(|_, _, _, _, _| Ok("entry1".to_string()));
+
+        let items: Arc<dyn ItemRepo> = Arc::new(items);
+        let teams_mock = {
+            let mut teams = MockTeamRepo::new();
+            teams
+                .expect_member_status()
+                .returning(|_, _| Ok(Some("ACTIVE".to_string())));
+            teams
+                .expect_member_role()
+                .returning(|_, _| Ok(Some(TeamRole::Member)));
+            teams
+                .expect_add_team_points()
+                .withf(|team_id, user_id, delta| team_id == "t1" && user_id == "member1" && *delta == 20)
+                .times(1)
+                .returning(|_, _, _| Ok(20));
+            teams
+        };
+
+        update_team_item(
+            &items,
+            &UpdateTeamItemContext {
+                teams: Arc::new(teams_mock),
+                activity_log: Arc::new(activity_log),
+            },
+            "member1",
+            UpdateTeamItemParams {
+                team_id: "t1".to_string(),
+                item_id: "item1".to_string(),
+                name: "Mow the lawn".to_string(),
+                complete: true,
+                assigned_to_user_id: Some("member1".to_string()),
+                points: Some(20),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("should award points on a genuine completion");
+    }
+
+    #[tokio::test]
+    async fn update_team_item_does_not_double_award_on_no_op_resubmit() {
+        // current.complete is already true, and the request also sends complete:
+        // true — no false->true transition happens, so `just_completed` never
+        // fires. The bare `ctx(teams)` helper's activity_log has no expectations
+        // set at all, so this test doubles as an assertion that log_activity/
+        // add_team_points are never called on this path.
+        let mut items = MockItemRepo::new();
+        items.expect_get_team_item().returning(|_, _| {
+            Ok(Item {
+                complete: true,
+                ..team_item_with_points_and_assignee("item1", "t1", Some(20), Some("member1"))
+            })
+        });
+        items
+            .expect_update_team_item()
+            .times(1)
+            .returning(|_| Ok(()));
+
+        let items: Arc<dyn ItemRepo> = Arc::new(items);
+        let teams = active_member_teams(TeamRole::Member);
+
+        update_team_item(
+            &items,
+            &ctx(teams),
+            "member1",
+            UpdateTeamItemParams {
+                team_id: "t1".to_string(),
+                item_id: "item1".to_string(),
+                name: "Mow the lawn".to_string(),
+                complete: true,
+                assigned_to_user_id: Some("member1".to_string()),
+                points: Some(20),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("no-op resubmit of an already-complete item should succeed with no award");
+    }
+
+    #[tokio::test]
+    async fn update_team_item_reversal_reads_logged_delta_not_items_current_points() {
+        // The item's own `points` has since been changed by an admin to 999, but the
+        // activity log entry recorded at completion time still says 20 — reversal
+        // must claw back 20, not 999 (see CLAUDE.md's Points plan, Stage 6).
+        let mut items = MockItemRepo::new();
+        items.expect_get_team_item().returning(|_, _| {
+            Ok(Item {
+                complete: true,
+                ..team_item_with_points_and_assignee("item1", "t1", Some(999), Some("member1"))
+            })
+        });
+        items
+            .expect_update_team_item()
+            .times(1)
+            .returning(|_| Ok(()));
+
+        let mut activity_log = MockActivityLogRepo::new();
+        activity_log
+            .expect_most_recent_unreversed()
+            .withf(|item_id, user_id| item_id == "item1" && user_id == "member1")
+            .times(1)
+            .returning(|_, _| {
+                Ok(Some(ActivityLogEntry {
+                    id: "entry1".to_string(),
+                    team_id: "t1".to_string(),
+                    user_id: "member1".to_string(),
+                    item_id: "item1".to_string(),
+                    item_name: "Mow the lawn".to_string(),
+                    points_delta: 20,
+                    reversed: false,
+                    created_at: chrono::Utc::now(),
+                }))
+            });
+        activity_log
+            .expect_mark_reversed()
+            .withf(|id| id == "entry1")
+            .times(1)
+            .returning(|_| Ok(()));
+
+        let items: Arc<dyn ItemRepo> = Arc::new(items);
+        let teams_mock = {
+            let mut teams = MockTeamRepo::new();
+            teams
+                .expect_member_status()
+                .returning(|_, _| Ok(Some("ACTIVE".to_string())));
+            teams
+                .expect_member_role()
+                .returning(|_, _| Ok(Some(TeamRole::Member)));
+            teams
+                .expect_add_team_points()
+                .withf(|team_id, user_id, delta| team_id == "t1" && user_id == "member1" && *delta == -20)
+                .times(1)
+                .returning(|_, _, _| Ok(0));
+            teams
+        };
+
+        update_team_item(
+            &items,
+            &UpdateTeamItemContext {
+                teams: Arc::new(teams_mock),
+                activity_log: Arc::new(activity_log),
+            },
+            "member1",
+            UpdateTeamItemParams {
+                team_id: "t1".to_string(),
+                item_id: "item1".to_string(),
+                name: "Mow the lawn".to_string(),
+                complete: false,
+                assigned_to_user_id: Some("member1".to_string()),
+                points: Some(999),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("should reverse using the logged delta");
+    }
+
+    #[tokio::test]
+    async fn update_team_item_uncomplete_with_no_log_entry_is_a_silent_no_op() {
+        let mut items = MockItemRepo::new();
+        items.expect_get_team_item().returning(|_, _| {
+            Ok(team_item_with_points_and_assignee(
+                "item1",
+                "t1",
+                None,
+                Some("member1"),
+            ))
+        });
+        items
+            .expect_update_team_item()
+            .times(1)
+            .returning(|_| Ok(()));
+
+        let mut activity_log = MockActivityLogRepo::new();
+        activity_log
+            .expect_most_recent_unreversed()
+            .returning(|_, _| Ok(None));
+
+        let items: Arc<dyn ItemRepo> = Arc::new(items);
+        let teams = active_member_teams(TeamRole::Member);
+
+        update_team_item(
+            &items,
+            &UpdateTeamItemContext {
+                teams,
+                activity_log: Arc::new(activity_log),
+            },
+            "member1",
+            UpdateTeamItemParams {
+                team_id: "t1".to_string(),
+                item_id: "item1".to_string(),
+                name: "Mow the lawn".to_string(),
+                complete: false,
+                assigned_to_user_id: Some("member1".to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("uncompleting an item with no logged points should silently no-op");
+    }
+
+    #[tokio::test]
+    async fn update_team_item_awards_points_correctly_even_when_recurrence_also_fires() {
+        let due_date = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let mut items = MockItemRepo::new();
+        items.expect_get_team_item().returning(move |_, _| {
+            Ok(Item {
+                due_date: Some(due_date),
+                recurrence: Some("every day".to_string()),
+                ..team_item_with_points_and_assignee("item1", "t1", Some(20), Some("member1"))
+            })
+        });
+        // Called once by the parent-gating check (has_incomplete_children), once
+        // more by clone_children's own recursive walk over the (empty) subtree —
+        // same double-call shape Stage 5's analogous personal-item test hit.
+        items
+            .expect_list_children()
+            .withf(|parent_id: &str| parent_id == "item1")
+            .times(2)
+            .returning(|_| Ok(vec![]));
+        items
+            .expect_create()
+            .times(1)
+            .returning(|_| Ok("item1-next".to_string()));
+        items
+            .expect_delete()
+            .withf(|id: &str| id == "item1")
+            .times(1)
+            .returning(|_| Ok(()));
+
+        let mut activity_log = MockActivityLogRepo::new();
+        activity_log
+            .expect_log_activity()
+            .withf(|team_id, user_id, item_id, _item_name, points_delta| {
+                // Must be logged against the *old* item's id, never the
+                // not-yet-created successor's.
+                team_id == "t1" && user_id == "member1" && item_id == "item1" && *points_delta == 20
+            })
+            .times(1)
+            .returning(|_, _, _, _, _| Ok("entry1".to_string()));
+
+        let items: Arc<dyn ItemRepo> = Arc::new(items);
+        let teams_mock = {
+            let mut teams = MockTeamRepo::new();
+            teams
+                .expect_member_status()
+                .returning(|_, _| Ok(Some("ACTIVE".to_string())));
+            teams
+                .expect_member_role()
+                .returning(|_, _| Ok(Some(TeamRole::Member)));
+            teams
+                .expect_add_team_points()
+                .withf(|team_id, user_id, delta| team_id == "t1" && user_id == "member1" && *delta == 20)
+                .times(1)
+                .returning(|_, _, _| Ok(20));
+            teams
+        };
+
+        update_team_item(
+            &items,
+            &UpdateTeamItemContext {
+                teams: Arc::new(teams_mock),
+                activity_log: Arc::new(activity_log),
+            },
+            "member1",
+            UpdateTeamItemParams {
+                team_id: "t1".to_string(),
+                item_id: "item1".to_string(),
+                name: "Mow the lawn".to_string(),
+                complete: true,
+                recurrence: Some("every day".to_string()),
+                assigned_to_user_id: Some("member1".to_string()),
+                points: Some(20),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("should award points even though recurrence also fires");
+    }
 }

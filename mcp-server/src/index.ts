@@ -346,6 +346,46 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: "set_team_member_role",
+      description:
+        "Promote or demote a team member's role ('admin' or 'member'). The caller must already be an admin of the team. Rejected if this would demote the team's last remaining admin — every team must always have at least one.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          userId: { type: "string", description: "The caller's user ID (must be a team admin)" },
+          teamId: { type: "string" },
+          targetUserId: { type: "string", description: "The member whose role is changing" },
+          role: { type: "string", enum: ["admin", "member"] },
+        },
+        required: ["userId", "teamId", "targetUserId", "role"],
+      },
+    },
+    {
+      name: "list_team_activity_log",
+      description:
+        "List a team's completion/points activity log (most recent first, capped server-side). The caller must be an active team member.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          teamId: { type: "string" },
+        },
+        required: ["teamId"],
+      },
+    },
+    {
+      name: "undo_activity_log_entry",
+      description:
+        "Reverse a specific, not-yet-reversed activity log entry's points directly by id — the only way to undo a recurring item's completion, since completing one deletes the old item row entirely. Only the entry's own user (the person who earned/lost the points) may undo it.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          teamId: { type: "string" },
+          entryId: { type: "string" },
+        },
+        required: ["teamId", "entryId"],
+      },
+    },
+    {
       name: "list_team_items",
       description: "List items belonging to a team. The caller must be an active team member.",
       inputSchema: {
@@ -409,6 +449,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           },
           assignedToUserId: { type: "string", description: "Active team member to assign this item to" },
           timezoneOffsetMinutes: { type: "number" },
+          points: {
+            type: "number",
+            description:
+              "Top-level items only (rejected alongside a parentItemId). Admin-only: the server silently drops this if the caller isn't an admin of the team, rather than rejecting the rest of the request.",
+          },
         },
         required: ["teamId", "name"],
       },
@@ -444,6 +489,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           },
           assignedToUserId: { type: "string", description: "Active team member to assign this item to" },
           timezoneOffsetMinutes: { type: "number" },
+          points: {
+            type: "number",
+            description:
+              "Top-level items only. Admin-only: the server preserves the item's existing value if the caller isn't an admin of the team, rather than rejecting the rest of the request. Omit to leave the current value unchanged only if you're not an admin — an admin omitting this will clear it, so admins should always round-trip the item's current points if they don't intend to change it.",
+          },
         },
         required: ["teamId", "itemId", "name", "complete"],
       },
@@ -612,6 +662,26 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         );
         break;
 
+      case "set_team_member_role":
+        result = await api(
+          "PUT",
+          `/users/${args.userId}/teams/${args.teamId}/members/${args.targetUserId}/role`,
+          { role: args.role }
+        );
+        break;
+
+      case "list_team_activity_log":
+        result = await api("GET", `/teams/${args.teamId}/activity-log`);
+        break;
+
+      case "undo_activity_log_entry":
+        result = await api(
+          "PUT",
+          `/teams/${args.teamId}/activity-log/${args.entryId}/undo`,
+          {}
+        );
+        break;
+
       case "list_team_items": {
         const params = new URLSearchParams();
         if (args.parentItemId) params.set("parentItemId", args.parentItemId as string);
@@ -642,6 +712,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         if (args.assignedToUserId) body.assignedToUserId = args.assignedToUserId;
         if (args.timezoneOffsetMinutes !== undefined)
           body.timezoneOffsetMinutes = args.timezoneOffsetMinutes;
+        if (args.points !== undefined) body.points = args.points;
         result = await api("POST", `/teams/${args.teamId}/items`, body);
         break;
       }
@@ -666,6 +737,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         if (args.assignedToUserId) body.assignedToUserId = args.assignedToUserId;
         if (args.timezoneOffsetMinutes !== undefined)
           body.timezoneOffsetMinutes = args.timezoneOffsetMinutes;
+        if (args.points !== undefined) body.points = args.points;
         result = await api("PUT", `/teams/${args.teamId}/items/${args.itemId}`, body);
         break;
       }

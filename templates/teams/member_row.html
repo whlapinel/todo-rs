@@ -1,4 +1,15 @@
+{% import "macros.html" as macros %}
 <li class="flex items-center justify-between gap-x-3 py-2">
-  <span class="text-gray-900 dark:text-white">{{ name }}</span>
-  {% if !is_active %}<span class="text-xs text-gray-400 dark:text-gray-500">pending</span>{% endif %}
+  <span class="flex items-center gap-x-2">
+    <span class="text-gray-900 dark:text-white">{{ name }}</span>
+    {% if !is_active %}<span class="text-xs text-gray-400 dark:text-gray-500">pending</span>{% endif %}
+    {% if let Some(points) = points %}<span class="text-xs text-gray-400 dark:text-gray-500">{{ points }} pts</span>{% endif %}
+    {% if is_role_admin %}{% call macros::badge("Admin", "indigo") %}{% endcall %}{% endif %}
+  </span>
+  {% if show_role_toggle %}
+  <form hx-put="/web/teams/{{ team_id }}/members/{{ user_id }}/role" hx-target="#page" hx-select="#page" hx-swap="innerHTML">
+    <input type="hidden" name="role" value="{{ toggle_target_role }}">
+    <button type="submit" class="cursor-pointer text-xs text-indigo-600 hover:text-indigo-500 dark:text-indigo-400 dark:hover:text-indigo-300">{{ toggle_label }}</button>
+  </form>
+  {% endif %}
 </li>

@@ -1,4 +1,5 @@
 use crate::auth::AuthUser;
+use crate::domain::team::TeamRole;
 use crate::handlers::web_ui::nav::{self, ActiveContext, SidebarSection};
 use crate::service::error::ItemError;
 use crate::service::teams as team_service;
@@ -6,6 +7,7 @@ use crate::storage::sqlite::{TeamRepo, UserRepo};
 use askama::Template;
 use axum::extract::{Extension, Form, Path};
 use axum::response::{Html, IntoResponse, Response};
+use std::str::FromStr;
 use std::sync::Arc;
 
 fn render<T: Template>(t: T) -> Result<Html<String>, ItemError> {
@@ -124,9 +126,20 @@ pub async fn leave_team_form(
 #[derive(Template)]
 #[template(path = "teams/member_row.html")]
 struct MemberRow {
+    team_id: String,
     user_id: String,
     name: String,
     is_active: bool,
+    is_role_admin: bool,
+    /// Points are per-team (see CLAUDE.md) — this is the member's balance on *this*
+    /// team specifically, not shown at all for a pending (non-`ACTIVE`) invite.
+    points: Option<i32>,
+    /// Whether the *viewer* can toggle this row's role — an active admin viewing
+    /// another active member. Server-checked again in the handler itself, not just
+    /// hidden here.
+    show_role_toggle: bool,
+    toggle_target_role: &'static str,
+    toggle_label: &'static str,
 }
 
 #[derive(Template)]
@@ -155,13 +168,25 @@ async fn render_team_detail(
         .iter()
         .any(|m| m.user.id == requester_user_id && m.status == "ACTIVE");
 
+    let viewer_is_admin = members.iter().any(|m| {
+        m.user.id == requester_user_id && m.status == "ACTIVE" && m.role == TeamRole::Admin
+    });
+
     let member_rows = members
         .iter()
         .map(|m| {
+            let is_active = m.status == "ACTIVE";
+            let is_role_admin = m.role == TeamRole::Admin;
             MemberRow {
+                team_id: team_id.to_string(),
                 user_id: m.user.id.clone(),
                 name: format!("{} {}", m.user.first_name, m.user.last_name),
-                is_active: m.status == "ACTIVE",
+                is_active,
+                is_role_admin,
+                points: is_active.then_some(m.points),
+                show_role_toggle: viewer_is_admin && is_active,
+                toggle_target_role: if is_role_admin { "member" } else { "admin" },
+                toggle_label: if is_role_admin { "Remove admin" } else { "Make admin" },
             }
             .render()
         })
@@ -198,6 +223,31 @@ pub async fn team_detail_page(
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(users): Extension<Arc<dyn UserRepo>>,
 ) -> Result<Html<String>, ItemError> {
+    render_team_detail(&teams, &users, &team_id, &auth_user.user_id).await
+}
+
+#[derive(serde::Deserialize)]
+pub struct SetMemberRoleForm {
+    role: String,
+}
+
+pub async fn set_team_member_role_form(
+    Path((team_id, target_user_id)): Path<(String, String)>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(users): Extension<Arc<dyn UserRepo>>,
+    Form(form): Form<SetMemberRoleForm>,
+) -> Result<Html<String>, ItemError> {
+    let new_role = TeamRole::from_str(&form.role)
+        .map_err(|e| ItemError::Invalid(format!("invalid role: {e}")))?;
+    team_service::set_team_member_role(
+        &teams,
+        &team_id,
+        &auth_user.user_id,
+        &target_user_id,
+        new_role,
+    )
+    .await?;
     render_team_detail(&teams, &users, &team_id, &auth_user.user_id).await
 }
 

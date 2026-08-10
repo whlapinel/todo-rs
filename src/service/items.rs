@@ -182,6 +182,15 @@ pub async fn update_item(
 
     let current = repo.get(&params.user_id, &params.item_id).await?;
 
+    if params.complete
+        && !current.complete
+        && has_incomplete_children(repo, &params.item_id).await?
+    {
+        return Err(ItemError::Invalid(
+            "cannot complete an item with incomplete sub-items".to_string(),
+        ));
+    }
+
     let item_type = params.item_type.unwrap_or(current.item_type);
     let mut item = match item_type {
         ItemType::Simple => Item::new_simple(&params.user_id, &params.name),
@@ -205,6 +214,12 @@ pub async fn update_item(
     item.due_offset_days = params.due_offset_days;
     item.assigned_to_user_id = current.assigned_to_user_id.clone();
     item.validate().map_err(ItemError::Invalid)?;
+
+    if current.complete && !is_pure_complete_toggle(&current, &item) {
+        return Err(ItemError::Invalid(
+            "cannot edit a completed item; un-complete it first".to_string(),
+        ));
+    }
 
     let tz_offset = params.timezone_offset_minutes.unwrap_or(0);
     if let Some((next_item, next_anchor)) = item.next_recurrence(chrono::Utc::now(), tz_offset) {
@@ -297,6 +312,47 @@ pub(crate) fn clone_children<'a>(
 /// template auto-trigger copies) — `due_date` if set, else `scheduled_date`, else neither.
 pub(crate) fn item_anchor(item: &Item) -> Option<DateTime<Utc>> {
     item.due_date.or(item.scheduled_date)
+}
+
+/// True if `item_id` has at least one direct child that isn't complete — used to block a
+/// fresh `false -> true` completion until every direct child is done. Direct children only
+/// is sufficient by induction: each child was itself gated the same way when *it* was
+/// completed, so an already-complete child's own descendants are guaranteed complete too.
+pub(crate) async fn has_incomplete_children(
+    repo: &Arc<dyn ItemRepo>,
+    item_id: &str,
+) -> Result<bool, RepoError> {
+    Ok(repo
+        .list_children(item_id)
+        .await?
+        .iter()
+        .any(|child| !child.complete))
+}
+
+/// True if `item` differs from `current` only in `complete` — the edit-lock's definition of
+/// "just the checkbox changed." Deliberately an explicit field allowlist rather than a
+/// derived whole-struct `PartialEq`: `update_item`/`update_team_item` always build `item` via
+/// `Item::new_*` (a fresh default) and then overlay fields from params, so it would otherwise
+/// spuriously differ from `current` on fields the caller never intended to touch — e.g.
+/// `has_children`, which isn't a real column at all (see `src/storage/sqlite/items.rs`'s
+/// `EXISTS(...)` subquery) and so is always `false` on a freshly-built `item` regardless of
+/// `current`'s DB-populated value.
+pub(crate) fn is_pure_complete_toggle(current: &Item, item: &Item) -> bool {
+    current.name == item.name
+        && current.due_date == item.due_date
+        && current.scheduled_date == item.scheduled_date
+        && current.scheduled_end_date == item.scheduled_end_date
+        && current.recurrence == item.recurrence
+        && current.recurrence_basis == item.recurrence_basis
+        && current.has_due_time == item.has_due_time
+        && current.has_scheduled_time == item.has_scheduled_time
+        && current.has_end_time == item.has_end_time
+        && current.parent_item_id == item.parent_item_id
+        && current.item_type == item.item_type
+        && current.event_type == item.event_type
+        && current.due_offset_days == item.due_offset_days
+        && current.assigned_to_user_id == item.assigned_to_user_id
+        && current.points == item.points
 }
 
 /// Recomputes `due_date` for every descendant of `parent_item_id` that has its own
@@ -556,14 +612,18 @@ mod tests {
             .times(1)
             .returning(|_| Ok("new-item-id".to_string()));
 
+        // Called twice: once by the parent-gating check (Stage 5), once by
+        // `clone_children` when the recurrence branch fires. The child is already
+        // complete, matching what parent-gating requires before a fresh completion.
         mock.expect_list_children()
             .withf(|parent_id: &str| parent_id == "item1")
-            .times(1)
+            .times(2)
             .returning(|_| {
                 Ok(vec![Item {
                     id: "child1".to_string(),
                     parent_item_id: Some("item1".to_string()),
                     due_offset_days: Some(2),
+                    complete: true,
                     ..Item::default()
                 }])
             });
@@ -792,5 +852,152 @@ mod tests {
         )
         .await
         .expect("should update without touching children");
+    }
+
+    #[tokio::test]
+    async fn update_item_rejects_completion_with_incomplete_child() {
+        let mut mock = MockItemRepo::new();
+
+        mock.expect_get().returning(|_, _| {
+            Ok(Item {
+                id: "item1".to_string(),
+                user_id: Some("u1".to_string()),
+                complete: false,
+                ..Item::default()
+            })
+        });
+        mock.expect_list_children()
+            .withf(|parent_id: &str| parent_id == "item1")
+            .times(1)
+            .returning(|_| {
+                Ok(vec![Item {
+                    id: "child1".to_string(),
+                    parent_item_id: Some("item1".to_string()),
+                    complete: false,
+                    ..Item::default()
+                }])
+            });
+
+        let repo: Arc<dyn ItemRepo> = Arc::new(mock);
+
+        let err = update_item(
+            &repo,
+            UpdateItemParams {
+                user_id: "u1".to_string(),
+                item_id: "item1".to_string(),
+                name: "Parent".to_string(),
+                complete: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect_err("should reject completing with an incomplete child");
+
+        assert!(matches!(err, ItemError::Invalid(_)));
+    }
+
+    #[tokio::test]
+    async fn update_item_allows_completion_when_all_children_complete() {
+        let mut mock = MockItemRepo::new();
+
+        mock.expect_get().returning(|_, _| {
+            Ok(Item {
+                id: "item1".to_string(),
+                user_id: Some("u1".to_string()),
+                complete: false,
+                ..Item::default()
+            })
+        });
+        mock.expect_list_children()
+            .withf(|parent_id: &str| parent_id == "item1")
+            .times(1)
+            .returning(|_| {
+                Ok(vec![Item {
+                    id: "child1".to_string(),
+                    parent_item_id: Some("item1".to_string()),
+                    complete: true,
+                    ..Item::default()
+                }])
+            });
+        mock.expect_update().times(1).returning(|_| Ok(()));
+
+        let repo: Arc<dyn ItemRepo> = Arc::new(mock);
+
+        update_item(
+            &repo,
+            UpdateItemParams {
+                user_id: "u1".to_string(),
+                item_id: "item1".to_string(),
+                name: "Parent".to_string(),
+                complete: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("should allow completion when all children are complete");
+    }
+
+    #[tokio::test]
+    async fn update_item_rejects_field_edit_on_completed_item() {
+        let mut mock = MockItemRepo::new();
+
+        mock.expect_get().returning(|_, _| {
+            Ok(Item {
+                id: "item1".to_string(),
+                user_id: Some("u1".to_string()),
+                name: "Original name".to_string(),
+                complete: true,
+                ..Item::default()
+            })
+        });
+
+        let repo: Arc<dyn ItemRepo> = Arc::new(mock);
+
+        let err = update_item(
+            &repo,
+            UpdateItemParams {
+                user_id: "u1".to_string(),
+                item_id: "item1".to_string(),
+                name: "Changed name".to_string(),
+                complete: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect_err("should reject editing a field on a completed item");
+
+        assert!(matches!(err, ItemError::Invalid(_)));
+    }
+
+    #[tokio::test]
+    async fn update_item_allows_pure_complete_toggle_both_directions() {
+        let mut mock = MockItemRepo::new();
+
+        mock.expect_get().returning(|_, _| {
+            Ok(Item {
+                id: "item1".to_string(),
+                user_id: Some("u1".to_string()),
+                name: "Same name".to_string(),
+                complete: true,
+                ..Item::default()
+            })
+        });
+        mock.expect_update().times(1).returning(|_| Ok(()));
+
+        let repo: Arc<dyn ItemRepo> = Arc::new(mock);
+
+        // true -> false: un-completing, every other field round-tripped unchanged.
+        update_item(
+            &repo,
+            UpdateItemParams {
+                user_id: "u1".to_string(),
+                item_id: "item1".to_string(),
+                name: "Same name".to_string(),
+                complete: false,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("pure toggle should be allowed on a completed item");
     }
 }

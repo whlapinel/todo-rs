@@ -3,11 +3,12 @@ use crate::domain::item::{Item, ItemType};
 use crate::handlers::web_ui::nav::{self, ActiveContext, SidebarSection};
 use crate::service::error::ItemError;
 use crate::service::team_items::{
-    self as team_item_service, require_active_member, CreateTeamItemParams, UpdateTeamItemParams,
+    self as team_item_service, require_active_member, CreateTeamItemParams, UpdateTeamItemContext,
+    UpdateTeamItemParams,
 };
 use crate::service::teams as team_service;
 use crate::service::templates::{self as template_service, CreateTeamTemplateParams};
-use crate::storage::sqlite::{ItemRepo, TeamRepo};
+use crate::storage::sqlite::{ActivityLogRepo, ItemRepo, TeamRepo};
 use askama::Template;
 use axum::extract::{Extension, Form, Path, Query};
 use axum::response::{Html, IntoResponse, Response};
@@ -44,6 +45,11 @@ pub struct TeamSimpleItemForm {
     complete: Option<String>,
     parent_item_id: Option<String>,
     assigned_to_user_id: Option<String>,
+    /// Admin-only — the service layer strips/preserves this for non-admins regardless of
+    /// what's submitted. No `<input>` renders this yet on either form (Stage 7 adds the
+    /// actual template work); the parsing exists now so that stage only has to touch
+    /// templates, not this module.
+    points: Option<String>,
     show_complete: Option<String>,
     /// Present only on the standalone `/team-simple-lists/:team_id/new` page's forms — see
     /// `items.rs`'s identical field for the full rationale.
@@ -80,6 +86,14 @@ fn overlay_bool(form_value: &Option<String>, current: bool) -> bool {
     }
 }
 
+fn overlay_i32(form_value: &Option<String>, current: Option<i32>) -> Option<i32> {
+    match form_value {
+        None => current,
+        Some(s) if s.trim().is_empty() => None,
+        Some(s) => s.trim().parse().ok().or(current),
+    }
+}
+
 fn create_params_from_form(team_id: &str, form: &TeamSimpleItemForm) -> CreateTeamItemParams {
     CreateTeamItemParams {
         team_id: team_id.to_string(),
@@ -88,6 +102,12 @@ fn create_params_from_form(team_id: &str, form: &TeamSimpleItemForm) -> CreateTe
         parent_item_id: non_empty(&form.parent_item_id),
         item_type: Some(ItemType::Simple),
         assigned_to_user_id: non_empty(&form.assigned_to_user_id),
+        points: form
+            .points
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .and_then(|s| s.parse().ok()),
         ..Default::default()
     }
 }
@@ -109,6 +129,7 @@ fn update_params_from_form(
             &form.assigned_to_user_id,
             current.assigned_to_user_id.clone(),
         ),
+        points: overlay_i32(&form.points, current.points),
         ..Default::default()
     }
 }
@@ -190,6 +211,11 @@ struct TeamSimpleItemDetailFields {
     complete: bool,
     assignee_options: Vec<(String, String)>,
     assigned_to_user_id: Option<String>,
+    is_top_level: bool,
+    /// Gates the admin-only `points` input — see `macros::points_field` and
+    /// `service::teams::is_team_admin`.
+    is_team_admin: bool,
+    points_input: String,
     /// Set only on the fragment returned by a successful save — see `items.rs`'s
     /// `DetailFields.just_saved` for the full rationale.
     just_saved: bool,
@@ -200,6 +226,7 @@ impl TeamSimpleItemDetailFields {
         item: &Item,
         team_id: &str,
         assignee_options: Vec<(String, String)>,
+        is_team_admin: bool,
         just_saved: bool,
     ) -> Self {
         Self {
@@ -209,6 +236,9 @@ impl TeamSimpleItemDetailFields {
             complete: item.complete,
             assignee_options,
             assigned_to_user_id: item.assigned_to_user_id.clone(),
+            is_top_level: item.parent_item_id.is_none(),
+            is_team_admin,
+            points_input: item.points.map(|p| p.to_string()).unwrap_or_default(),
             just_saved,
         }
     }
@@ -254,6 +284,8 @@ struct TeamSimpleListsListPageTemplate {
     team_id: String,
     rows: Vec<String>,
     show_complete: bool,
+    /// The viewer's own point balance on this team — see `service::teams::member_points`.
+    points_label: String,
     nav_html: String,
 }
 
@@ -263,6 +295,8 @@ struct NewTeamSimpleItemPageTemplate {
     team_id: String,
     show_complete: bool,
     assignee_options: Vec<(String, String)>,
+    is_team_admin: bool,
+    blank_points_input: String,
     nav_html: String,
 }
 
@@ -272,6 +306,7 @@ struct TeamSimpleItemDetailPageTemplate {
     id: String,
     team_id: String,
     name: String,
+    complete: bool,
     view: String,
     nav_html: String,
 }
@@ -366,6 +401,7 @@ pub async fn team_simple_lists_page(
     let items = list_team_simple_items(&repo, &team_id).await?;
     let names = names_for(&teams, &team_id, &auth_user.user_id).await?;
     let rows = render_rows(&items, &team_id, &names, show_complete)?;
+    let points = team_service::member_points(&teams, &team_id, &auth_user.user_id).await?;
     let nav_html = nav::build_nav_html(
         &teams,
         &auth_user.user_id,
@@ -377,6 +413,7 @@ pub async fn team_simple_lists_page(
         team_id,
         rows,
         show_complete,
+        points_label: format!("{points} pts"),
         nav_html,
     })
 }
@@ -389,6 +426,7 @@ pub async fn new_team_simple_item_page(
 ) -> Result<Html<String>, ItemError> {
     require_active_member(&teams, &team_id, &auth_user.user_id).await?;
     let assignee_options = active_member_options(&teams, &team_id, &auth_user.user_id).await?;
+    let is_team_admin = team_service::is_team_admin(&teams, &team_id, &auth_user.user_id).await;
     let nav_html = nav::build_nav_html(
         &teams,
         &auth_user.user_id,
@@ -400,6 +438,8 @@ pub async fn new_team_simple_item_page(
         team_id,
         show_complete: q.show_complete.is_some(),
         assignee_options,
+        is_team_admin,
+        blank_points_input: String::new(),
         nav_html,
     })
 }
@@ -429,6 +469,7 @@ pub async fn team_simple_item_detail_page(
         id: item.id,
         team_id,
         name: item.name,
+        complete: item.complete,
         view,
         nav_html,
     })
@@ -447,8 +488,15 @@ pub async fn team_simple_item_edit_page(
         .map_err(ItemError::from)?;
     let item = require_team_simple(item)?;
     let assignee_options = active_member_options(&teams, &team_id, &auth_user.user_id).await?;
-    let fields =
-        TeamSimpleItemDetailFields::from_item(&item, &team_id, assignee_options, false).render()?;
+    let is_team_admin = team_service::is_team_admin(&teams, &team_id, &auth_user.user_id).await;
+    let fields = TeamSimpleItemDetailFields::from_item(
+        &item,
+        &team_id,
+        assignee_options,
+        is_team_admin,
+        false,
+    )
+    .render()?;
     let nav_html = nav::build_nav_html(
         &teams,
         &auth_user.user_id,
@@ -589,6 +637,7 @@ pub async fn update_team_simple_item_form(
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(activity_log): Extension<Arc<dyn ActivityLogRepo>>,
     Form(form): Form<TeamSimpleItemForm>,
 ) -> Result<Response, ItemError> {
     require_active_member(&teams, &team_id, &auth_user.user_id).await?;
@@ -598,7 +647,16 @@ pub async fn update_team_simple_item_form(
         .map_err(ItemError::from)?;
     let current = require_team_simple(current)?;
     let params = update_params_from_form(&team_id, &item_id, &current, &form);
-    team_item_service::update_team_item(&repo, &teams, &auth_user.user_id, params).await?;
+    team_item_service::update_team_item(
+        &repo,
+        &UpdateTeamItemContext {
+            teams: teams.clone(),
+            activity_log,
+        },
+        &auth_user.user_id,
+        params,
+    )
+    .await?;
 
     // Unlike team_tasks.rs/team_events.rs, there's no "recurring item got replaced under a
     // new id" case to handle here — Item::validate rejects `recurrence` outright for
@@ -611,9 +669,15 @@ pub async fn update_team_simple_item_form(
     let names = names_for(&teams, &team_id, &auth_user.user_id).await?;
     let row = TeamSimpleItemRow::from_item(&updated, &team_id, &names).render()?;
     let assignee_options = active_member_options(&teams, &team_id, &auth_user.user_id).await?;
-    let fields =
-        TeamSimpleItemDetailFields::from_item(&updated, &team_id, assignee_options, true)
-            .render()?;
+    let is_team_admin = team_service::is_team_admin(&teams, &team_id, &auth_user.user_id).await;
+    let fields = TeamSimpleItemDetailFields::from_item(
+        &updated,
+        &team_id,
+        assignee_options,
+        is_team_admin,
+        true,
+    )
+    .render()?;
     let view = TeamSimpleItemDetailView::from_item(&updated, &team_id, &names).render()?;
     Ok(Html(format!("{row}{fields}{view}")).into_response())
 }

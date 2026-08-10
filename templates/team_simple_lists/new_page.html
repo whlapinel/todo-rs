@@ -32,6 +32,7 @@
         </select>
       </div>
     </label>
+    {% call macros::points_field(is_team_admin, true, blank_points_input) %}{% endcall %}
     {% call macros::button_primary("Add item") %}{% endcall %}
   </form>
 
