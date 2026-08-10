@@ -2,7 +2,6 @@ use crate::auth::AuthUser;
 use crate::domain::item::{Item, ItemKind};
 use crate::handlers::web_ui::nav::{self, ActiveContext, SidebarSection};
 use crate::service::items::{self as item_service, ItemError};
-use crate::service::templates::{self as template_service, CreateTemplateParams};
 use crate::storage::sqlite::{ItemRepo, TeamRepo};
 use askama::Template;
 use axum::extract::{Extension, Form, Path, Query};
@@ -493,28 +492,4 @@ pub async fn delete_simple_item_form(
     require_simple(current)?;
     item_service::delete_item(&repo, &auth_user.user_id, &item_id).await?;
     Ok(Html(String::new()))
-}
-
-pub async fn save_simple_item_as_template(
-    Path(item_id): Path<String>,
-    Extension(auth_user): Extension<AuthUser>,
-    Extension(repo): Extension<Arc<dyn ItemRepo>>,
-) -> Result<Html<String>, ItemError> {
-    let item = repo
-        .get(&auth_user.user_id, &item_id)
-        .await
-        .map_err(ItemError::from)?;
-    template_service::create_template(
-        &repo,
-        CreateTemplateParams {
-            user_id: auth_user.user_id.clone(),
-            name: item.name.clone(),
-            source_item_id: Some(item_id),
-            event_type: None,
-        },
-    )
-    .await?;
-    Ok(Html(
-        r#"<span class="text-xs text-green-600">Saved</span>"#.to_string(),
-    ))
 }

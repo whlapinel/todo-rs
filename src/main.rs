@@ -129,10 +129,6 @@ fn build_web_router() -> Router {
             "/simple-lists/:item_id/children",
             get(simple_item_children_fragment),
         )
-        .route(
-            "/simple-lists/:item_id/save-as-template",
-            post(save_simple_item_as_template),
-        )
         .route("/dashboard", get(dashboard_page))
         .route("/dashboard/items/:item_id", put(toggle_item_complete))
         .route(
@@ -238,10 +234,6 @@ fn build_web_router() -> Router {
         .route(
             "/team-events/:team_id/:item_id/save-as-template",
             post(save_team_event_as_template),
-        )
-        .route(
-            "/team-simple-lists/:team_id/:item_id/save-as-template",
-            post(save_team_simple_item_as_template),
         )
         .route(
             "/team-templates/:team_id",

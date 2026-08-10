@@ -7,7 +7,6 @@ use crate::service::team_items::{
     UpdateTeamItemParams,
 };
 use crate::service::teams as team_service;
-use crate::service::templates::{self as template_service, CreateTeamTemplateParams};
 use crate::storage::sqlite::{ActivityLogRepo, ItemRepo, TeamRepo};
 use askama::Template;
 use axum::extract::{Extension, Form, Path, Query};
@@ -550,31 +549,4 @@ pub async fn delete_team_simple_item_form(
     team_item_service::delete_team_item(&repo, &teams, &auth_user.user_id, &team_id, &item_id)
         .await?;
     Ok(Html(String::new()))
-}
-
-pub async fn save_team_simple_item_as_template(
-    Path((team_id, item_id)): Path<(String, String)>,
-    Extension(auth_user): Extension<AuthUser>,
-    Extension(repo): Extension<Arc<dyn ItemRepo>>,
-    Extension(teams): Extension<Arc<dyn TeamRepo>>,
-) -> Result<Html<String>, ItemError> {
-    let item = repo
-        .get_team_item(&team_id, &item_id)
-        .await
-        .map_err(ItemError::from)?;
-    template_service::create_team_template(
-        &repo,
-        &teams,
-        CreateTeamTemplateParams {
-            team_id,
-            requester_user_id: auth_user.user_id,
-            name: item.name.clone(),
-            source_item_id: Some(item_id),
-            event_type: None,
-        },
-    )
-    .await?;
-    Ok(Html(
-        r#"<span class="text-xs text-green-600">Saved</span>"#.to_string(),
-    ))
 }

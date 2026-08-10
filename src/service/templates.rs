@@ -25,6 +25,11 @@ pub async fn create_template(
     let source_id = params.source_item_id;
     if let Some(source_id) = &source_id {
         let source = repo.get(&params.user_id, source_id).await?;
+        if matches!(source.item_type, ItemType::Simple) {
+            return Err(ItemError::Invalid(
+                "Simple list items cannot be saved as templates".to_string(),
+            ));
+        }
         recurrence = Recurrence {
             pattern: source.recurrence_pattern(),
             basis: source.recurrence_basis(),
@@ -81,6 +86,11 @@ pub async fn create_team_template(
     if let Some(source_id) = &source_id {
         // get_team_item (not get) confirms the source item actually belongs to this team.
         let source = repo.get_team_item(&params.team_id, source_id).await?;
+        if matches!(source.item_type, ItemType::Simple) {
+            return Err(ItemError::Invalid(
+                "Simple list items cannot be saved as templates".to_string(),
+            ));
+        }
         recurrence = Recurrence {
             pattern: source.recurrence_pattern(),
             basis: source.recurrence_basis(),
@@ -186,5 +196,82 @@ mod tests {
         .expect("should create template with copied children");
 
         assert_eq!(template_id, "tpl1");
+    }
+
+    #[tokio::test]
+    async fn create_template_rejects_simple_source() {
+        let mut mock = MockItemRepo::new();
+
+        mock.expect_get()
+            .withf(|user_id: &str, item_id: &str| user_id == "u1" && item_id == "src")
+            .times(1)
+            .returning(|_, _| {
+                Ok(Item {
+                    id: "src".to_string(),
+                    user_id: Some("u1".to_string()),
+                    name: "Groceries".to_string(),
+                    item_type: ItemType::Simple,
+                    ..Item::default()
+                })
+            });
+
+        let repo: Arc<dyn ItemRepo> = Arc::new(mock);
+
+        let result = create_template(
+            &repo,
+            CreateTemplateParams {
+                user_id: "u1".to_string(),
+                name: "Groceries".to_string(),
+                source_item_id: Some("src".to_string()),
+                event_type: None,
+            },
+        )
+        .await;
+
+        assert!(matches!(result, Err(ItemError::Invalid(_))));
+    }
+
+    #[tokio::test]
+    async fn create_team_template_rejects_simple_source() {
+        use crate::storage::sqlite::MockTeamRepo;
+
+        let mut mock = MockItemRepo::new();
+        mock.expect_get_team_item()
+            .withf(|team_id: &str, item_id: &str| team_id == "team1" && item_id == "src")
+            .times(1)
+            .returning(|_, _| {
+                Ok(Item {
+                    id: "src".to_string(),
+                    team_id: Some("team1".to_string()),
+                    name: "Groceries".to_string(),
+                    item_type: ItemType::Simple,
+                    ..Item::default()
+                })
+            });
+
+        let mut teams = MockTeamRepo::new();
+        teams
+            .expect_member_status()
+            .withf(|team_id: &str, user_id: &str| team_id == "team1" && user_id == "u1")
+            .times(1)
+            .returning(|_, _| Ok(Some("ACTIVE".to_string())));
+
+        let repo: Arc<dyn ItemRepo> = Arc::new(mock);
+        let teams: Arc<dyn TeamRepo> = Arc::new(teams);
+
+        let result = create_team_template(
+            &repo,
+            &teams,
+            CreateTeamTemplateParams {
+                team_id: "team1".to_string(),
+                requester_user_id: "u1".to_string(),
+                name: "Groceries".to_string(),
+                source_item_id: Some("src".to_string()),
+                event_type: None,
+            },
+        )
+        .await;
+
+        assert!(matches!(result, Err(ItemError::Invalid(_))));
     }
 }
