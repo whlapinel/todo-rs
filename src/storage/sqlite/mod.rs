@@ -69,6 +69,7 @@ pub trait ItemRepo: Send + Sync {
         parent_item_id: Option<String>,
     ) -> Result<Vec<Item>, RepoError>;
     async fn list_children(&self, parent_item_id: &str) -> Result<Vec<Item>, RepoError>;
+    async fn list_by_source_event(&self, source_event_id: &str) -> Result<Vec<Item>, RepoError>;
     async fn create(&self, item: &Item) -> Result<String, RepoError>;
     async fn update(&self, item: &Item) -> Result<(), RepoError>;
     async fn update_team_item(&self, item: &Item) -> Result<(), RepoError>;
@@ -224,6 +225,7 @@ fn row_to_item(row: &sqlx::sqlite::SqliteRow) -> Item {
     let event_type: Option<String> = row.get("event_type");
     let assigned_to_user_id: Option<String> = row.get("assigned_to_user_id");
     let points: Option<i32> = row.get("points");
+    let source_event_id: Option<String> = row.get("source_event_id");
 
     let kind: ItemKind = row
         .get::<Option<String>, _>("item_type")
@@ -242,6 +244,7 @@ fn row_to_item(row: &sqlx::sqlite::SqliteRow) -> Item {
             } else {
                 None
             },
+            source_event_id,
         },
         ItemKind::Event => ItemType::Event {
             schedule,
@@ -321,7 +324,8 @@ pub async fn create_pool(url: &str) -> Result<SqlitePool, sqlx::Error> {
             event_type TEXT,
             due_offset_days INTEGER,
             assigned_to_user_id TEXT,
-            points INTEGER
+            points INTEGER,
+            source_event_id TEXT
         )",
     )
     .execute(&pool)
@@ -335,6 +339,11 @@ pub async fn create_pool(url: &str) -> Result<SqlitePool, sqlx::Error> {
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_items_assigned_to ON items (assigned_to_user_id)")
         .execute(&pool)
         .await?;
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_items_source_event_id ON items (source_event_id)",
+    )
+    .execute(&pool)
+    .await?;
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS teams (
             id TEXT PRIMARY KEY,

@@ -73,6 +73,7 @@ pub async fn create_team_item(
             event_type: input.event_type,
             due_offset_days: input.due_offset_days,
             assigned_to_user_id: input.assigned_to_user_id,
+            source_event_id: input.source_event_id,
             timezone_offset_minutes: input.timezone_offset_minutes,
             points: input.points,
         },
@@ -126,6 +127,7 @@ pub async fn get_team_item(
         due_offset_days: item.due_offset_days(),
         assigned_to_user_id: item.assigned_to_user_id(),
         points: item.points(),
+        source_event_id: item.source_event_id(),
     })
 }
 
@@ -171,6 +173,7 @@ pub async fn update_team_item(
             event_type: input.event_type,
             due_offset_days: input.due_offset_days,
             assigned_to_user_id: input.assigned_to_user_id,
+            source_event_id: input.source_event_id,
             timezone_offset_minutes: input.timezone_offset_minutes,
             points: input.points,
         },
@@ -257,6 +260,7 @@ pub async fn list_team_items(
                 .assigned_to_user_id()
                 .map(|id| names.get(&id).unwrap_or(&"<Name>".to_string()).clone()),
             points: i.points(),
+            source_event_id: i.source_event_id(),
         })
         .collect();
     Ok(output::ListTeamItemsOutput { items })

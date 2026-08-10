@@ -20,7 +20,7 @@
 
   <div>
     <div class="flex items-center justify-between mb-2">
-      <h3 class="text-base/7 font-semibold text-gray-900 dark:text-white">Sub-items</h3>
+      <h3 class="text-base/7 font-semibold text-gray-900 dark:text-white">Linked tasks</h3>
       <button hx-post="/web/events/{{ id }}/save-as-template" hx-target="this" hx-select="unset" hx-swap="outerHTML"
               class="cursor-pointer text-sm text-gray-400 hover:text-gray-700 dark:text-gray-500 dark:hover:text-gray-300">Save as template</button>
     </div>
@@ -31,7 +31,7 @@
     <form hx-post="/web/events/{{ id }}/children" hx-target="#children-list" hx-select="unset" hx-swap="innerHTML"
           hx-on::after-request="if(event.detail.successful) this.reset()"
           class="mt-4 flex items-end gap-x-2">
-      <label class="flex-1 block text-sm/6 font-medium text-gray-900 dark:text-white">New sub-item <span class="text-red-500" aria-hidden="true">*</span>
+      <label class="flex-1 block text-sm/6 font-medium text-gray-900 dark:text-white">New linked task <span class="text-red-500" aria-hidden="true">*</span>
         <div class="mt-2">
           <input type="text" name="name" placeholder="Name" required maxlength="200"
                  class="block w-full rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 placeholder:text-gray-400 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:placeholder:text-gray-500 dark:focus:outline-indigo-500" />

@@ -204,6 +204,7 @@ fn create_params_from_form(
         item_type: Some(ItemKind::Event),
         event_type: non_empty(&form.event_type),
         due_offset_days: None,
+        source_event_id: None,
         timezone_offset_minutes: Some(tz),
     }
 }
@@ -249,6 +250,7 @@ fn update_params_from_form(
         item_type: Some(ItemKind::Event),
         event_type: overlay_str(&form.event_type, current.event_type()),
         due_offset_days: None,
+        source_event_id: None,
         timezone_offset_minutes: Some(tz),
     }
 }
@@ -904,21 +906,21 @@ pub async fn delete_event_form(
     Ok(Html(String::new()))
 }
 
-/// An event's own sub-items are always plain `Task`-typed (same as a Task's own children),
-/// so this reuses `tasks::render_children_fragment` rather than duplicating `TaskRow`/its
-/// template here — see that function's doc comment.
+/// An Event can never have structural children (see `Item::validate`/`create_item`'s parent-
+/// kind check) — its "Linked tasks" section instead shows every top-level Task that
+/// references it via `sourceEventId`, via `tasks::render_source_event_fragment`.
 pub async fn event_children_fragment(
     Path(item_id): Path<String>,
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     TzOffset(tz): TzOffset,
 ) -> Result<Html<String>, ItemError> {
-    // Ownership gate: list_children itself isn't scoped by user, so confirm the caller owns
-    // the parent before listing its children.
+    // Ownership gate: list_by_source_event itself isn't scoped by user, so confirm the caller
+    // owns the event before listing tasks that reference it.
     repo.get(&auth_user.user_id, &item_id)
         .await
         .map_err(ItemError::from)?;
-    tasks::render_children_fragment(&repo, &item_id, tz).await
+    tasks::render_source_event_fragment(&repo, &item_id, tz).await
 }
 
 #[derive(serde::Deserialize)]
@@ -928,6 +930,10 @@ pub struct EventChildForm {
     due_offset_days: Option<String>,
 }
 
+/// Creates a top-level Task that references this event via `sourceEventId` — not a structural
+/// child (Events can never have children, see `event_children_fragment`'s doc comment). Its
+/// `dueDate` is server-computed from `dueOffsetDays` against the event's own anchor (see
+/// `service::items::resolve_offset_anchor`), same as a structural child's would be.
 pub async fn create_event_child_form(
     Path(item_id): Path<String>,
     Extension(auth_user): Extension<AuthUser>,
@@ -938,7 +944,7 @@ pub async fn create_event_child_form(
     let params = item_service::CreateItemParams {
         user_id: auth_user.user_id.clone(),
         name: form.name,
-        parent_item_id: Some(item_id.clone()),
+        source_event_id: Some(item_id.clone()),
         item_type: Some(ItemKind::Task),
         due_offset_days: form
             .due_offset_days
@@ -950,7 +956,7 @@ pub async fn create_event_child_form(
         ..Default::default()
     };
     item_service::create_item(&repo, params).await?;
-    tasks::render_children_fragment(&repo, &item_id, tz).await
+    tasks::render_source_event_fragment(&repo, &item_id, tz).await
 }
 
 pub async fn save_event_as_template(

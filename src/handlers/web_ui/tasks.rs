@@ -3,7 +3,7 @@ use crate::domain::item::{Item, ItemKind};
 use crate::handlers::web_ui::dashboard::{detail_url, list_url_for};
 use crate::handlers::web_ui::nav::{self, ActiveContext, SidebarSection};
 use crate::handlers::web_ui::{TzOffset, to_local};
-use crate::service::items::{self as item_service, item_anchor, ItemError};
+use crate::service::items::{self as item_service, top_level_anchor, ItemError};
 use crate::service::templates::{self as template_service, CreateTemplateParams};
 use crate::storage::sqlite::{ItemRepo, RepoError, TeamRepo};
 use askama::Template;
@@ -264,6 +264,7 @@ fn update_params_from_form(
         parent_item_id: current.parent_item_id.clone(),
         item_type: Some(ItemKind::Task),
         due_offset_days: overlay_i32(&form.due_offset_days, current.due_offset_days()),
+        source_event_id: current.source_event_id(),
         timezone_offset_minutes: Some(tz),
         ..Default::default()
     }
@@ -281,14 +282,15 @@ fn recurrence_basis_label(recurrence_basis: &Option<String>) -> String {
 }
 
 fn offset_label_for(item: &Item) -> Option<String> {
-    item.parent_item_id
-        .as_ref()
-        .map(|_| match item.due_offset_days() {
-            Some(0) => "on due date".to_string(),
-            Some(n) if n > 0 => format!("+{n}d"),
-            Some(n) => format!("{n}d"),
-            None => "no offset".to_string(),
-        })
+    if !item.is_offset_driven() {
+        return None;
+    }
+    Some(match item.due_offset_days() {
+        Some(0) => "on due date".to_string(),
+        Some(n) if n > 0 => format!("+{n}d"),
+        Some(n) => format!("{n}d"),
+        None => "no offset".to_string(),
+    })
 }
 
 #[derive(Template)]
@@ -310,6 +312,10 @@ struct TaskRow {
     /// Populates the row's "subordinate under…" picker (see `subordinate_task_form`);
     /// empty for an only child / sole top-level item.
     siblings: Vec<(String, String)>,
+    /// True if this task references an Event via `sourceEventId` — its row hides the
+    /// "subordinate under…" picker even when siblings exist, since giving it a
+    /// `parentItemId` too would conflict with the reference (see `Item::validate`).
+    is_source_event_linked: bool,
 }
 
 impl TaskRow {
@@ -339,6 +345,7 @@ impl TaskRow {
                 .filter(|s| s.id != item.id)
                 .map(|s| (s.id.clone(), s.name.clone()))
                 .collect(),
+            is_source_event_linked: item.source_event_id().is_some(),
         }
     }
 }
@@ -355,6 +362,11 @@ struct TaskDetailFields {
     description: String,
     complete: bool,
     is_top_level: bool,
+    /// True for a structural child or an event-linked task — its due date is always
+    /// computed from `due_offset_days`, never manually typed (issues #21/#22), so the
+    /// template swaps the free-form due-date/scheduled-window inputs for a read-only
+    /// computed display and shows the offset field instead of recurrence controls.
+    is_offset_driven: bool,
     due_date_input: String,
     due_time_input: String,
     scheduled_date_input: String,
@@ -410,6 +422,7 @@ impl TaskDetailFields {
             description: item.description.clone().unwrap_or_default(),
             complete: item.complete,
             is_top_level: item.parent_item_id.is_none(),
+            is_offset_driven: item.is_offset_driven(),
             due_date_input,
             due_time_input,
             scheduled_date_input,
@@ -438,13 +451,18 @@ struct TaskDetailView {
     scheduled_date: Option<String>,
     scheduled_end_date: Option<String>,
     is_top_level: bool,
+    is_offset_driven: bool,
     recurrence: Option<String>,
     recurrence_basis_label: String,
     offset_label: Option<String>,
+    /// (name, detail-page URL) of the Event this task references via `sourceEventId`,
+    /// resolved by the caller (a plain lookup, since this struct's own `from_item` stays
+    /// pure/repo-free like every other `*_view`/`*_fields` struct in this module).
+    linked_event: Option<(String, String)>,
 }
 
 impl TaskDetailView {
-    fn from_item(item: &Item, tz: i32) -> Self {
+    fn from_item(item: &Item, tz: i32, linked_event: Option<(String, String)>) -> Self {
         let due_date = item.due_date().map(|d| {
             let local = to_local(d, tz);
             if item.has_due_time() {
@@ -479,11 +497,28 @@ impl TaskDetailView {
             scheduled_date,
             scheduled_end_date,
             is_top_level: item.parent_item_id.is_none(),
+            is_offset_driven: item.is_offset_driven(),
             recurrence: item.recurrence_pattern(),
             recurrence_basis_label: recurrence_basis_label(&item.recurrence_basis()),
             offset_label: offset_label_for(item),
+            linked_event,
         }
     }
+}
+
+/// Resolves the (name, detail-page URL) of the Event a task references via `sourceEventId`,
+/// for `TaskDetailView`'s read-only "Linked to event" line. `None` if the task doesn't
+/// reference one at all.
+async fn resolve_linked_event(
+    repo: &Arc<dyn ItemRepo>,
+    user_id: &str,
+    item: &Item,
+) -> Result<Option<(String, String)>, ItemError> {
+    let Some(event_id) = item.source_event_id() else {
+        return Ok(None);
+    };
+    let event = repo.get(user_id, &event_id).await.map_err(ItemError::from)?;
+    Ok(Some((event.name.clone(), detail_url(&event))))
 }
 
 #[derive(Template)]
@@ -798,7 +833,8 @@ pub async fn task_detail_page(
         .await
         .map_err(ItemError::from)?;
     let item = require_task(item)?;
-    let view = TaskDetailView::from_item(&item, tz).render()?;
+    let linked_event = resolve_linked_event(&repo, &auth_user.user_id, &item).await?;
+    let view = TaskDetailView::from_item(&item, tz, linked_event).render()?;
     let nav_html = nav::build_nav_html(
         &team_repo,
         &auth_user.user_id,
@@ -861,6 +897,29 @@ pub(crate) async fn render_children_fragment(
     render(TaskRowsFragmentTemplate {
         rows,
         empty_message: "No sub-items yet.".to_string(),
+    })
+}
+
+/// Renders every task that references `event_id` via `sourceEventId` as `TaskRow`s — the
+/// reference-based counterpart to `render_children_fragment` above, used by an Event's own
+/// "Linked tasks" section. Reuses `render_rows` (and so computes real siblings among the
+/// linked tasks themselves), but that's harmless: `TaskRow`'s "Move under…" picker is hidden
+/// unconditionally for a `sourceEventId`-linked row regardless of its siblings list (see
+/// `TaskRow::is_source_event_linked` and `Item::validate`'s "can't have both a parent and an
+/// event reference" rule) — subordinating one here would create exactly that conflict.
+pub(crate) async fn render_source_event_fragment(
+    repo: &Arc<dyn ItemRepo>,
+    event_id: &str,
+    tz: i32,
+) -> Result<Html<String>, ItemError> {
+    let tasks = repo
+        .list_by_source_event(event_id)
+        .await
+        .map_err(ItemError::from)?;
+    let rows = render_rows(&tasks, true, tz)?;
+    render(TaskRowsFragmentTemplate {
+        rows,
+        empty_message: "No linked tasks yet.".to_string(),
     })
 }
 
@@ -986,7 +1045,8 @@ pub async fn update_task_form(
 
     match repo.get(&auth_user.user_id, &item_id).await {
         Ok(updated) if close => {
-            let view = TaskDetailView::from_item(&updated, tz).render()?;
+            let linked_event = resolve_linked_event(&repo, &auth_user.user_id, &updated).await?;
+            let view = TaskDetailView::from_item(&updated, tz, linked_event).render()?;
             let nav_html = nav::build_nav_html(
                 &team_repo,
                 &auth_user.user_id,
@@ -1010,7 +1070,8 @@ pub async fn update_task_form(
             let siblings_ref: Vec<&Item> = siblings.iter().collect();
             let row = TaskRow::from_item(&updated, &siblings_ref, tz).render()?;
             let fields = TaskDetailFields::from_item(&updated, tz, true).render()?;
-            let view = TaskDetailView::from_item(&updated, tz).render()?;
+            let linked_event = resolve_linked_event(&repo, &auth_user.user_id, &updated).await?;
+            let view = TaskDetailView::from_item(&updated, tz, linked_event).render()?;
             Ok(Html(format!("{row}{fields}{view}")).into_response())
         }
         // The task was recurring, just got marked complete, and the service layer replaced
@@ -1041,28 +1102,6 @@ pub async fn delete_task_form(
     require_task(current)?;
     item_service::delete_item(&repo, &auth_user.user_id, &item_id).await?;
     Ok(Html(String::new()))
-}
-
-/// Walks up `item`'s own parent chain to find its top-level ancestor, then returns that
-/// ancestor's anchor (`due_date.or(scheduled_date)`, via `item_anchor`) — `None` if the
-/// ancestor has neither. `due_offset_days` is always measured from the **top-level** item's
-/// own anchor, never chained through an intermediate parent's own (possibly offset-derived)
-/// deadline — see CLAUDE.md's Recurrence section ("a grandchild's offset is measured from the
-/// same root a direct child's is, not chained through an intermediate parent's own
-/// deadline"). `sync_offset_children`/`clone_children` get this for free because their caller
-/// always passes down one single anchor for an entire cascade; a promote/subordinate has no
-/// such cascade to inherit from; it's the one place a new offset root has to be *found*, so it
-/// has to walk for it explicitly. A no-op (no extra fetch) when `item` is already top-level.
-async fn top_level_anchor(
-    repo: &Arc<dyn ItemRepo>,
-    user_id: &str,
-    item: &Item,
-) -> Result<Option<DateTime<Utc>>, ItemError> {
-    let mut current = item.clone();
-    while let Some(parent_id) = current.parent_item_id.clone() {
-        current = repo.get(user_id, &parent_id).await.map_err(ItemError::from)?;
-    }
-    Ok(item_anchor(&current))
 }
 
 /// Builds the params for a reparent-only update — every other field round-tripped unchanged
@@ -1120,6 +1159,7 @@ fn reparent_params(
         item_type: Some(current.kind()),
         event_type: current.event_type(),
         due_offset_days,
+        source_event_id: current.source_event_id(),
         timezone_offset_minutes: Some(tz),
     }
 }

@@ -9,6 +9,15 @@
       </div>
     </label>
     {% call macros::description_field(description) %}{% endcall %}
+    {% if is_offset_driven %}
+    <div>
+      <p class="block text-sm/6 font-medium text-gray-900 dark:text-white">Due date</p>
+      <p class="mt-2 text-sm text-gray-700 dark:text-gray-300">
+        {% if due_date_input.is_empty() %}Not set{% else %}{{ due_date_input }}{% if !due_time_input.is_empty() %} {{ due_time_input }}{% endif %}{% endif %}
+        (computed from the offset below)
+      </p>
+    </div>
+    {% else %}
     <div class="flex items-end gap-x-4">
       <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Due date
         <div class="mt-2">
@@ -24,6 +33,7 @@
       </label>
     </div>
     {% call macros::scheduled_fields(scheduled_date_input, scheduled_time_input, scheduled_end_date_input, scheduled_end_time_input) %}{% endcall %}
+    {% endif %}
     <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Assign to
       <div class="mt-2 grid grid-cols-1">
         <select name="assignedToUserId"
@@ -49,7 +59,7 @@
         </select>
       </div>
     </label>
-    {% call macros::recurrence_fields(is_top_level, recurrence, recurrence_basis, due_offset_days_input) %}{% endcall %}
+    {% call macros::recurrence_fields(is_top_level && !is_offset_driven, recurrence, recurrence_basis, due_offset_days_input) %}{% endcall %}
     {% call macros::points_field(is_team_admin, is_top_level, points_input) %}{% endcall %}
     <div class="flex items-center gap-x-3">
       {% call macros::button_primary("Save and close") %}{% endcall %}

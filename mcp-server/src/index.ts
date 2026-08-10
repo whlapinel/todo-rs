@@ -103,7 +103,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       name: "create_item",
       description:
         "Create a new todo item. Supports due dates, recurrence rules (e.g. 'every Monday', 'every 2 weeks'), and nesting under a parent item. " +
-        "Recurrence is only valid on top-level items (no parentItemId) — child items use dueOffsetDays instead, and setting both recurrence and parentItemId is rejected.",
+        "Recurrence is only valid on top-level items with no parentItemId/sourceEventId — a child item or an event-linked item (sourceEventId) uses dueOffsetDays instead, and setting recurrence alongside either is rejected.",
       inputSchema: {
         type: "object",
         properties: {
@@ -160,13 +160,18 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           eventType: {
             type: "string",
             description:
-              "Free-text category (e.g. 'rain'). Only valid on itemType EVENT — the server rejects it on any other item type. If it matches a checklist template's own eventType, that template's children are automatically copied onto this item when it's created.",
+              "Free-text category (e.g. 'rain'). Only valid on itemType EVENT — the server rejects it on any other item type. If it matches a checklist template's own eventType, that template's children are automatically added as sourceEventId-linked top-level tasks referencing this item when it's created (not nested children — an Event can never have children).",
           },
           dueOffsetDays: {
             type: "number",
             description:
-              "For a child item only: days from the top-level item's due date (negative = before, positive = after). " +
-              "Whenever the top-level item recurs, this child's due date is recalculated from the offset — any manually-set due date on the child does not persist across recurrences.",
+              "For a child item (parentItemId) or event-linked item (sourceEventId) only: days from the top-level item's or linked event's due date (negative = before, positive = after). " +
+              "The due date is always computed from this offset (a manually-set dueDate is ignored/overwritten) and is recalculated whenever the top-level item recurs or the linked event is rescheduled/recurs.",
+          },
+          sourceEventId: {
+            type: "string",
+            description:
+              "ID of an EVENT-typed item this (top-level) task references and tracks — mutually exclusive with parentItemId (an item either nests under a parent or references an event, never both). Like a child item, its due date is offset-driven via dueOffsetDays rather than freely settable, and it can't have scheduledDate/scheduledEndDate.",
           },
           timezoneOffsetMinutes: {
             type: "number",
@@ -194,7 +199,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           dueDate: { type: "string", description: "ISO 8601 date/time string" },
           scheduledDate: { type: "string", description: "ISO 8601 date/time string" },
           scheduledEndDate: { type: "string", description: "ISO 8601 date/time string" },
-          recurrence: { type: "string", description: "Only valid when parentItemId is not set." },
+          recurrence: { type: "string", description: "Only valid when parentItemId/sourceEventId are not set." },
           recurrenceBasis: {
             type: "string",
             enum: ["DUE_DATE", "COMPLETION_DATE"],
@@ -211,7 +216,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           eventType: { type: "string" },
           dueOffsetDays: {
             type: "number",
-            description: "For a child item only: days from the top-level item's due date (negative = before, positive = after).",
+            description: "For a child item (parentItemId) or event-linked item (sourceEventId) only: days from the top-level item's or linked event's due date (negative = before, positive = after).",
+          },
+          sourceEventId: {
+            type: "string",
+            description:
+              "ID of an EVENT-typed item this (top-level) task references — see create_item's sourceEventId for the full rationale. Omit to leave unchanged; the current value is not preserved automatically if omitted on a caller-built update, so round-trip it explicitly when editing an item that already has one.",
           },
           timezoneOffsetMinutes: { type: "number" },
         },
@@ -430,7 +440,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "create_team_item",
       description: "Create a new item owned by a team. The caller must be an active team member. Supports assignment to any active team member. " +
-        "Recurrence is only valid on top-level items (no parentItemId) — child items use dueOffsetDays instead, and setting both recurrence and parentItemId is rejected.",
+        "Recurrence is only valid on top-level items with no parentItemId/sourceEventId — a child item or an event-linked item (sourceEventId) uses dueOffsetDays instead, and setting recurrence alongside either is rejected.",
       inputSchema: {
         type: "object",
         properties: {
@@ -458,13 +468,18 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           eventType: {
             type: "string",
             description:
-              "Free-text category (e.g. 'rain'). Only valid on itemType EVENT — the server rejects it on any other item type. If it matches a checklist template's own eventType, that template's children are automatically copied onto this item when it's created.",
+              "Free-text category (e.g. 'rain'). Only valid on itemType EVENT — the server rejects it on any other item type. If it matches a checklist template's own eventType, that template's children are automatically added as sourceEventId-linked top-level tasks referencing this item when it's created (not nested children — an Event can never have children).",
           },
           dueOffsetDays: {
             type: "number",
             description:
-              "For a child item only: days from the top-level item's due date (negative = before, positive = after). " +
-              "Whenever the top-level item recurs, this child's due date is recalculated from the offset — any manually-set due date on the child does not persist across recurrences.",
+              "For a child item (parentItemId) or event-linked item (sourceEventId) only: days from the top-level item's or linked event's due date (negative = before, positive = after). " +
+              "The due date is always computed from this offset (a manually-set dueDate is ignored/overwritten) and is recalculated whenever the top-level item recurs or the linked event is rescheduled/recurs.",
+          },
+          sourceEventId: {
+            type: "string",
+            description:
+              "ID of an EVENT-typed team item this (top-level) task references and tracks — mutually exclusive with parentItemId. Unlike parentItemId-nested children, a sourceEventId-linked task is top-level, so it can still be assigned and carry points.",
           },
           assignedToUserId: { type: "string", description: "Active team member to assign this item to" },
           timezoneOffsetMinutes: { type: "number" },
@@ -508,7 +523,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           eventType: { type: "string" },
           dueOffsetDays: {
             type: "number",
-            description: "For a child item only: days from the top-level item's due date (negative = before, positive = after).",
+            description: "For a child item (parentItemId) or event-linked item (sourceEventId) only: days from the top-level item's or linked event's due date (negative = before, positive = after).",
+          },
+          sourceEventId: {
+            type: "string",
+            description:
+              "ID of an EVENT-typed team item this (top-level) task references — see create_team_item's sourceEventId for the full rationale. Omit to leave unchanged; the current value is not preserved automatically if omitted on a caller-built update, so round-trip it explicitly when editing an item that already has one.",
           },
           assignedToUserId: { type: "string", description: "Active team member to assign this item to" },
           timezoneOffsetMinutes: { type: "number" },
@@ -598,6 +618,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         if (args.itemType) body.itemType = args.itemType;
         if (args.eventType) body.eventType = args.eventType;
         if (args.dueOffsetDays !== undefined) body.dueOffsetDays = args.dueOffsetDays;
+        if (args.sourceEventId) body.sourceEventId = args.sourceEventId;
         if (args.timezoneOffsetMinutes !== undefined)
           body.timezoneOffsetMinutes = args.timezoneOffsetMinutes;
         result = await api("POST", `/users/${args.userId}/items`, body);
@@ -622,6 +643,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         if (args.itemType) body.itemType = args.itemType;
         if (args.eventType !== undefined) body.eventType = args.eventType;
         if (args.dueOffsetDays !== undefined) body.dueOffsetDays = args.dueOffsetDays;
+        if (args.sourceEventId !== undefined) body.sourceEventId = args.sourceEventId;
         if (args.timezoneOffsetMinutes !== undefined)
           body.timezoneOffsetMinutes = args.timezoneOffsetMinutes;
         result = await api(
@@ -741,6 +763,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         if (args.itemType) body.itemType = args.itemType;
         if (args.eventType) body.eventType = args.eventType;
         if (args.dueOffsetDays !== undefined) body.dueOffsetDays = args.dueOffsetDays;
+        if (args.sourceEventId) body.sourceEventId = args.sourceEventId;
         if (args.assignedToUserId) body.assignedToUserId = args.assignedToUserId;
         if (args.timezoneOffsetMinutes !== undefined)
           body.timezoneOffsetMinutes = args.timezoneOffsetMinutes;
@@ -767,6 +790,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         if (args.itemType) body.itemType = args.itemType;
         if (args.eventType !== undefined) body.eventType = args.eventType;
         if (args.dueOffsetDays !== undefined) body.dueOffsetDays = args.dueOffsetDays;
+        if (args.sourceEventId !== undefined) body.sourceEventId = args.sourceEventId;
         if (args.assignedToUserId) body.assignedToUserId = args.assignedToUserId;
         if (args.timezoneOffsetMinutes !== undefined)
           body.timezoneOffsetMinutes = args.timezoneOffsetMinutes;

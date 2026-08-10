@@ -32,6 +32,7 @@ resource Item {
         eventType: String
         dueOffsetDays: Integer
         assignedToUserId: String
+        sourceEventId: String
     }
     read: GetItem
     list: ListItems
@@ -77,6 +78,8 @@ operation CreateItem {
         $eventType
 
         $dueOffsetDays
+
+        $sourceEventId
 
         @notProperty
         timezoneOffsetMinutes: Integer
@@ -141,6 +144,8 @@ operation GetItem {
         $dueOffsetDays
 
         $assignedToUserId
+
+        $sourceEventId
     }
 
     errors: [
@@ -191,6 +196,8 @@ operation UpdateItem {
         $eventType
 
         $dueOffsetDays
+
+        $sourceEventId
 
         @notProperty
         timezoneOffsetMinutes: Integer
@@ -246,6 +253,7 @@ structure ItemSummary for Item {
     $eventType
     $dueOffsetDays
     $assignedToUserId
+    $sourceEventId
 }
 
 @input

@@ -541,6 +541,7 @@ pub async fn update_template_child_form(
         item_type: Some(ItemKind::Task),
         event_type: current.event_type(),
         due_offset_days: parse_offset(&form.due_offset_days),
+        source_event_id: None,
         timezone_offset_minutes: None,
     };
     item_service::update_item(&repo, params).await?;

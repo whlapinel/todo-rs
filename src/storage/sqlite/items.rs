@@ -9,7 +9,7 @@ pub struct SqliteItemRepo(pub SqlitePool);
 const ITEM_SELECT: &str =
     "SELECT id, user_id, team_id, parent_item_id, name, description, due_date, scheduled_date, scheduled_end_date, complete, recurrence, recurrence_basis,
             has_due_time, has_scheduled_time, has_end_time,
-            item_type, event_type, due_offset_days, assigned_to_user_id, points,
+            item_type, event_type, due_offset_days, assigned_to_user_id, points, source_event_id,
             EXISTS(SELECT 1 FROM items c WHERE c.parent_item_id = items.id) AS has_children";
 
 #[async_trait]
@@ -46,6 +46,19 @@ impl ItemRepo for SqliteItemRepo {
         );
         sqlx::query(&q)
             .bind(parent_item_id)
+            .fetch_all(&self.0)
+            .await
+            .map_err(db_err)
+            .map(|rows| rows.iter().map(row_to_item).collect())
+    }
+
+    async fn list_by_source_event(&self, source_event_id: &str) -> Result<Vec<Item>, RepoError> {
+        let q = format!(
+            "{ITEM_SELECT} FROM items WHERE source_event_id = ? \
+             ORDER BY COALESCE(due_date, 9999999999999) ASC"
+        );
+        sqlx::query(&q)
+            .bind(source_event_id)
             .fetch_all(&self.0)
             .await
             .map_err(db_err)
@@ -104,8 +117,8 @@ impl ItemRepo for SqliteItemRepo {
         let has_end_time: i64 = item.has_end_time() as i64;
         let item_type: &str = item.kind().as_str();
         sqlx::query(
-            "INSERT INTO items (id, user_id, team_id, parent_item_id, name, description, due_date, scheduled_date, scheduled_end_date, complete, recurrence, recurrence_basis, has_due_time, has_scheduled_time, has_end_time, item_type, event_type, due_offset_days, assigned_to_user_id, points)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO items (id, user_id, team_id, parent_item_id, name, description, due_date, scheduled_date, scheduled_end_date, complete, recurrence, recurrence_basis, has_due_time, has_scheduled_time, has_end_time, item_type, event_type, due_offset_days, assigned_to_user_id, points, source_event_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(&item.user_id)
@@ -127,6 +140,7 @@ impl ItemRepo for SqliteItemRepo {
         .bind(item.due_offset_days())
         .bind(item.assigned_to_user_id())
         .bind(item.points())
+        .bind(item.source_event_id())
         .execute(&self.0)
         .await
         .map_err(db_err)?;
@@ -144,7 +158,7 @@ impl ItemRepo for SqliteItemRepo {
         let item_type: &str = item.kind().as_str();
         let rows = sqlx::query(
             "UPDATE items SET name = ?, description = ?, due_date = ?, scheduled_date = ?, scheduled_end_date = ?, complete = ?, recurrence = ?, recurrence_basis = ?, \
-             has_due_time = ?, has_scheduled_time = ?, has_end_time = ?, parent_item_id = ?, item_type = ?, event_type = ?, due_offset_days = ?, assigned_to_user_id = ? \
+             has_due_time = ?, has_scheduled_time = ?, has_end_time = ?, parent_item_id = ?, item_type = ?, event_type = ?, due_offset_days = ?, assigned_to_user_id = ?, source_event_id = ? \
              WHERE id = ? AND user_id = ?",
         )
         .bind(&item.name)
@@ -163,6 +177,7 @@ impl ItemRepo for SqliteItemRepo {
         .bind(item.event_type())
         .bind(item.due_offset_days())
         .bind(item.assigned_to_user_id())
+        .bind(item.source_event_id())
         .bind(&item.id)
         .bind(&item.user_id)
         .execute(&self.0)
@@ -183,7 +198,7 @@ impl ItemRepo for SqliteItemRepo {
         let item_type: &str = item.kind().as_str();
         let rows = sqlx::query(
             "UPDATE items SET name = ?, description = ?, due_date = ?, scheduled_date = ?, scheduled_end_date = ?, complete = ?, recurrence = ?, recurrence_basis = ?, \
-             has_due_time = ?, has_scheduled_time = ?, has_end_time = ?, parent_item_id = ?, item_type = ?, event_type = ?, due_offset_days = ?, assigned_to_user_id = ?, points = ? \
+             has_due_time = ?, has_scheduled_time = ?, has_end_time = ?, parent_item_id = ?, item_type = ?, event_type = ?, due_offset_days = ?, assigned_to_user_id = ?, points = ?, source_event_id = ? \
              WHERE id = ? AND team_id = ?",
         )
         .bind(&item.name)
@@ -203,6 +218,7 @@ impl ItemRepo for SqliteItemRepo {
         .bind(item.due_offset_days())
         .bind(item.assigned_to_user_id())
         .bind(item.points())
+        .bind(item.source_event_id())
         .bind(&item.id)
         .bind(&item.team_id)
         .execute(&self.0)
@@ -231,7 +247,7 @@ impl ItemRepo for SqliteItemRepo {
         sqlx::query(
             "SELECT items.id, items.user_id, items.team_id, items.parent_item_id, items.name, items.description, items.due_date, items.scheduled_date, items.scheduled_end_date,
                     items.complete, items.recurrence, items.recurrence_basis, items.has_due_time, items.has_scheduled_time, items.has_end_time,
-                    items.item_type, items.event_type, items.due_offset_days, items.assigned_to_user_id, items.points,
+                    items.item_type, items.event_type, items.due_offset_days, items.assigned_to_user_id, items.points, items.source_event_id,
                     COALESCE(parent.name, '') AS parent_name,
                     EXISTS(SELECT 1 FROM items c WHERE c.parent_item_id = items.id) AS has_children
              FROM items
@@ -269,7 +285,7 @@ impl ItemRepo for SqliteItemRepo {
         sqlx::query(
             "SELECT items.id, items.user_id, items.team_id, items.parent_item_id, items.name, items.description, items.due_date, items.scheduled_date, items.scheduled_end_date,
                     items.complete, items.recurrence, items.recurrence_basis, items.has_due_time, items.has_scheduled_time, items.has_end_time,
-                    items.item_type, items.event_type, items.due_offset_days, items.assigned_to_user_id, items.points,
+                    items.item_type, items.event_type, items.due_offset_days, items.assigned_to_user_id, items.points, items.source_event_id,
                     COALESCE(parent.name, '') AS parent_name,
                     EXISTS(SELECT 1 FROM items c WHERE c.parent_item_id = items.id) AS has_children
              FROM items

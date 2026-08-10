@@ -60,6 +60,7 @@ pub async fn create_item(
             item_type: to_domain_item_type(input.item_type),
             event_type: input.event_type,
             due_offset_days: input.due_offset_days,
+            source_event_id: input.source_event_id,
             timezone_offset_minutes: input.timezone_offset_minutes,
         },
     )
@@ -104,6 +105,7 @@ pub async fn update_item(
             item_type: to_domain_item_type(input.item_type),
             event_type: input.event_type,
             due_offset_days: input.due_offset_days,
+            source_event_id: input.source_event_id,
             timezone_offset_minutes: input.timezone_offset_minutes,
         },
     )
@@ -160,6 +162,7 @@ pub async fn get_item(
         event_type: item.event_type(),
         due_offset_days: item.due_offset_days(),
         assigned_to_user_id: item.assigned_to_user_id(),
+        source_event_id: item.source_event_id(),
     })
 }
 
@@ -203,6 +206,7 @@ pub async fn list_items(
             event_type: i.event_type(),
             due_offset_days: i.due_offset_days(),
             assigned_to_user_id: i.assigned_to_user_id(),
+            source_event_id: i.source_event_id(),
         })
         .collect();
     Ok(output::ListItemsOutput { items })

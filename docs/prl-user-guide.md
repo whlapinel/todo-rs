@@ -103,6 +103,7 @@ prl items add "Rain today" --item-type event --event-type rain
 prl items add "Write report" --scheduled 2026-06-18 --scheduled-end 2026-06-20
 prl items add "Milk" --item-type simple
 prl items add "Trip planning" --description "Book flights, hotel, and rental car"
+prl items add "Buy cake" --source-event-id <event-item-id> --due-offset-days -2
 ```
 
 `--description` is free-form notes text (up to 5000 characters), separate from the
@@ -115,26 +116,40 @@ server rejects any of those on a `simple` item). `--event-type` is a free-text
 category (e.g. `rain`), only valid on `--item-type event` (the server rejects it on
 tasks and simple items — `prl` itself checks this too and errors before sending the
 request); if it matches a checklist template's own event type, that template's
-checklist items are automatically added as children the moment the item is created.
-Checklist templates themselves aren't yet manageable from `prl` (web UI or MCP server
-only), but an event created via `prl items add --item-type event --event-type ...`
-can still trigger one that already exists.
+checklist items are automatically added the moment the item is created — as
+`--source-event-id`-linked top-level tasks (see below), not children, since an
+event can never have children. Checklist templates themselves aren't yet
+manageable from `prl` (web UI or MCP server only), but an event created via
+`prl items add --item-type event --event-type ...` can still trigger one that
+already exists.
+
+`--source-event-id` links a top-level task to an event it tracks — the same
+mechanism the auto-trigger above uses, available for manually linking a task
+to an event too. It's mutually exclusive with `--parent` (an item either
+nests under a parent or references an event, never both) and, like a child's
+`--due-offset-days`, drives the task's due date instead of a manually-typed
+one — the server computes it from the referenced event's own due/scheduled
+date plus the offset, ignoring any `--due` you pass alongside it.
 
 `--due`, `--scheduled`, and `--scheduled-end` all accept `YYYY-MM-DD` or a Unix
 timestamp. `--due` is the deadline (drives recurrence and offset-based child due
 dates); `--scheduled`/`--scheduled-end` describe an optional start→end window —
-when you actually plan to do it — and apply to tasks just as much as events.
+when you actually plan to do it — and apply to tasks just as much as events. Note
+that a child item (`--parent`) or event-linked task (`--source-event-id`) can't
+use `--scheduled`/`--scheduled-end` at all — the server rejects it, since their
+only supported date is the offset-derived due date.
 
 > **Note:** Assignment is no longer supported on personal items. To create an
 > assignable task, use the web UI to create a team item under a team you
 > belong to (see [Teams](#teams)).
 
-> **Note:** `--recurrence` only works on items with no `--parent` — child
-> items can't have their own recurrence, and `prl` rejects the combination
-> before it ever reaches the server. Use `--due-offset-days` on a child
-> instead (days from the top-level item's due date, negative = before,
-> positive = after) — the offset is what actually sets the child's due date
-> whenever the top-level item recurs.
+> **Note:** `--recurrence` only works on items with no `--parent`/
+> `--source-event-id` — child and event-linked items can't have their own
+> recurrence, and `prl` rejects the combination before it ever reaches the
+> server. Use `--due-offset-days` instead (days from the top-level item's or
+> linked event's due date, negative = before, positive = after) — the offset
+> is what actually sets the item's due date whenever the top-level item
+> recurs or the linked event is rescheduled.
 
 ### Mark complete
 
@@ -337,7 +352,7 @@ When adding an item with `--recurrence`, the system understands natural English 
 
 When a recurring item is marked done, it is replaced by a new item with the next computed date. The recurrence basis — due date, completion date, or scheduled date — controls both which date the next occurrence is measured from and which field (`due` or `scheduled`) it's written into; due-date basis writes the new due date, the other two write the new scheduled date instead. Basis must be set via the web app — `prl` has no flag for it yet.
 
-Recurrence only applies to top-level items — a child item (created with `--parent`) can't have its own recurrence. Instead, a child can have an offset (days from its top-level item's due date, set with `--due-offset-days`), which is used to recompute the child's due date whenever the top-level item recurs.
+Recurrence only applies to top-level items with no `--source-event-id` — a child item (created with `--parent`) or an event-linked task (created with `--source-event-id`) can't have its own recurrence. Instead, either can have an offset (days from its top-level item's or linked event's due date, set with `--due-offset-days`), which is used to recompute its due date whenever the top-level item recurs or the linked event is rescheduled/recurs.
 
 ---
 

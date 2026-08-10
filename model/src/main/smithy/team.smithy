@@ -26,6 +26,7 @@ resource TeamItem {
         dueOffsetDays: Integer
         assignedToUserId: String
         points: Integer
+        sourceEventId: String
     }
     read: GetTeamItem
     list: ListTeamItems
@@ -75,6 +76,8 @@ operation CreateTeamItem {
         $assignedToUserId
 
         $points
+
+        $sourceEventId
 
         @notProperty
         timezoneOffsetMinutes: Integer
@@ -141,6 +144,8 @@ operation GetTeamItem {
         $assignedToUserId
 
         $points
+
+        $sourceEventId
     }
 
     errors: [
@@ -195,6 +200,8 @@ operation UpdateTeamItem {
         $assignedToUserId
 
         $points
+
+        $sourceEventId
 
         @notProperty
         timezoneOffsetMinutes: Integer
@@ -252,6 +259,7 @@ structure TeamItemSummary for TeamItem {
     $assignedToUserId
     assignedToUserName: String
     $points
+    $sourceEventId
 }
 
 @input

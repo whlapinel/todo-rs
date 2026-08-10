@@ -436,6 +436,7 @@ pub async fn toggle_item_complete(
         item_type: Some(current.kind()),
         event_type: current.event_type(),
         due_offset_days: current.due_offset_days(),
+        source_event_id: current.source_event_id(),
         timezone_offset_minutes: Some(tz),
     };
     item_service::update_item(&repo, params).await?;
@@ -484,6 +485,7 @@ pub async fn toggle_team_item_complete(
         event_type: current.event_type(),
         due_offset_days: current.due_offset_days(),
         assigned_to_user_id: current.assigned_to_user_id(),
+        source_event_id: current.source_event_id(),
         timezone_offset_minutes: Some(tz),
         points: current.points(),
     };

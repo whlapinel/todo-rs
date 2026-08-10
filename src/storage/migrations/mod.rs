@@ -1,6 +1,7 @@
 mod activity_log;
 mod add_item_description;
 mod add_item_points;
+mod add_item_source_event_id;
 mod add_team_member_role;
 mod has_tasks_to_simple;
 mod item_type_event_type;
@@ -10,6 +11,7 @@ mod team_member_points;
 use activity_log::ActivityLog;
 use add_item_description::AddItemDescription;
 use add_item_points::AddItemPoints;
+use add_item_source_event_id::AddItemSourceEventId;
 use add_team_member_role::AddTeamMemberRole;
 use async_trait::async_trait;
 use has_tasks_to_simple::HasTasksToSimple;
@@ -59,6 +61,7 @@ fn all_migrations() -> Vec<Box<dyn Migration>> {
         Box::new(ActivityLog),
         Box::new(TeamMemberPoints),
         Box::new(AddItemDescription),
+        Box::new(AddItemSourceEventId),
     ]
 }
 
@@ -142,7 +145,8 @@ mod tests {
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
                 due_date INTEGER,
-                is_template INTEGER NOT NULL DEFAULT 0
+                is_template INTEGER NOT NULL DEFAULT 0,
+                parent_item_id TEXT
             )",
         )
         .execute(&pool)
@@ -227,6 +231,57 @@ mod tests {
         pool
     }
 
+    async fn pre_source_event_id_schema_pool() -> SqlitePool {
+        let pool = memory_pool().await;
+        sqlx::query(
+            "CREATE TABLE items (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                due_date INTEGER,
+                parent_item_id TEXT,
+                item_type TEXT NOT NULL DEFAULT 'TASK'
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        old_team_members_table(&pool).await;
+        pool
+    }
+
+    #[tokio::test]
+    async fn backfills_event_nested_children_into_source_event_id_references() {
+        let pool = pre_source_event_id_schema_pool().await;
+        sqlx::query(
+            "INSERT INTO items (id, name, item_type, parent_item_id) VALUES \
+             ('event1', 'Birthday party', 'EVENT', NULL), \
+             ('child1', 'Buy cake', 'TASK', 'event1'), \
+             ('other1', 'Unrelated task', 'TASK', NULL)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        run_migrations(&pool).await.unwrap();
+
+        let (source_event_id, parent_item_id): (Option<String>, Option<String>) = sqlx::query_as(
+            "SELECT source_event_id, parent_item_id FROM items WHERE id = 'child1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(source_event_id.as_deref(), Some("event1"));
+        assert_eq!(parent_item_id, None);
+
+        let (other_source_event_id, other_parent_item_id): (Option<String>, Option<String>) =
+            sqlx::query_as("SELECT source_event_id, parent_item_id FROM items WHERE id = 'other1'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(other_source_event_id, None);
+        assert_eq!(other_parent_item_id, None);
+    }
+
     #[tokio::test]
     async fn backfills_simple_item_type_and_drops_has_tasks() {
         let pool = pre_simple_schema_pool().await;
@@ -292,7 +347,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 8);
+        assert_eq!(applied_count, 9);
     }
 
     #[tokio::test]
@@ -305,7 +360,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 8);
+        assert_eq!(applied_count, 9);
     }
 
     #[tokio::test]
@@ -319,6 +374,6 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 8);
+        assert_eq!(applied_count, 9);
     }
 }

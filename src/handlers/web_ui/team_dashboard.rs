@@ -170,6 +170,7 @@ pub async fn toggle_team_dashboard_item_complete(
         event_type: current.event_type(),
         due_offset_days: current.due_offset_days(),
         assigned_to_user_id: current.assigned_to_user_id(),
+        source_event_id: current.source_event_id(),
         timezone_offset_minutes: Some(tz),
         points: current.points(),
     };

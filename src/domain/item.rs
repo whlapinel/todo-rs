@@ -109,6 +109,14 @@ pub enum ItemType {
         schedule: Schedule,
         recurrence: Recurrence,
         team_assignment: Option<TeamAssignment>,
+        /// The Event this task tracks, if it was auto-copied from a matching
+        /// template or manually linked from the event's own "Linked tasks"
+        /// form — a reference, not structural nesting, so the task stays
+        /// top-level (assignable/pointable) while still being offset-driven
+        /// off the event's own date. Mutually exclusive with `parent_item_id`
+        /// (see `Item::validate`) and only settable on `Task` — only a Task
+        /// has anywhere to put it.
+        source_event_id: Option<String>,
     },
     Event {
         schedule: Schedule,
@@ -131,6 +139,7 @@ impl Default for ItemType {
             schedule: Schedule::default(),
             recurrence: Recurrence::default(),
             team_assignment: None,
+            source_event_id: None,
         }
     }
 }
@@ -154,6 +163,7 @@ impl ItemType {
                 schedule: Schedule::default(),
                 recurrence: Recurrence::default(),
                 team_assignment: None,
+                source_event_id: None,
             },
             ItemKind::Event => ItemType::Event {
                 schedule: Schedule::default(),
@@ -217,6 +227,13 @@ impl ItemType {
     pub fn team_assignment(&self) -> Option<&TeamAssignment> {
         match self {
             ItemType::Task { team_assignment, .. } => team_assignment.as_ref(),
+            _ => None,
+        }
+    }
+
+    pub fn source_event_id(&self) -> Option<&str> {
+        match self {
+            ItemType::Task { source_event_id, .. } => source_event_id.as_deref(),
             _ => None,
         }
     }
@@ -345,6 +362,19 @@ impl Item {
         self.item_type.team_assignment().and_then(|a| a.points)
     }
 
+    pub fn source_event_id(&self) -> Option<String> {
+        self.item_type.source_event_id().map(|s| s.to_string())
+    }
+
+    /// True if this item's own date is derived from an offset rather than
+    /// freely set — either a structural child (`parent_item_id`) or a task
+    /// referencing an Event (`source_event_id`). Every "child-like"
+    /// restriction (no manual scheduled window, no recurrence, due date
+    /// computed rather than accepted) keys off this one predicate.
+    pub fn is_offset_driven(&self) -> bool {
+        self.parent_item_id.is_some() || self.source_event_id().is_some()
+    }
+
     /// Enforces the cross-field invariants that assigning the payload to the wrong
     /// variant would otherwise still allow at construction time (a caller can still
     /// build `ItemType::Task { team_assignment: Some(..), .. }` on a child by hand) —
@@ -373,6 +403,25 @@ impl Item {
         // completion concept at all (unlike Task/Event, which support it).
         if self.complete && self.kind() == ItemKind::Simple {
             return Err("simple items cannot be marked complete".to_string());
+        }
+        // A task either nests under a parent or references an event, never both —
+        // keeps "offset-driven" unambiguous: exactly one anchor source.
+        if self.source_event_id().is_some() && self.parent_item_id.is_some() {
+            return Err(
+                "an item cannot both have a parent and reference an event".to_string(),
+            );
+        }
+        // Offset-driven items (children and event-linked tasks) get their due date
+        // computed from the offset (see service::items::resolve_offset_anchor) —
+        // there's no equivalent "scheduled offset", so a manual scheduled window
+        // isn't allowed on them at all.
+        if self.is_offset_driven()
+            && (self.scheduled_date().is_some() || self.scheduled_end_date().is_some())
+        {
+            return Err(
+                "scheduled dates are not allowed on child or event-linked items"
+                    .to_string(),
+            );
         }
         Ok(())
     }
@@ -499,6 +548,13 @@ mod tests {
             .due_offset_days = Some(days);
     }
 
+    fn set_source_event_id(item: &mut Item, event_id: &str) {
+        match &mut item.item_type {
+            ItemType::Task { source_event_id, .. } => *source_event_id = Some(event_id.to_string()),
+            _ => panic!("source_event_id only settable on Task"),
+        }
+    }
+
     fn set_points(item: &mut Item, points: i32) {
         match &mut item.item_type {
             ItemType::Task { team_assignment, .. } => {
@@ -601,6 +657,64 @@ mod tests {
         let mut item = Item::new_team_item("t1", "Task");
         set_points(&mut item, 10);
         assert!(item.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_item_with_both_parent_and_source_event() {
+        let mut item = Item::new_task("u1", "Buy cake");
+        item.parent_item_id = Some("parent1".to_string());
+        set_source_event_id(&mut item, "event1");
+        assert!(item.validate().is_err());
+    }
+
+    #[test]
+    fn validate_allows_source_event_linked_task_with_no_parent() {
+        let mut item = Item::new_task("u1", "Buy cake");
+        set_source_event_id(&mut item, "event1");
+        assert!(item.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_scheduled_date_on_child_item() {
+        let mut item = Item::new_task("u1", "Sub-task");
+        item.parent_item_id = Some("parent1".to_string());
+        set_scheduled_date(&mut item, Utc::now());
+        assert!(item.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_scheduled_date_on_source_event_linked_task() {
+        let mut item = Item::new_task("u1", "Buy cake");
+        set_source_event_id(&mut item, "event1");
+        set_scheduled_date(&mut item, Utc::now());
+        assert!(item.validate().is_err());
+    }
+
+    #[test]
+    fn validate_allows_scheduled_date_on_independent_top_level_item() {
+        let mut item = Item::new_task("u1", "Plan trip");
+        set_scheduled_date(&mut item, Utc::now());
+        assert!(item.validate().is_ok());
+    }
+
+    #[test]
+    fn is_offset_driven_true_for_child() {
+        let mut item = Item::new_task("u1", "Sub-task");
+        item.parent_item_id = Some("parent1".to_string());
+        assert!(item.is_offset_driven());
+    }
+
+    #[test]
+    fn is_offset_driven_true_for_source_event_linked_task() {
+        let mut item = Item::new_task("u1", "Buy cake");
+        set_source_event_id(&mut item, "event1");
+        assert!(item.is_offset_driven());
+    }
+
+    #[test]
+    fn is_offset_driven_false_for_independent_top_level_item() {
+        let item = Item::new_task("u1", "Plan trip");
+        assert!(!item.is_offset_driven());
     }
 
     #[test]

@@ -2,8 +2,9 @@ use crate::domain::item::{Item, ItemKind, ItemType, Recurrence, Schedule, TeamAs
 use crate::domain::recurrence;
 use crate::service::activity_log::reverse_entry;
 use crate::service::items::{
-    archive_recurrence, clone_children, copy_template_children, has_incomplete_children,
-    is_pure_complete_toggle, item_anchor, sync_offset_children, ItemError,
+    archive_recurrence, clone_children, copy_template_children_to_event, has_incomplete_children,
+    is_pure_complete_toggle, item_anchor, repoint_source_event_tasks, sync_offset_children,
+    sync_source_event_tasks, unlink_source_event_tasks, ItemError,
 };
 use crate::service::teams::require_team_admin;
 use crate::storage::sqlite::{ActivityLogRepo, ItemRepo, TeamRepo};
@@ -38,6 +39,7 @@ pub struct CreateTeamItemParams {
     pub event_type: Option<String>,
     pub due_offset_days: Option<i32>,
     pub assigned_to_user_id: Option<String>,
+    pub source_event_id: Option<String>,
     pub timezone_offset_minutes: Option<i32>,
     pub points: Option<i32>,
 }
@@ -53,6 +55,7 @@ fn build_item_type(
     recurrence: Recurrence,
     event_type: Option<String>,
     team_assignment: Option<TeamAssignment>,
+    source_event_id: Option<String>,
 ) -> ItemType {
     match kind {
         ItemKind::Simple => ItemType::Simple,
@@ -60,6 +63,7 @@ fn build_item_type(
             schedule,
             recurrence,
             team_assignment,
+            source_event_id,
         },
         ItemKind::Event => ItemType::Event {
             schedule,
@@ -74,6 +78,39 @@ fn build_item_type(
     }
 }
 
+/// Team-scoped mirror of `service::items::top_level_anchor` — walks `item`'s
+/// `parent_item_id` chain up to its true top-level ancestor via `repo.get_team_item`
+/// rather than `repo.get`, since a team item has no `user_id` to scope a plain `get`
+/// against.
+pub(crate) async fn top_level_anchor_team(
+    repo: &Arc<dyn ItemRepo>,
+    team_id: &str,
+    item: &Item,
+) -> Result<Option<DateTime<Utc>>, ItemError> {
+    let mut current = item.clone();
+    while let Some(parent_id) = current.parent_item_id.clone() {
+        current = repo.get_team_item(team_id, &parent_id).await?;
+    }
+    Ok(item_anchor(&current))
+}
+
+/// Team-scoped mirror of `service::items::resolve_offset_anchor`.
+pub(crate) async fn resolve_offset_anchor_team(
+    repo: &Arc<dyn ItemRepo>,
+    team_id: &str,
+    item: &Item,
+) -> Result<Option<DateTime<Utc>>, ItemError> {
+    if let Some(event_id) = item.source_event_id() {
+        let event = repo.get_team_item(team_id, &event_id).await?;
+        Ok(item_anchor(&event))
+    } else if let Some(parent_id) = item.parent_item_id.clone() {
+        let parent = repo.get_team_item(team_id, &parent_id).await?;
+        top_level_anchor_team(repo, team_id, &parent).await
+    } else {
+        Ok(None)
+    }
+}
+
 /// Moved from `json_api::team_items::create_team_item`.
 pub async fn create_team_item(
     repo: &Arc<dyn ItemRepo>,
@@ -85,9 +122,12 @@ pub async fn create_team_item(
     if let Some(ref r) = params.recurrence {
         recurrence::parse(r).map_err(ItemError::Invalid)?;
     }
-    if params.recurrence.is_some() && params.parent_item_id.is_some() {
+    if params.recurrence.is_some()
+        && (params.parent_item_id.is_some() || params.source_event_id.is_some())
+    {
         return Err(ItemError::Invalid(
-            "child items cannot have their own recurrence; set dueOffsetDays instead".to_string(),
+            "child or event-linked items cannot have their own recurrence; set dueOffsetDays instead"
+                .to_string(),
         ));
     }
     if params.item_type == Some(ItemKind::Template) {
@@ -100,6 +140,18 @@ pub async fn create_team_item(
     {
         return Err(ItemError::Invalid(
             "scheduledEndDate cannot be before scheduledDate".to_string(),
+        ));
+    }
+
+    // Events can never have children (a task references an event via
+    // sourceEventId instead of nesting under it).
+    if let Some(ref parent_id) = params.parent_item_id
+        && let Ok(parent) = repo.get_team_item(&params.team_id, parent_id).await
+        && parent.kind() == ItemKind::Event
+    {
+        return Err(ItemError::Invalid(
+            "Events cannot have children; link a task to it via sourceEventId instead"
+                .to_string(),
         ));
     }
 
@@ -149,19 +201,26 @@ pub async fn create_team_item(
         recurrence_data,
         params.event_type.clone(),
         team_assignment,
+        params.source_event_id.clone(),
     );
     item.complete = params.complete.unwrap_or(false);
     item.parent_item_id = params.parent_item_id.clone();
     item.description = params.description.clone();
-    item.validate().map_err(ItemError::Invalid)?;
 
-    if let Some(pattern) = item.recurrence_pattern()
+    let tz_offset = params.timezone_offset_minutes.unwrap_or(0);
+    if item.is_offset_driven() {
+        let anchor = resolve_offset_anchor_team(repo, &params.team_id, &item).await?;
+        let new_due_date = anchor.and_then(|a| item.deadline_from_offset(a, tz_offset));
+        if let Some(schedule) = item.item_type.schedule_mut() {
+            schedule.due_date = new_due_date;
+            schedule.has_due_time = false;
+        }
+    } else if let Some(pattern) = item.recurrence_pattern()
         && let Ok(rule) = recurrence::parse(&pattern)
     {
         let basis = item
             .recurrence_basis()
             .unwrap_or_else(|| "DUE_DATE".to_string());
-        let tz_offset = params.timezone_offset_minutes.unwrap_or(0);
         if let Some(schedule) = item.item_type.schedule_mut() {
             if basis == "DUE_DATE" && schedule.due_date.is_none() {
                 let mut deadline = recurrence::next_date(&rule, chrono::Utc::now(), tz_offset);
@@ -180,11 +239,16 @@ pub async fn create_team_item(
             }
         }
     }
+
+    item.validate().map_err(ItemError::Invalid)?;
+
     let item_id = repo.create(&item).await?;
 
-    // Considers both the requester's personal templates and the team's own —
-    // same mechanism as service::items::create_item's trigger step, plus
-    // the team-scoped template library from Stage 8.
+    // Considers both the requester's personal templates and the team's own — same
+    // mechanism as service::items::create_item's trigger step, plus the team-scoped
+    // template library from Stage 8. Lands as sourceEventId-linked top-level tasks
+    // (copy_template_children_to_event), not nested children — Events can never have
+    // children (see the parent-fetch check above).
     if let Some(event_type) = item.event_type() {
         let tz_offset = params.timezone_offset_minutes.unwrap_or(0);
         let root_date = item_anchor(&item);
@@ -194,7 +258,8 @@ pub async fn create_team_item(
             .iter()
             .filter(|t| t.event_type().as_deref() == Some(event_type.as_str()))
         {
-            copy_template_children(repo, &tpl.id, &item_id, root_date, tz_offset).await?;
+            copy_template_children_to_event(repo, &tpl.id, &item_id, root_date, tz_offset)
+                .await?;
         }
     }
     Ok(item_id)
@@ -224,6 +289,7 @@ pub async fn delete_team_item(
             repo.delete(&child.id).await?;
         }
     }
+    unlink_source_event_tasks(repo, item_id).await?;
     repo.delete(item_id).await?;
     Ok(())
 }
@@ -288,6 +354,7 @@ pub struct UpdateTeamItemParams {
     pub event_type: Option<String>,
     pub due_offset_days: Option<i32>,
     pub assigned_to_user_id: Option<String>,
+    pub source_event_id: Option<String>,
     pub timezone_offset_minutes: Option<i32>,
     pub points: Option<i32>,
 }
@@ -305,9 +372,11 @@ pub async fn update_team_item(
     if let Some(ref r) = params.recurrence {
         recurrence::parse(r).map_err(ItemError::Invalid)?;
     }
-    if params.recurrence.is_some() && params.parent_item_id.is_some() {
+    if params.recurrence.is_some()
+        && (params.parent_item_id.is_some() || params.source_event_id.is_some())
+    {
         return Err(ItemError::Invalid(
-            "child items cannot have their own recurrence; set dueOffsetDays instead"
+            "child or event-linked items cannot have their own recurrence; set dueOffsetDays instead"
                 .to_string(),
         ));
     }
@@ -331,6 +400,18 @@ pub async fn update_team_item(
     {
         return Err(ItemError::Invalid(
             "cannot complete an item with incomplete sub-items".to_string(),
+        ));
+    }
+
+    // Events can never have children (a task references an event via
+    // sourceEventId instead of nesting under it).
+    if let Some(ref parent_id) = params.parent_item_id
+        && let Ok(parent) = repo.get_team_item(&params.team_id, parent_id).await
+        && parent.kind() == ItemKind::Event
+    {
+        return Err(ItemError::Invalid(
+            "Events cannot have children; link a task to it via sourceEventId instead"
+                .to_string(),
         ));
     }
 
@@ -385,7 +466,19 @@ pub async fn update_team_item(
         recurrence_data,
         params.event_type.clone(),
         team_assignment,
+        params.source_event_id.clone(),
     );
+
+    let tz_offset = params.timezone_offset_minutes.unwrap_or(0);
+    if item.is_offset_driven() {
+        let anchor = resolve_offset_anchor_team(repo, &params.team_id, &item).await?;
+        let new_due_date = anchor.and_then(|a| item.deadline_from_offset(a, tz_offset));
+        if let Some(schedule) = item.item_type.schedule_mut() {
+            schedule.due_date = new_due_date;
+            schedule.has_due_time = false;
+        }
+    }
+
     item.validate().map_err(ItemError::Invalid)?;
 
     if current.complete && !is_pure_complete_toggle(&current, &item) {
@@ -444,10 +537,12 @@ pub async fn update_team_item(
         reverse_entry(teams, activity_log, &entry).await?;
     }
 
-    let tz_offset = params.timezone_offset_minutes.unwrap_or(0);
     if let Some((next_item, next_anchor)) = item.next_recurrence(chrono::Utc::now(), tz_offset) {
         let next_id = repo.create(&next_item).await?;
         clone_children(repo, &item.id, &next_id, next_anchor, tz_offset).await?;
+        if item.kind() == ItemKind::Event {
+            repoint_source_event_tasks(repo, &item.id, &next_id, next_anchor, tz_offset).await?;
+        }
         archive_recurrence(&mut item);
         repo.update_team_item(&item).await?;
         return Ok(());
@@ -459,6 +554,9 @@ pub async fn update_team_item(
         && Some(new_anchor) != old_anchor
     {
         sync_offset_children(repo, &item.id, new_anchor, tz_offset).await?;
+        if item.kind() == ItemKind::Event {
+            sync_source_event_tasks(repo, &item.id, new_anchor, tz_offset).await?;
+        }
     }
     Ok(())
 }
@@ -573,6 +671,7 @@ mod tests {
                     points,
                     assigned_to_user_id: assigned_to_user_id.map(str::to_string),
                 }),
+                source_event_id: None,
             },
             ..Item::default()
         }

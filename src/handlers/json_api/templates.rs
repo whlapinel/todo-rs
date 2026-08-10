@@ -58,6 +58,7 @@ pub async fn list_templates(
             event_type: i.event_type(),
             due_offset_days: i.due_offset_days(),
             assigned_to_user_id: None,
+            source_event_id: None,
         })
         .collect();
     Ok(output::ListTemplatesOutput { items })

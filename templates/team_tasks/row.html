@@ -17,7 +17,7 @@
       {% if let Some(d) = due_date %}<span class="{% if overdue %}text-red-600 dark:text-red-400{% endif %}">Due: {{ d }}</span>{% endif %}
       {% if let Some(r) = recurrence %}<span title="repeats">&#8635; {{ r }}</span>{% endif %}
     </div>
-    {% if !complete && !siblings.is_empty() %}
+    {% if !complete && !siblings.is_empty() && !is_source_event_linked %}
     <select name="new_parent_id"
             hx-post="/web/team-tasks/{{ team_id }}/{{ id }}/subordinate" hx-trigger="change"
             hx-target="#page" hx-select="#page" hx-swap="innerHTML" hx-push-url="true"

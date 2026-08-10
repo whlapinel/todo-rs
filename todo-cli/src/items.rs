@@ -52,6 +52,11 @@ pub enum ItemsCommand {
         scheduled: Option<String>,
         #[arg(long, help = "Scheduled end: YYYY-MM-DD or Unix timestamp")]
         scheduled_end: Option<String>,
+        #[arg(
+            long,
+            help = "Event item ID this task references (top-level only; mutually exclusive with --parent)"
+        )]
+        source_event_id: Option<String>,
     },
     /// Mark an item complete
     Done { item_id: String },
@@ -112,6 +117,7 @@ pub async fn cmd_items(client: &Client, cmd: ItemsCommand, user_id: Option<Strin
             event_type,
             scheduled,
             scheduled_end,
+            source_event_id,
         } => {
             if parent.is_some() && recurrence.is_some() {
                 eprintln!(
@@ -122,6 +128,18 @@ pub async fn cmd_items(client: &Client, cmd: ItemsCommand, user_id: Option<Strin
             if event_type.is_some() && item_type.as_deref().map(str::to_lowercase).as_deref() != Some("event") {
                 eprintln!(
                     "error: --event-type can only be used with --item-type event — only events can auto-trigger a matching template"
+                );
+                std::process::exit(1);
+            }
+            if parent.is_some() && source_event_id.is_some() {
+                eprintln!(
+                    "error: --source-event-id can't be combined with --parent — an item either nests under a parent or references an event, not both"
+                );
+                std::process::exit(1);
+            }
+            if source_event_id.is_some() && recurrence.is_some() {
+                eprintln!(
+                    "error: --recurrence can't be combined with --source-event-id — event-linked items can't have their own recurrence; use --due-offset-days instead"
                 );
                 std::process::exit(1);
             }
@@ -165,6 +183,9 @@ pub async fn cmd_items(client: &Client, cmd: ItemsCommand, user_id: Option<Strin
                     std::process::exit(1);
                 });
                 req = req.scheduled_end_date(scheduled_end_date);
+            }
+            if let Some(e) = source_event_id {
+                req = req.source_event_id(e);
             }
             let out = unwrap_or_exit(req.send().await, "add item");
             println!("created item {}", out.item_id());
@@ -222,6 +243,9 @@ pub async fn cmd_items(client: &Client, cmd: ItemsCommand, user_id: Option<Strin
             }
             if let Some(t) = item.has_end_time() {
                 req = req.has_end_time(t);
+            }
+            if let Some(e) = item.source_event_id() {
+                req = req.source_event_id(e);
             }
             unwrap_or_exit(req.send().await, "mark done");
             println!("marked {item_id} complete");
@@ -302,6 +326,7 @@ pub async fn cmd_items(client: &Client, cmd: ItemsCommand, user_id: Option<Strin
             println!("assigned:   {}", item.assigned_to_user_id().unwrap_or("-"));
             println!("item type:  {:?}", item.item_type());
             println!("event type: {}", item.event_type().unwrap_or("-"));
+            println!("src event:  {}", item.source_event_id().unwrap_or("-"));
         }
         ItemsCommand::Due { after, before } => {
             let uid = require_user(user_id);

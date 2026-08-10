@@ -4,10 +4,9 @@ use crate::handlers::web_ui::dashboard::{detail_url, list_url_for};
 use crate::handlers::web_ui::nav::{self, ActiveContext, SidebarSection};
 use crate::handlers::web_ui::{TzOffset, to_local};
 use crate::service::error::ItemError;
-use crate::service::items::item_anchor;
 use crate::service::team_items::{
-    self as team_item_service, require_active_member, CreateTeamItemParams, UpdateTeamItemContext,
-    UpdateTeamItemParams,
+    self as team_item_service, require_active_member, top_level_anchor_team, CreateTeamItemParams,
+    UpdateTeamItemContext, UpdateTeamItemParams,
 };
 use crate::service::teams as team_service;
 use crate::service::templates::{self as template_service, CreateTeamTemplateParams};
@@ -284,6 +283,7 @@ fn update_params_from_form(
             &form.assigned_to_user_id,
             current.assigned_to_user_id(),
         ),
+        source_event_id: current.source_event_id(),
         timezone_offset_minutes: Some(tz),
         // No points input renders on this form yet (Stage 7 adds it) — `overlay_i32` falls
         // back to `current.points` when the form field is absent, so a plain edit here can't
@@ -343,14 +343,15 @@ fn recurrence_basis_label(recurrence_basis: &Option<String>) -> String {
 }
 
 fn offset_label_for(item: &Item) -> Option<String> {
-    item.parent_item_id
-        .as_ref()
-        .map(|_| match item.due_offset_days() {
-            Some(0) => "on due date".to_string(),
-            Some(n) if n > 0 => format!("+{n}d"),
-            Some(n) => format!("{n}d"),
-            None => "no offset".to_string(),
-        })
+    if !item.is_offset_driven() {
+        return None;
+    }
+    Some(match item.due_offset_days() {
+        Some(0) => "on due date".to_string(),
+        Some(n) if n > 0 => format!("+{n}d"),
+        Some(n) => format!("{n}d"),
+        None => "no offset".to_string(),
+    })
 }
 
 fn format_offset_input(due_offset_days: Option<i32>) -> String {
@@ -379,6 +380,8 @@ struct TeamTaskRow {
     /// See `tasks::TaskRow`'s identical field — populates this row's "subordinate under…"
     /// picker with its actual siblings (the other items rendered in the same list call).
     siblings: Vec<(String, String)>,
+    /// See `tasks::TaskRow`'s identical field — hides the picker even with siblings present.
+    is_source_event_linked: bool,
 }
 
 impl TeamTaskRow {
@@ -418,6 +421,7 @@ impl TeamTaskRow {
                 .filter(|s| s.id != item.id)
                 .map(|s| (s.id.clone(), s.name.clone()))
                 .collect(),
+            is_source_event_linked: item.source_event_id().is_some(),
         }
     }
 }
@@ -431,6 +435,8 @@ struct TeamTaskDetailFields {
     description: String,
     complete: bool,
     is_top_level: bool,
+    /// See `tasks::TaskDetailFields`'s identical field.
+    is_offset_driven: bool,
     due_date_input: String,
     due_time_input: String,
     scheduled_date_input: String,
@@ -500,6 +506,7 @@ impl TeamTaskDetailFields {
             description: item.description.clone().unwrap_or_default(),
             complete: item.complete,
             is_top_level: item.parent_item_id.is_none(),
+            is_offset_driven: item.is_offset_driven(),
             due_date_input,
             due_time_input,
             scheduled_date_input,
@@ -533,14 +540,23 @@ struct TeamTaskDetailView {
     scheduled_date: Option<String>,
     scheduled_end_date: Option<String>,
     is_top_level: bool,
+    is_offset_driven: bool,
     recurrence: Option<String>,
     recurrence_basis_label: String,
     offset_label: Option<String>,
     assignee_name: Option<String>,
+    /// See `tasks::TaskDetailView`'s identical field.
+    linked_event: Option<(String, String)>,
 }
 
 impl TeamTaskDetailView {
-    fn from_item(item: &Item, team_id: &str, names: &HashMap<String, String>, tz: i32) -> Self {
+    fn from_item(
+        item: &Item,
+        team_id: &str,
+        names: &HashMap<String, String>,
+        tz: i32,
+        linked_event: Option<(String, String)>,
+    ) -> Self {
         let due_date = item.due_date().map(|d| {
             let local = to_local(d, tz);
             if item.has_due_time() {
@@ -576,14 +592,32 @@ impl TeamTaskDetailView {
             scheduled_date,
             scheduled_end_date,
             is_top_level: item.parent_item_id.is_none(),
+            is_offset_driven: item.is_offset_driven(),
             recurrence: item.recurrence_pattern(),
             recurrence_basis_label: recurrence_basis_label(&item.recurrence_basis()),
             offset_label: offset_label_for(item),
             assignee_name: item
                 .assigned_to_user_id()
                 .map(|id| names.get(&id).cloned().unwrap_or(id)),
+            linked_event,
         }
     }
+}
+
+/// See `tasks::resolve_linked_event`'s identical rationale, team-scoped via `get_team_item`.
+async fn resolve_linked_event(
+    repo: &Arc<dyn ItemRepo>,
+    team_id: &str,
+    item: &Item,
+) -> Result<Option<(String, String)>, ItemError> {
+    let Some(event_id) = item.source_event_id() else {
+        return Ok(None);
+    };
+    let event = repo
+        .get_team_item(team_id, &event_id)
+        .await
+        .map_err(ItemError::from)?;
+    Ok(Some((event.name.clone(), detail_url(&event))))
 }
 
 #[derive(Template)]
@@ -808,7 +842,8 @@ pub async fn team_task_detail_page(
         .map_err(ItemError::from)?;
     let item = require_team_task(item)?;
     let names = names_for(&teams, &team_id, &auth_user.user_id).await?;
-    let view = TeamTaskDetailView::from_item(&item, &team_id, &names, tz).render()?;
+    let linked_event = resolve_linked_event(&repo, &team_id, &item).await?;
+    let view = TeamTaskDetailView::from_item(&item, &team_id, &names, tz, linked_event).render()?;
     let nav_html = nav::build_nav_html(
         &teams,
         &auth_user.user_id,
@@ -888,6 +923,27 @@ pub(crate) async fn render_children_fragment(
     render(TeamTaskRowsFragmentTemplate {
         rows,
         empty_message: "No sub-items yet.".to_string(),
+    })
+}
+
+/// See `tasks::render_source_event_fragment`'s identical rationale, team-scoped.
+pub(crate) async fn render_source_event_fragment(
+    repo: &Arc<dyn ItemRepo>,
+    teams: &Arc<dyn TeamRepo>,
+    team_id: &str,
+    event_id: &str,
+    requester_user_id: &str,
+    tz: i32,
+) -> Result<Html<String>, ItemError> {
+    let tasks = repo
+        .list_by_source_event(event_id)
+        .await
+        .map_err(ItemError::from)?;
+    let names = names_for(teams, team_id, requester_user_id).await?;
+    let rows = render_rows(&tasks, team_id, &names, true, tz)?;
+    render(TeamTaskRowsFragmentTemplate {
+        rows,
+        empty_message: "No linked tasks yet.".to_string(),
     })
 }
 
@@ -1037,7 +1093,10 @@ pub async fn update_team_task_form(
     match repo.get_team_item(&team_id, &item_id).await {
         Ok(updated) if close => {
             let names = names_for(&teams, &team_id, &auth_user.user_id).await?;
-            let view = TeamTaskDetailView::from_item(&updated, &team_id, &names, tz).render()?;
+            let linked_event = resolve_linked_event(&repo, &team_id, &updated).await?;
+            let view =
+                TeamTaskDetailView::from_item(&updated, &team_id, &names, tz, linked_event)
+                    .render()?;
             let nav_html = nav::build_nav_html(
                 &teams,
                 &auth_user.user_id,
@@ -1075,7 +1134,10 @@ pub async fn update_team_task_form(
                 true,
             )
             .render()?;
-            let view = TeamTaskDetailView::from_item(&updated, &team_id, &names, tz).render()?;
+            let linked_event = resolve_linked_event(&repo, &team_id, &updated).await?;
+            let view =
+                TeamTaskDetailView::from_item(&updated, &team_id, &names, tz, linked_event)
+                    .render()?;
             Ok(Html(format!("{row}{fields}{view}")).into_response())
         }
         // The task was recurring, just got marked complete, and the service layer replaced
@@ -1107,22 +1169,6 @@ pub async fn delete_team_task_form(
     team_item_service::delete_team_item(&repo, &teams, &auth_user.user_id, &team_id, &item_id)
         .await?;
     Ok(Html(String::new()))
-}
-
-/// See `tasks::top_level_anchor`'s identical rationale — team-scoped via `get_team_item`.
-async fn top_level_anchor(
-    repo: &Arc<dyn ItemRepo>,
-    team_id: &str,
-    item: &Item,
-) -> Result<Option<DateTime<Utc>>, ItemError> {
-    let mut current = item.clone();
-    while let Some(parent_id) = current.parent_item_id.clone() {
-        current = repo
-            .get_team_item(team_id, &parent_id)
-            .await
-            .map_err(ItemError::from)?;
-    }
-    Ok(item_anchor(&current))
 }
 
 /// Reparent-only update, every other field round-tripped from `current` — see
@@ -1163,6 +1209,7 @@ fn reparent_params(
         event_type: current.event_type(),
         due_offset_days,
         assigned_to_user_id: current.assigned_to_user_id(),
+        source_event_id: current.source_event_id(),
         timezone_offset_minutes: Some(tz),
         points: current.points(),
     }
@@ -1212,7 +1259,7 @@ pub async fn promote_team_task_form(
         None => None,
     };
     let offset_anchor = match &grandparent {
-        Some(gp) => top_level_anchor(&repo, &team_id, gp).await?,
+        Some(gp) => top_level_anchor_team(&repo, &team_id, gp).await?,
         None => None,
     };
     let params = reparent_params(
@@ -1272,7 +1319,7 @@ pub async fn subordinate_team_task_form(
             "target is not a sibling of this item".to_string(),
         ));
     }
-    let offset_anchor = top_level_anchor(&repo, &team_id, &new_parent).await?;
+    let offset_anchor = top_level_anchor_team(&repo, &team_id, &new_parent).await?;
     let params = reparent_params(
         &team_id,
         &item_id,

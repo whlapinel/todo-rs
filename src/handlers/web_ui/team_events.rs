@@ -215,6 +215,7 @@ fn create_params_from_form(team_id: &str, form: &TeamEventForm, tz: i32) -> Crea
         // `service::team_items::build_item_type`), so this screen has no form fields for
         // either and always passes `None`.
         assigned_to_user_id: None,
+        source_event_id: None,
         timezone_offset_minutes: Some(tz),
         points: None,
     }
@@ -263,6 +264,7 @@ fn update_params_from_form(
         due_offset_days: None,
         // See create_params_from_form above — Events never carry assignment/points.
         assigned_to_user_id: None,
+        source_event_id: None,
         timezone_offset_minutes: Some(tz),
         points: None,
     }
@@ -964,9 +966,9 @@ pub async fn delete_team_event_form(
     Ok(Html(String::new()))
 }
 
-/// A team event's own sub-items are always plain `Task`-typed (same as a team task's own
-/// children), so this reuses `team_tasks::render_children_fragment` rather than duplicating
-/// `TeamTaskRow`/its template here — see that function's doc comment.
+/// A team Event can never have structural children (see `Item::validate`/`create_team_item`'s
+/// parent-kind check) — its "Linked tasks" section instead shows every top-level Task that
+/// references it via `sourceEventId`, via `team_tasks::render_source_event_fragment`.
 pub async fn team_event_children_fragment(
     Path((team_id, item_id)): Path<(String, String)>,
     Extension(auth_user): Extension<AuthUser>,
@@ -975,13 +977,20 @@ pub async fn team_event_children_fragment(
     TzOffset(tz): TzOffset,
 ) -> Result<Html<String>, ItemError> {
     require_active_member(&teams, &team_id, &auth_user.user_id).await?;
-    // Ownership gate: list_children isn't scoped by team, so confirm the parent actually
-    // belongs to this team before listing its children (mirrors team_tasks.rs's equivalent).
+    // Ownership gate: list_by_source_event isn't scoped by team, so confirm the event actually
+    // belongs to this team before listing tasks that reference it.
     repo.get_team_item(&team_id, &item_id)
         .await
         .map_err(ItemError::from)?;
-    team_tasks::render_children_fragment(&repo, &teams, &team_id, &item_id, &auth_user.user_id, tz)
-        .await
+    team_tasks::render_source_event_fragment(
+        &repo,
+        &teams,
+        &team_id,
+        &item_id,
+        &auth_user.user_id,
+        tz,
+    )
+    .await
 }
 
 #[derive(serde::Deserialize)]
@@ -991,6 +1000,11 @@ pub struct TeamEventChildForm {
     due_offset_days: Option<String>,
 }
 
+/// Creates a top-level team Task that references this event via `sourceEventId` — not a
+/// structural child (team Events can never have children, see
+/// `team_event_children_fragment`'s doc comment). Its `dueDate` is server-computed from
+/// `dueOffsetDays` against the event's own anchor (see
+/// `service::team_items::resolve_offset_anchor_team`), same as a structural child's would be.
 pub async fn create_team_event_child_form(
     Path((team_id, item_id)): Path<(String, String)>,
     Extension(auth_user): Extension<AuthUser>,
@@ -1003,7 +1017,7 @@ pub async fn create_team_event_child_form(
     let params = CreateTeamItemParams {
         team_id: team_id.clone(),
         name: form.name,
-        parent_item_id: Some(item_id.clone()),
+        source_event_id: Some(item_id.clone()),
         item_type: Some(ItemKind::Task),
         due_offset_days: form
             .due_offset_days
@@ -1015,8 +1029,15 @@ pub async fn create_team_event_child_form(
         ..Default::default()
     };
     team_item_service::create_team_item(&repo, &teams, &auth_user.user_id, params).await?;
-    team_tasks::render_children_fragment(&repo, &teams, &team_id, &item_id, &auth_user.user_id, tz)
-        .await
+    team_tasks::render_source_event_fragment(
+        &repo,
+        &teams,
+        &team_id,
+        &item_id,
+        &auth_user.user_id,
+        tz,
+    )
+    .await
 }
 
 pub async fn save_team_event_as_template(

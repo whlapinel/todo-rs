@@ -30,6 +30,7 @@ pub struct CreateItemParams {
     pub item_type: Option<ItemKind>,
     pub event_type: Option<String>,
     pub due_offset_days: Option<i32>,
+    pub source_event_id: Option<String>,
     pub timezone_offset_minutes: Option<i32>,
 }
 
@@ -42,6 +43,7 @@ fn build_item_type(
     schedule: Schedule,
     recurrence: Recurrence,
     event_type: Option<String>,
+    source_event_id: Option<String>,
 ) -> ItemType {
     match kind {
         ItemKind::Simple => ItemType::Simple,
@@ -49,6 +51,7 @@ fn build_item_type(
             schedule,
             recurrence,
             team_assignment: None,
+            source_event_id,
         },
         ItemKind::Event => ItemType::Event {
             schedule,
@@ -72,9 +75,11 @@ pub async fn create_item(
     if let Some(ref r) = params.recurrence {
         recurrence::parse(r).map_err(ItemError::Invalid)?;
     }
-    if params.recurrence.is_some() && params.parent_item_id.is_some() {
+    if params.recurrence.is_some()
+        && (params.parent_item_id.is_some() || params.source_event_id.is_some())
+    {
         return Err(ItemError::Invalid(
-            "child items cannot have their own recurrence; set dueOffsetDays instead"
+            "child or event-linked items cannot have their own recurrence; set dueOffsetDays instead"
                 .to_string(),
         ));
     }
@@ -94,12 +99,21 @@ pub async fn create_item(
 
     let mut kind = params.item_type.unwrap_or_default();
 
-    // Child items of a template automatically become template items.
+    // Child items of a template automatically become template items; Events can never
+    // have children (see `Item::source_event_id` — a task references an event instead
+    // of nesting under it).
     if let Some(ref parent_id) = params.parent_item_id
         && let Ok(parent) = repo.get(&params.user_id, parent_id).await
-        && parent.kind() == ItemKind::Template
     {
-        kind = ItemKind::Template;
+        if parent.kind() == ItemKind::Template {
+            kind = ItemKind::Template;
+        }
+        if parent.kind() == ItemKind::Event {
+            return Err(ItemError::Invalid(
+                "Events cannot have children; link a task to it via sourceEventId instead"
+                    .to_string(),
+            ));
+        }
     }
 
     let schedule = Schedule {
@@ -120,20 +134,33 @@ pub async fn create_item(
         ItemKind::Simple => Item::new_simple(&params.user_id, &params.name),
         _ => Item::new_user_item(&params.user_id, &params.name),
     };
-    item.item_type = build_item_type(kind, schedule, recurrence_data, params.event_type.clone());
+    item.item_type = build_item_type(
+        kind,
+        schedule,
+        recurrence_data,
+        params.event_type.clone(),
+        params.source_event_id.clone(),
+    );
     item.complete = params.complete.unwrap_or(false);
     item.parent_item_id = params.parent_item_id.clone();
     item.description = params.description.clone();
 
     item.validate().map_err(ItemError::Invalid)?;
 
-    if let Some(pattern) = item.recurrence_pattern()
+    let tz_offset = params.timezone_offset_minutes.unwrap_or(0);
+    if item.is_offset_driven() {
+        let anchor = resolve_offset_anchor(repo, &params.user_id, &item).await?;
+        let new_due_date = anchor.and_then(|a| item.deadline_from_offset(a, tz_offset));
+        if let Some(schedule) = item.item_type.schedule_mut() {
+            schedule.due_date = new_due_date;
+            schedule.has_due_time = false;
+        }
+    } else if let Some(pattern) = item.recurrence_pattern()
         && let Ok(rule) = recurrence::parse(&pattern)
     {
         let basis = item
             .recurrence_basis()
             .unwrap_or_else(|| "DUE_DATE".to_string());
-        let tz_offset = params.timezone_offset_minutes.unwrap_or(0);
         if let Some(schedule) = item.item_type.schedule_mut() {
             if basis == "DUE_DATE" && schedule.due_date.is_none() {
                 let mut deadline = recurrence::next_date(&rule, chrono::Utc::now(), tz_offset);
@@ -154,9 +181,11 @@ pub async fn create_item(
     }
     let item_id = repo.create(&item).await?;
 
-    // An event-typed item can auto-instantiate matching templates'
-    // children onto itself — same mechanism the templates screen's "Use" flow
-    // already uses, just triggered by event_type matching instead of a manual click.
+    // An event-typed item can auto-instantiate matching templates' direct children as
+    // sourceEventId-linked top-level tasks (see copy_template_children_to_event) — same
+    // trigger the templates screen's "Use" flow shares (copy_template_children), just fired
+    // by event_type matching instead of a manual click, and landing as references rather
+    // than nested children since Events can't have children.
     if let Some(event_type) = item.event_type() {
         let tz_offset = params.timezone_offset_minutes.unwrap_or(0);
         let root_date = item_anchor(&item);
@@ -165,7 +194,8 @@ pub async fn create_item(
             .iter()
             .filter(|t| t.event_type().as_deref() == Some(event_type.as_str()))
         {
-            copy_template_children(repo, &tpl.id, &item_id, root_date, tz_offset).await?;
+            copy_template_children_to_event(repo, &tpl.id, &item_id, root_date, tz_offset)
+                .await?;
         }
     }
     Ok(item_id)
@@ -190,6 +220,7 @@ pub struct UpdateItemParams {
     pub item_type: Option<ItemKind>,
     pub event_type: Option<String>,
     pub due_offset_days: Option<i32>,
+    pub source_event_id: Option<String>,
     pub timezone_offset_minutes: Option<i32>,
 }
 
@@ -203,9 +234,11 @@ pub async fn update_item(
     if let Some(ref r) = params.recurrence {
         recurrence::parse(r).map_err(ItemError::Invalid)?;
     }
-    if params.recurrence.is_some() && params.parent_item_id.is_some() {
+    if params.recurrence.is_some()
+        && (params.parent_item_id.is_some() || params.source_event_id.is_some())
+    {
         return Err(ItemError::Invalid(
-            "child items cannot have their own recurrence; set dueOffsetDays instead"
+            "child or event-linked items cannot have their own recurrence; set dueOffsetDays instead"
                 .to_string(),
         ));
     }
@@ -234,6 +267,18 @@ pub async fn update_item(
         ));
     }
 
+    // Events can never have children (a task references an event via
+    // sourceEventId instead of nesting under it).
+    if let Some(ref parent_id) = params.parent_item_id
+        && let Ok(parent) = repo.get(&params.user_id, parent_id).await
+        && parent.kind() == ItemKind::Event
+    {
+        return Err(ItemError::Invalid(
+            "Events cannot have children; link a task to it via sourceEventId instead"
+                .to_string(),
+        ));
+    }
+
     let kind = params.item_type.unwrap_or(current.kind());
     let schedule = Schedule {
         due_date: params.due_date,
@@ -253,11 +298,28 @@ pub async fn update_item(
         ItemKind::Simple => Item::new_simple(&params.user_id, &params.name),
         _ => Item::new_user_item(&params.user_id, &params.name),
     };
-    item.item_type = build_item_type(kind, schedule, recurrence_data, params.event_type.clone());
+    item.item_type = build_item_type(
+        kind,
+        schedule,
+        recurrence_data,
+        params.event_type.clone(),
+        params.source_event_id.clone(),
+    );
     item.id = params.item_id.clone();
     item.complete = params.complete;
     item.parent_item_id = params.parent_item_id.clone();
     item.description = params.description.clone();
+
+    let tz_offset = params.timezone_offset_minutes.unwrap_or(0);
+    if item.is_offset_driven() {
+        let anchor = resolve_offset_anchor(repo, &params.user_id, &item).await?;
+        let new_due_date = anchor.and_then(|a| item.deadline_from_offset(a, tz_offset));
+        if let Some(schedule) = item.item_type.schedule_mut() {
+            schedule.due_date = new_due_date;
+            schedule.has_due_time = false;
+        }
+    }
+
     item.validate().map_err(ItemError::Invalid)?;
 
     if current.complete && !is_pure_complete_toggle(&current, &item) {
@@ -266,10 +328,12 @@ pub async fn update_item(
         ));
     }
 
-    let tz_offset = params.timezone_offset_minutes.unwrap_or(0);
     if let Some((next_item, next_anchor)) = item.next_recurrence(chrono::Utc::now(), tz_offset) {
         let next_id = repo.create(&next_item).await?;
         clone_children(repo, &item.id, &next_id, next_anchor, tz_offset).await?;
+        if item.kind() == ItemKind::Event {
+            repoint_source_event_tasks(repo, &item.id, &next_id, next_anchor, tz_offset).await?;
+        }
         archive_recurrence(&mut item);
         repo.update(&item).await?;
         return Ok(());
@@ -281,6 +345,9 @@ pub async fn update_item(
         && Some(new_anchor) != old_anchor
     {
         sync_offset_children(repo, &item.id, new_anchor, tz_offset).await?;
+        if item.kind() == ItemKind::Event {
+            sync_source_event_tasks(repo, &item.id, new_anchor, tz_offset).await?;
+        }
     }
     Ok(())
 }
@@ -307,7 +374,34 @@ pub async fn delete_item(
             repo.delete(&child.id).await?;
         }
     }
+    unlink_source_event_tasks(repo, item_id).await?;
     repo.delete(item_id).await?;
+    Ok(())
+}
+
+/// Clears `source_event_id` on every task referencing `event_id` — called before an item is
+/// deleted, so a deleted Event unlinks the (independent, otherwise-untouched) tasks that
+/// reference it rather than leaving them pointing at a nonexistent id. Deliberately *not* a
+/// cascade delete: unlike structural parent/child deletion, these tasks are independent
+/// entities that may carry their own points/assignment history.
+pub(crate) async fn unlink_source_event_tasks(
+    repo: &Arc<dyn ItemRepo>,
+    event_id: &str,
+) -> Result<(), RepoError> {
+    let tasks = repo.list_by_source_event(event_id).await?;
+    for mut task in tasks {
+        if let ItemType::Task {
+            source_event_id, ..
+        } = &mut task.item_type
+        {
+            *source_event_id = None;
+        }
+        if task.team_id.is_some() {
+            repo.update_team_item(&task).await?;
+        } else {
+            repo.update(&task).await?;
+        }
+    }
     Ok(())
 }
 
@@ -375,6 +469,45 @@ pub(crate) fn archive_recurrence(item: &mut Item) {
 /// template auto-trigger copies) — `due_date` if set, else `scheduled_date`, else neither.
 pub(crate) fn item_anchor(item: &Item) -> Option<DateTime<Utc>> {
     item.due_date().or(item.scheduled_date())
+}
+
+/// Walks `item`'s `parent_item_id` chain up to its true top-level ancestor and returns that
+/// ancestor's own `item_anchor` — zero extra cost if `item` is already top-level. An offset is
+/// always measured from the top-level ancestor, never chained through an intermediate parent's
+/// own (possibly offset-derived) date — see CLAUDE.md's Recurrence section. Moved here from
+/// `web_ui::tasks`/`web_ui::team_tasks` (built for the promote/subordinate reparent actions) so
+/// `resolve_offset_anchor` below can share it instead of every offset computation duplicating
+/// the walk.
+pub(crate) async fn top_level_anchor(
+    repo: &Arc<dyn ItemRepo>,
+    user_id: &str,
+    item: &Item,
+) -> Result<Option<DateTime<Utc>>, RepoError> {
+    let mut current = item.clone();
+    while let Some(parent_id) = current.parent_item_id.clone() {
+        current = repo.get(user_id, &parent_id).await?;
+    }
+    Ok(item_anchor(&current))
+}
+
+/// Resolves the anchor date an offset-driven item's `due_date` should be measured from —
+/// either the Event it references (`source_event_id`) or the true top-level ancestor of the
+/// parent it nests under (`parent_item_id`), never both (see `Item::validate`). `None` if the
+/// item isn't offset-driven at all, or the resolved anchor itself has no date.
+pub(crate) async fn resolve_offset_anchor(
+    repo: &Arc<dyn ItemRepo>,
+    user_id: &str,
+    item: &Item,
+) -> Result<Option<DateTime<Utc>>, RepoError> {
+    if let Some(event_id) = item.source_event_id() {
+        let event = repo.get(user_id, &event_id).await?;
+        Ok(item_anchor(&event))
+    } else if let Some(parent_id) = item.parent_item_id.clone() {
+        let parent = repo.get(user_id, &parent_id).await?;
+        top_level_anchor(repo, user_id, &parent).await
+    } else {
+        Ok(None)
+    }
 }
 
 /// True if `item_id` has at least one direct child that isn't complete — used to block a
@@ -454,6 +587,70 @@ pub(crate) fn sync_offset_children<'a>(
     })
 }
 
+/// Recomputes `due_date` for every task referencing `event_id` via `source_event_id`, measured
+/// against `new_anchor` — the source-event-reference counterpart to `sync_offset_children`,
+/// called after a plain edit to an Event's own anchor date. Unlike `sync_offset_children`, this
+/// doesn't recurse by walking `parent_item_id` itself (a source-event task is never nested), but
+/// each referencing task can have its own ordinary `parent_item_id` subtree, which still needs
+/// the normal cascade — hence the trailing `sync_offset_children` call per task.
+pub(crate) async fn sync_source_event_tasks(
+    repo: &Arc<dyn ItemRepo>,
+    event_id: &str,
+    new_anchor: DateTime<Utc>,
+    tz_offset_minutes: i32,
+) -> Result<(), RepoError> {
+    let tasks = repo.list_by_source_event(event_id).await?;
+    for mut task in tasks {
+        let new_due_date = task.deadline_from_offset(new_anchor, tz_offset_minutes);
+        if let Some(schedule) = task.item_type.schedule_mut() {
+            schedule.due_date = new_due_date;
+        }
+        if task.team_id.is_some() {
+            repo.update_team_item(&task).await?;
+        } else {
+            repo.update(&task).await?;
+        }
+        if let Some(anchor) = item_anchor(&task) {
+            sync_offset_children(repo, &task.id, anchor, tz_offset_minutes).await?;
+        }
+    }
+    Ok(())
+}
+
+/// Re-points every task referencing `old_event_id` onto `new_event_id` and recomputes its
+/// `due_date` from `next_anchor` — the source-event-reference counterpart to `clone_children`,
+/// called when a recurring Event completes and is replaced by a fresh occurrence. Unlike
+/// `clone_children`, referencing tasks are independent entities, not structurally owned
+/// duplicates of the event, so there's nothing to clone/delete — the reference is simply
+/// updated in place, same ids.
+pub(crate) async fn repoint_source_event_tasks(
+    repo: &Arc<dyn ItemRepo>,
+    old_event_id: &str,
+    new_event_id: &str,
+    next_anchor: DateTime<Utc>,
+    tz_offset_minutes: i32,
+) -> Result<(), RepoError> {
+    let tasks = repo.list_by_source_event(old_event_id).await?;
+    for mut task in tasks {
+        let new_due_date = task.deadline_from_offset(next_anchor, tz_offset_minutes);
+        if let ItemType::Task {
+            source_event_id, ..
+        } = &mut task.item_type
+        {
+            *source_event_id = Some(new_event_id.to_string());
+        }
+        if let Some(schedule) = task.item_type.schedule_mut() {
+            schedule.due_date = new_due_date;
+        }
+        if task.team_id.is_some() {
+            repo.update_team_item(&task).await?;
+        } else {
+            repo.update(&task).await?;
+        }
+    }
+    Ok(())
+}
+
 /// Recursively copies the subtree under `template_parent_id` onto `new_parent_id`, leaving
 /// the template itself untouched (unlike `clone_children`, nothing is deleted — the template
 /// must stay reusable for the next "Use" click). Used by `web_ui::templates::use_template_form`
@@ -489,6 +686,7 @@ pub(crate) fn copy_template_children<'a>(
                 schedule,
                 recurrence,
                 team_assignment: None,
+                source_event_id: None,
             };
             let new_child_id = repo.create(&new_child).await?;
             copy_template_children(
@@ -496,6 +694,52 @@ pub(crate) fn copy_template_children<'a>(
                 &child.id,
                 &new_child_id,
                 root_due_date,
+                tz_offset_minutes,
+            )
+            .await?;
+        }
+        Ok(())
+    })
+}
+
+/// Copies a matching template's *direct* children onto a newly created Event as top-level,
+/// `source_event_id`-referencing tasks instead of `parent_item_id`-nested ones — Events can
+/// never have children (see `Item::validate`), so this is the event-auto-trigger's own entry
+/// point rather than a call to `copy_template_children` directly. Each direct child's own
+/// descendants (grandchildren of the template, if any) nest normally under it via the ordinary
+/// `copy_template_children` — only the direct link to the Event itself is a reference, not the
+/// whole subtree; a source-event-linked task is free to have its own ordinary child subtree.
+pub(crate) fn copy_template_children_to_event<'a>(
+    repo: &'a Arc<dyn ItemRepo>,
+    template_parent_id: &'a str,
+    event_id: &'a str,
+    event_anchor: Option<DateTime<Utc>>,
+    tz_offset_minutes: i32,
+) -> Pin<Box<dyn Future<Output = Result<(), RepoError>> + Send + 'a>> {
+    Box::pin(async move {
+        let children = repo.list_children(template_parent_id).await?;
+        for child in children {
+            let mut new_child = child.clone();
+            new_child.id = String::new();
+            new_child.parent_item_id = None;
+            new_child.complete = false;
+            let mut schedule = child.item_type.schedule().cloned().unwrap_or_default();
+            schedule.due_date = event_anchor
+                .and_then(|root| child.deadline_from_offset(root, tz_offset_minutes));
+            schedule.has_due_time = false;
+            let recurrence = child.item_type.recurrence().cloned().unwrap_or_default();
+            new_child.item_type = ItemType::Task {
+                schedule,
+                recurrence,
+                team_assignment: None,
+                source_event_id: Some(event_id.to_string()),
+            };
+            let new_child_id = repo.create(&new_child).await?;
+            copy_template_children(
+                repo,
+                &child.id,
+                &new_child_id,
+                event_anchor,
                 tz_offset_minutes,
             )
             .await?;
@@ -590,6 +834,7 @@ mod tests {
                 },
                 recurrence: Recurrence::default(),
                 team_assignment: None,
+                source_event_id: None,
             },
             ..Item::default()
         }
@@ -606,6 +851,7 @@ mod tests {
                     ..Recurrence::default()
                 },
                 team_assignment: None,
+                source_event_id: None,
             },
             ..Item::default()
         }
@@ -631,7 +877,10 @@ mod tests {
             .returning(|_| Ok(vec![template_child("child1", "tpl1", 1)]));
 
         mock.expect_create()
-            .withf(|item: &Item| item.parent_item_id.as_deref() == Some("new-event-id"))
+            .withf(|item: &Item| {
+                item.parent_item_id.is_none()
+                    && item.source_event_id().as_deref() == Some("new-event-id")
+            })
             .times(1)
             .returning(|_| Ok("new-child-id".to_string()));
 
@@ -687,6 +936,152 @@ mod tests {
         )
         .await
         .expect("should create item");
+    }
+
+    fn event_item(id: &str, user_id: &str, due_date: DateTime<Utc>) -> Item {
+        Item {
+            id: id.to_string(),
+            user_id: Some(user_id.to_string()),
+            item_type: ItemType::Event {
+                schedule: Schedule {
+                    due_date: Some(due_date),
+                    ..Schedule::default()
+                },
+                recurrence: Recurrence::default(),
+                event_type: None,
+            },
+            ..Item::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn create_item_rejects_parent_that_is_an_event() {
+        let mut mock = MockItemRepo::new();
+        let due_date = DateTime::parse_from_rfc3339("2026-01-10T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        mock.expect_get()
+            .withf(|user_id: &str, item_id: &str| user_id == "u1" && item_id == "event1")
+            .times(1)
+            .returning(move |_, _| Ok(event_item("event1", "u1", due_date)));
+
+        let repo: Arc<dyn ItemRepo> = Arc::new(mock);
+
+        let err = create_item(
+            &repo,
+            CreateItemParams {
+                user_id: "u1".to_string(),
+                name: "Sneaky child".to_string(),
+                parent_item_id: Some("event1".to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect_err("should reject an Event as parent");
+
+        assert!(matches!(err, ItemError::Invalid(_)));
+    }
+
+    #[tokio::test]
+    async fn create_item_computes_due_date_from_source_event_anchor() {
+        let mut mock = MockItemRepo::new();
+        let event_due = DateTime::parse_from_rfc3339("2026-01-10T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        mock.expect_get()
+            .withf(|user_id: &str, item_id: &str| user_id == "u1" && item_id == "event1")
+            .times(1)
+            .returning(move |_, _| Ok(event_item("event1", "u1", event_due)));
+
+        let expected_due = recurrence::apply_end_of_day(event_due + chrono::Duration::days(2), 0);
+        mock.expect_create()
+            .withf(move |item: &Item| {
+                item.source_event_id().as_deref() == Some("event1")
+                    && item.parent_item_id.is_none()
+                    && item.due_date() == Some(expected_due)
+            })
+            .times(1)
+            .returning(|_| Ok("new-task-id".to_string()));
+
+        let repo: Arc<dyn ItemRepo> = Arc::new(mock);
+
+        create_item(
+            &repo,
+            CreateItemParams {
+                user_id: "u1".to_string(),
+                name: "Buy cake".to_string(),
+                source_event_id: Some("event1".to_string()),
+                due_offset_days: Some(2),
+                // A manually-submitted due_date must be ignored/overwritten for an
+                // offset-driven item — this stale value proves it never reaches storage.
+                due_date: Some(
+                    DateTime::parse_from_rfc3339("2020-01-01T00:00:00Z")
+                        .unwrap()
+                        .with_timezone(&Utc),
+                ),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("should create source-event-linked task");
+    }
+
+    #[tokio::test]
+    async fn delete_item_unlinks_source_event_tasks_without_deleting_them() {
+        let mut mock = MockItemRepo::new();
+
+        mock.expect_get()
+            .withf(|user_id: &str, item_id: &str| user_id == "u1" && item_id == "event1")
+            .times(1)
+            .returning(|_, _| Ok(Item {
+                id: "event1".to_string(),
+                user_id: Some("u1".to_string()),
+                item_type: ItemType::Event {
+                    schedule: Schedule::default(),
+                    recurrence: Recurrence::default(),
+                    event_type: None,
+                },
+                ..Item::default()
+            }));
+
+        mock.expect_list_children()
+            .withf(|parent_id: &str| parent_id == "event1")
+            .times(1)
+            .returning(|_| Ok(vec![]));
+
+        let mut linked_task = task_with_due_date(
+            "task1",
+            DateTime::parse_from_rfc3339("2026-01-10T00:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
+        );
+        linked_task.user_id = Some("u1".to_string());
+        if let ItemType::Task { source_event_id, .. } = &mut linked_task.item_type {
+            *source_event_id = Some("event1".to_string());
+        }
+        let returned_task = linked_task.clone();
+        mock.expect_list_by_source_event()
+            .withf(|event_id: &str| event_id == "event1")
+            .times(1)
+            .returning(move |_| Ok(vec![returned_task.clone()]));
+
+        mock.expect_update()
+            .withf(|item: &Item| item.id == "task1" && item.source_event_id().is_none())
+            .times(1)
+            .returning(|_| Ok(()));
+
+        mock.expect_delete()
+            .withf(|id: &str| id == "event1")
+            .times(1)
+            .returning(|_| Ok(()));
+
+        let repo: Arc<dyn ItemRepo> = Arc::new(mock);
+
+        delete_item(&repo, "u1", "event1")
+            .await
+            .expect("should delete the event and unlink referencing tasks");
     }
 
     #[tokio::test]
