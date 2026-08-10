@@ -1,5 +1,5 @@
 use crate::auth::AuthUser;
-use crate::domain::item::{Item, ItemType};
+use crate::domain::item::{Item, ItemKind};
 use crate::handlers::web_ui::nav::{self, ActiveContext, SidebarSection};
 use crate::service::error::ItemError;
 use crate::service::team_items::{
@@ -25,7 +25,7 @@ fn render<T: Template>(t: T) -> Result<Html<String>, ItemError> {
 /// team item's id reaching one of these handlers must 404 rather than silently reclassify
 /// it back to Simple on save.
 fn require_team_simple(item: Item) -> Result<Item, ItemError> {
-    if item.item_type == ItemType::Simple {
+    if item.kind() == ItemKind::Simple {
         Ok(item)
     } else {
         Err(ItemError::NotFound)
@@ -100,7 +100,7 @@ fn create_params_from_form(team_id: &str, form: &TeamSimpleItemForm) -> CreateTe
         name: form.name.clone().unwrap_or_default(),
         complete: form.complete.as_deref().map(|s| s == "true"),
         parent_item_id: non_empty(&form.parent_item_id),
-        item_type: Some(ItemType::Simple),
+        item_type: Some(ItemKind::Simple),
         assigned_to_user_id: non_empty(&form.assigned_to_user_id),
         points: form
             .points
@@ -124,12 +124,12 @@ fn update_params_from_form(
         name: overlay_required_str(&form.name, &current.name),
         complete: overlay_bool(&form.complete, current.complete),
         parent_item_id: current.parent_item_id.clone(),
-        item_type: Some(ItemType::Simple),
+        item_type: Some(ItemKind::Simple),
         assigned_to_user_id: overlay_str(
             &form.assigned_to_user_id,
-            current.assigned_to_user_id.clone(),
+            current.assigned_to_user_id(),
         ),
-        points: overlay_i32(&form.points, current.points),
+        points: overlay_i32(&form.points, current.points()),
         ..Default::default()
     }
 }
@@ -194,9 +194,8 @@ impl TeamSimpleItemRow {
             complete: item.complete,
             has_children: item.has_children,
             assignee_name: item
-                .assigned_to_user_id
-                .as_ref()
-                .map(|id| names.get(id).cloned().unwrap_or_else(|| id.clone())),
+                .assigned_to_user_id()
+                .map(|id| names.get(&id).cloned().unwrap_or(id)),
             toggle_complete_json: (!item.complete).to_string(),
         }
     }
@@ -235,10 +234,10 @@ impl TeamSimpleItemDetailFields {
             name: item.name.clone(),
             complete: item.complete,
             assignee_options,
-            assigned_to_user_id: item.assigned_to_user_id.clone(),
+            assigned_to_user_id: item.assigned_to_user_id(),
             is_top_level: item.parent_item_id.is_none(),
             is_team_admin,
-            points_input: item.points.map(|p| p.to_string()).unwrap_or_default(),
+            points_input: item.points().map(|p| p.to_string()).unwrap_or_default(),
             just_saved,
         }
     }
@@ -264,9 +263,8 @@ impl TeamSimpleItemDetailView {
             complete: item.complete,
             toggle_complete_json: (!item.complete).to_string(),
             assignee_name: item
-                .assigned_to_user_id
-                .as_ref()
-                .map(|id| names.get(id).cloned().unwrap_or_else(|| id.clone())),
+                .assigned_to_user_id()
+                .map(|id| names.get(&id).cloned().unwrap_or(id)),
         }
     }
 }
@@ -348,7 +346,7 @@ async fn list_team_simple_items(
         .list_team_items(team_id, None)
         .await
         .map_err(ItemError::from)?;
-    items.retain(|i| i.item_type == ItemType::Simple);
+    items.retain(|i| i.kind() == ItemKind::Simple);
     Ok(items)
 }
 
@@ -609,7 +607,7 @@ pub async fn create_team_simple_items_batch(
             team_id: team_id.clone(),
             name: name.to_string(),
             parent_item_id: parent_item_id.clone(),
-            item_type: Some(ItemType::Simple),
+            item_type: Some(ItemKind::Simple),
             ..Default::default()
         };
         team_item_service::create_team_item(&repo, &teams, &auth_user.user_id, params).await?;

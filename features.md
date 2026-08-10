@@ -1,2 +1,17 @@
+- ~~Put an asterisk for required fields in all forms~~ Fixed: every form's `name` field (the only field enforced client-side via HTML `required`) now shows a red asterisk next to its label, or appended to its placeholder on single-field quick-add forms with no visible label. Also added the missing `required` attribute (it existed inconsistently) to the six item-type edit forms' Name fields for consistency.
+- Due date should be be secondary for tasks to avoid user confusion. Should also be disallowed for repeating/recurring tasks, OR preferably due date should also be set on recurrence according to the same periodicity rules as scheduling recurrence. The latter is more desireable if it doesn't raise the potential for more problems.
+    - One idea that kind of sounds a bit too complex but might work, if a simpler solution isn't at hand, is to only allow an offset for scheduled_date when recurrence and due_date are both set. That way the recurrence is applied to the most important date and the scheduled date can key off that. Put a little ? tooltip or explanation popup to make this very clear to the user.
+    - One thought on this however - reschedule/"skip current" functionality should not allow recurrence of the due date. Due date should remain the same for recurring items UNLESS the item was marked complete. I've confirmed Todoist works somewhat similarly except that marking a recurring item complete will NOT change the deadline (that to me is less desireable than what I'm proposing).
+- Allow promoting child to sibling of parent (one-click, redirect to parent list)
+- Allow subordinating a sibling to child of other sibling (one-click, redirect to new parent list)
+- Change "save" in all edit screens to "save and close" which returns to parent item sub-tasks view (i.e. equivalent of clicking "save" then "back to tasks/events/...")
 - Skip current, to avoid marking complete something that wasn't done but still want next recurrence
-- Mass rescheduling
+- Individual and Mass rescheduling - rescheduling an item (only possible when scheduled date is in the past) to a user-specified date. This will be the equivalent of skipping current - it will not mark it complete, only reschedule it.  
+- Simple lists should not have "save as template" UI and backend shouldn't allow it
+- Simple lists shouldn't even have "complete" or "done" UI - it's just a list. Can create or delete it, period.
+- Simple lists shouldn't have assignment UI
+- ~~character limit for names~~ Fixed: added `Item::MAX_NAME_LENGTH` (200 chars) enforced in `Item::validate()` (so it's checked on every create/update path, personal and team), and mirrored client-side via `maxlength="200"` on every item-name `<input>` in the web UI (team-name fields are a separate concept and untouched by this).
+- add description field with bigger character limit (all types: Simple, Task, Event, Template)
+- Tasks should also get a calendar view
+- Dashboard should get a calendar view combining tasks and events, with a short symbol indicating which is which. List view should also combine tasks and events.
+- There should be a dashboard for teams as well, which basically does the same thing

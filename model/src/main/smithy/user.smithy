@@ -23,6 +23,7 @@ resource User {
         ListTemplates
         CreateTeam
         GetTeam
+        UpdateTeam
         ListTeams
         ListTeamMembers
         InviteTeamMember

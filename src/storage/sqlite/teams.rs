@@ -42,6 +42,19 @@ impl TeamRepo for SqliteTeamRepo {
             .ok_or_else(not_found)
     }
 
+    async fn update_name(&self, team_id: &str, name: &str) -> Result<(), RepoError> {
+        let result = sqlx::query("UPDATE teams SET name = ? WHERE id = ?")
+            .bind(name)
+            .bind(team_id)
+            .execute(&self.0)
+            .await
+            .map_err(db_err)?;
+        if result.rows_affected() == 0 {
+            return Err(not_found());
+        }
+        Ok(())
+    }
+
     async fn list_for_user(&self, user_id: &str) -> Result<Vec<TeamWithStatus>, RepoError> {
         sqlx::query(
             "SELECT teams.id, teams.name, team_members.status,

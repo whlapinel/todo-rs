@@ -294,6 +294,19 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: "update_team",
+      description: "Rename a team. The caller must be an active admin of the team.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          userId: { type: "string", description: "The caller's user ID" },
+          teamId: { type: "string" },
+          name: { type: "string", description: "New team name" },
+        },
+        required: ["userId", "teamId", "name"],
+      },
+    },
+    {
       name: "list_team_members",
       description:
         "List a team's members and their status (PENDING or ACTIVE). The caller must already be a member.",
@@ -639,6 +652,12 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
 
       case "create_team":
         result = await api("POST", `/users/${args.userId}/teams`, { name: args.name });
+        break;
+
+      case "update_team":
+        result = await api("PUT", `/users/${args.userId}/teams/${args.teamId}`, {
+          name: args.name,
+        });
         break;
 
       case "list_team_members":

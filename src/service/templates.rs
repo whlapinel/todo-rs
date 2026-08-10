@@ -1,4 +1,4 @@
-use crate::domain::item::{Item, ItemType};
+use crate::domain::item::{Item, ItemType, Recurrence, Schedule};
 use crate::service::items::{copy_children_as_template, ItemError};
 use crate::service::team_items::require_active_member;
 use crate::storage::sqlite::{ItemRepo, TeamRepo};
@@ -18,22 +18,31 @@ pub async fn create_template(
     params: CreateTemplateParams,
 ) -> Result<String, ItemError> {
     let mut item = Item::new_user_item(&params.user_id, &params.name);
-    item.item_type = ItemType::Template;
+    let mut schedule = Schedule::default();
+    let mut recurrence = Recurrence::default();
+    let mut event_type = None;
 
     let source_id = params.source_item_id;
     if let Some(source_id) = &source_id {
         let source = repo.get(&params.user_id, source_id).await?;
+        recurrence = Recurrence {
+            pattern: source.recurrence_pattern(),
+            basis: source.recurrence_basis(),
+            due_offset_days: source.due_offset_days(),
+        };
+        schedule.has_due_time = source.has_due_time();
+        event_type = source.event_type();
         item.name = source.name;
-        item.recurrence = source.recurrence;
-        item.recurrence_basis = source.recurrence_basis;
-        item.has_due_time = source.has_due_time;
-        item.event_type = source.event_type;
-        item.due_offset_days = source.due_offset_days;
         // deadline intentionally not copied — templates have no dates
     }
     if params.event_type.is_some() {
-        item.event_type = params.event_type;
+        event_type = params.event_type;
     }
+    item.item_type = ItemType::Template {
+        schedule,
+        recurrence,
+        event_type,
+    };
 
     let template_id = repo.create(&item).await?;
 
@@ -64,23 +73,32 @@ pub async fn create_team_template(
     require_active_member(teams, &params.team_id, &params.requester_user_id).await?;
 
     let mut item = Item::new_team_item(&params.team_id, &params.name);
-    item.item_type = ItemType::Template;
+    let mut schedule = Schedule::default();
+    let mut recurrence = Recurrence::default();
+    let mut event_type = None;
 
     let source_id = params.source_item_id;
     if let Some(source_id) = &source_id {
         // get_team_item (not get) confirms the source item actually belongs to this team.
         let source = repo.get_team_item(&params.team_id, source_id).await?;
+        recurrence = Recurrence {
+            pattern: source.recurrence_pattern(),
+            basis: source.recurrence_basis(),
+            due_offset_days: source.due_offset_days(),
+        };
+        schedule.has_due_time = source.has_due_time();
+        event_type = source.event_type();
         item.name = source.name;
-        item.recurrence = source.recurrence;
-        item.recurrence_basis = source.recurrence_basis;
-        item.has_due_time = source.has_due_time;
-        item.event_type = source.event_type;
-        item.due_offset_days = source.due_offset_days;
         // deadline intentionally not copied — templates have no dates
     }
     if params.event_type.is_some() {
-        item.event_type = params.event_type;
+        event_type = params.event_type;
     }
+    item.item_type = ItemType::Template {
+        schedule,
+        recurrence,
+        event_type,
+    };
 
     let template_id = repo.create(&item).await?;
 
@@ -113,7 +131,9 @@ mod tests {
             });
 
         mock.expect_create()
-            .withf(|item: &Item| item.parent_item_id.is_none() && item.item_type == ItemType::Template)
+            .withf(|item: &Item| {
+                item.parent_item_id.is_none() && matches!(item.item_type, ItemType::Template { .. })
+            })
             .times(1)
             .returning(|_| Ok("tpl1".to_string()));
 
@@ -125,7 +145,14 @@ mod tests {
                     id: "child1".to_string(),
                     parent_item_id: Some("src".to_string()),
                     name: "Pack boxes".to_string(),
-                    due_offset_days: Some(-3),
+                    item_type: ItemType::Task {
+                        schedule: Schedule::default(),
+                        recurrence: Recurrence {
+                            due_offset_days: Some(-3),
+                            ..Recurrence::default()
+                        },
+                        team_assignment: None,
+                    },
                     ..Item::default()
                 }])
             });
@@ -133,8 +160,8 @@ mod tests {
         mock.expect_create()
             .withf(|item: &Item| {
                 item.parent_item_id.as_deref() == Some("tpl1")
-                    && item.item_type == ItemType::Template
-                    && item.due_offset_days == Some(-3)
+                    && matches!(item.item_type, ItemType::Template { .. })
+                    && item.due_offset_days() == Some(-3)
             })
             .times(1)
             .returning(|_| Ok("child-tpl1".to_string()));

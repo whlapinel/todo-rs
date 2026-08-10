@@ -132,31 +132,31 @@ pub async fn get_item(
             _ => error::GetItemError::from(internal(format!("{e:?}"))),
         })?;
     let due_date = item
-        .due_date
+        .due_date()
         .map(|dt| SmithyDateTime::from_secs(dt.timestamp()));
     let scheduled_date = item
-        .scheduled_date
+        .scheduled_date()
         .map(|dt| SmithyDateTime::from_secs(dt.timestamp()));
     let scheduled_end_date = item
-        .scheduled_end_date
+        .scheduled_end_date()
         .map(|dt| SmithyDateTime::from_secs(dt.timestamp()));
     Ok(output::GetItemOutput {
-        name: item.name,
+        name: item.name.clone(),
         due_date,
         scheduled_date,
         scheduled_end_date,
         complete: item.complete,
-        recurrence: item.recurrence,
-        recurrence_basis: item.recurrence_basis,
-        has_due_time: Some(item.has_due_time),
-        has_scheduled_time: Some(item.has_scheduled_time),
-        has_end_time: Some(item.has_end_time),
-        parent_item_id: item.parent_item_id,
+        recurrence: item.recurrence_pattern(),
+        recurrence_basis: item.recurrence_basis(),
+        has_due_time: Some(item.has_due_time()),
+        has_scheduled_time: Some(item.has_scheduled_time()),
+        has_end_time: Some(item.has_end_time()),
+        parent_item_id: item.parent_item_id.clone(),
         has_children: Some(item.has_children),
-        item_type: Some(to_sdk_item_type(item.item_type)),
-        event_type: item.event_type,
-        due_offset_days: item.due_offset_days,
-        assigned_to_user_id: item.assigned_to_user_id,
+        item_type: Some(to_sdk_item_type(item.kind())),
+        event_type: item.event_type(),
+        due_offset_days: item.due_offset_days(),
+        assigned_to_user_id: item.assigned_to_user_id(),
     })
 }
 
@@ -176,29 +176,29 @@ pub async fn list_items(
     let items = items
         .into_iter()
         .map(|i| todo_server_sdk::model::ItemSummary {
-            item_id: Some(i.id),
-            name: Some(i.name),
+            item_id: Some(i.id.clone()),
+            name: Some(i.name.clone()),
             due_date: i
-                .due_date
+                .due_date()
                 .map(|dt| SmithyDateTime::from_secs(dt.timestamp())),
             scheduled_date: i
-                .scheduled_date
+                .scheduled_date()
                 .map(|dt| SmithyDateTime::from_secs(dt.timestamp())),
             scheduled_end_date: i
-                .scheduled_end_date
+                .scheduled_end_date()
                 .map(|dt| SmithyDateTime::from_secs(dt.timestamp())),
             complete: Some(i.complete),
-            recurrence: i.recurrence,
-            recurrence_basis: i.recurrence_basis,
-            has_due_time: Some(i.has_due_time),
-            has_scheduled_time: Some(i.has_scheduled_time),
-            has_end_time: Some(i.has_end_time),
-            parent_item_id: i.parent_item_id,
+            recurrence: i.recurrence_pattern(),
+            recurrence_basis: i.recurrence_basis(),
+            has_due_time: Some(i.has_due_time()),
+            has_scheduled_time: Some(i.has_scheduled_time()),
+            has_end_time: Some(i.has_end_time()),
+            parent_item_id: i.parent_item_id.clone(),
             has_children: Some(i.has_children),
-            item_type: Some(to_sdk_item_type(i.item_type)),
-            event_type: i.event_type,
-            due_offset_days: i.due_offset_days,
-            assigned_to_user_id: i.assigned_to_user_id,
+            item_type: Some(to_sdk_item_type(i.kind())),
+            event_type: i.event_type(),
+            due_offset_days: i.due_offset_days(),
+            assigned_to_user_id: i.assigned_to_user_id(),
         })
         .collect();
     Ok(output::ListItemsOutput { items })
@@ -217,24 +217,24 @@ pub async fn list_items_due(
     let items = due_items
         .into_iter()
         .map(|di| todo_server_sdk::model::DueItemSummary {
-            item_id: di.item.id,
-            name: di.item.name,
-            owner_user_id: di.item.user_id,
-            team_id: di.item.team_id,
-            assigned_to_user_id: di.item.assigned_to_user_id,
+            item_id: di.item.id.clone(),
+            name: di.item.name.clone(),
+            owner_user_id: di.item.user_id.clone(),
+            team_id: di.item.team_id.clone(),
+            assigned_to_user_id: di.item.assigned_to_user_id(),
             parent_name: Some(di.parent_name),
             due_date: di
                 .item
-                .due_date
+                .due_date()
                 .map(|dt| SmithyDateTime::from_secs(dt.timestamp())),
             scheduled_date: di
                 .item
-                .scheduled_date
+                .scheduled_date()
                 .map(|dt| SmithyDateTime::from_secs(dt.timestamp())),
             complete: Some(di.item.complete),
-            recurrence: di.item.recurrence,
-            recurrence_basis: di.item.recurrence_basis,
-            has_due_time: Some(di.item.has_due_time),
+            recurrence: di.item.recurrence_pattern(),
+            recurrence_basis: di.item.recurrence_basis(),
+            has_due_time: Some(di.item.has_due_time()),
         })
         .collect();
     Ok(output::ListItemsDueOutput { items })
@@ -251,19 +251,19 @@ pub async fn list_assigned_items(
     let items = items
         .into_iter()
         .map(|i| todo_server_sdk::model::AssignedItemSummary {
-            item_id: i.id,
-            name: i.name,
-            owner_user_id: i.user_id.or(i.team_id).unwrap_or_default(),
+            item_id: i.id.clone(),
+            name: i.name.clone(),
+            owner_user_id: i.user_id.clone().or(i.team_id.clone()).unwrap_or_default(),
             due_date: i
-                .due_date
+                .due_date()
                 .map(|dt| SmithyDateTime::from_secs(dt.timestamp())),
             scheduled_date: i
-                .scheduled_date
+                .scheduled_date()
                 .map(|dt| SmithyDateTime::from_secs(dt.timestamp())),
             complete: Some(i.complete),
-            recurrence: i.recurrence,
-            recurrence_basis: i.recurrence_basis,
-            has_due_time: Some(i.has_due_time),
+            recurrence: i.recurrence_pattern(),
+            recurrence_basis: i.recurrence_basis(),
+            has_due_time: Some(i.has_due_time()),
         })
         .collect();
     Ok(output::ListAssignedItemsOutput { items })

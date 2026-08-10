@@ -414,6 +414,31 @@ operation GetTeam {
     ]
 }
 
+@idempotent
+@http(method: "PUT", uri: "/users/{userId}/teams/{teamId}")
+operation UpdateTeam {
+    input := {
+        @required
+        @httpLabel
+        userId: String
+
+        @required
+        @httpLabel
+        @notProperty
+        teamId: String
+
+        @required
+        @notProperty
+        name: String
+    }
+
+    output := {}
+
+    errors: [
+        PeoplesRepublicOfListsError
+    ]
+}
+
 @readonly
 @http(method: "GET", uri: "/users/{userId}/teams")
 operation ListTeams {

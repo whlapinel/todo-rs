@@ -10,6 +10,8 @@ pub enum TeamsCommand {
     Create { name: String },
     /// List a team's members, their role, and their points balance
     Members { team_id: String },
+    /// Rename a team (you must already be an admin)
+    Rename { team_id: String, name: String },
     /// Invite an existing user to a team
     Invite {
         team_id: String,
@@ -84,6 +86,20 @@ pub async fn cmd_teams(client: &Client, cmd: TeamsCommand, user_id: Option<Strin
                     m.last_name()
                 );
             }
+        }
+        TeamsCommand::Rename { team_id, name } => {
+            let uid = require_user(user_id);
+            unwrap_or_exit(
+                client
+                    .update_team()
+                    .user_id(uid)
+                    .team_id(&team_id)
+                    .name(&name)
+                    .send()
+                    .await,
+                "rename team",
+            );
+            println!("renamed team {team_id} to {name}");
         }
         TeamsCommand::Invite {
             team_id,

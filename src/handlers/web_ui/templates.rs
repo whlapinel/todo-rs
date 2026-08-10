@@ -1,5 +1,5 @@
 use crate::auth::AuthUser;
-use crate::domain::item::{Item, ItemType};
+use crate::domain::item::{Item, ItemKind};
 use crate::domain::recurrence;
 use crate::handlers::web_ui::TzOffset;
 use crate::handlers::web_ui::nav::{self, ActiveContext, SidebarSection};
@@ -44,7 +44,7 @@ impl TemplateRow {
         Self {
             id: item.id.clone(),
             name: item.name.clone(),
-            recurrence: item.recurrence.clone(),
+            recurrence: item.recurrence_pattern(),
         }
     }
 }
@@ -86,7 +86,7 @@ impl TemplateChildRow {
             template_id: template_id.to_string(),
             id: item.id.clone(),
             name: item.name.clone(),
-            offset_label: format_offset_label(item.due_offset_days),
+            offset_label: format_offset_label(item.due_offset_days()),
         }
     }
 }
@@ -124,7 +124,7 @@ impl TemplateChildDetailFields {
             id: item.id.clone(),
             name: item.name.clone(),
             due_offset_days_input: item
-                .due_offset_days
+                .due_offset_days()
                 .map(|d| d.to_string())
                 .unwrap_or_default(),
             just_saved,
@@ -147,7 +147,7 @@ impl TemplateChildDetailView {
     fn from_item(item: &Item) -> Self {
         Self {
             id: item.id.clone(),
-            offset_label: format_offset_label(item.due_offset_days),
+            offset_label: format_offset_label(item.due_offset_days()),
         }
     }
 }
@@ -422,8 +422,8 @@ pub async fn update_template_child_form(
         has_scheduled_time: Some(false),
         has_end_time: Some(false),
         parent_item_id: Some(template_id.clone()),
-        item_type: Some(ItemType::Task),
-        event_type: current.event_type.clone(),
+        item_type: Some(ItemKind::Task),
+        event_type: current.event_type(),
         due_offset_days: parse_offset(&form.due_offset_days),
         timezone_offset_minutes: None,
     };
@@ -486,8 +486,8 @@ pub async fn use_template_form(
         user_id: auth_user.user_id.clone(),
         name,
         due_date,
-        recurrence: template.recurrence.clone(),
-        recurrence_basis: template.recurrence_basis.clone(),
+        recurrence: template.recurrence_pattern(),
+        recurrence_basis: template.recurrence_basis(),
         timezone_offset_minutes: Some(tz),
         ..Default::default()
     };
@@ -501,7 +501,7 @@ pub async fn use_template_form(
         .await
         .map_err(ItemError::from)?;
 
-    item_service::copy_template_children(&repo, &template_id, &new_item_id, new_item.due_date, tz)
+    item_service::copy_template_children(&repo, &template_id, &new_item_id, new_item.due_date(), tz)
         .await
         .map_err(ItemError::from)?;
 

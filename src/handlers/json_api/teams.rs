@@ -55,6 +55,18 @@ pub async fn get_team(
     })
 }
 
+pub async fn update_team(
+    input: input::UpdateTeamInput,
+    server::Extension(teams): server::Extension<Arc<dyn TeamRepo>>,
+    server::Extension(auth): server::Extension<AuthUser>,
+) -> Result<output::UpdateTeamOutput, error::UpdateTeamError> {
+    require_matching_user(&auth, &input.user_id).map_err(|e| error::UpdateTeamError::from(to_msg(e)))?;
+    team_service::update_team(&teams, &input.team_id, &auth.user_id, &input.name)
+        .await
+        .map_err(|e| error::UpdateTeamError::from(to_msg(e)))?;
+    Ok(output::UpdateTeamOutput {})
+}
+
 pub async fn list_teams(
     input: input::ListTeamsInput,
     server::Extension(teams): server::Extension<Arc<dyn TeamRepo>>,

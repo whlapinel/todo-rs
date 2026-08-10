@@ -98,32 +98,32 @@ pub async fn get_team_item(
             _ => error::GetTeamItemError::from(internal(format!("{e:?}"))),
         })?;
     let due_date = item
-        .due_date
+        .due_date()
         .map(|dt| SmithyDateTime::from_secs(dt.timestamp()));
     let scheduled_date = item
-        .scheduled_date
+        .scheduled_date()
         .map(|dt| SmithyDateTime::from_secs(dt.timestamp()));
     let scheduled_end_date = item
-        .scheduled_end_date
+        .scheduled_end_date()
         .map(|dt| SmithyDateTime::from_secs(dt.timestamp()));
     Ok(output::GetTeamItemOutput {
-        name: item.name,
+        name: item.name.clone(),
         due_date,
         scheduled_date,
         scheduled_end_date,
         complete: item.complete,
-        recurrence: item.recurrence,
-        recurrence_basis: item.recurrence_basis,
-        has_due_time: Some(item.has_due_time),
-        has_scheduled_time: Some(item.has_scheduled_time),
-        has_end_time: Some(item.has_end_time),
-        parent_item_id: item.parent_item_id,
+        recurrence: item.recurrence_pattern(),
+        recurrence_basis: item.recurrence_basis(),
+        has_due_time: Some(item.has_due_time()),
+        has_scheduled_time: Some(item.has_scheduled_time()),
+        has_end_time: Some(item.has_end_time()),
+        parent_item_id: item.parent_item_id.clone(),
         has_children: Some(item.has_children),
-        item_type: Some(to_sdk_item_type(item.item_type)),
-        event_type: item.event_type,
-        due_offset_days: item.due_offset_days,
-        assigned_to_user_id: item.assigned_to_user_id,
-        points: item.points,
+        item_type: Some(to_sdk_item_type(item.kind())),
+        event_type: item.event_type(),
+        due_offset_days: item.due_offset_days(),
+        assigned_to_user_id: item.assigned_to_user_id(),
+        points: item.points(),
     })
 }
 
@@ -210,10 +210,10 @@ pub async fn list_team_items(
         .map_err(|e| internal(format!("{e:?}")))?;
     let mut names = HashMap::<String, String>::new();
     for item in items.iter() {
-        if let Some(id) = &item.assigned_to_user_id {
-            match get_user_name(id, &users).await {
+        if let Some(id) = item.assigned_to_user_id() {
+            match get_user_name(&id, &users).await {
                 Some(name) => {
-                    names.insert(id.to_string(), name);
+                    names.insert(id, name);
                 }
                 None => {
                     tracing::error!(
@@ -226,33 +226,33 @@ pub async fn list_team_items(
     let items = items
         .into_iter()
         .map(|i| todo_server_sdk::model::TeamItemSummary {
-            item_id: Some(i.id),
-            name: Some(i.name),
+            item_id: Some(i.id.clone()),
+            name: Some(i.name.clone()),
             due_date: i
-                .due_date
+                .due_date()
                 .map(|dt| SmithyDateTime::from_secs(dt.timestamp())),
             scheduled_date: i
-                .scheduled_date
+                .scheduled_date()
                 .map(|dt| SmithyDateTime::from_secs(dt.timestamp())),
             scheduled_end_date: i
-                .scheduled_end_date
+                .scheduled_end_date()
                 .map(|dt| SmithyDateTime::from_secs(dt.timestamp())),
             complete: Some(i.complete),
-            recurrence: i.recurrence,
-            recurrence_basis: i.recurrence_basis,
-            has_due_time: Some(i.has_due_time),
-            has_scheduled_time: Some(i.has_scheduled_time),
-            has_end_time: Some(i.has_end_time),
-            parent_item_id: i.parent_item_id,
+            recurrence: i.recurrence_pattern(),
+            recurrence_basis: i.recurrence_basis(),
+            has_due_time: Some(i.has_due_time()),
+            has_scheduled_time: Some(i.has_scheduled_time()),
+            has_end_time: Some(i.has_end_time()),
+            parent_item_id: i.parent_item_id.clone(),
             has_children: Some(i.has_children),
-            item_type: Some(to_sdk_item_type(i.item_type)),
-            event_type: i.event_type,
-            due_offset_days: i.due_offset_days,
-            assigned_to_user_id: i.assigned_to_user_id.clone(),
+            item_type: Some(to_sdk_item_type(i.kind())),
+            event_type: i.event_type(),
+            due_offset_days: i.due_offset_days(),
+            assigned_to_user_id: i.assigned_to_user_id(),
             assigned_to_user_name: i
-                .assigned_to_user_id
+                .assigned_to_user_id()
                 .map(|id| names.get(&id).unwrap_or(&"<Name>".to_string()).clone()),
-            points: i.points,
+            points: i.points(),
         })
         .collect();
     Ok(output::ListTeamItemsOutput { items })

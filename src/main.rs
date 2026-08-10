@@ -29,7 +29,7 @@ use handlers::json_api::team_items::{
 use handlers::json_api::team_templates::{create_team_template, list_team_templates};
 use handlers::json_api::teams::{
     accept_team_invite, create_team, get_team, invite_team_member, leave_team, list_team_members,
-    list_teams, set_team_member_role,
+    list_teams, set_team_member_role, update_team,
 };
 use handlers::json_api::templates::{create_template, list_templates};
 use handlers::json_api::users::{get_user, list_users, update_user};
@@ -166,7 +166,10 @@ fn build_web_router() -> Router {
         )
         .route("/templates/:template_id/use", post(use_template_form))
         .route("/teams", get(teams_page).post(create_team_form))
-        .route("/teams/:team_id", get(team_detail_page))
+        .route(
+            "/teams/:team_id",
+            get(team_detail_page).put(update_team_form),
+        )
         .route("/teams/:team_id/invite", post(invite_team_member_form))
         .route("/teams/:team_id/accept", post(accept_team_invite_form))
         .route("/teams/:team_id/leave", post(leave_team_form))
@@ -314,6 +317,7 @@ async fn main() {
         .list_templates(list_templates)
         .create_team(create_team)
         .get_team(get_team)
+        .update_team(update_team)
         .list_teams(list_teams)
         .list_team_members(list_team_members)
         .invite_team_member(invite_team_member)

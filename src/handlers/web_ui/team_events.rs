@@ -1,5 +1,5 @@
 use crate::auth::AuthUser;
-use crate::domain::item::{Item, ItemType};
+use crate::domain::item::{Item, ItemKind};
 use crate::handlers::web_ui::nav::{self, ActiveContext, SidebarSection};
 use crate::handlers::web_ui::team_tasks;
 use crate::handlers::web_ui::{TzOffset, to_local};
@@ -28,7 +28,7 @@ fn render<T: Template>(t: T) -> Result<Html<String>, ItemError> {
 /// or Simple team item's id reaching one of these handlers must 404 rather than render
 /// nonsense.
 fn require_team_event(item: Item) -> Result<Item, ItemError> {
-    if item.item_type == ItemType::Event {
+    if item.kind() == ItemKind::Event {
         Ok(item)
     } else {
         Err(ItemError::NotFound)
@@ -220,7 +220,7 @@ fn create_params_from_form(team_id: &str, form: &TeamEventForm, tz: i32) -> Crea
             .as_deref()
             .map(|t| !t.trim().is_empty()),
         parent_item_id: None,
-        item_type: Some(ItemType::Event),
+        item_type: Some(ItemKind::Event),
         event_type: non_empty(&form.event_type),
         due_offset_days: None,
         assigned_to_user_id: non_empty(&form.assigned_to_user_id),
@@ -245,41 +245,41 @@ fn update_params_from_form(
         team_id: team_id.to_string(),
         item_id: item_id.to_string(),
         name: overlay_required_str(&form.name, &current.name),
-        due_date: overlay_due_date(&form.due_date, &form.due_time, tz, current.due_date),
+        due_date: overlay_due_date(&form.due_date, &form.due_time, tz, current.due_date()),
         scheduled_date: overlay_scheduled_date(
             &form.scheduled_date,
             &form.scheduled_time,
             tz,
-            current.scheduled_date,
+            current.scheduled_date(),
         ),
         scheduled_end_date: overlay_scheduled_end_date(
             &form.scheduled_end_date,
             &form.scheduled_end_time,
             tz,
-            current.scheduled_end_date,
+            current.scheduled_end_date(),
         ),
         complete: overlay_bool(&form.complete, current.complete),
-        recurrence: overlay_str(&form.recurrence, current.recurrence.clone()),
-        recurrence_basis: overlay_str(&form.recurrence_basis, current.recurrence_basis.clone()),
-        has_due_time: Some(overlay_has_due_time(&form.due_time, current.has_due_time)),
+        recurrence: overlay_str(&form.recurrence, current.recurrence_pattern()),
+        recurrence_basis: overlay_str(&form.recurrence_basis, current.recurrence_basis()),
+        has_due_time: Some(overlay_has_due_time(&form.due_time, current.has_due_time())),
         has_scheduled_time: Some(overlay_has_due_time(
             &form.scheduled_time,
-            current.has_scheduled_time,
+            current.has_scheduled_time(),
         )),
         has_end_time: Some(overlay_has_due_time(
             &form.scheduled_end_time,
-            current.has_end_time,
+            current.has_end_time(),
         )),
         parent_item_id: None,
-        item_type: Some(ItemType::Event),
-        event_type: overlay_str(&form.event_type, current.event_type.clone()),
+        item_type: Some(ItemKind::Event),
+        event_type: overlay_str(&form.event_type, current.event_type()),
         due_offset_days: None,
         assigned_to_user_id: overlay_str(
             &form.assigned_to_user_id,
-            current.assigned_to_user_id.clone(),
+            current.assigned_to_user_id(),
         ),
         timezone_offset_minutes: Some(tz),
-        points: overlay_i32(&form.points, current.points),
+        points: overlay_i32(&form.points, current.points()),
     }
 }
 
@@ -356,33 +356,32 @@ impl TeamEventRow {
             team_id: team_id.to_string(),
             name: item.name.clone(),
             complete: item.complete,
-            scheduled_date: item.scheduled_date.map(|d| {
+            scheduled_date: item.scheduled_date().map(|d| {
                 let local = to_local(d, tz);
-                if item.has_scheduled_time {
+                if item.has_scheduled_time() {
                     local.format("%Y-%m-%d %H:%M").to_string()
                 } else {
                     local.format("%Y-%m-%d").to_string()
                 }
             }),
-            scheduled_end_date: item.scheduled_end_date.map(|d| {
+            scheduled_end_date: item.scheduled_end_date().map(|d| {
                 let local = to_local(d, tz);
-                if item.has_end_time {
+                if item.has_end_time() {
                     local.format("%Y-%m-%d %H:%M").to_string()
                 } else {
                     local.format("%Y-%m-%d").to_string()
                 }
             }),
             due_date: item
-                .due_date
+                .due_date()
                 .map(|d| to_local(d, tz).format("%Y-%m-%d %H:%M").to_string()),
             overdue: item.is_overdue(Utc::now()),
-            event_type: item.event_type.clone(),
+            event_type: item.event_type(),
             has_children: item.has_children,
-            recurrence: item.recurrence.clone(),
+            recurrence: item.recurrence_pattern(),
             assignee_name: item
-                .assigned_to_user_id
-                .as_ref()
-                .map(|id| names.get(id).cloned().unwrap_or_else(|| id.clone())),
+                .assigned_to_user_id()
+                .map(|id| names.get(&id).cloned().unwrap_or(id)),
             toggle_complete_json: (!item.complete).to_string(),
         }
     }
@@ -426,33 +425,33 @@ impl TeamEventDetailFields {
         tz: i32,
         just_saved: bool,
     ) -> Self {
-        let local_scheduled_date = item.scheduled_date.map(|d| to_local(d, tz));
+        let local_scheduled_date = item.scheduled_date().map(|d| to_local(d, tz));
         let scheduled_date_input = local_scheduled_date
             .map(|d| d.format("%Y-%m-%d").to_string())
             .unwrap_or_default();
-        let scheduled_time_input = if item.has_scheduled_time {
+        let scheduled_time_input = if item.has_scheduled_time() {
             local_scheduled_date
                 .map(|d| d.format("%H:%M").to_string())
                 .unwrap_or_default()
         } else {
             String::new()
         };
-        let local_scheduled_end_date = item.scheduled_end_date.map(|d| to_local(d, tz));
+        let local_scheduled_end_date = item.scheduled_end_date().map(|d| to_local(d, tz));
         let scheduled_end_date_input = local_scheduled_end_date
             .map(|d| d.format("%Y-%m-%d").to_string())
             .unwrap_or_default();
-        let scheduled_end_time_input = if item.has_end_time {
+        let scheduled_end_time_input = if item.has_end_time() {
             local_scheduled_end_date
                 .map(|d| d.format("%H:%M").to_string())
                 .unwrap_or_default()
         } else {
             String::new()
         };
-        let local_due_date = item.due_date.map(|d| to_local(d, tz));
+        let local_due_date = item.due_date().map(|d| to_local(d, tz));
         let due_date_input = local_due_date
             .map(|d| d.format("%Y-%m-%d").to_string())
             .unwrap_or_default();
-        let due_time_input = if item.has_due_time {
+        let due_time_input = if item.has_due_time() {
             local_due_date
                 .map(|d| d.format("%H:%M").to_string())
                 .unwrap_or_default()
@@ -470,13 +469,13 @@ impl TeamEventDetailFields {
             scheduled_end_time_input,
             due_date_input,
             due_time_input,
-            event_type_input: item.event_type.clone().unwrap_or_default(),
-            recurrence: item.recurrence.clone(),
-            recurrence_basis: item.recurrence_basis.clone(),
+            event_type_input: item.event_type().unwrap_or_default(),
+            recurrence: item.recurrence_pattern(),
+            recurrence_basis: item.recurrence_basis(),
             assignee_options,
-            assigned_to_user_id: item.assigned_to_user_id.clone(),
+            assigned_to_user_id: item.assigned_to_user_id(),
             is_team_admin,
-            points_input: item.points.map(|p| p.to_string()).unwrap_or_default(),
+            points_input: item.points().map(|p| p.to_string()).unwrap_or_default(),
             just_saved,
         }
     }
@@ -503,25 +502,25 @@ struct TeamEventDetailView {
 
 impl TeamEventDetailView {
     fn from_item(item: &Item, team_id: &str, names: &HashMap<String, String>, tz: i32) -> Self {
-        let scheduled_date = item.scheduled_date.map(|d| {
+        let scheduled_date = item.scheduled_date().map(|d| {
             let local = to_local(d, tz);
-            if item.has_scheduled_time {
+            if item.has_scheduled_time() {
                 local.format("%Y-%m-%d %H:%M").to_string()
             } else {
                 local.format("%Y-%m-%d").to_string()
             }
         });
-        let scheduled_end_date = item.scheduled_end_date.map(|d| {
+        let scheduled_end_date = item.scheduled_end_date().map(|d| {
             let local = to_local(d, tz);
-            if item.has_end_time {
+            if item.has_end_time() {
                 local.format("%Y-%m-%d %H:%M").to_string()
             } else {
                 local.format("%Y-%m-%d").to_string()
             }
         });
-        let due_date = item.due_date.map(|d| {
+        let due_date = item.due_date().map(|d| {
             let local = to_local(d, tz);
-            if item.has_due_time {
+            if item.has_due_time() {
                 local.format("%Y-%m-%d %H:%M").to_string()
             } else {
                 local.format("%Y-%m-%d").to_string()
@@ -536,13 +535,12 @@ impl TeamEventDetailView {
             scheduled_end_date,
             due_date,
             overdue: item.is_overdue(Utc::now()),
-            event_type: item.event_type.clone(),
-            recurrence: item.recurrence.clone(),
-            recurrence_basis_label: recurrence_basis_label(&item.recurrence_basis),
+            event_type: item.event_type(),
+            recurrence: item.recurrence_pattern(),
+            recurrence_basis_label: recurrence_basis_label(&item.recurrence_basis()),
             assignee_name: item
-                .assigned_to_user_id
-                .as_ref()
-                .map(|id| names.get(id).cloned().unwrap_or_else(|| id.clone())),
+                .assigned_to_user_id()
+                .map(|id| names.get(&id).cloned().unwrap_or(id)),
         }
     }
 }
@@ -652,8 +650,8 @@ fn render_rows(
 /// Sort key for the team events list: primary date is `scheduled_date` (falling back to
 /// `due_date`), undated events last — mirrors `events.rs`'s `sort_key`.
 fn sort_key(item: &Item) -> i64 {
-    item.scheduled_date
-        .or(item.due_date)
+    item.scheduled_date()
+        .or(item.due_date())
         .map(|d| d.timestamp())
         .unwrap_or(i64::MAX)
 }
@@ -666,7 +664,7 @@ async fn list_team_events(repo: &Arc<dyn ItemRepo>, team_id: &str) -> Result<Vec
         .list_team_items(team_id, None)
         .await
         .map_err(ItemError::from)?;
-    items.retain(|i| i.item_type == ItemType::Event);
+    items.retain(|i| i.kind() == ItemKind::Event);
     items.sort_by_key(sort_key);
     Ok(items)
 }
@@ -683,14 +681,14 @@ fn next_month(year: i32, month: u32) -> (i32, u32) {
 /// `events.rs`'s `calendar_date`/`calendar_has_time`, kept consistent so an event lands on
 /// the same day in both the flat list and the calendar.
 fn calendar_date(item: &Item) -> Option<DateTime<Utc>> {
-    item.scheduled_date.or(item.due_date)
+    item.scheduled_date().or(item.due_date())
 }
 
 fn calendar_has_time(item: &Item) -> bool {
-    if item.scheduled_date.is_some() {
-        item.has_scheduled_time
+    if item.scheduled_date().is_some() {
+        item.has_scheduled_time()
     } else {
-        item.has_due_time
+        item.has_due_time()
     }
 }
 
@@ -1096,7 +1094,7 @@ pub async fn create_team_event_child_form(
         team_id: team_id.clone(),
         name: form.name,
         parent_item_id: Some(item_id.clone()),
-        item_type: Some(ItemType::Task),
+        item_type: Some(ItemKind::Task),
         due_offset_days: form
             .due_offset_days
             .as_deref()

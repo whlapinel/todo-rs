@@ -1,5 +1,5 @@
 use crate::auth::AuthUser;
-use crate::domain::item::{Item, ItemType};
+use crate::domain::item::{Item, ItemKind};
 use crate::handlers::web_ui::nav::{self, ActiveContext, SidebarSection};
 use crate::service::items::{self as item_service, ItemError};
 use crate::service::templates::{self as template_service, CreateTemplateParams};
@@ -18,7 +18,7 @@ fn render<T: Template>(t: T) -> Result<Html<String>, ItemError> {
 /// `require_task`), so a Task/Event item's id reaching one of these handlers must 404 rather
 /// than render a form that would silently reclassify it back to Simple on save.
 fn require_simple(item: Item) -> Result<Item, ItemError> {
-    if item.item_type == ItemType::Simple {
+    if item.kind() == ItemKind::Simple {
         Ok(item)
     } else {
         Err(ItemError::NotFound)
@@ -73,7 +73,7 @@ fn create_params_from_form(
         name: form.name.clone().unwrap_or_default(),
         complete: form.complete.as_deref().map(|s| s == "true"),
         parent_item_id: non_empty(&form.parent_item_id),
-        item_type: Some(ItemType::Simple),
+        item_type: Some(ItemKind::Simple),
         ..Default::default()
     }
 }
@@ -90,7 +90,7 @@ fn update_params_from_form(
         name: overlay_required_str(&form.name, &current.name),
         complete: overlay_bool(&form.complete, current.complete),
         parent_item_id: current.parent_item_id.clone(),
-        item_type: Some(ItemType::Simple),
+        item_type: Some(ItemKind::Simple),
         ..Default::default()
     }
 }
@@ -221,7 +221,7 @@ async fn list_simple_items(
     user_id: &str,
 ) -> Result<Vec<Item>, ItemError> {
     let mut items = repo.list(user_id).await.map_err(ItemError::from)?;
-    items.retain(|i| i.item_type == ItemType::Simple);
+    items.retain(|i| i.kind() == ItemKind::Simple);
     Ok(items)
 }
 
@@ -436,7 +436,7 @@ pub async fn create_simple_items_batch(
             user_id: auth_user.user_id.clone(),
             name: name.to_string(),
             parent_item_id: parent_item_id.clone(),
-            item_type: Some(ItemType::Simple),
+            item_type: Some(ItemKind::Simple),
             ..Default::default()
         };
         item_service::create_item(&repo, params).await?;

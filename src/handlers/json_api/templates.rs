@@ -39,22 +39,22 @@ pub async fn list_templates(
     let items = items
         .into_iter()
         .map(|i| todo_server_sdk::model::ItemSummary {
-            item_id: Some(i.id),
-            name: Some(i.name),
+            item_id: Some(i.id.clone()),
+            name: Some(i.name.clone()),
             due_date: None,
             scheduled_date: None,
             scheduled_end_date: None,
             complete: Some(i.complete),
-            recurrence: i.recurrence,
-            recurrence_basis: i.recurrence_basis,
-            has_due_time: Some(i.has_due_time),
-            has_scheduled_time: Some(i.has_scheduled_time),
-            has_end_time: Some(i.has_end_time),
-            parent_item_id: i.parent_item_id,
+            recurrence: i.recurrence_pattern(),
+            recurrence_basis: i.recurrence_basis(),
+            has_due_time: Some(i.has_due_time()),
+            has_scheduled_time: Some(i.has_scheduled_time()),
+            has_end_time: Some(i.has_end_time()),
+            parent_item_id: i.parent_item_id.clone(),
             has_children: Some(i.has_children),
-            item_type: Some(to_sdk_item_type(i.item_type)),
-            event_type: i.event_type,
-            due_offset_days: i.due_offset_days,
+            item_type: Some(to_sdk_item_type(i.kind())),
+            event_type: i.event_type(),
+            due_offset_days: i.due_offset_days(),
             assigned_to_user_id: None,
         })
         .collect();

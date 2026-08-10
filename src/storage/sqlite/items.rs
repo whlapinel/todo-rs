@@ -95,14 +95,14 @@ impl ItemRepo for SqliteItemRepo {
 
     async fn create(&self, item: &Item) -> Result<String, RepoError> {
         let id = uuid::Uuid::new_v4().to_string();
-        let due_date: Option<i64> = item.due_date.map(|dt| dt.timestamp());
-        let scheduled_date: Option<i64> = item.scheduled_date.map(|dt| dt.timestamp());
-        let scheduled_end_date: Option<i64> = item.scheduled_end_date.map(|dt| dt.timestamp());
+        let due_date: Option<i64> = item.due_date().map(|dt| dt.timestamp());
+        let scheduled_date: Option<i64> = item.scheduled_date().map(|dt| dt.timestamp());
+        let scheduled_end_date: Option<i64> = item.scheduled_end_date().map(|dt| dt.timestamp());
         let complete: i64 = item.complete as i64;
-        let has_due_time: i64 = item.has_due_time as i64;
-        let has_scheduled_time: i64 = item.has_scheduled_time as i64;
-        let has_end_time: i64 = item.has_end_time as i64;
-        let item_type: &str = item.item_type.as_str();
+        let has_due_time: i64 = item.has_due_time() as i64;
+        let has_scheduled_time: i64 = item.has_scheduled_time() as i64;
+        let has_end_time: i64 = item.has_end_time() as i64;
+        let item_type: &str = item.kind().as_str();
         sqlx::query(
             "INSERT INTO items (id, user_id, team_id, parent_item_id, name, due_date, scheduled_date, scheduled_end_date, complete, recurrence, recurrence_basis, has_due_time, has_scheduled_time, has_end_time, item_type, event_type, due_offset_days, assigned_to_user_id, points)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -116,16 +116,16 @@ impl ItemRepo for SqliteItemRepo {
         .bind(scheduled_date)
         .bind(scheduled_end_date)
         .bind(complete)
-        .bind(&item.recurrence)
-        .bind(&item.recurrence_basis)
+        .bind(item.recurrence_pattern())
+        .bind(item.recurrence_basis())
         .bind(has_due_time)
         .bind(has_scheduled_time)
         .bind(has_end_time)
         .bind(item_type)
-        .bind(&item.event_type)
-        .bind(item.due_offset_days)
-        .bind(&item.assigned_to_user_id)
-        .bind(item.points)
+        .bind(item.event_type())
+        .bind(item.due_offset_days())
+        .bind(item.assigned_to_user_id())
+        .bind(item.points())
         .execute(&self.0)
         .await
         .map_err(db_err)?;
@@ -133,14 +133,14 @@ impl ItemRepo for SqliteItemRepo {
     }
 
     async fn update(&self, item: &Item) -> Result<(), RepoError> {
-        let due_date: Option<i64> = item.due_date.map(|dt| dt.timestamp());
-        let scheduled_date: Option<i64> = item.scheduled_date.map(|dt| dt.timestamp());
-        let scheduled_end_date: Option<i64> = item.scheduled_end_date.map(|dt| dt.timestamp());
+        let due_date: Option<i64> = item.due_date().map(|dt| dt.timestamp());
+        let scheduled_date: Option<i64> = item.scheduled_date().map(|dt| dt.timestamp());
+        let scheduled_end_date: Option<i64> = item.scheduled_end_date().map(|dt| dt.timestamp());
         let complete: i64 = item.complete as i64;
-        let has_due_time: i64 = item.has_due_time as i64;
-        let has_scheduled_time: i64 = item.has_scheduled_time as i64;
-        let has_end_time: i64 = item.has_end_time as i64;
-        let item_type: &str = item.item_type.as_str();
+        let has_due_time: i64 = item.has_due_time() as i64;
+        let has_scheduled_time: i64 = item.has_scheduled_time() as i64;
+        let has_end_time: i64 = item.has_end_time() as i64;
+        let item_type: &str = item.kind().as_str();
         let rows = sqlx::query(
             "UPDATE items SET name = ?, due_date = ?, scheduled_date = ?, scheduled_end_date = ?, complete = ?, recurrence = ?, recurrence_basis = ?, \
              has_due_time = ?, has_scheduled_time = ?, has_end_time = ?, parent_item_id = ?, item_type = ?, event_type = ?, due_offset_days = ?, assigned_to_user_id = ? \
@@ -151,16 +151,16 @@ impl ItemRepo for SqliteItemRepo {
         .bind(scheduled_date)
         .bind(scheduled_end_date)
         .bind(complete)
-        .bind(&item.recurrence)
-        .bind(&item.recurrence_basis)
+        .bind(item.recurrence_pattern())
+        .bind(item.recurrence_basis())
         .bind(has_due_time)
         .bind(has_scheduled_time)
         .bind(has_end_time)
         .bind(&item.parent_item_id)
         .bind(item_type)
-        .bind(&item.event_type)
-        .bind(item.due_offset_days)
-        .bind(&item.assigned_to_user_id)
+        .bind(item.event_type())
+        .bind(item.due_offset_days())
+        .bind(item.assigned_to_user_id())
         .bind(&item.id)
         .bind(&item.user_id)
         .execute(&self.0)
@@ -171,14 +171,14 @@ impl ItemRepo for SqliteItemRepo {
     }
 
     async fn update_team_item(&self, item: &Item) -> Result<(), RepoError> {
-        let due_date: Option<i64> = item.due_date.map(|dt| dt.timestamp());
-        let scheduled_date: Option<i64> = item.scheduled_date.map(|dt| dt.timestamp());
-        let scheduled_end_date: Option<i64> = item.scheduled_end_date.map(|dt| dt.timestamp());
+        let due_date: Option<i64> = item.due_date().map(|dt| dt.timestamp());
+        let scheduled_date: Option<i64> = item.scheduled_date().map(|dt| dt.timestamp());
+        let scheduled_end_date: Option<i64> = item.scheduled_end_date().map(|dt| dt.timestamp());
         let complete: i64 = item.complete as i64;
-        let has_due_time: i64 = item.has_due_time as i64;
-        let has_scheduled_time: i64 = item.has_scheduled_time as i64;
-        let has_end_time: i64 = item.has_end_time as i64;
-        let item_type: &str = item.item_type.as_str();
+        let has_due_time: i64 = item.has_due_time() as i64;
+        let has_scheduled_time: i64 = item.has_scheduled_time() as i64;
+        let has_end_time: i64 = item.has_end_time() as i64;
+        let item_type: &str = item.kind().as_str();
         let rows = sqlx::query(
             "UPDATE items SET name = ?, due_date = ?, scheduled_date = ?, scheduled_end_date = ?, complete = ?, recurrence = ?, recurrence_basis = ?, \
              has_due_time = ?, has_scheduled_time = ?, has_end_time = ?, parent_item_id = ?, item_type = ?, event_type = ?, due_offset_days = ?, assigned_to_user_id = ?, points = ? \
@@ -189,17 +189,17 @@ impl ItemRepo for SqliteItemRepo {
         .bind(scheduled_date)
         .bind(scheduled_end_date)
         .bind(complete)
-        .bind(&item.recurrence)
-        .bind(&item.recurrence_basis)
+        .bind(item.recurrence_pattern())
+        .bind(item.recurrence_basis())
         .bind(has_due_time)
         .bind(has_scheduled_time)
         .bind(has_end_time)
         .bind(&item.parent_item_id)
         .bind(item_type)
-        .bind(&item.event_type)
-        .bind(item.due_offset_days)
-        .bind(&item.assigned_to_user_id)
-        .bind(item.points)
+        .bind(item.event_type())
+        .bind(item.due_offset_days())
+        .bind(item.assigned_to_user_id())
+        .bind(item.points())
         .bind(&item.id)
         .bind(&item.team_id)
         .execute(&self.0)

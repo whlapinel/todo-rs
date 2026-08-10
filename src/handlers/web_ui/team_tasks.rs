@@ -1,5 +1,5 @@
 use crate::auth::AuthUser;
-use crate::domain::item::{Item, ItemType};
+use crate::domain::item::{Item, ItemKind};
 use crate::handlers::web_ui::nav::{self, ActiveContext, SidebarSection};
 use crate::handlers::web_ui::{TzOffset, to_local};
 use crate::service::error::ItemError;
@@ -27,7 +27,7 @@ fn render<T: Template>(t: T) -> Result<Html<String>, ItemError> {
 /// team item's id reaching one of these handlers must 404 rather than silently
 /// reclassify it back to Task on save.
 fn require_team_task(item: Item) -> Result<Item, ItemError> {
-    if item.item_type == ItemType::Task {
+    if item.kind() == ItemKind::Task {
         Ok(item)
     } else {
         Err(ItemError::NotFound)
@@ -216,7 +216,7 @@ fn create_params_from_form(team_id: &str, form: &TeamTaskForm, tz: i32) -> Creat
             .as_deref()
             .map(|t| !t.trim().is_empty()),
         parent_item_id: non_empty(&form.parent_item_id),
-        item_type: Some(ItemType::Task),
+        item_type: Some(ItemKind::Task),
         due_offset_days: form
             .due_offset_days
             .as_deref()
@@ -246,44 +246,44 @@ fn update_params_from_form(
         team_id: team_id.to_string(),
         item_id: item_id.to_string(),
         name: overlay_required_str(&form.name, &current.name),
-        due_date: overlay_due_date(&form.due_date, &form.due_time, tz, current.due_date),
+        due_date: overlay_due_date(&form.due_date, &form.due_time, tz, current.due_date()),
         scheduled_date: overlay_scheduled_date(
             &form.scheduled_date,
             &form.scheduled_time,
             tz,
-            current.scheduled_date,
+            current.scheduled_date(),
         ),
         scheduled_end_date: overlay_scheduled_end_date(
             &form.scheduled_end_date,
             &form.scheduled_end_time,
             tz,
-            current.scheduled_end_date,
+            current.scheduled_end_date(),
         ),
         complete: overlay_bool(&form.complete, current.complete),
-        recurrence: overlay_str(&form.recurrence, current.recurrence.clone()),
-        recurrence_basis: overlay_str(&form.recurrence_basis, current.recurrence_basis.clone()),
-        has_due_time: Some(overlay_has_due_time(&form.due_time, current.has_due_time)),
+        recurrence: overlay_str(&form.recurrence, current.recurrence_pattern()),
+        recurrence_basis: overlay_str(&form.recurrence_basis, current.recurrence_basis()),
+        has_due_time: Some(overlay_has_due_time(&form.due_time, current.has_due_time())),
         has_scheduled_time: Some(overlay_has_due_time(
             &form.scheduled_time,
-            current.has_scheduled_time,
+            current.has_scheduled_time(),
         )),
         has_end_time: Some(overlay_has_due_time(
             &form.scheduled_end_time,
-            current.has_end_time,
+            current.has_end_time(),
         )),
         parent_item_id: current.parent_item_id.clone(),
-        item_type: Some(ItemType::Task),
-        due_offset_days: overlay_i32(&form.due_offset_days, current.due_offset_days),
+        item_type: Some(ItemKind::Task),
+        due_offset_days: overlay_i32(&form.due_offset_days, current.due_offset_days()),
         assigned_to_user_id: overlay_str(
             &form.assigned_to_user_id,
-            current.assigned_to_user_id.clone(),
+            current.assigned_to_user_id(),
         ),
         timezone_offset_minutes: Some(tz),
         // No points input renders on this form yet (Stage 7 adds it) — `overlay_i32` falls
         // back to `current.points` when the form field is absent, so a plain edit here can't
         // silently wipe it. The service layer's own admin gate is what actually decides
         // whether a *changed* value would be honored.
-        points: overlay_i32(&form.points, current.points),
+        points: overlay_i32(&form.points, current.points()),
         ..Default::default()
     }
 }
@@ -339,7 +339,7 @@ fn recurrence_basis_label(recurrence_basis: &Option<String>) -> String {
 fn offset_label_for(item: &Item) -> Option<String> {
     item.parent_item_id
         .as_ref()
-        .map(|_| match item.due_offset_days {
+        .map(|_| match item.due_offset_days() {
             Some(0) => "on due date".to_string(),
             Some(n) if n > 0 => format!("+{n}d"),
             Some(n) => format!("{n}d"),
@@ -380,12 +380,12 @@ impl TeamTaskRow {
             name: item.name.clone(),
             complete: item.complete,
             due_date: item
-                .due_date
+                .due_date()
                 .map(|d| to_local(d, tz).format("%Y-%m-%d %H:%M").to_string()),
             overdue: item.is_overdue(Utc::now()),
-            scheduled_date: item.scheduled_date.map(|d| {
+            scheduled_date: item.scheduled_date().map(|d| {
                 let local = to_local(d, tz);
-                if item.has_scheduled_time {
+                if item.has_scheduled_time() {
                     local.format("%Y-%m-%d %H:%M").to_string()
                 } else {
                     local.format("%Y-%m-%d").to_string()
@@ -393,11 +393,10 @@ impl TeamTaskRow {
             }),
             has_children: item.has_children,
             offset_label: offset_label_for(item),
-            recurrence: item.recurrence.clone(),
+            recurrence: item.recurrence_pattern(),
             assignee_name: item
-                .assigned_to_user_id
-                .as_ref()
-                .map(|id| names.get(id).cloned().unwrap_or_else(|| id.clone())),
+                .assigned_to_user_id()
+                .map(|id| names.get(&id).cloned().unwrap_or(id)),
             toggle_complete_json: (!item.complete).to_string(),
         }
     }
@@ -440,33 +439,33 @@ impl TeamTaskDetailFields {
         tz: i32,
         just_saved: bool,
     ) -> Self {
-        let local_due_date = item.due_date.map(|d| to_local(d, tz));
+        let local_due_date = item.due_date().map(|d| to_local(d, tz));
         let due_date_input = local_due_date
             .map(|d| d.format("%Y-%m-%d").to_string())
             .unwrap_or_default();
-        let due_time_input = if item.has_due_time {
+        let due_time_input = if item.has_due_time() {
             local_due_date
                 .map(|d| d.format("%H:%M").to_string())
                 .unwrap_or_default()
         } else {
             String::new()
         };
-        let local_scheduled_date = item.scheduled_date.map(|d| to_local(d, tz));
+        let local_scheduled_date = item.scheduled_date().map(|d| to_local(d, tz));
         let scheduled_date_input = local_scheduled_date
             .map(|d| d.format("%Y-%m-%d").to_string())
             .unwrap_or_default();
-        let scheduled_time_input = if item.has_scheduled_time {
+        let scheduled_time_input = if item.has_scheduled_time() {
             local_scheduled_date
                 .map(|d| d.format("%H:%M").to_string())
                 .unwrap_or_default()
         } else {
             String::new()
         };
-        let local_scheduled_end_date = item.scheduled_end_date.map(|d| to_local(d, tz));
+        let local_scheduled_end_date = item.scheduled_end_date().map(|d| to_local(d, tz));
         let scheduled_end_date_input = local_scheduled_end_date
             .map(|d| d.format("%Y-%m-%d").to_string())
             .unwrap_or_default();
-        let scheduled_end_time_input = if item.has_end_time {
+        let scheduled_end_time_input = if item.has_end_time() {
             local_scheduled_end_date
                 .map(|d| d.format("%H:%M").to_string())
                 .unwrap_or_default()
@@ -485,13 +484,13 @@ impl TeamTaskDetailFields {
             scheduled_time_input,
             scheduled_end_date_input,
             scheduled_end_time_input,
-            recurrence: item.recurrence.clone(),
-            recurrence_basis: item.recurrence_basis.clone(),
-            due_offset_days_input: format_offset_input(item.due_offset_days),
+            recurrence: item.recurrence_pattern(),
+            recurrence_basis: item.recurrence_basis(),
+            due_offset_days_input: format_offset_input(item.due_offset_days()),
             assignee_options,
-            assigned_to_user_id: item.assigned_to_user_id.clone(),
+            assigned_to_user_id: item.assigned_to_user_id(),
             is_team_admin,
-            points_input: format_points_input(item.points),
+            points_input: format_points_input(item.points()),
             just_saved,
         }
     }
@@ -519,25 +518,25 @@ struct TeamTaskDetailView {
 
 impl TeamTaskDetailView {
     fn from_item(item: &Item, team_id: &str, names: &HashMap<String, String>, tz: i32) -> Self {
-        let due_date = item.due_date.map(|d| {
+        let due_date = item.due_date().map(|d| {
             let local = to_local(d, tz);
-            if item.has_due_time {
+            if item.has_due_time() {
                 local.format("%Y-%m-%d %H:%M").to_string()
             } else {
                 local.format("%Y-%m-%d").to_string()
             }
         });
-        let scheduled_date = item.scheduled_date.map(|d| {
+        let scheduled_date = item.scheduled_date().map(|d| {
             let local = to_local(d, tz);
-            if item.has_scheduled_time {
+            if item.has_scheduled_time() {
                 local.format("%Y-%m-%d %H:%M").to_string()
             } else {
                 local.format("%Y-%m-%d").to_string()
             }
         });
-        let scheduled_end_date = item.scheduled_end_date.map(|d| {
+        let scheduled_end_date = item.scheduled_end_date().map(|d| {
             let local = to_local(d, tz);
-            if item.has_end_time {
+            if item.has_end_time() {
                 local.format("%Y-%m-%d %H:%M").to_string()
             } else {
                 local.format("%Y-%m-%d").to_string()
@@ -553,13 +552,12 @@ impl TeamTaskDetailView {
             scheduled_date,
             scheduled_end_date,
             is_top_level: item.parent_item_id.is_none(),
-            recurrence: item.recurrence.clone(),
-            recurrence_basis_label: recurrence_basis_label(&item.recurrence_basis),
+            recurrence: item.recurrence_pattern(),
+            recurrence_basis_label: recurrence_basis_label(&item.recurrence_basis()),
             offset_label: offset_label_for(item),
             assignee_name: item
-                .assigned_to_user_id
-                .as_ref()
-                .map(|id| names.get(id).cloned().unwrap_or_else(|| id.clone())),
+                .assigned_to_user_id()
+                .map(|id| names.get(&id).cloned().unwrap_or(id)),
         }
     }
 }
@@ -642,7 +640,7 @@ fn render_rows(
 /// further to `Task` and sorts by due date (undated tasks last), mirroring `tasks.rs`'s
 /// `sort_key`.
 fn sort_key(item: &Item) -> i64 {
-    item.due_date.map(|d| d.timestamp()).unwrap_or(i64::MAX)
+    item.due_date().map(|d| d.timestamp()).unwrap_or(i64::MAX)
 }
 
 async fn list_team_tasks(repo: &Arc<dyn ItemRepo>, team_id: &str) -> Result<Vec<Item>, ItemError> {
@@ -650,7 +648,7 @@ async fn list_team_tasks(repo: &Arc<dyn ItemRepo>, team_id: &str) -> Result<Vec<
         .list_team_items(team_id, None)
         .await
         .map_err(ItemError::from)?;
-    items.retain(|i| i.item_type == ItemType::Task);
+    items.retain(|i| i.kind() == ItemKind::Task);
     items.sort_by_key(sort_key);
     Ok(items)
 }
@@ -946,7 +944,7 @@ pub async fn create_team_tasks_batch(
             team_id: team_id.clone(),
             name: name.to_string(),
             parent_item_id: parent_item_id.clone(),
-            item_type: Some(ItemType::Task),
+            item_type: Some(ItemKind::Task),
             timezone_offset_minutes: Some(tz),
             ..Default::default()
         };

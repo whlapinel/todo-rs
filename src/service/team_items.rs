@@ -1,4 +1,4 @@
-use crate::domain::item::{Item, ItemType};
+use crate::domain::item::{Item, ItemKind, ItemType, Recurrence, Schedule, TeamAssignment};
 use crate::domain::recurrence;
 use crate::service::activity_log::reverse_entry;
 use crate::service::items::{
@@ -33,12 +33,44 @@ pub struct CreateTeamItemParams {
     pub has_scheduled_time: Option<bool>,
     pub has_end_time: Option<bool>,
     pub parent_item_id: Option<String>,
-    pub item_type: Option<ItemType>,
+    pub item_type: Option<ItemKind>,
     pub event_type: Option<String>,
     pub due_offset_days: Option<i32>,
     pub assigned_to_user_id: Option<String>,
     pub timezone_offset_minutes: Option<i32>,
     pub points: Option<i32>,
+}
+
+/// Builds the `ItemType` payload for a team item. `team_assignment` is only ever
+/// `Some` for `Task` — points/assignment are Task-only (see issues.md); requesting
+/// them on any other kind is silently dropped, the same shape as the existing
+/// non-admin-points-request handling below, rather than rejecting the rest of an
+/// otherwise-valid request.
+fn build_item_type(
+    kind: ItemKind,
+    schedule: Schedule,
+    recurrence: Recurrence,
+    event_type: Option<String>,
+    team_assignment: Option<TeamAssignment>,
+) -> ItemType {
+    match kind {
+        ItemKind::Simple => ItemType::Simple,
+        ItemKind::Task => ItemType::Task {
+            schedule,
+            recurrence,
+            team_assignment,
+        },
+        ItemKind::Event => ItemType::Event {
+            schedule,
+            recurrence,
+            event_type,
+        },
+        ItemKind::Template => ItemType::Template {
+            schedule,
+            recurrence,
+            event_type,
+        },
+    }
 }
 
 /// Moved from `json_api::team_items::create_team_item`.
@@ -57,7 +89,7 @@ pub async fn create_team_item(
             "child items cannot have their own recurrence; set dueOffsetDays instead".to_string(),
         ));
     }
-    if params.item_type == Some(ItemType::Template) {
+    if params.item_type == Some(ItemKind::Template) {
         return Err(ItemError::Invalid(
             "item_type Template is not supported for team items".to_string(),
         ));
@@ -69,55 +101,81 @@ pub async fn create_team_item(
             "scheduledEndDate cannot be before scheduledDate".to_string(),
         ));
     }
-    let mut item = Item::new_team_item(&params.team_id, &params.name);
-    item.due_date = params.due_date;
-    item.scheduled_date = params.scheduled_date;
-    item.scheduled_end_date = params.scheduled_end_date;
-    item.complete = params.complete.unwrap_or(false);
-    item.recurrence = params.recurrence.clone();
-    item.recurrence_basis = params.recurrence_basis;
-    item.has_due_time = params.has_due_time.unwrap_or(false);
-    item.has_scheduled_time = params.has_scheduled_time.unwrap_or(false);
-    item.has_end_time = params.has_end_time.unwrap_or(false);
-    item.parent_item_id = params.parent_item_id;
-    item.item_type = params.item_type.unwrap_or_default();
-    item.event_type = params.event_type.clone();
-    item.due_offset_days = params.due_offset_days;
-    item.assigned_to_user_id =
-        resolve_assignee(teams, &params.team_id, params.assigned_to_user_id).await?;
-    // Points are admin-of-that-team-only. A non-admin's requested value is
-    // silently dropped rather than rejecting the whole create — the rest of
-    // the request (name, dates, etc.) is still perfectly valid.
-    item.points = if params.points.is_some()
-        && require_team_admin(teams, &params.team_id, requester_user_id)
-            .await
-            .is_ok()
-    {
-        params.points
+
+    let kind = params.item_type.unwrap_or_default();
+
+    let schedule = Schedule {
+        due_date: params.due_date,
+        has_due_time: params.has_due_time.unwrap_or(false),
+        scheduled_date: params.scheduled_date,
+        has_scheduled_time: params.has_scheduled_time.unwrap_or(false),
+        scheduled_end_date: params.scheduled_end_date,
+        has_end_time: params.has_end_time.unwrap_or(false),
+    };
+    let recurrence_data = Recurrence {
+        pattern: params.recurrence.clone(),
+        basis: params.recurrence_basis.clone(),
+        due_offset_days: params.due_offset_days,
+    };
+
+    let team_assignment = if kind == ItemKind::Task {
+        let assigned_to_user_id =
+            resolve_assignee(teams, &params.team_id, params.assigned_to_user_id.clone()).await?;
+        // Points are admin-of-that-team-only. A non-admin's requested value is
+        // silently dropped rather than rejecting the whole create — the rest of
+        // the request (name, dates, etc.) is still perfectly valid.
+        let points = if params.points.is_some()
+            && require_team_admin(teams, &params.team_id, requester_user_id)
+                .await
+                .is_ok()
+        {
+            params.points
+        } else {
+            None
+        };
+        Some(TeamAssignment {
+            assigned_to_user_id,
+            points,
+        })
     } else {
         None
     };
+
+    let mut item = Item::new_team_item(&params.team_id, &params.name);
+    item.item_type = build_item_type(
+        kind,
+        schedule,
+        recurrence_data,
+        params.event_type.clone(),
+        team_assignment,
+    );
+    item.complete = params.complete.unwrap_or(false);
+    item.parent_item_id = params.parent_item_id.clone();
     item.validate().map_err(ItemError::Invalid)?;
 
-    if let Some(ref pattern) = item.recurrence
-        && let Ok(rule) = recurrence::parse(pattern)
+    if let Some(pattern) = item.recurrence_pattern()
+        && let Ok(rule) = recurrence::parse(&pattern)
     {
-        let basis = item.recurrence_basis.as_deref().unwrap_or("DUE_DATE");
+        let basis = item
+            .recurrence_basis()
+            .unwrap_or_else(|| "DUE_DATE".to_string());
         let tz_offset = params.timezone_offset_minutes.unwrap_or(0);
-        if basis == "DUE_DATE" && item.due_date.is_none() {
-            let mut deadline = recurrence::next_date(&rule, chrono::Utc::now(), tz_offset);
-            if rule.time_override.is_none() {
-                deadline = recurrence::apply_end_of_day(deadline, tz_offset);
-            } else {
-                item.has_due_time = true;
+        if let Some(schedule) = item.item_type.schedule_mut() {
+            if basis == "DUE_DATE" && schedule.due_date.is_none() {
+                let mut deadline = recurrence::next_date(&rule, chrono::Utc::now(), tz_offset);
+                if rule.time_override.is_none() {
+                    deadline = recurrence::apply_end_of_day(deadline, tz_offset);
+                } else {
+                    schedule.has_due_time = true;
+                }
+                schedule.due_date = Some(deadline);
+            } else if basis != "DUE_DATE" && schedule.scheduled_date.is_none() {
+                let when = recurrence::next_date(&rule, chrono::Utc::now(), tz_offset);
+                if rule.time_override.is_some() {
+                    schedule.has_scheduled_time = true;
+                }
+                schedule.scheduled_date = Some(when);
             }
-            item.due_date = Some(deadline);
-        } else if basis != "DUE_DATE" && item.scheduled_date.is_none() {
-            let when = recurrence::next_date(&rule, chrono::Utc::now(), tz_offset);
-            if rule.time_override.is_some() {
-                item.has_scheduled_time = true;
-            }
-            item.scheduled_date = Some(when);
         }
     }
     let item_id = repo.create(&item).await?;
@@ -125,14 +183,14 @@ pub async fn create_team_item(
     // Considers both the requester's personal templates and the team's own —
     // same mechanism as service::items::create_item's trigger step, plus
     // the team-scoped template library from Stage 8.
-    if let Some(ref event_type) = item.event_type {
+    if let Some(event_type) = item.event_type() {
         let tz_offset = params.timezone_offset_minutes.unwrap_or(0);
         let root_date = item_anchor(&item);
         let mut templates = repo.list_templates(requester_user_id).await?;
         templates.extend(repo.list_team_templates(&params.team_id).await?);
         for tpl in templates
             .iter()
-            .filter(|t| t.event_type.as_deref() == Some(event_type.as_str()))
+            .filter(|t| t.event_type().as_deref() == Some(event_type.as_str()))
         {
             copy_template_children(repo, &tpl.id, &item_id, root_date, tz_offset).await?;
         }
@@ -223,7 +281,7 @@ pub struct UpdateTeamItemParams {
     pub has_scheduled_time: Option<bool>,
     pub has_end_time: Option<bool>,
     pub parent_item_id: Option<String>,
-    pub item_type: Option<ItemType>,
+    pub item_type: Option<ItemKind>,
     pub event_type: Option<String>,
     pub due_offset_days: Option<i32>,
     pub assigned_to_user_id: Option<String>,
@@ -250,7 +308,7 @@ pub async fn update_team_item(
                 .to_string(),
         ));
     }
-    if params.item_type == Some(ItemType::Template) {
+    if params.item_type == Some(ItemKind::Template) {
         return Err(ItemError::Invalid(
             "item_type Template is not supported for team items".to_string(),
         ));
@@ -273,37 +331,57 @@ pub async fn update_team_item(
         ));
     }
 
+    let kind = params.item_type.unwrap_or(current.kind());
+    let schedule = Schedule {
+        due_date: params.due_date,
+        has_due_time: params.has_due_time.unwrap_or(false),
+        scheduled_date: params.scheduled_date,
+        has_scheduled_time: params.has_scheduled_time.unwrap_or(false),
+        scheduled_end_date: params.scheduled_end_date,
+        has_end_time: params.has_end_time.unwrap_or(false),
+    };
+    let recurrence_data = Recurrence {
+        pattern: params.recurrence.clone(),
+        basis: params.recurrence_basis.clone(),
+        due_offset_days: params.due_offset_days,
+    };
+
+    let team_assignment = if kind == ItemKind::Task {
+        let assigned_to_user_id = if params.assigned_to_user_id == current.assigned_to_user_id() {
+            current.assigned_to_user_id()
+        } else {
+            resolve_assignee(teams, &params.team_id, params.assigned_to_user_id.clone()).await?
+        };
+        // Points are admin-of-that-team-only. A non-admin's request simply can't
+        // change the existing value — it's preserved as-is rather than erroring
+        // the rest of the (otherwise valid) update.
+        let points = if require_team_admin(teams, &params.team_id, requester_user_id)
+            .await
+            .is_ok()
+        {
+            params.points
+        } else {
+            current.points()
+        };
+        Some(TeamAssignment {
+            assigned_to_user_id,
+            points,
+        })
+    } else {
+        None
+    };
+
     let mut item = Item::new_team_item(&params.team_id, &params.name);
     item.id = params.item_id.clone();
     item.complete = params.complete;
-    item.due_date = params.due_date;
-    item.scheduled_date = params.scheduled_date;
-    item.scheduled_end_date = params.scheduled_end_date;
-    item.recurrence = params.recurrence.clone();
-    item.recurrence_basis = params.recurrence_basis.clone();
-    item.has_due_time = params.has_due_time.unwrap_or(false);
-    item.has_scheduled_time = params.has_scheduled_time.unwrap_or(false);
-    item.has_end_time = params.has_end_time.unwrap_or(false);
     item.parent_item_id = params.parent_item_id.clone();
-    item.item_type = params.item_type.unwrap_or(current.item_type);
-    item.event_type = params.event_type.clone();
-    item.due_offset_days = params.due_offset_days;
-    item.assigned_to_user_id = if params.assigned_to_user_id == current.assigned_to_user_id {
-        current.assigned_to_user_id.clone()
-    } else {
-        resolve_assignee(teams, &params.team_id, params.assigned_to_user_id).await?
-    };
-    // Points are admin-of-that-team-only. A non-admin's request simply can't
-    // change the existing value — it's preserved as-is rather than erroring
-    // the rest of the (otherwise valid) update.
-    item.points = if require_team_admin(teams, &params.team_id, requester_user_id)
-        .await
-        .is_ok()
-    {
-        params.points
-    } else {
-        current.points
-    };
+    item.item_type = build_item_type(
+        kind,
+        schedule,
+        recurrence_data,
+        params.event_type.clone(),
+        team_assignment,
+    );
     item.validate().map_err(ItemError::Invalid)?;
 
     if current.complete && !is_pure_complete_toggle(&current, &item) {
@@ -319,7 +397,7 @@ pub async fn update_team_item(
     let just_completed = !current.complete && item.complete;
     let just_uncompleted = current.complete && !item.complete;
     if just_completed {
-        match item.assigned_to_user_id.as_deref() {
+        match item.assigned_to_user_id() {
             None => {
                 return Err(ItemError::Invalid(
                     "cannot complete an unassigned team item; assign it first".to_string(),
@@ -340,12 +418,11 @@ pub async fn update_team_item(
     // anything (see CLAUDE.md's Points plan, Stage 6, and its cross-stage risk #2).
     if just_completed
         && item.parent_item_id.is_none()
-        && let Some(points) = item.points
+        && let Some(points) = item.points()
     {
         // Guarded by the match above: a just-completed item always has an assignee.
         let assignee = item
-            .assigned_to_user_id
-            .clone()
+            .assigned_to_user_id()
             .expect("just-completed team item must be assigned");
         activity_log
             .log_activity(&params.team_id, &assignee, &current.id, &current.name, points)
@@ -355,9 +432,9 @@ pub async fn update_team_item(
             .await?;
     }
     if just_uncompleted
-        && let Some(assignee) = current.assigned_to_user_id.as_deref()
+        && let Some(assignee) = current.assigned_to_user_id()
         && let Some(entry) = activity_log
-            .most_recent_unreversed(&current.id, assignee)
+            .most_recent_unreversed(&current.id, &assignee)
             .await?
     {
         reverse_entry(teams, activity_log, &entry).await?;
@@ -405,7 +482,7 @@ mod tests {
         let mut items = MockItemRepo::new();
         items
             .expect_create()
-            .withf(|item: &Item| item.points.is_none())
+            .withf(|item: &Item| item.points().is_none())
             .times(1)
             .returning(|_| Ok("new-item-id".to_string()));
 
@@ -440,7 +517,7 @@ mod tests {
         let mut items = MockItemRepo::new();
         items
             .expect_create()
-            .withf(|item: &Item| item.points == Some(50))
+            .withf(|item: &Item| item.points() == Some(50))
             .times(1)
             .returning(|_| Ok("new-item-id".to_string()));
 
@@ -484,10 +561,26 @@ mod tests {
             id: id.to_string(),
             team_id: Some(team_id.to_string()),
             name: "Mow the lawn".to_string(),
-            points,
-            assigned_to_user_id: assigned_to_user_id.map(str::to_string),
+            item_type: ItemType::Task {
+                schedule: Schedule::default(),
+                recurrence: Recurrence::default(),
+                team_assignment: Some(TeamAssignment {
+                    points,
+                    assigned_to_user_id: assigned_to_user_id.map(str::to_string),
+                }),
+            },
             ..Item::default()
         }
+    }
+
+    fn with_due_date_and_recurrence(mut item: Item, due_date: DateTime<Utc>, pattern: &str) -> Item {
+        if let Some(schedule) = item.item_type.schedule_mut() {
+            schedule.due_date = Some(due_date);
+        }
+        if let Some(recurrence) = item.item_type.recurrence_mut() {
+            recurrence.pattern = Some(pattern.to_string());
+        }
+        item
     }
 
     #[tokio::test]
@@ -498,7 +591,7 @@ mod tests {
             .returning(|_, _| Ok(team_item_with_points("item1", "t1", Some(30))));
         items
             .expect_update_team_item()
-            .withf(|item: &Item| item.points == Some(30))
+            .withf(|item: &Item| item.points() == Some(30))
             .times(1)
             .returning(|_| Ok(()));
 
@@ -538,7 +631,7 @@ mod tests {
             .returning(|_, _| Ok(team_item_with_points("item1", "t1", Some(30))));
         items
             .expect_update_team_item()
-            .withf(|item: &Item| item.points == Some(999))
+            .withf(|item: &Item| item.points() == Some(999))
             .times(1)
             .returning(|_| Ok(()));
 
@@ -1038,11 +1131,11 @@ mod tests {
             .with_timezone(&chrono::Utc);
         let mut items = MockItemRepo::new();
         items.expect_get_team_item().returning(move |_, _| {
-            Ok(Item {
-                due_date: Some(due_date),
-                recurrence: Some("every day".to_string()),
-                ..team_item_with_points_and_assignee("item1", "t1", Some(20), Some("member1"))
-            })
+            Ok(with_due_date_and_recurrence(
+                team_item_with_points_and_assignee("item1", "t1", Some(20), Some("member1")),
+                due_date,
+                "every day",
+            ))
         });
         // Called once by the parent-gating check (has_incomplete_children), once
         // more by clone_children's own recursive walk over the (empty) subtree —

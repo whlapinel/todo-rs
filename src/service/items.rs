@@ -1,4 +1,4 @@
-use crate::domain::item::{Item, ItemType};
+use crate::domain::item::{Item, ItemKind, ItemType, Recurrence, Schedule};
 use crate::domain::recurrence;
 use crate::storage::sqlite::{ItemRepo, RepoError};
 use chrono::{DateTime, Utc};
@@ -26,10 +26,40 @@ pub struct CreateItemParams {
     pub has_scheduled_time: Option<bool>,
     pub has_end_time: Option<bool>,
     pub parent_item_id: Option<String>,
-    pub item_type: Option<ItemType>,
+    pub item_type: Option<ItemKind>,
     pub event_type: Option<String>,
     pub due_offset_days: Option<i32>,
     pub timezone_offset_minutes: Option<i32>,
+}
+
+/// Builds the `ItemType` payload for a given kind from a `CreateItemParams`/`UpdateItemParams`-
+/// shaped set of flat fields — the one place that decides which of `Schedule`/`Recurrence`/
+/// `event_type` a kind actually gets to carry. Personal items never get a `TeamAssignment`
+/// (points/assignment are team-item-only — see `team_items::build_item_type`, its sibling).
+fn build_item_type(
+    kind: ItemKind,
+    schedule: Schedule,
+    recurrence: Recurrence,
+    event_type: Option<String>,
+) -> ItemType {
+    match kind {
+        ItemKind::Simple => ItemType::Simple,
+        ItemKind::Task => ItemType::Task {
+            schedule,
+            recurrence,
+            team_assignment: None,
+        },
+        ItemKind::Event => ItemType::Event {
+            schedule,
+            recurrence,
+            event_type,
+        },
+        ItemKind::Template => ItemType::Template {
+            schedule,
+            recurrence,
+            event_type,
+        },
+    }
 }
 
 /// Moved from `json_api::items::create_item` (C.0.2 of the migration plan) — this is the one
@@ -47,7 +77,7 @@ pub async fn create_item(
                 .to_string(),
         ));
     }
-    if params.item_type == Some(ItemType::Template) {
+    if params.item_type == Some(ItemKind::Template) {
         return Err(ItemError::Invalid(
             "item_type Template can only be set via the template creation flow"
                 .to_string(),
@@ -60,54 +90,64 @@ pub async fn create_item(
             "scheduledEndDate cannot be before scheduledDate".to_string(),
         ));
     }
-    let mut item = match params.item_type.unwrap_or_default() {
-        ItemType::Simple => Item::new_simple(&params.user_id, &params.name),
-        ItemType::Event => Item::new_event(&params.user_id, &params.name),
-        ItemType::Task => Item::new_task(&params.user_id, &params.name),
-        // Unreachable via user input (rejected above); the "child of a template"
-        // auto-promotion below is what actually produces a Template item.
-        ItemType::Template => Item::new_user_item(&params.user_id, &params.name),
-    };
-    item.due_date = params.due_date;
-    item.scheduled_date = params.scheduled_date;
-    item.scheduled_end_date = params.scheduled_end_date;
-    item.complete = params.complete.unwrap_or(false);
-    item.recurrence = params.recurrence;
-    item.recurrence_basis = params.recurrence_basis;
-    item.has_due_time = params.has_due_time.unwrap_or(false);
-    item.has_scheduled_time = params.has_scheduled_time.unwrap_or(false);
-    item.has_end_time = params.has_end_time.unwrap_or(false);
-    item.parent_item_id = params.parent_item_id.clone();
-    item.event_type = params.event_type.clone();
-    item.due_offset_days = params.due_offset_days;
+
+    let mut kind = params.item_type.unwrap_or_default();
 
     // Child items of a template automatically become template items.
     if let Some(ref parent_id) = params.parent_item_id
         && let Ok(parent) = repo.get(&params.user_id, parent_id).await
-        && parent.item_type == ItemType::Template
+        && parent.kind() == ItemKind::Template
     {
-        item.item_type = ItemType::Template;
+        kind = ItemKind::Template;
     }
+
+    let schedule = Schedule {
+        due_date: params.due_date,
+        has_due_time: params.has_due_time.unwrap_or(false),
+        scheduled_date: params.scheduled_date,
+        has_scheduled_time: params.has_scheduled_time.unwrap_or(false),
+        scheduled_end_date: params.scheduled_end_date,
+        has_end_time: params.has_end_time.unwrap_or(false),
+    };
+    let recurrence_data = Recurrence {
+        pattern: params.recurrence.clone(),
+        basis: params.recurrence_basis.clone(),
+        due_offset_days: params.due_offset_days,
+    };
+
+    let mut item = match kind {
+        ItemKind::Simple => Item::new_simple(&params.user_id, &params.name),
+        _ => Item::new_user_item(&params.user_id, &params.name),
+    };
+    item.item_type = build_item_type(kind, schedule, recurrence_data, params.event_type.clone());
+    item.complete = params.complete.unwrap_or(false);
+    item.parent_item_id = params.parent_item_id.clone();
+
     item.validate().map_err(ItemError::Invalid)?;
-    if let Some(ref pattern) = item.recurrence
-        && let Ok(rule) = recurrence::parse(pattern)
+
+    if let Some(pattern) = item.recurrence_pattern()
+        && let Ok(rule) = recurrence::parse(&pattern)
     {
-        let basis = item.recurrence_basis.as_deref().unwrap_or("DUE_DATE");
+        let basis = item
+            .recurrence_basis()
+            .unwrap_or_else(|| "DUE_DATE".to_string());
         let tz_offset = params.timezone_offset_minutes.unwrap_or(0);
-        if basis == "DUE_DATE" && item.due_date.is_none() {
-            let mut deadline = recurrence::next_date(&rule, chrono::Utc::now(), tz_offset);
-            if rule.time_override.is_none() {
-                deadline = recurrence::apply_end_of_day(deadline, tz_offset);
-            } else {
-                item.has_due_time = true;
+        if let Some(schedule) = item.item_type.schedule_mut() {
+            if basis == "DUE_DATE" && schedule.due_date.is_none() {
+                let mut deadline = recurrence::next_date(&rule, chrono::Utc::now(), tz_offset);
+                if rule.time_override.is_none() {
+                    deadline = recurrence::apply_end_of_day(deadline, tz_offset);
+                } else {
+                    schedule.has_due_time = true;
+                }
+                schedule.due_date = Some(deadline);
+            } else if basis != "DUE_DATE" && schedule.scheduled_date.is_none() {
+                let when = recurrence::next_date(&rule, chrono::Utc::now(), tz_offset);
+                if rule.time_override.is_some() {
+                    schedule.has_scheduled_time = true;
+                }
+                schedule.scheduled_date = Some(when);
             }
-            item.due_date = Some(deadline);
-        } else if basis != "DUE_DATE" && item.scheduled_date.is_none() {
-            let when = recurrence::next_date(&rule, chrono::Utc::now(), tz_offset);
-            if rule.time_override.is_some() {
-                item.has_scheduled_time = true;
-            }
-            item.scheduled_date = Some(when);
         }
     }
     let item_id = repo.create(&item).await?;
@@ -115,13 +155,13 @@ pub async fn create_item(
     // An event-typed item can auto-instantiate matching templates'
     // children onto itself — same mechanism the templates screen's "Use" flow
     // already uses, just triggered by event_type matching instead of a manual click.
-    if let Some(ref event_type) = item.event_type {
+    if let Some(event_type) = item.event_type() {
         let tz_offset = params.timezone_offset_minutes.unwrap_or(0);
         let root_date = item_anchor(&item);
         let templates = repo.list_templates(&params.user_id).await?;
         for tpl in templates
             .iter()
-            .filter(|t| t.event_type.as_deref() == Some(event_type.as_str()))
+            .filter(|t| t.event_type().as_deref() == Some(event_type.as_str()))
         {
             copy_template_children(repo, &tpl.id, &item_id, root_date, tz_offset).await?;
         }
@@ -144,7 +184,7 @@ pub struct UpdateItemParams {
     pub has_scheduled_time: Option<bool>,
     pub has_end_time: Option<bool>,
     pub parent_item_id: Option<String>,
-    pub item_type: Option<ItemType>,
+    pub item_type: Option<ItemKind>,
     pub event_type: Option<String>,
     pub due_offset_days: Option<i32>,
     pub timezone_offset_minutes: Option<i32>,
@@ -166,7 +206,7 @@ pub async fn update_item(
                 .to_string(),
         ));
     }
-    if params.item_type == Some(ItemType::Template) {
+    if params.item_type == Some(ItemKind::Template) {
         return Err(ItemError::Invalid(
             "item_type Template can only be set via the template creation flow"
                 .to_string(),
@@ -191,28 +231,29 @@ pub async fn update_item(
         ));
     }
 
-    let item_type = params.item_type.unwrap_or(current.item_type);
-    let mut item = match item_type {
-        ItemType::Simple => Item::new_simple(&params.user_id, &params.name),
-        ItemType::Event => Item::new_event(&params.user_id, &params.name),
-        ItemType::Task => Item::new_task(&params.user_id, &params.name),
-        ItemType::Template => Item::new_user_item(&params.user_id, &params.name),
+    let kind = params.item_type.unwrap_or(current.kind());
+    let schedule = Schedule {
+        due_date: params.due_date,
+        has_due_time: params.has_due_time.unwrap_or(false),
+        scheduled_date: params.scheduled_date,
+        has_scheduled_time: params.has_scheduled_time.unwrap_or(false),
+        scheduled_end_date: params.scheduled_end_date,
+        has_end_time: params.has_end_time.unwrap_or(false),
     };
-    item.item_type = item_type;
+    let recurrence_data = Recurrence {
+        pattern: params.recurrence.clone(),
+        basis: params.recurrence_basis.clone(),
+        due_offset_days: params.due_offset_days,
+    };
+
+    let mut item = match kind {
+        ItemKind::Simple => Item::new_simple(&params.user_id, &params.name),
+        _ => Item::new_user_item(&params.user_id, &params.name),
+    };
+    item.item_type = build_item_type(kind, schedule, recurrence_data, params.event_type.clone());
     item.id = params.item_id.clone();
     item.complete = params.complete;
-    item.due_date = params.due_date;
-    item.scheduled_date = params.scheduled_date;
-    item.scheduled_end_date = params.scheduled_end_date;
-    item.recurrence = params.recurrence.clone();
-    item.recurrence_basis = params.recurrence_basis.clone();
-    item.has_due_time = params.has_due_time.unwrap_or(false);
-    item.has_scheduled_time = params.has_scheduled_time.unwrap_or(false);
-    item.has_end_time = params.has_end_time.unwrap_or(false);
     item.parent_item_id = params.parent_item_id.clone();
-    item.event_type = params.event_type.clone();
-    item.due_offset_days = params.due_offset_days;
-    item.assigned_to_user_id = current.assigned_to_user_id.clone();
     item.validate().map_err(ItemError::Invalid)?;
 
     if current.complete && !is_pure_complete_toggle(&current, &item) {
@@ -291,8 +332,11 @@ pub(crate) fn clone_children<'a>(
             new_child.id = String::new();
             new_child.parent_item_id = Some(new_parent_id.to_string());
             new_child.complete = false;
-            new_child.due_date = child.deadline_from_offset(root_deadline, tz_offset_minutes);
-            new_child.has_due_time = false;
+            let new_due_date = child.deadline_from_offset(root_deadline, tz_offset_minutes);
+            if let Some(schedule) = new_child.item_type.schedule_mut() {
+                schedule.due_date = new_due_date;
+                schedule.has_due_time = false;
+            }
             let new_child_id = repo.create(&new_child).await?;
             clone_children(
                 repo,
@@ -311,7 +355,7 @@ pub(crate) fn clone_children<'a>(
 /// An item's own reference date for anything measured relative to it (offset children,
 /// template auto-trigger copies) — `due_date` if set, else `scheduled_date`, else neither.
 pub(crate) fn item_anchor(item: &Item) -> Option<DateTime<Utc>> {
-    item.due_date.or(item.scheduled_date)
+    item.due_date().or(item.scheduled_date())
 }
 
 /// True if `item_id` has at least one direct child that isn't complete — used to block a
@@ -339,20 +383,20 @@ pub(crate) async fn has_incomplete_children(
 /// `current`'s DB-populated value.
 pub(crate) fn is_pure_complete_toggle(current: &Item, item: &Item) -> bool {
     current.name == item.name
-        && current.due_date == item.due_date
-        && current.scheduled_date == item.scheduled_date
-        && current.scheduled_end_date == item.scheduled_end_date
-        && current.recurrence == item.recurrence
-        && current.recurrence_basis == item.recurrence_basis
-        && current.has_due_time == item.has_due_time
-        && current.has_scheduled_time == item.has_scheduled_time
-        && current.has_end_time == item.has_end_time
+        && current.due_date() == item.due_date()
+        && current.scheduled_date() == item.scheduled_date()
+        && current.scheduled_end_date() == item.scheduled_end_date()
+        && current.recurrence_pattern() == item.recurrence_pattern()
+        && current.recurrence_basis() == item.recurrence_basis()
+        && current.has_due_time() == item.has_due_time()
+        && current.has_scheduled_time() == item.has_scheduled_time()
+        && current.has_end_time() == item.has_end_time()
         && current.parent_item_id == item.parent_item_id
-        && current.item_type == item.item_type
-        && current.event_type == item.event_type
-        && current.due_offset_days == item.due_offset_days
-        && current.assigned_to_user_id == item.assigned_to_user_id
-        && current.points == item.points
+        && current.kind() == item.kind()
+        && current.event_type() == item.event_type()
+        && current.due_offset_days() == item.due_offset_days()
+        && current.assigned_to_user_id() == item.assigned_to_user_id()
+        && current.points() == item.points()
 }
 
 /// Recomputes `due_date` for every descendant of `parent_item_id` that has its own
@@ -373,8 +417,11 @@ pub(crate) fn sync_offset_children<'a>(
     Box::pin(async move {
         let children = repo.list_children(parent_item_id).await?;
         for mut child in children {
-            if child.due_offset_days.is_some() {
-                child.due_date = child.deadline_from_offset(new_anchor, tz_offset_minutes);
+            if child.due_offset_days().is_some() {
+                let new_due_date = child.deadline_from_offset(new_anchor, tz_offset_minutes);
+                if let Some(schedule) = child.item_type.schedule_mut() {
+                    schedule.due_date = new_due_date;
+                }
                 if child.team_id.is_some() {
                     repo.update_team_item(&child).await?;
                 } else {
@@ -396,7 +443,9 @@ pub(crate) fn sync_offset_children<'a>(
 /// `deadline_from_offset(root_due_date, tz_offset_minutes)`, measured from the single new
 /// item that was just created, not chained through intermediate copied parents. If the new
 /// item has no due date at all, copied children get none either, regardless of any offset —
-/// there's nothing for an offset to be measured from.
+/// there's nothing for an offset to be measured from. Copied children always come out as
+/// `Task`s — a template child can never carry points/assignment (only `Task` has a
+/// `TeamAssignment` slot at all), matching the "points/assignment are Task-only" rule.
 pub(crate) fn copy_template_children<'a>(
     repo: &'a Arc<dyn ItemRepo>,
     template_parent_id: &'a str,
@@ -411,10 +460,16 @@ pub(crate) fn copy_template_children<'a>(
             new_child.id = String::new();
             new_child.parent_item_id = Some(new_parent_id.to_string());
             new_child.complete = false;
-            new_child.item_type = ItemType::Task;
-            new_child.due_date =
+            let mut schedule = child.item_type.schedule().cloned().unwrap_or_default();
+            schedule.due_date =
                 root_due_date.and_then(|root| child.deadline_from_offset(root, tz_offset_minutes));
-            new_child.has_due_time = false;
+            schedule.has_due_time = false;
+            let recurrence = child.item_type.recurrence().cloned().unwrap_or_default();
+            new_child.item_type = ItemType::Task {
+                schedule,
+                recurrence,
+                team_assignment: None,
+            };
             let new_child_id = repo.create(&new_child).await?;
             copy_template_children(
                 repo,
@@ -438,7 +493,9 @@ pub(crate) fn copy_template_children<'a>(
 ///
 /// `due_offset_days` rides along unchanged (that's what lets `copy_template_children` later
 /// recompute each child's deadline when the template is used); dates themselves are cleared,
-/// matching `create_template`'s "templates have no dates" rule for the root.
+/// matching `create_template`'s "templates have no dates" rule for the root. A source child's
+/// `TeamAssignment`, if it had one (only possible if it was itself a `Task`), is dropped —
+/// `Template` has no slot for it, matching "points/assignment are Task-only."
 pub(crate) fn copy_children_as_template<'a>(
     repo: &'a Arc<dyn ItemRepo>,
     source_parent_id: &'a str,
@@ -451,10 +508,17 @@ pub(crate) fn copy_children_as_template<'a>(
             new_child.id = String::new();
             new_child.parent_item_id = Some(new_template_parent_id.to_string());
             new_child.complete = false;
-            new_child.item_type = ItemType::Template;
-            new_child.due_date = None;
-            new_child.scheduled_date = None;
-            new_child.scheduled_end_date = None;
+            let mut schedule = child.item_type.schedule().cloned().unwrap_or_default();
+            schedule.due_date = None;
+            schedule.scheduled_date = None;
+            schedule.scheduled_end_date = None;
+            let recurrence = child.item_type.recurrence().cloned().unwrap_or_default();
+            let event_type = child.event_type();
+            new_child.item_type = ItemType::Template {
+                schedule,
+                recurrence,
+                event_type,
+            };
             let new_child_id = repo.create(&new_child).await?;
             copy_children_as_template(repo, &child.id, &new_child_id).await?;
         }
@@ -471,8 +535,11 @@ mod tests {
         Item {
             id: id.to_string(),
             user_id: Some(user_id.to_string()),
-            item_type: ItemType::Template,
-            event_type: Some(event_type.to_string()),
+            item_type: ItemType::Template {
+                schedule: Schedule::default(),
+                recurrence: Recurrence::default(),
+                event_type: Some(event_type.to_string()),
+            },
             ..Item::default()
         }
     }
@@ -481,8 +548,45 @@ mod tests {
         Item {
             id: id.to_string(),
             parent_item_id: Some(parent_id.to_string()),
-            item_type: ItemType::Template,
-            due_offset_days: Some(offset_days),
+            item_type: ItemType::Template {
+                schedule: Schedule::default(),
+                recurrence: Recurrence {
+                    due_offset_days: Some(offset_days),
+                    ..Recurrence::default()
+                },
+                event_type: None,
+            },
+            ..Item::default()
+        }
+    }
+
+    fn task_with_due_date(id: &str, due_date: DateTime<Utc>) -> Item {
+        Item {
+            id: id.to_string(),
+            item_type: ItemType::Task {
+                schedule: Schedule {
+                    due_date: Some(due_date),
+                    ..Schedule::default()
+                },
+                recurrence: Recurrence::default(),
+                team_assignment: None,
+            },
+            ..Item::default()
+        }
+    }
+
+    fn task_with_due_offset(id: &str, parent_id: &str, offset_days: i32) -> Item {
+        Item {
+            id: id.to_string(),
+            parent_item_id: Some(parent_id.to_string()),
+            item_type: ItemType::Task {
+                schedule: Schedule::default(),
+                recurrence: Recurrence {
+                    due_offset_days: Some(offset_days),
+                    ..Recurrence::default()
+                },
+                team_assignment: None,
+            },
             ..Item::default()
         }
     }
@@ -523,7 +627,7 @@ mod tests {
             CreateItemParams {
                 user_id: "u1".to_string(),
                 name: "It rained".to_string(),
-                item_type: Some(ItemType::Event),
+                item_type: Some(ItemKind::Event),
                 event_type: Some("rain".to_string()),
                 ..Default::default()
             },
@@ -556,7 +660,7 @@ mod tests {
             CreateItemParams {
                 user_id: "u1".to_string(),
                 name: "It rained".to_string(),
-                item_type: Some(ItemType::Event),
+                item_type: Some(ItemKind::Event),
                 event_type: Some("rain".to_string()),
                 ..Default::default()
             },
@@ -575,7 +679,7 @@ mod tests {
             CreateItemParams {
                 user_id: "u1".to_string(),
                 name: "Sneaky template".to_string(),
-                item_type: Some(ItemType::Template),
+                item_type: Some(ItemKind::Template),
                 ..Default::default()
             },
         )
@@ -596,14 +700,13 @@ mod tests {
             .unwrap()
             .with_timezone(&Utc);
 
-        mock.expect_get()
-            .returning(move |_, _| {
-                Ok(Item {
-                    id: "item1".to_string(),
-                    user_id: Some("u1".to_string()),
-                    ..Item::default()
-                })
-            });
+        mock.expect_get().returning(move |_, _| {
+            Ok(Item {
+                id: "item1".to_string(),
+                user_id: Some("u1".to_string()),
+                ..Item::default()
+            })
+        });
 
         // The recurring item itself is re-created fresh (fresh id) with an advanced
         // scheduled_date; due_date rides along unchanged (still the stale value).
@@ -619,13 +722,9 @@ mod tests {
             .withf(|parent_id: &str| parent_id == "item1")
             .times(2)
             .returning(|_| {
-                Ok(vec![Item {
-                    id: "child1".to_string(),
-                    parent_item_id: Some("item1".to_string()),
-                    due_offset_days: Some(2),
-                    complete: true,
-                    ..Item::default()
-                }])
+                let mut child = task_with_due_offset("child1", "item1", 2);
+                child.complete = true;
+                Ok(vec![child])
             });
 
         let rule = recurrence::parse("every week").unwrap();
@@ -636,7 +735,7 @@ mod tests {
         mock.expect_create()
             .withf(move |item: &Item| {
                 item.parent_item_id.as_deref() == Some("new-item-id")
-                    && item.due_date == Some(expected_child_due)
+                    && item.due_date() == Some(expected_child_due)
             })
             .times(1)
             .returning(|_| Ok("new-child-id".to_string()));
@@ -743,17 +842,10 @@ mod tests {
             .unwrap()
             .with_timezone(&Utc);
 
-        mock.expect_get().returning(move |_, _| {
-            Ok(Item {
-                id: "item1".to_string(),
-                user_id: Some("u1".to_string()),
-                due_date: Some(old_due),
-                ..Item::default()
-            })
-        });
+        mock.expect_get().returning(move |_, _| Ok(task_with_due_date("item1", old_due)));
 
         mock.expect_update()
-            .withf(move |item: &Item| item.id == "item1" && item.due_date == Some(new_due))
+            .withf(move |item: &Item| item.id == "item1" && item.due_date() == Some(new_due))
             .times(1)
             .returning(|_| Ok(()));
 
@@ -762,18 +854,8 @@ mod tests {
             .times(1)
             .returning(move |_| {
                 Ok(vec![
-                    Item {
-                        id: "offset-child".to_string(),
-                        parent_item_id: Some("item1".to_string()),
-                        due_offset_days: Some(3),
-                        ..Item::default()
-                    },
-                    Item {
-                        id: "manual-child".to_string(),
-                        parent_item_id: Some("item1".to_string()),
-                        due_date: Some(manual_child_due),
-                        ..Item::default()
-                    },
+                    task_with_due_offset("offset-child", "item1", 3),
+                    task_with_due_date("manual-child", manual_child_due),
                 ])
             });
 
@@ -781,7 +863,7 @@ mod tests {
             recurrence::apply_end_of_day(new_due + chrono::Duration::days(3), 0);
         mock.expect_update()
             .withf(move |item: &Item| {
-                item.id == "offset-child" && item.due_date == Some(expected_offset_child_due)
+                item.id == "offset-child" && item.due_date() == Some(expected_offset_child_due)
             })
             .times(1)
             .returning(|_| Ok(()));
@@ -821,17 +903,10 @@ mod tests {
             .unwrap()
             .with_timezone(&Utc);
 
-        mock.expect_get().returning(move |_, _| {
-            Ok(Item {
-                id: "item1".to_string(),
-                user_id: Some("u1".to_string()),
-                due_date: Some(due),
-                ..Item::default()
-            })
-        });
+        mock.expect_get().returning(move |_, _| Ok(task_with_due_date("item1", due)));
 
         mock.expect_update()
-            .withf(move |item: &Item| item.id == "item1" && item.due_date == Some(due))
+            .withf(move |item: &Item| item.id == "item1" && item.due_date() == Some(due))
             .times(1)
             .returning(|_| Ok(()));
 

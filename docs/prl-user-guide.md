@@ -252,6 +252,14 @@ member's status, role, points balance, and name.
 prl teams members <team-id>
 ```
 
+### Rename a team
+
+You must already be an admin of the team.
+
+```sh
+prl teams rename <team-id> "New name"
+```
+
 ### Invite an existing user
 
 You must be an active member of the team. The invitee shows up with status

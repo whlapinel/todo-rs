@@ -1,5 +1,5 @@
 use crate::auth::AuthUser;
-use crate::domain::item::{Item, ItemType};
+use crate::domain::item::{Item, ItemKind};
 use crate::handlers::web_ui::nav::{self, ActiveContext, SidebarSection};
 use crate::handlers::web_ui::{TzOffset, to_local};
 use crate::service::items::{self as item_service, ItemError};
@@ -59,19 +59,19 @@ struct DashboardRow {
 /// row's own `detail_link`/delete target and `assigned_items.rs`'s equivalent (team-only
 /// subset there).
 fn detail_url(item: &Item) -> String {
-    match (&item.team_id, item.item_type) {
-        (Some(team_id), ItemType::Task) => format!("/web/team-tasks/{team_id}/{}", item.id),
-        (Some(team_id), ItemType::Event) => format!("/web/team-events/{team_id}/{}", item.id),
-        (Some(team_id), ItemType::Simple) => {
+    match (&item.team_id, item.kind()) {
+        (Some(team_id), ItemKind::Task) => format!("/web/team-tasks/{team_id}/{}", item.id),
+        (Some(team_id), ItemKind::Event) => format!("/web/team-events/{team_id}/{}", item.id),
+        (Some(team_id), ItemKind::Simple) => {
             format!("/web/team-simple-lists/{team_id}/{}", item.id)
         }
-        (Some(team_id), ItemType::Template) => {
+        (Some(team_id), ItemKind::Template) => {
             format!("/web/team-templates/{team_id}/{}", item.id)
         }
-        (None, ItemType::Task) => format!("/web/tasks/{}", item.id),
-        (None, ItemType::Event) => format!("/web/events/{}", item.id),
-        (None, ItemType::Simple) => format!("/web/simple-lists/{}", item.id),
-        (None, ItemType::Template) => format!("/web/templates/{}", item.id),
+        (None, ItemKind::Task) => format!("/web/tasks/{}", item.id),
+        (None, ItemKind::Event) => format!("/web/events/{}", item.id),
+        (None, ItemKind::Simple) => format!("/web/simple-lists/{}", item.id),
+        (None, ItemKind::Template) => format!("/web/templates/{}", item.id),
     }
 }
 
@@ -91,7 +91,7 @@ impl DashboardRow {
             item_id: item.id.clone(),
             name: item.name.clone(),
             complete: item.complete,
-            due_date: item.due_date.map(|d| to_local(d, tz).format("%Y-%m-%d %H:%M").to_string()),
+            due_date: item.due_date().map(|d| to_local(d, tz).format("%Y-%m-%d %H:%M").to_string()),
             overdue: item.is_overdue(Utc::now()),
             parent_name: if di.parent_name.is_empty() { None } else { Some(di.parent_name.clone()) },
             from_badge: item.team_id.as_ref().map(|team_id| format!("from team {team_id}")),
@@ -127,7 +127,7 @@ fn render_rows(items: &[DueItem], preset: &str, show_complete: bool, tz: i32) ->
     items
         .iter()
         .filter(|di| show_complete || !di.item.complete)
-        .filter(|di| preset != "All with due date" || di.item.due_date.is_some())
+        .filter(|di| preset != "All with due date" || di.item.due_date().is_some())
         .map(|di| DashboardRow::from_due_item(di, tz).render())
         .collect::<Result<Vec<_>, _>>()
         .map_err(ItemError::from)
@@ -184,19 +184,19 @@ pub async fn toggle_item_complete(
         user_id: auth_user.user_id.clone(),
         item_id: item_id.clone(),
         name: current.name.clone(),
-        due_date: current.due_date,
-        scheduled_date: current.scheduled_date,
-        scheduled_end_date: current.scheduled_end_date,
+        due_date: current.due_date(),
+        scheduled_date: current.scheduled_date(),
+        scheduled_end_date: current.scheduled_end_date(),
         complete: form.complete.as_deref() == Some("true"),
-        recurrence: current.recurrence.clone(),
-        recurrence_basis: current.recurrence_basis.clone(),
-        has_due_time: Some(current.has_due_time),
-        has_scheduled_time: Some(current.has_scheduled_time),
-        has_end_time: Some(current.has_end_time),
+        recurrence: current.recurrence_pattern(),
+        recurrence_basis: current.recurrence_basis(),
+        has_due_time: Some(current.has_due_time()),
+        has_scheduled_time: Some(current.has_scheduled_time()),
+        has_end_time: Some(current.has_end_time()),
         parent_item_id: current.parent_item_id.clone(),
-        item_type: Some(current.item_type),
-        event_type: current.event_type.clone(),
-        due_offset_days: current.due_offset_days,
+        item_type: Some(current.kind()),
+        event_type: current.event_type(),
+        due_offset_days: current.due_offset_days(),
         timezone_offset_minutes: Some(tz),
     };
     item_service::update_item(&repo, params).await?;
@@ -230,22 +230,22 @@ pub async fn toggle_team_item_complete(
         team_id: team_id.clone(),
         item_id: item_id.clone(),
         name: current.name.clone(),
-        due_date: current.due_date,
-        scheduled_date: current.scheduled_date,
-        scheduled_end_date: current.scheduled_end_date,
+        due_date: current.due_date(),
+        scheduled_date: current.scheduled_date(),
+        scheduled_end_date: current.scheduled_end_date(),
         complete: form.complete.as_deref() == Some("true"),
-        recurrence: current.recurrence.clone(),
-        recurrence_basis: current.recurrence_basis.clone(),
-        has_due_time: Some(current.has_due_time),
-        has_scheduled_time: Some(current.has_scheduled_time),
-        has_end_time: Some(current.has_end_time),
+        recurrence: current.recurrence_pattern(),
+        recurrence_basis: current.recurrence_basis(),
+        has_due_time: Some(current.has_due_time()),
+        has_scheduled_time: Some(current.has_scheduled_time()),
+        has_end_time: Some(current.has_end_time()),
         parent_item_id: current.parent_item_id.clone(),
-        item_type: Some(current.item_type),
-        event_type: current.event_type.clone(),
-        due_offset_days: current.due_offset_days,
-        assigned_to_user_id: current.assigned_to_user_id.clone(),
+        item_type: Some(current.kind()),
+        event_type: current.event_type(),
+        due_offset_days: current.due_offset_days(),
+        assigned_to_user_id: current.assigned_to_user_id(),
         timezone_offset_minutes: Some(tz),
-        points: current.points,
+        points: current.points(),
     };
     team_item_service::update_team_item(
         &repo,

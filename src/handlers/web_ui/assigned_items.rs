@@ -1,5 +1,5 @@
 use crate::auth::AuthUser;
-use crate::domain::item::{Item, ItemType};
+use crate::domain::item::{Item, ItemKind};
 use crate::handlers::web_ui::nav::{self, ActiveContext, SidebarSection};
 use crate::handlers::web_ui::to_local;
 use crate::service::error::ItemError;
@@ -32,11 +32,11 @@ struct AssignedItemRow {
 /// on this page always has a `team_id` (assignment is a team-item-only concept), so this
 /// only needs the team-owned half of `dashboard.rs`'s equivalent `detail_url`.
 fn detail_url(item: &Item, team_id: &str) -> String {
-    match item.item_type {
-        ItemType::Task => format!("/web/team-tasks/{team_id}/{}", item.id),
-        ItemType::Event => format!("/web/team-events/{team_id}/{}", item.id),
-        ItemType::Simple => format!("/web/team-simple-lists/{team_id}/{}", item.id),
-        ItemType::Template => format!("/web/team-templates/{team_id}/{}", item.id),
+    match item.kind() {
+        ItemKind::Task => format!("/web/team-tasks/{team_id}/{}", item.id),
+        ItemKind::Event => format!("/web/team-events/{team_id}/{}", item.id),
+        ItemKind::Simple => format!("/web/team-simple-lists/{team_id}/{}", item.id),
+        ItemKind::Template => format!("/web/team-templates/{team_id}/{}", item.id),
     }
 }
 
@@ -49,7 +49,7 @@ impl AssignedItemRow {
             name: item.name.clone(),
             complete: item.complete,
             due_date: item
-                .due_date
+                .due_date()
                 .map(|d| to_local(d, tz).format("%Y-%m-%d %H:%M").to_string()),
             overdue: item.is_overdue(Utc::now()),
             toggle_complete_json: (!item.complete).to_string(),

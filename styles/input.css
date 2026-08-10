@@ -1,5 +1,10 @@
 @import "tailwindcss";
 @source "../templates/**/*.html";
+/* ItemError::into_response (src/handlers/web_ui/error.rs) builds its error-toast markup
+   as a raw HTML string in Rust rather than an Askama template, so its Tailwind classes
+   (p-3, bg-red-50, etc.) live outside the templates glob above and were silently
+   dropped from the compiled CSS -- the box appeared unstyled/transparent. */
+@source "../src/**/*.rs";
 
 @keyframes toast-fade {
   0%, 60% { opacity: 1; }
@@ -28,8 +33,4 @@
        remain keyboard-focusable even though translateX has moved them out of view. */
     visibility: hidden;
   }
-}
-
-html.sidebar-collapsed #sidebar-toggle-icon {
-  transform: rotate(180deg);
 }

@@ -22,20 +22,20 @@ fn not_found() -> error::PeoplesRepublicOfListsError {
 
 fn to_domain_item_type(
     t: Option<todo_server_sdk::model::ItemType>,
-) -> Option<crate::domain::item::ItemType> {
+) -> Option<crate::domain::item::ItemKind> {
     t.map(|t| match t {
-        todo_server_sdk::model::ItemType::Task => crate::domain::item::ItemType::Task,
-        todo_server_sdk::model::ItemType::Event => crate::domain::item::ItemType::Event,
-        todo_server_sdk::model::ItemType::Template => crate::domain::item::ItemType::Template,
-        todo_server_sdk::model::ItemType::Simple => crate::domain::item::ItemType::Simple,
+        todo_server_sdk::model::ItemType::Task => crate::domain::item::ItemKind::Task,
+        todo_server_sdk::model::ItemType::Event => crate::domain::item::ItemKind::Event,
+        todo_server_sdk::model::ItemType::Template => crate::domain::item::ItemKind::Template,
+        todo_server_sdk::model::ItemType::Simple => crate::domain::item::ItemKind::Simple,
     })
 }
 
-fn to_sdk_item_type(t: crate::domain::item::ItemType) -> todo_server_sdk::model::ItemType {
+fn to_sdk_item_type(t: crate::domain::item::ItemKind) -> todo_server_sdk::model::ItemType {
     match t {
-        crate::domain::item::ItemType::Task => todo_server_sdk::model::ItemType::Task,
-        crate::domain::item::ItemType::Event => todo_server_sdk::model::ItemType::Event,
-        crate::domain::item::ItemType::Template => todo_server_sdk::model::ItemType::Template,
-        crate::domain::item::ItemType::Simple => todo_server_sdk::model::ItemType::Simple,
+        crate::domain::item::ItemKind::Task => todo_server_sdk::model::ItemType::Task,
+        crate::domain::item::ItemKind::Event => todo_server_sdk::model::ItemType::Event,
+        crate::domain::item::ItemKind::Template => todo_server_sdk::model::ItemType::Template,
+        crate::domain::item::ItemKind::Simple => todo_server_sdk::model::ItemType::Simple,
     }
 }

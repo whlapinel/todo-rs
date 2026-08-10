@@ -83,6 +83,18 @@ pub async fn get_team(teams: &Arc<dyn TeamRepo>, team_id: &str) -> Result<Team, 
     Ok(teams.get(team_id).await?)
 }
 
+/// Renames a team. Requires the requester to already be an admin of that team,
+/// mirroring `set_team_member_role`'s own gating.
+pub async fn update_team(
+    teams: &Arc<dyn TeamRepo>,
+    team_id: &str,
+    requester_user_id: &str,
+    name: &str,
+) -> Result<(), ItemError> {
+    require_team_admin(teams, team_id, requester_user_id).await?;
+    Ok(teams.update_name(team_id, name).await?)
+}
+
 /// Moved from `json_api::teams::list_teams`.
 pub async fn list_teams(teams: &Arc<dyn TeamRepo>, user_id: &str) -> Result<Vec<TeamWithStatus>, ItemError> {
     Ok(teams.list_for_user(user_id).await?)

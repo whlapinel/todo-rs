@@ -32,10 +32,41 @@
     </div>
   </main>
 
+  <!-- Always-present error-display target for htmx error responses. Sits outside #page so
+       boosted navigation (which only swaps #page's innerHTML) never removes it. Row/checkbox
+       actions target narrow ids like #item-{id} that don't exist in an ItemError's response
+       body, so the server retargets error responses here via the HX-Retarget/HX-Reswap/
+       HX-Reselect headers (see ItemError::into_response in src/handlers/web_ui/error.rs)
+       instead of relying on the triggering element's own hx-target/hx-select. -->
+  <div id="error-toast" class="pointer-events-none fixed inset-x-0 top-4 z-50 flex justify-center px-4"></div>
+
   <script src="/web/static/js/htmx.min.js"></script>
   <script>
+    // htmx defaults to *not* swapping 4xx/5xx response bodies into the DOM at all (it only
+    // fires htmx:responseError). Every error this app returns (ItemError::into_response) is
+    // meaningful HTML meant to be shown to the user, so swapping needs to be enabled for
+    // those status codes too — the HX-Retarget/HX-Reswap/HX-Reselect headers on the response
+    // itself (not hx-target/hx-select on the triggering element) decide where it lands.
+    htmx.config.responseHandling = [
+      { code: "204", swap: false },
+      { code: "[23]..", swap: true },
+      { code: "[45]..", swap: true, error: true },
+    ];
+
     document.body.addEventListener("htmx:configRequest", function (evt) {
       evt.detail.headers["X-Tz-Offset-Minutes"] = new Date().getTimezoneOffset();
+    });
+
+    // A checkbox's native `checked` state flips the instant the user clicks it, before the
+    // hx-put it triggers even reaches the server — a rejected request (e.g. completing an
+    // unassigned team item) now shows its error in #error-toast (above) rather than silently
+    // vanishing, but the checkbox itself has no row/fields swap to revert it, since that swap
+    // got retargeted to the toast instead. Without this, a rejected completion would leave the
+    // checkbox looking checked even though the item never actually completed.
+    document.body.addEventListener("htmx:afterRequest", function (evt) {
+      if (!evt.detail.successful && evt.detail.elt && evt.detail.elt.matches && evt.detail.elt.matches("input[type=checkbox]")) {
+        evt.detail.elt.checked = !evt.detail.elt.checked;
+      }
     });
 
     // Desktop-only sidebar collapse. #page never reserves space for the sidebar and never
@@ -51,6 +82,19 @@
       document.documentElement.classList.toggle("sidebar-collapsed", collapsed);
       localStorage.setItem("sidebarCollapsed", collapsed ? "1" : "0");
     }
+
+    // Mirrors #sidebar-mobile's backdrop-click-to-close: clicking anywhere outside the
+    // expanded desktop sidebar (and outside its own toggle button, so that click doesn't
+    // immediately re-open what toggleSidebar() just closed) collapses it too.
+    document.addEventListener("click", function (evt) {
+      if (window.innerWidth < 1024) return;
+      if (document.documentElement.classList.contains("sidebar-collapsed")) return;
+      var sidebar = document.getElementById("sidebar-desktop");
+      var toggleBtn = document.getElementById("sidebar-toggle-btn");
+      if (!sidebar || sidebar.contains(evt.target)) return;
+      if (toggleBtn && toggleBtn.contains(evt.target)) return;
+      toggleSidebar();
+    });
   </script>
 </body>
 </html>

@@ -152,6 +152,7 @@ struct TeamDetailPageTemplate {
     /// candidates for a fresh invite.
     invite_candidates: Vec<(String, String)>,
     is_active_member: bool,
+    is_admin: bool,
     nav_html: String,
 }
 
@@ -213,6 +214,7 @@ async fn render_team_detail(
         member_rows,
         invite_candidates,
         is_active_member,
+        is_admin: viewer_is_admin,
         nav_html,
     })
 }
@@ -248,6 +250,22 @@ pub async fn set_team_member_role_form(
         new_role,
     )
     .await?;
+    render_team_detail(&teams, &users, &team_id, &auth_user.user_id).await
+}
+
+#[derive(serde::Deserialize)]
+pub struct UpdateTeamForm {
+    name: String,
+}
+
+pub async fn update_team_form(
+    Path(team_id): Path<String>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(users): Extension<Arc<dyn UserRepo>>,
+    Form(form): Form<UpdateTeamForm>,
+) -> Result<Html<String>, ItemError> {
+    team_service::update_team(&teams, &team_id, &auth_user.user_id, &form.name).await?;
     render_team_detail(&teams, &users, &team_id, &auth_user.user_id).await
 }
 

@@ -10,7 +10,7 @@
   <form hx-post="/web/team-templates/{{ team_id }}" hx-target="#templates-list" hx-select="unset" hx-swap="innerHTML"
         hx-on::after-request="if(event.detail.successful) this.reset()"
         class="rounded-lg border border-gray-200 bg-white p-4 flex items-center gap-x-2 dark:border-white/10 dark:bg-gray-800/50">
-    <input type="text" name="name" placeholder="New template" required
+    <input type="text" name="name" placeholder="New template *" required maxlength="200"
            class="flex-1 rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 placeholder:text-gray-400 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:placeholder:text-gray-500 dark:focus:outline-indigo-500" />
     <input type="text" name="eventType" placeholder="Triggering event type (optional)"
            class="flex-1 rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 placeholder:text-gray-400 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:placeholder:text-gray-500 dark:focus:outline-indigo-500" />

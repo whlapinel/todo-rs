@@ -4,7 +4,12 @@ pub mod users;
 pub mod items;
 use async_trait::async_trait;
 use sqlx::{Row, SqlitePool};
-use crate::domain::{activity_log::ActivityLogEntry, item::Item, team::{Team, TeamRole}, user::User};
+use crate::domain::{
+    activity_log::ActivityLogEntry,
+    item::{Item, ItemKind, ItemType, Recurrence, Schedule, TeamAssignment},
+    team::{Team, TeamRole},
+    user::User,
+};
 
 pub struct DueItem {
     pub item: Item,
@@ -84,6 +89,7 @@ pub trait ItemRepo: Send + Sync {
 pub trait TeamRepo: Send + Sync {
     async fn create(&self, name: &str, creator_user_id: &str) -> Result<String, RepoError>;
     async fn get(&self, team_id: &str) -> Result<Team, RepoError>;
+    async fn update_name(&self, team_id: &str, name: &str) -> Result<(), RepoError>;
     async fn list_for_user(&self, user_id: &str) -> Result<Vec<TeamWithStatus>, RepoError>;
     async fn list_members(&self, team_id: &str) -> Result<Vec<TeamMemberInfo>, RepoError>;
     async fn member_status(
@@ -178,41 +184,81 @@ fn row_to_user(row: &sqlx::sqlite::SqliteRow) -> User {
     }
 }
 
+/// Reconstructs whichever `ItemType` variant matches the stored `item_type` column,
+/// folding the flat DB columns (unchanged schema — see CLAUDE.md's storage section)
+/// into that variant's payload. Columns that don't apply to the resolved variant
+/// (e.g. `points` on a row that turns out to be an `Event`) are simply dropped here;
+/// the write side (`items.rs`'s INSERT/UPDATE) is what keeps them from being written
+/// in the first place for the wrong kind.
 fn row_to_item(row: &sqlx::sqlite::SqliteRow) -> Item {
     let due_date_secs: Option<i64> = row.get("due_date");
     let scheduled_secs: Option<i64> = row.get("scheduled_date");
     let scheduled_end_secs: Option<i64> = row.get("scheduled_end_date");
     let complete: Option<i64> = row.get("complete");
+
+    let schedule = Schedule {
+        due_date: due_date_secs
+            .and_then(|s| chrono::DateTime::from_timestamp(s, 0))
+            .map(|dt| dt.with_timezone(&chrono::Utc)),
+        has_due_time: row.get::<Option<i64>, _>("has_due_time").unwrap_or(0) != 0,
+        scheduled_date: scheduled_secs
+            .and_then(|s| chrono::DateTime::from_timestamp(s, 0))
+            .map(|dt| dt.with_timezone(&chrono::Utc)),
+        has_scheduled_time: row.get::<Option<i64>, _>("has_scheduled_time").unwrap_or(0) != 0,
+        scheduled_end_date: scheduled_end_secs
+            .and_then(|s| chrono::DateTime::from_timestamp(s, 0))
+            .map(|dt| dt.with_timezone(&chrono::Utc)),
+        has_end_time: row.get::<Option<i64>, _>("has_end_time").unwrap_or(0) != 0,
+    };
+    let recurrence = Recurrence {
+        pattern: row.get("recurrence"),
+        basis: row.get("recurrence_basis"),
+        due_offset_days: row.get("due_offset_days"),
+    };
+    let event_type: Option<String> = row.get("event_type");
+    let assigned_to_user_id: Option<String> = row.get("assigned_to_user_id");
+    let points: Option<i32> = row.get("points");
+
+    let kind: ItemKind = row
+        .get::<Option<String>, _>("item_type")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or_default();
+
+    let item_type = match kind {
+        ItemKind::Task => ItemType::Task {
+            schedule,
+            recurrence,
+            team_assignment: if assigned_to_user_id.is_some() || points.is_some() {
+                Some(TeamAssignment {
+                    assigned_to_user_id,
+                    points,
+                })
+            } else {
+                None
+            },
+        },
+        ItemKind::Event => ItemType::Event {
+            schedule,
+            recurrence,
+            event_type,
+        },
+        ItemKind::Template => ItemType::Template {
+            schedule,
+            recurrence,
+            event_type,
+        },
+        ItemKind::Simple => ItemType::Simple,
+    };
+
     Item {
         id: row.get("id"),
         user_id: row.get("user_id"),
         team_id: row.get("team_id"),
         parent_item_id: row.get("parent_item_id"),
         name: row.get("name"),
-        due_date: due_date_secs
-            .and_then(|s| chrono::DateTime::from_timestamp(s, 0))
-            .map(|dt| dt.with_timezone(&chrono::Utc)),
-        scheduled_date: scheduled_secs
-            .and_then(|s| chrono::DateTime::from_timestamp(s, 0))
-            .map(|dt| dt.with_timezone(&chrono::Utc)),
-        scheduled_end_date: scheduled_end_secs
-            .and_then(|s| chrono::DateTime::from_timestamp(s, 0))
-            .map(|dt| dt.with_timezone(&chrono::Utc)),
         complete: complete.unwrap_or(0) != 0,
-        recurrence: row.get("recurrence"),
-        recurrence_basis: row.get("recurrence_basis"),
-        has_due_time: row.get::<Option<i64>, _>("has_due_time").unwrap_or(0) != 0,
-        has_scheduled_time: row.get::<Option<i64>, _>("has_scheduled_time").unwrap_or(0) != 0,
-        has_end_time: row.get::<Option<i64>, _>("has_end_time").unwrap_or(0) != 0,
         has_children: row.get::<Option<i64>, _>("has_children").unwrap_or(0) != 0,
-        item_type: row
-            .get::<Option<String>, _>("item_type")
-            .and_then(|s| s.parse().ok())
-            .unwrap_or_default(),
-        event_type: row.get("event_type"),
-        due_offset_days: row.get("due_offset_days"),
-        assigned_to_user_id: row.get("assigned_to_user_id"),
-        points: row.get("points"),
+        item_type,
     }
 }
 
