@@ -6,15 +6,6 @@
     </a>
   </div>
   <div class="mt-1 flex items-center justify-end gap-x-3 pl-7 text-xs text-gray-500 dark:text-gray-400">
-    {% if !siblings.is_empty() %}
-    <select name="new_parent_id"
-            hx-post="/web/team-simple-lists/{{ team_id }}/{{ id }}/subordinate" hx-trigger="change"
-            hx-target="#page" hx-select="#page" hx-swap="innerHTML" hx-push-url="true"
-            class="shrink-0 rounded-md border-0 bg-white py-1 pl-2 pr-6 text-xs text-gray-700 ring-1 ring-inset ring-gray-300 focus:ring-2 focus:ring-indigo-600 dark:bg-white/5 dark:text-gray-300 dark:ring-white/10">
-      <option value="" selected disabled>Move under…</option>
-      {% for s in siblings %}<option value="{{ s.0 }}">{{ s.1 }}</option>{% endfor %}
-    </select>
-    {% endif %}
     <button hx-delete="/web/team-simple-lists/{{ team_id }}/{{ id }}"
             hx-confirm="Delete {{ name }}{% if has_children %} and all its sub-items{% endif %}?"
             hx-target="#item-{{ id }}" hx-select="unset" hx-swap="outerHTML swap:200ms"
