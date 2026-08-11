@@ -33,3 +33,7 @@ New Since we began work on this list:
 - Need a plan for deleting old data to keep db from growing infinitely. Maybe (probably) this is a user configuration. Including but not limited to:
     - Completed recurring items (e.g. daily) have the potential to add a lot of rows to the db 
     - The activity log has the same potential
+- We had index creation in the wrong place, before the migrations were run that added the columns those indexes would be set on. I only moved the one for source event id because that was causing an error but I think a bunch of them are in the wrong place and should be within their respective migration itself.
+- Batch add UI should be available task details add sub-task screen
+- As documented elsewhere, the select box "Move Under" was deleted due to ruining the mobile layout and being way too wide, and having contrast issues within the dropdown (light text on light background).
+- The 

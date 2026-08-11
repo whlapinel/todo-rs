@@ -45,6 +45,11 @@ impl Migration for AddItemSourceEventId {
             .execute(&mut *conn)
             .await?;
         }
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_items_source_event_id ON items (source_event_id)",
+        )
+        .execute(&mut *conn)
+        .await?;
         Ok(())
     }
 }

@@ -35,6 +35,11 @@ tasks:
       - task: web-styles
       - cargo build
 
+  copy-prod-db:
+    desc: Copies prod db to repo for testing
+    cmds:
+      - scp daddy@lapinel-fam.club:/opt/home-server-data/todo-data/todo.db .
+
   run:
     dotenv:
       - .env

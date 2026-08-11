@@ -339,11 +339,7 @@ pub async fn create_pool(url: &str) -> Result<SqlitePool, sqlx::Error> {
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_items_assigned_to ON items (assigned_to_user_id)")
         .execute(&pool)
         .await?;
-    sqlx::query(
-        "CREATE INDEX IF NOT EXISTS idx_items_source_event_id ON items (source_event_id)",
-    )
-    .execute(&pool)
-    .await?;
+
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS teams (
             id TEXT PRIMARY KEY,

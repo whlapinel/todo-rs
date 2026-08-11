@@ -3,7 +3,7 @@ use crate::domain::item::{Item, ItemKind};
 use crate::handlers::web_ui::dashboard::{detail_url, list_url_for};
 use crate::handlers::web_ui::nav::{self, ActiveContext, SidebarSection};
 use crate::handlers::web_ui::{TzOffset, to_local};
-use crate::service::items::{self as item_service, top_level_anchor, ItemError};
+use crate::service::items::{self as item_service, ItemError, top_level_anchor};
 use crate::service::templates::{self as template_service, CreateTemplateParams};
 use crate::storage::sqlite::{ItemRepo, RepoError, TeamRepo};
 use askama::Template;
@@ -285,17 +285,18 @@ fn offset_label_for(item: &Item) -> Option<String> {
     if !item.is_offset_driven() {
         return None;
     }
-    Some(match item.due_offset_days() {
-        Some(0) => "on due date".to_string(),
-        Some(n) if n > 0 => format!("+{n}d"),
-        Some(n) => format!("{n}d"),
-        None => "no offset".to_string(),
-    })
+    match item.due_offset_days() {
+        Some(0) => Some("on due date".to_string()),
+        Some(n) if n > 0 => Some(format!("+{n}d")),
+        Some(n) => Some(format!("{n}d")),
+        None => None,
+    }
 }
 
 #[derive(Template)]
 #[template(path = "tasks/row.html")]
 struct TaskRow {
+    expanded_row: bool,
     id: String,
     name: String,
     complete: bool,
@@ -320,13 +321,18 @@ struct TaskRow {
 
 impl TaskRow {
     fn from_item(item: &Item, siblings: &[&Item], tz: i32) -> Self {
+        let offset_label = offset_label_for(item);
         Self {
             id: item.id.clone(),
             name: item.name.clone(),
             complete: item.complete,
-            due_date: item
-                .due_date()
-                .map(|d| to_local(d, tz).format("%Y-%m-%d %H:%M").to_string()),
+            due_date: item.due_date().map(|d| {
+                if item.has_due_time() {
+                    to_local(d, tz).format("%Y-%m-%d %H:%M").to_string()
+                } else {
+                    to_local(d, tz).format("%Y-%m-%d").to_string()
+                }
+            }),
             overdue: item.is_overdue(Utc::now()),
             scheduled_date: item.scheduled_date().map(|d| {
                 let local = to_local(d, tz);
@@ -336,8 +342,12 @@ impl TaskRow {
                     local.format("%Y-%m-%d").to_string()
                 }
             }),
+            expanded_row: item.due_date().is_some()
+                || item.scheduled_date().is_some()
+                || item.due_offset_days().is_some()
+                || offset_label.is_some(),
             has_children: item.has_children,
-            offset_label: offset_label_for(item),
+            offset_label,
             recurrence: item.recurrence_pattern(),
             toggle_complete_json: (!item.complete).to_string(),
             siblings: siblings
@@ -517,7 +527,10 @@ async fn resolve_linked_event(
     let Some(event_id) = item.source_event_id() else {
         return Ok(None);
     };
-    let event = repo.get(user_id, &event_id).await.map_err(ItemError::from)?;
+    let event = repo
+        .get(user_id, &event_id)
+        .await
+        .map_err(ItemError::from)?;
     Ok(Some((event.name.clone(), detail_url(&event))))
 }
 
@@ -573,6 +586,14 @@ struct CalendarTaskEntry {
     id: String,
     name: String,
     time_label: Option<String>,
+    date_type: DateType,
+    has_end: bool,
+}
+
+enum DateType {
+    Due,
+    ScheduledStart,
+    ScheduledEnd,
 }
 
 struct CalendarDay {
@@ -599,7 +620,10 @@ struct TasksCalendarPageTemplate {
 // ---- shared rendering helpers ------------------------------------------------
 
 fn render_rows(items: &[Item], show_complete: bool, tz: i32) -> Result<Vec<String>, ItemError> {
-    let visible: Vec<&Item> = items.iter().filter(|i| show_complete || !i.complete).collect();
+    let visible: Vec<&Item> = items
+        .iter()
+        .filter(|i| show_complete || !i.complete)
+        .collect();
     visible
         .iter()
         .map(|i| TaskRow::from_item(i, &visible, tz).render())
@@ -637,11 +661,19 @@ async fn sibling_group(
 }
 
 fn prev_month(year: i32, month: u32) -> (i32, u32) {
-    if month == 1 { (year - 1, 12) } else { (year, month - 1) }
+    if month == 1 {
+        (year - 1, 12)
+    } else {
+        (year, month - 1)
+    }
 }
 
 fn next_month(year: i32, month: u32) -> (i32, u32) {
-    if month == 12 { (year + 1, 1) } else { (year, month + 1) }
+    if month == 12 {
+        (year + 1, 1)
+    } else {
+        (year, month + 1)
+    }
 }
 
 /// Builds the 42-cell (6-week, Monday-start) grid for `year`/`month`, bucketing `items` by
@@ -665,7 +697,9 @@ fn build_calendar_days(
     for item in items {
         if let Some(dt) = item.due_date() {
             let local = to_local(dt, tz);
-            let time_label = item.has_due_time().then(|| local.format("%H:%M").to_string());
+            let time_label = item
+                .has_due_time()
+                .then(|| local.format("%H:%M").to_string());
             by_date
                 .entry(local.date_naive())
                 .or_default()
@@ -673,6 +707,40 @@ fn build_calendar_days(
                     id: item.id.clone(),
                     name: item.name.clone(),
                     time_label,
+                    date_type: DateType::Due,
+                    has_end: item.scheduled_end_date().is_some(),
+                });
+        }
+        if let Some(dt) = item.scheduled_date() {
+            let local = to_local(dt, tz);
+            let time_label = item
+                .has_scheduled_time()
+                .then(|| local.format("%H:%M").to_string());
+            by_date
+                .entry(local.date_naive())
+                .or_default()
+                .push(CalendarTaskEntry {
+                    id: item.id.clone(),
+                    name: item.name.clone(),
+                    time_label,
+                    date_type: DateType::ScheduledStart,
+                    has_end: item.scheduled_end_date().is_some(),
+                });
+        }
+        if let Some(dt) = item.scheduled_end_date() {
+            let local = to_local(dt, tz);
+            let time_label = item
+                .has_scheduled_time()
+                .then(|| local.format("%H:%M").to_string());
+            by_date
+                .entry(local.date_naive())
+                .or_default()
+                .push(CalendarTaskEntry {
+                    id: item.id.clone(),
+                    name: item.name.clone(),
+                    time_label,
+                    date_type: DateType::ScheduledEnd,
+                    has_end: true,
                 });
         }
     }
@@ -1065,8 +1133,7 @@ pub async fn update_task_form(
         }
         Ok(updated) => {
             let siblings =
-                sibling_group(&repo, &auth_user.user_id, updated.parent_item_id.as_deref())
-                    .await?;
+                sibling_group(&repo, &auth_user.user_id, updated.parent_item_id.as_deref()).await?;
             let siblings_ref: Vec<&Item> = siblings.iter().collect();
             let row = TaskRow::from_item(&updated, &siblings_ref, tz).render()?;
             let fields = TaskDetailFields::from_item(&updated, tz, true).render()?;

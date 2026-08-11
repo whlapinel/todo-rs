@@ -5,8 +5,8 @@ use crate::handlers::web_ui::nav::{self, ActiveContext, SidebarSection};
 use crate::handlers::web_ui::{TzOffset, to_local};
 use crate::service::error::ItemError;
 use crate::service::team_items::{
-    self as team_item_service, require_active_member, top_level_anchor_team, CreateTeamItemParams,
-    UpdateTeamItemContext, UpdateTeamItemParams,
+    self as team_item_service, CreateTeamItemParams, UpdateTeamItemContext, UpdateTeamItemParams,
+    require_active_member, top_level_anchor_team,
 };
 use crate::service::teams as team_service;
 use crate::service::templates::{self as template_service, CreateTeamTemplateParams};
@@ -279,10 +279,7 @@ fn update_params_from_form(
         parent_item_id: current.parent_item_id.clone(),
         item_type: Some(ItemKind::Task),
         due_offset_days: overlay_i32(&form.due_offset_days, current.due_offset_days()),
-        assigned_to_user_id: overlay_str(
-            &form.assigned_to_user_id,
-            current.assigned_to_user_id(),
-        ),
+        assigned_to_user_id: overlay_str(&form.assigned_to_user_id, current.assigned_to_user_id()),
         source_event_id: current.source_event_id(),
         timezone_offset_minutes: Some(tz),
         // No points input renders on this form yet (Stage 7 adds it) — `overlay_i32` falls
@@ -397,9 +394,13 @@ impl TeamTaskRow {
             team_id: team_id.to_string(),
             name: item.name.clone(),
             complete: item.complete,
-            due_date: item
-                .due_date()
-                .map(|d| to_local(d, tz).format("%Y-%m-%d %H:%M").to_string()),
+            due_date: item.due_date().map(|d| {
+                if item.has_due_time() {
+                    to_local(d, tz).format("%Y-%m-%d %H:%M").to_string()
+                } else {
+                    to_local(d, tz).format("%Y-%m-%d").to_string()
+                }
+            }),
             overdue: item.is_overdue(Utc::now()),
             scheduled_date: item.scheduled_date().map(|d| {
                 let local = to_local(d, tz);
@@ -686,7 +687,10 @@ fn render_rows(
     show_complete: bool,
     tz: i32,
 ) -> Result<Vec<String>, ItemError> {
-    let visible: Vec<&Item> = items.iter().filter(|i| show_complete || !i.complete).collect();
+    let visible: Vec<&Item> = items
+        .iter()
+        .filter(|i| show_complete || !i.complete)
+        .collect();
     visible
         .iter()
         .map(|i| TeamTaskRow::from_item(i, team_id, names, &visible, tz).render())
@@ -1094,9 +1098,8 @@ pub async fn update_team_task_form(
         Ok(updated) if close => {
             let names = names_for(&teams, &team_id, &auth_user.user_id).await?;
             let linked_event = resolve_linked_event(&repo, &team_id, &updated).await?;
-            let view =
-                TeamTaskDetailView::from_item(&updated, &team_id, &names, tz, linked_event)
-                    .render()?;
+            let view = TeamTaskDetailView::from_item(&updated, &team_id, &names, tz, linked_event)
+                .render()?;
             let nav_html = nav::build_nav_html(
                 &teams,
                 &auth_user.user_id,
@@ -1135,9 +1138,8 @@ pub async fn update_team_task_form(
             )
             .render()?;
             let linked_event = resolve_linked_event(&repo, &team_id, &updated).await?;
-            let view =
-                TeamTaskDetailView::from_item(&updated, &team_id, &names, tz, linked_event)
-                    .render()?;
+            let view = TeamTaskDetailView::from_item(&updated, &team_id, &names, tz, linked_event)
+                .render()?;
             Ok(Html(format!("{row}{fields}{view}")).into_response())
         }
         // The task was recurring, just got marked complete, and the service layer replaced
