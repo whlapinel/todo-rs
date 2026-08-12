@@ -898,6 +898,60 @@ scope — B3 is next.
 **Verify:** unit tests mirroring `service::teams.rs`'s/A3's coverage —
 member/non-member/admin cases for both personal and team-backed projects.
 
+**Implementation notes:** Done, with the scope deliberately narrowed to match this
+stage's own title ("read paths") rather than the plan bullet's literal wording. The
+plan bullet says `ItemRepo` gains `list_by_project`/`get_by_project` "(and
+update/delete-by-project)" and that `service::project_items.rs` wraps "these" — taken
+literally that reads as full CRUD. What actually landed:
+
+- `ItemRepo` (`src/storage/sqlite/mod.rs`) gained three new methods:
+  `get_by_project`, `list_by_project` (same `parent_item_id`-optional shape as
+  `list_team_items`), and `update_by_project` (the full `update_team_item` column
+  set, including `points`, keyed on `WHERE id = ? AND project_id = ?` instead of
+  `team_id`/`user_id` — a single write primitive usable for both personal- and
+  team-backed projects once a caller exists). All three implemented in
+  `src/storage/sqlite/items.rs`.
+- **Deliberately not added:** a `delete_by_project` method. `delete_item`/
+  `delete_team_item` (`src/service/items.rs`/`team_items.rs`) already call the
+  existing owner-agnostic `ItemRepo::delete(item_id)` (no `user_id`/`team_id` filter
+  at all) *after* verifying ownership via `get`/`get_team_item` — a
+  `delete_by_project` would just be a redundant re-filter on a call already gated by
+  `get_by_project`. `service::project_items.rs` follows the identical shape: verify
+  via `get_by_project` (inside `require_project_member`-gated `get_project_item`),
+  then call the existing `delete(item_id)` — no new trait method needed. (Not yet
+  wired into a `delete_project_item` service fn either — see next point.)
+- **Deliberately not added this stage:** `create_project_item`/`update_project_item`/
+  `delete_project_item` service functions. `create_item`/`update_item` carry
+  substantial business logic (recurrence, `sync_offset_children`/`clone_children`,
+  completion-transition guards, points-award/reversal) that only exists today in
+  `service::items.rs`/`service::team_items.rs`, driven by `CreateItemParams`/
+  `UpdateItemParams`-shaped input. Porting that logic now, without the `ProjectItem`
+  Smithy operation's request shape to drive it, would be speculative — that
+  porting is squarely stage B4's job (wiring the new Smithy resource), not B3's.
+  `update_by_project` exists at the storage layer as a ready-made primitive for B4
+  to call, unused for now — same "storage CRUD not yet called from anywhere"
+  precedent stage A2 set for the original `ProjectRepo`.
+- `src/service/project_items.rs` (new file, registered in `src/service/mod.rs`) ships
+  exactly the stage title's "read paths": `get_project_item`/`list_project_items`,
+  both gated by A3's `require_project_member` before delegating to the new
+  `ItemRepo` methods — the plan's own "unified check" replacing the personal-vs-team
+  authorization branch, exactly as described.
+
+12 new unit tests (188 total, up from B2's 176): 6 in `storage::sqlite::items`
+(`items.rs` had no sqlite-level tests before this stage, same gap A2's own notes
+flagged for it — new `test_pool()` mirrors `projects.rs`'s per-file precedent,
+covering `get_by_project` found/wrong-project, `list_by_project` top-level-scoping
+and parent-scoping, `update_by_project` round-trip-including-points and
+wrong-project-not-found) and 6 in `service::project_items` (mirroring
+`service::projects.rs`'s `MockProjectRepo`/`MockTeamRepo` pattern, now also using
+`MockItemRepo`: owner-allowed/non-owner-rejected on a personal project,
+active/inactive team member on a shared project, and delegation/rejection for
+`list_project_items`). `cargo test`: 188/188 passing, zero regressions. `cargo
+check`: clean, same pre-existing dead-code warnings as every prior stage plus the
+expected new ones on `get_by_project`/`list_by_project`/`update_by_project`
+themselves (unconstructed outside tests, per this stage's own scope — not
+reachable via HTTP until B4). No `main.rs`/handler/Smithy changes.
+
 ### B4 — Smithy surface: `ProjectItem` resource
 
 - New `model/src/main/smithy/project_item.smithy`, modeled on `TeamItem`

@@ -73,10 +73,21 @@ pub trait UserRepo: Send + Sync {
 pub trait ItemRepo: Send + Sync {
     async fn get(&self, user_id: &str, item_id: &str) -> Result<Item, RepoError>;
     async fn get_team_item(&self, team_id: &str, item_id: &str) -> Result<Item, RepoError>;
+    /// Stage B3's unified read: an item scoped to `project_id` regardless of whether
+    /// the underlying row is personal- or team-owned — see
+    /// docs/project-abstraction-plan.md.
+    async fn get_by_project(&self, project_id: &str, item_id: &str) -> Result<Item, RepoError>;
     async fn list(&self, user_id: &str) -> Result<Vec<Item>, RepoError>;
     async fn list_team_items(
         &self,
         team_id: &str,
+        parent_item_id: Option<String>,
+    ) -> Result<Vec<Item>, RepoError>;
+    /// Stage B3's unified list: same `parent_item_id`-optional shape as
+    /// `list_team_items`, keyed on `project_id` instead of `team_id`/`user_id`.
+    async fn list_by_project(
+        &self,
+        project_id: &str,
         parent_item_id: Option<String>,
     ) -> Result<Vec<Item>, RepoError>;
     async fn list_children(&self, parent_item_id: &str) -> Result<Vec<Item>, RepoError>;
@@ -84,6 +95,11 @@ pub trait ItemRepo: Send + Sync {
     async fn create(&self, item: &Item) -> Result<String, RepoError>;
     async fn update(&self, item: &Item) -> Result<(), RepoError>;
     async fn update_team_item(&self, item: &Item) -> Result<(), RepoError>;
+    /// Stage B3's unified write primitive, keyed on `project_id` — carries the full
+    /// `update_team_item` column set (including `points`) so it's usable for both
+    /// personal- and team-backed projects once stage B4 wires a caller. Not yet
+    /// called from anywhere in the running app (see that stage's own scope note).
+    async fn update_by_project(&self, item: &Item) -> Result<(), RepoError>;
     async fn delete(&self, item_id: &str) -> Result<(), RepoError>;
     async fn list_due(
         &self,
