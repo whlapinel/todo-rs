@@ -1,4 +1,5 @@
 pub mod activity_log;
+pub mod projects;
 pub mod teams;
 pub mod users;
 pub mod items;
@@ -7,6 +8,7 @@ use sqlx::{Row, SqlitePool};
 use crate::domain::{
     activity_log::ActivityLogEntry,
     item::{Item, ItemKind, ItemType, Recurrence, Schedule, TeamAssignment},
+    project::Project,
     team::{Team, TeamRole},
     user::User,
 };
@@ -25,6 +27,15 @@ pub struct TeamWithStatus {
 pub struct TeamMemberInfo {
     pub user: User,
     pub status: String,
+    pub role: TeamRole,
+    pub points: i32,
+}
+
+/// No `status` field, unlike `TeamMemberInfo` — a project has no independent
+/// invite flow at this stage; every row is either the owner (seeded at `create`)
+/// or synced in eagerly from an attached team's ACTIVE members (stage A4).
+pub struct ProjectMemberInfo {
+    pub user: User,
     pub role: TeamRole,
     pub points: i32,
 }
@@ -138,6 +149,50 @@ pub trait TeamRepo: Send + Sync {
     async fn accept(&self, team_id: &str, user_id: &str) -> Result<(), RepoError>;
     async fn remove_member(&self, team_id: &str, user_id: &str) -> Result<(), RepoError>;
     async fn share_active_team(&self, user_a: &str, user_b: &str) -> Result<bool, RepoError>;
+}
+
+/// See docs/project-abstraction-plan.md, stage A2. Not yet called from anywhere in
+/// the running app — no service layer, no HTTP surface (that's A3/A5).
+#[cfg_attr(test, mockall::automock)]
+#[async_trait]
+pub trait ProjectRepo: Send + Sync {
+    /// Creates the project row and seeds `owner_user_id` as an admin
+    /// `project_members` row (points 0) — same shape as `TeamRepo::create` seeding
+    /// the creator as admin.
+    async fn create<'a>(
+        &'a self,
+        name: &'a str,
+        owner_user_id: &'a str,
+        team_id: Option<&'a str>,
+    ) -> Result<String, RepoError>;
+    async fn get(&self, project_id: &str) -> Result<Project, RepoError>;
+    async fn update_name(&self, project_id: &str, name: &str) -> Result<(), RepoError>;
+    /// Plain column write, no member-sync cascade — that's stage A4.
+    async fn attach_team(&self, project_id: &str, team_id: &str) -> Result<(), RepoError>;
+    /// Plain column write (`team_id` → NULL), no member-sync cascade — stage A4.
+    async fn detach_team(&self, project_id: &str) -> Result<(), RepoError>;
+    async fn delete(&self, project_id: &str) -> Result<(), RepoError>;
+    async fn list_for_user(&self, user_id: &str) -> Result<Vec<Project>, RepoError>;
+    async fn list_members(&self, project_id: &str) -> Result<Vec<ProjectMemberInfo>, RepoError>;
+    async fn member_role(
+        &self,
+        project_id: &str,
+        user_id: &str,
+    ) -> Result<Option<TeamRole>, RepoError>;
+    async fn set_member_role(
+        &self,
+        project_id: &str,
+        user_id: &str,
+        role: TeamRole,
+    ) -> Result<(), RepoError>;
+    /// Adds `delta` (negative to claw back) to `user_id`'s point balance on
+    /// `project_id`, returning the resulting balance — mirrors `add_team_points`.
+    async fn add_project_points(
+        &self,
+        project_id: &str,
+        user_id: &str,
+        delta: i32,
+    ) -> Result<i64, RepoError>;
 }
 
 /// Append-mostly completion/points log, kept separate from `ItemRepo`/`TeamRepo`
@@ -325,7 +380,8 @@ pub async fn create_pool(url: &str) -> Result<SqlitePool, sqlx::Error> {
             due_offset_days INTEGER,
             assigned_to_user_id TEXT,
             points INTEGER,
-            source_event_id TEXT
+            source_event_id TEXT,
+            project_id TEXT
         )",
     )
     .execute(&pool)
@@ -386,6 +442,40 @@ pub async fn create_pool(url: &str) -> Result<SqlitePool, sqlx::Error> {
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_activity_log_item_id ON activity_log (item_id)")
         .execute(&pool)
         .await?;
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS projects (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            owner_user_id TEXT NOT NULL,
+            team_id TEXT
+        )",
+    )
+    .execute(&pool)
+    .await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_projects_team_id ON projects (team_id)")
+        .execute(&pool)
+        .await?;
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS project_members (
+            project_id TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'member',
+            points INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (project_id, user_id)
+        )",
+    )
+    .execute(&pool)
+    .await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_project_members_user_id ON project_members (user_id)")
+        .execute(&pool)
+        .await?;
+    // idx_items_project_id is deliberately NOT created here — see add_projects.rs's
+    // doc comment: an index on a column added to an *existing* table via a migration
+    // must live inside that migration, not the baseline, since baseline indexes run
+    // before run_migrations() and would fail against any DB that predates the ALTER
+    // TABLE that adds the column (this bit us once already for source_event_id).
+
     // Every CREATE TABLE/INDEX IF NOT EXISTS baseline statement above must run before
     // this — migrations may target any of those tables (e.g. AddTeamMemberRole alters
     // team_members), and on a brand-new DB they wouldn't exist yet otherwise.
@@ -394,5 +484,3 @@ pub async fn create_pool(url: &str) -> Result<SqlitePool, sqlx::Error> {
         .map_err(|crate::storage::migrations::MigrationError::Database(e)| e)?;
     Ok(pool)
 }
-
-

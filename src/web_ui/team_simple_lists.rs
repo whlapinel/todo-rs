@@ -1,7 +1,7 @@
 use crate::auth::AuthUser;
 use crate::domain::item::{Item, ItemKind};
-use crate::handlers::web_ui::dashboard::{detail_url, list_url_for};
-use crate::handlers::web_ui::nav::{self, ActiveContext, SidebarSection};
+use super::dashboard::{detail_url, list_url_for};
+use super::nav::{self, ActiveContext, SidebarSection};
 use crate::service::error::ItemError;
 use crate::service::team_items::{
     self as team_item_service, require_active_member, CreateTeamItemParams, UpdateTeamItemContext,

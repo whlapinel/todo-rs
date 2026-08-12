@@ -2,6 +2,7 @@ mod activity_log;
 mod add_item_description;
 mod add_item_points;
 mod add_item_source_event_id;
+mod add_projects;
 mod add_team_member_role;
 mod has_tasks_to_simple;
 mod item_type_event_type;
@@ -12,6 +13,7 @@ use activity_log::ActivityLog;
 use add_item_description::AddItemDescription;
 use add_item_points::AddItemPoints;
 use add_item_source_event_id::AddItemSourceEventId;
+use add_projects::AddProjects;
 use add_team_member_role::AddTeamMemberRole;
 use async_trait::async_trait;
 use has_tasks_to_simple::HasTasksToSimple;
@@ -62,6 +64,7 @@ fn all_migrations() -> Vec<Box<dyn Migration>> {
         Box::new(TeamMemberPoints),
         Box::new(AddItemDescription),
         Box::new(AddItemSourceEventId),
+        Box::new(AddProjects),
     ]
 }
 
@@ -170,7 +173,8 @@ mod tests {
                 has_end_time INTEGER NOT NULL DEFAULT 0,
                 item_type TEXT NOT NULL DEFAULT 'TASK',
                 event_type TEXT,
-                points INTEGER
+                points INTEGER,
+                project_id TEXT
             )",
         )
         .execute(&pool)
@@ -200,6 +204,29 @@ mod tests {
                 points_delta INTEGER NOT NULL,
                 reversed INTEGER NOT NULL DEFAULT 0,
                 created_at INTEGER NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE projects (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                owner_user_id TEXT NOT NULL,
+                team_id TEXT
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE project_members (
+                project_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                role TEXT NOT NULL DEFAULT 'member',
+                points INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (project_id, user_id)
             )",
         )
         .execute(&pool)
@@ -347,7 +374,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 9);
+        assert_eq!(applied_count, 10);
     }
 
     #[tokio::test]
@@ -360,7 +387,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 9);
+        assert_eq!(applied_count, 10);
     }
 
     #[tokio::test]
@@ -374,6 +401,6 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 9);
+        assert_eq!(applied_count, 10);
     }
 }

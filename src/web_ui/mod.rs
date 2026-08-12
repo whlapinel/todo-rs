@@ -14,6 +14,7 @@ pub mod team_tasks;
 pub mod team_templates;
 pub mod teams;
 pub mod templates;
+pub mod components;
 
 use async_trait::async_trait;
 use axum::extract::FromRequestParts;

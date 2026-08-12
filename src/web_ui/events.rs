@@ -1,16 +1,12 @@
 use crate::auth::AuthUser;
 use crate::domain::item::{Item, ItemKind};
-use crate::handlers::web_ui::nav::{self, ActiveContext, SidebarSection};
-use crate::handlers::web_ui::team_tasks;
-use crate::handlers::web_ui::{TzOffset, to_local};
-use crate::service::error::ItemError;
-use crate::service::team_items::{
-    self as team_item_service, require_active_member, CreateTeamItemParams, UpdateTeamItemContext,
-    UpdateTeamItemParams,
-};
-use crate::service::teams as team_service;
-use crate::service::templates::{self as template_service, CreateTeamTemplateParams};
-use crate::storage::sqlite::{ActivityLogRepo, ItemRepo, RepoError, TeamRepo};
+use crate::web_ui::tasks::handlers::render_source_event_fragment;
+use super::nav::{self, ActiveContext, SidebarSection};
+use super::tasks;
+use super::{TzOffset, to_local};
+use crate::service::items::{self as item_service, ItemError};
+use crate::service::templates::{self as template_service, CreateTemplateParams};
+use crate::storage::sqlite::{ItemRepo, RepoError, TeamRepo};
 use askama::Template;
 use axum::extract::{Extension, Form, Path, Query};
 use axum::response::{Html, IntoResponse, Response};
@@ -21,12 +17,10 @@ fn render<T: Template>(t: T) -> Result<Html<String>, ItemError> {
     Ok(Html(t.render()?))
 }
 
-/// Guards every route below to the item actually being an Event, the same role
-/// `events::require_event` plays for the personal screen — this screen renders
-/// event-specific field layouts (scheduled window primary, no offset/Kind UI), so a Task
-/// or Simple team item's id reaching one of these handlers must 404 rather than render
-/// nonsense.
-fn require_team_event(item: Item) -> Result<Item, ItemError> {
+/// Guards every route below to the item actually being an Event — this screen renders
+/// event-specific field layouts (scheduled window primary, no offset/Kind UI), so a Task or
+/// Simple item's id reaching one of these handlers must 404 rather than render nonsense.
+fn require_event(item: Item) -> Result<Item, ItemError> {
     if item.kind() == ItemKind::Event {
         Ok(item)
     } else {
@@ -36,16 +30,13 @@ fn require_team_event(item: Item) -> Result<Item, ItemError> {
 
 // ---- form parsing helpers -------------------------------------------------
 //
-// Mirrors `team_items.rs`'s helper set exactly (see that file's comment on why this isn't
-// shared with `events.rs`'s near-identical set instead) plus `events.rs`'s choice to
-// hardcode `itemType: EVENT` and `parentItemId: None` rather than exposing selectors for
-// either — an Event is never itself a child, and its own children (regular Task-type
-// sub-items) are created through the generic team-items form instead, mirroring how
-// personal `events.rs` delegates the same job to `items.rs` (see `TeamEventDetailPageTemplate`
-// below).
+// Duplicated from `items.rs` rather than shared, matching the precedent `team_items.rs`
+// already set for this exact helper set (see CLAUDE.md/issues.md's noted items/team_items
+// duplication) — same three-way read convention: field absent => untouched, present-empty =>
+// explicit clear, present-with-content => set.
 #[derive(serde::Deserialize, Debug, Default)]
 #[serde(rename_all = "camelCase")]
-pub struct TeamEventForm {
+pub struct EventForm {
     name: Option<String>,
     description: Option<String>,
     scheduled_date: Option<String>,
@@ -59,9 +50,8 @@ pub struct TeamEventForm {
     recurrence: Option<String>,
     recurrence_basis: Option<String>,
     show_complete: Option<String>,
-    /// Set on the standalone `/team-events/:team_id/new` page's create form and on every edit
-    /// form's "Save and close" submission — see `tasks.rs`'s identical field for the full
-    /// rationale.
+    /// Set on the standalone `/events/new` page's create form and on every edit form's
+    /// "Save and close" submission — see `tasks.rs`'s identical field for the full rationale.
     redirect: Option<String>,
 }
 
@@ -180,9 +170,13 @@ fn overlay_scheduled_end_date(
     }
 }
 
-fn create_params_from_form(team_id: &str, form: &TeamEventForm, tz: i32) -> CreateTeamItemParams {
-    CreateTeamItemParams {
-        team_id: team_id.to_string(),
+fn create_params_from_form(
+    user_id: &str,
+    form: &EventForm,
+    tz: i32,
+) -> item_service::CreateItemParams {
+    item_service::CreateItemParams {
+        user_id: user_id.to_string(),
         name: form.name.clone().unwrap_or_default(),
         description: non_empty(&form.description),
         due_date: overlay_due_date(&form.due_date, &form.due_time, tz, None),
@@ -211,25 +205,20 @@ fn create_params_from_form(team_id: &str, form: &TeamEventForm, tz: i32) -> Crea
         item_type: Some(ItemKind::Event),
         event_type: non_empty(&form.event_type),
         due_offset_days: None,
-        // Events never carry assignment/points — those are Task-only (see
-        // `service::team_items::build_item_type`), so this screen has no form fields for
-        // either and always passes `None`.
-        assigned_to_user_id: None,
         source_event_id: None,
         timezone_offset_minutes: Some(tz),
-        points: None,
     }
 }
 
 fn update_params_from_form(
-    team_id: &str,
+    user_id: &str,
     item_id: &str,
     current: &Item,
-    form: &TeamEventForm,
+    form: &EventForm,
     tz: i32,
-) -> UpdateTeamItemParams {
-    UpdateTeamItemParams {
-        team_id: team_id.to_string(),
+) -> item_service::UpdateItemParams {
+    item_service::UpdateItemParams {
+        user_id: user_id.to_string(),
         item_id: item_id.to_string(),
         name: overlay_required_str(&form.name, &current.name),
         description: overlay_str(&form.description, current.description.clone()),
@@ -262,11 +251,8 @@ fn update_params_from_form(
         item_type: Some(ItemKind::Event),
         event_type: overlay_str(&form.event_type, current.event_type()),
         due_offset_days: None,
-        // See create_params_from_form above — Events never carry assignment/points.
-        assigned_to_user_id: None,
         source_event_id: None,
         timezone_offset_minutes: Some(tz),
-        points: None,
     }
 }
 
@@ -282,10 +268,9 @@ fn recurrence_basis_label(recurrence_basis: &Option<String>) -> String {
 }
 
 #[derive(Template)]
-#[template(path = "team_events/row.html")]
-struct TeamEventRow {
+#[template(path = "events/row.html")]
+struct EventRow {
     id: String,
-    team_id: String,
     name: String,
     complete: bool,
     scheduled_date: Option<String>,
@@ -298,11 +283,10 @@ struct TeamEventRow {
     toggle_complete_json: String,
 }
 
-impl TeamEventRow {
-    fn from_item(item: &Item, team_id: &str, tz: i32) -> Self {
+impl EventRow {
+    fn from_item(item: &Item, tz: i32) -> Self {
         Self {
             id: item.id.clone(),
-            team_id: team_id.to_string(),
             name: item.name.clone(),
             complete: item.complete,
             scheduled_date: item.scheduled_date().map(|d| {
@@ -334,10 +318,9 @@ impl TeamEventRow {
 }
 
 #[derive(Template)]
-#[template(path = "team_events/detail_fields.html")]
-struct TeamEventDetailFields {
+#[template(path = "events/detail_fields.html")]
+struct EventDetailFields {
     id: String,
-    team_id: String,
     name: String,
     description: String,
     complete: bool,
@@ -350,13 +333,13 @@ struct TeamEventDetailFields {
     event_type_input: String,
     recurrence: Option<String>,
     recurrence_basis: Option<String>,
-    /// Set only on the fragment returned by a successful save — see `items.rs`'s
-    /// `DetailFields.just_saved` for the full rationale.
+    /// See `items.rs`'s `DetailFields.just_saved` — set only on the fragment returned by a
+    /// successful save.
     just_saved: bool,
 }
 
-impl TeamEventDetailFields {
-    fn from_item(item: &Item, team_id: &str, tz: i32, just_saved: bool) -> Self {
+impl EventDetailFields {
+    fn from_item(item: &Item, tz: i32, just_saved: bool) -> Self {
         let local_scheduled_date = item.scheduled_date().map(|d| to_local(d, tz));
         let scheduled_date_input = local_scheduled_date
             .map(|d| d.format("%Y-%m-%d").to_string())
@@ -392,7 +375,6 @@ impl TeamEventDetailFields {
         };
         Self {
             id: item.id.clone(),
-            team_id: team_id.to_string(),
             name: item.name.clone(),
             description: item.description.clone().unwrap_or_default(),
             complete: item.complete,
@@ -410,13 +392,13 @@ impl TeamEventDetailFields {
     }
 }
 
-/// Read-only counterpart to `TeamEventDetailFields` — see `items.rs`'s `DetailView` for the
-/// row-editing convention this mirrors (complete-toggle lives here too).
+/// Read-only counterpart to `EventDetailFields` — see `items.rs`'s `DetailView` for the
+/// row-editing convention this mirrors (complete-toggle lives here too, so marking an event
+/// done doesn't require entering edit mode).
 #[derive(Template)]
-#[template(path = "team_events/detail_view.html")]
-struct TeamEventDetailView {
+#[template(path = "events/detail_view.html")]
+struct EventDetailView {
     id: String,
-    team_id: String,
     description: Option<String>,
     complete: bool,
     toggle_complete_json: String,
@@ -429,8 +411,8 @@ struct TeamEventDetailView {
     recurrence_basis_label: String,
 }
 
-impl TeamEventDetailView {
-    fn from_item(item: &Item, team_id: &str, tz: i32) -> Self {
+impl EventDetailView {
+    fn from_item(item: &Item, tz: i32) -> Self {
         let scheduled_date = item.scheduled_date().map(|d| {
             let local = to_local(d, tz);
             if item.has_scheduled_time() {
@@ -457,7 +439,6 @@ impl TeamEventDetailView {
         });
         Self {
             id: item.id.clone(),
-            team_id: team_id.to_string(),
             description: item.description.clone(),
             complete: item.complete,
             toggle_complete_json: (!item.complete).to_string(),
@@ -473,27 +454,23 @@ impl TeamEventDetailView {
 }
 
 #[derive(Template)]
-#[template(path = "team_events/rows_fragment.html")]
-struct TeamEventRowsFragmentTemplate {
+#[template(path = "events/rows_fragment.html")]
+struct EventRowsFragmentTemplate {
     rows: Vec<String>,
     empty_message: String,
 }
 
 #[derive(Template)]
-#[template(path = "team_events/list_page.html")]
-struct TeamEventsListPageTemplate {
-    team_id: String,
+#[template(path = "events/list_page.html")]
+struct EventsListPageTemplate {
     rows: Vec<String>,
     show_complete: bool,
-    /// The viewer's own point balance on this team — see `service::teams::member_points`.
-    points_label: String,
     nav_html: String,
 }
 
 #[derive(Template)]
-#[template(path = "team_events/new_page.html")]
-struct NewTeamEventPageTemplate {
-    team_id: String,
+#[template(path = "events/new_page.html")]
+struct NewEventPageTemplate {
     show_complete: bool,
     blank_recurrence: Option<String>,
     blank_recurrence_basis: Option<String>,
@@ -506,10 +483,9 @@ struct NewTeamEventPageTemplate {
 }
 
 #[derive(Template)]
-#[template(path = "team_events/detail_page.html")]
-struct TeamEventDetailPageTemplate {
+#[template(path = "events/detail_page.html")]
+struct EventDetailPageTemplate {
     id: String,
-    team_id: String,
     name: String,
     complete: bool,
     view: String,
@@ -517,10 +493,9 @@ struct TeamEventDetailPageTemplate {
 }
 
 #[derive(Template)]
-#[template(path = "team_events/edit_page.html")]
-struct TeamEventEditPageTemplate {
+#[template(path = "events/edit_page.html")]
+struct EventEditPageTemplate {
     id: String,
-    team_id: String,
     name: String,
     fields: String,
     nav_html: String,
@@ -541,9 +516,8 @@ struct CalendarDay {
 }
 
 #[derive(Template)]
-#[template(path = "team_events/calendar_page.html")]
-struct TeamEventsCalendarPageTemplate {
-    team_id: String,
+#[template(path = "events/calendar_page.html")]
+struct EventsCalendarPageTemplate {
     month_label: String,
     month_iso: String,
     prev_year: i32,
@@ -556,22 +530,19 @@ struct TeamEventsCalendarPageTemplate {
 
 // ---- shared rendering helpers ------------------------------------------------
 
-fn render_rows(
-    items: &[Item],
-    team_id: &str,
-    show_complete: bool,
-    tz: i32,
-) -> Result<Vec<String>, ItemError> {
+fn render_rows(items: &[Item], show_complete: bool, tz: i32) -> Result<Vec<String>, ItemError> {
     items
         .iter()
         .filter(|i| show_complete || !i.complete)
-        .map(|i| TeamEventRow::from_item(i, team_id, tz).render())
+        .map(|i| EventRow::from_item(i, tz).render())
         .collect::<Result<Vec<_>, _>>()
         .map_err(ItemError::from)
 }
 
-/// Sort key for the team events list: primary date is `scheduled_date` (falling back to
-/// `due_date`), undated events last — mirrors `events.rs`'s `sort_key`.
+/// Sort key for the events list: primary date is `scheduled_date` (falling back to
+/// `due_date`), undated events last — see the plan's rationale for why Events makes the
+/// scheduled window primary instead of `due_date` (the one axis CLAUDE.md flags as not yet
+/// surfaced anywhere in the UI).
 fn sort_key(item: &Item) -> i64 {
     item.scheduled_date()
         .or(item.due_date())
@@ -579,14 +550,12 @@ fn sort_key(item: &Item) -> i64 {
         .unwrap_or(i64::MAX)
 }
 
-/// `repo.list_team_items` already scopes to top-level, non-Template items — this narrows
-/// further to `Event` and re-sorts by the scheduled-primary key above, mirroring
-/// `events.rs`'s `list_events`.
-async fn list_team_events(repo: &Arc<dyn ItemRepo>, team_id: &str) -> Result<Vec<Item>, ItemError> {
-    let mut items = repo
-        .list_team_items(team_id, None)
-        .await
-        .map_err(ItemError::from)?;
+/// `repo.list` already scopes to top-level, non-Template items (see
+/// `storage::sqlite::items::list`) — this narrows further to `Event` and re-sorts by the
+/// scheduled-primary key above. No storage-layer filter/sort exists for this; filtering here
+/// in the presentation layer is deliberate for a single screen (see the plan).
+async fn list_events(repo: &Arc<dyn ItemRepo>, user_id: &str) -> Result<Vec<Item>, ItemError> {
+    let mut items = repo.list(user_id).await.map_err(ItemError::from)?;
     items.retain(|i| i.kind() == ItemKind::Event);
     items.sort_by_key(sort_key);
     Ok(items)
@@ -600,9 +569,11 @@ fn next_month(year: i32, month: u32) -> (i32, u32) {
     if month == 12 { (year + 1, 1) } else { (year, month + 1) }
 }
 
-/// The date each event displays under: `scheduled_date` if set, else `due_date` — mirrors
-/// `events.rs`'s `calendar_date`/`calendar_has_time`, kept consistent so an event lands on
-/// the same day in both the flat list and the calendar.
+/// The date each event displays under: `scheduled_date` if set, else `due_date` — same
+/// scheduled-primary fallback `sort_key`/`list_events` above use for the flat list, kept
+/// consistent so an event lands on the same day in both views. `calendar_has_time` mirrors it:
+/// whichever field supplied the date is also the field whose `has_*_time` flag decides
+/// whether a time label is shown.
 fn calendar_date(item: &Item) -> Option<DateTime<Utc>> {
     item.scheduled_date().or(item.due_date())
 }
@@ -616,10 +587,9 @@ fn calendar_has_time(item: &Item) -> bool {
 }
 
 /// Builds the 42-cell (6-week, Monday-start) grid for `year`/`month`, bucketing `items` by
-/// local calendar day via `calendar_date` — mirrors `events.rs`'s `build_calendar_days`
-/// exactly, team-scoping only comes from which `items` are passed in. No assignee display
-/// on calendar day cells — `CalendarEventEntry` has no such field, matching the personal
-/// calendar's own entry shape.
+/// local calendar day via `calendar_date`. Always 6 rows regardless of how many the month
+/// actually spans, matching the fixed `grid-rows-6` layout of the vendored Tailwind Plus
+/// component this view is adapted from.
 fn build_calendar_days(
     year: i32,
     month: u32,
@@ -672,31 +642,26 @@ pub struct ShowCompleteQuery {
     show_complete: Option<String>,
 }
 
-pub async fn team_events_page(
-    Path(team_id): Path<String>,
+pub async fn events_page(
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
-    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(team_repo): Extension<Arc<dyn TeamRepo>>,
     TzOffset(tz): TzOffset,
     Query(q): Query<ShowCompleteQuery>,
 ) -> Result<Html<String>, ItemError> {
-    require_active_member(&teams, &team_id, &auth_user.user_id).await?;
     let show_complete = q.show_complete.is_some();
-    let items = list_team_events(&repo, &team_id).await?;
-    let rows = render_rows(&items, &team_id, show_complete, tz)?;
-    let points = team_service::member_points(&teams, &team_id, &auth_user.user_id).await?;
+    let items = list_events(&repo, &auth_user.user_id).await?;
+    let rows = render_rows(&items, show_complete, tz)?;
     let nav_html = nav::build_nav_html(
-        &teams,
+        &team_repo,
         &auth_user.user_id,
-        ActiveContext::Team(team_id.clone()),
+        ActiveContext::Personal,
         SidebarSection::Events,
     )
     .await?;
-    render(TeamEventsListPageTemplate {
-        team_id,
+    render(EventsListPageTemplate {
         rows,
         show_complete,
-        points_label: format!("{points} pts"),
         nav_html,
     })
 }
@@ -707,15 +672,13 @@ pub struct CalendarQuery {
     month: Option<u32>,
 }
 
-pub async fn team_events_calendar_page(
-    Path(team_id): Path<String>,
+pub async fn events_calendar_page(
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
-    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(team_repo): Extension<Arc<dyn TeamRepo>>,
     TzOffset(tz): TzOffset,
     Query(q): Query<CalendarQuery>,
 ) -> Result<Html<String>, ItemError> {
-    require_active_member(&teams, &team_id, &auth_user.user_id).await?;
     let today = to_local(Utc::now(), tz).date_naive();
     let year = q.year.unwrap_or_else(|| today.year());
     let month = q
@@ -723,20 +686,19 @@ pub async fn team_events_calendar_page(
         .filter(|m| (1..=12).contains(m))
         .unwrap_or_else(|| today.month());
 
-    let items = list_team_events(&repo, &team_id).await?;
+    let items = list_events(&repo, &auth_user.user_id).await?;
     let days = build_calendar_days(year, month, &items, tz, today);
     let (prev_year, prev_month) = prev_month(year, month);
     let (next_year, next_month) = next_month(year, month);
     let nav_html = nav::build_nav_html(
-        &teams,
+        &team_repo,
         &auth_user.user_id,
-        ActiveContext::Team(team_id.clone()),
+        ActiveContext::Personal,
         SidebarSection::Events,
     )
     .await?;
 
-    render(TeamEventsCalendarPageTemplate {
-        team_id,
+    render(EventsCalendarPageTemplate {
         month_label: NaiveDate::from_ymd_opt(year, month, 1)
             .unwrap()
             .format("%B %Y")
@@ -751,22 +713,19 @@ pub async fn team_events_calendar_page(
     })
 }
 
-pub async fn new_team_event_page(
-    Path(team_id): Path<String>,
+pub async fn new_event_page(
     Extension(auth_user): Extension<AuthUser>,
-    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(team_repo): Extension<Arc<dyn TeamRepo>>,
     Query(q): Query<ShowCompleteQuery>,
 ) -> Result<Html<String>, ItemError> {
-    require_active_member(&teams, &team_id, &auth_user.user_id).await?;
     let nav_html = nav::build_nav_html(
-        &teams,
+        &team_repo,
         &auth_user.user_id,
-        ActiveContext::Team(team_id.clone()),
+        ActiveContext::Personal,
         SidebarSection::Events,
     )
     .await?;
-    render(NewTeamEventPageTemplate {
-        team_id,
+    render(NewEventPageTemplate {
         show_complete: q.show_complete.is_some(),
         blank_recurrence: None,
         blank_recurrence_basis: Some("SCHEDULED_DATE".to_string()),
@@ -779,30 +738,28 @@ pub async fn new_team_event_page(
     })
 }
 
-pub async fn team_event_detail_page(
-    Path((team_id, item_id)): Path<(String, String)>,
+pub async fn event_detail_page(
+    Path(item_id): Path<String>,
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
-    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(team_repo): Extension<Arc<dyn TeamRepo>>,
     TzOffset(tz): TzOffset,
 ) -> Result<Html<String>, ItemError> {
-    require_active_member(&teams, &team_id, &auth_user.user_id).await?;
     let item = repo
-        .get_team_item(&team_id, &item_id)
+        .get(&auth_user.user_id, &item_id)
         .await
         .map_err(ItemError::from)?;
-    let item = require_team_event(item)?;
-    let view = TeamEventDetailView::from_item(&item, &team_id, tz).render()?;
+    let item = require_event(item)?;
+    let view = EventDetailView::from_item(&item, tz).render()?;
     let nav_html = nav::build_nav_html(
-        &teams,
+        &team_repo,
         &auth_user.user_id,
-        ActiveContext::Team(team_id.clone()),
+        ActiveContext::Personal,
         SidebarSection::Events,
     )
     .await?;
-    render(TeamEventDetailPageTemplate {
+    render(EventDetailPageTemplate {
         id: item.id,
-        team_id,
         name: item.name,
         complete: item.complete,
         view,
@@ -810,43 +767,42 @@ pub async fn team_event_detail_page(
     })
 }
 
-pub async fn team_event_edit_page(
-    Path((team_id, item_id)): Path<(String, String)>,
+pub async fn event_edit_page(
+    Path(item_id): Path<String>,
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
-    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(team_repo): Extension<Arc<dyn TeamRepo>>,
     TzOffset(tz): TzOffset,
 ) -> Result<Html<String>, ItemError> {
-    require_active_member(&teams, &team_id, &auth_user.user_id).await?;
     let item = repo
-        .get_team_item(&team_id, &item_id)
+        .get(&auth_user.user_id, &item_id)
         .await
         .map_err(ItemError::from)?;
-    let item = require_team_event(item)?;
-    let fields = TeamEventDetailFields::from_item(&item, &team_id, tz, false).render()?;
+    let item = require_event(item)?;
+    let fields = EventDetailFields::from_item(&item, tz, false).render()?;
     let nav_html = nav::build_nav_html(
-        &teams,
+        &team_repo,
         &auth_user.user_id,
-        ActiveContext::Team(team_id.clone()),
+        ActiveContext::Personal,
         SidebarSection::Events,
     )
     .await?;
-    render(TeamEventEditPageTemplate {
+    render(EventEditPageTemplate {
         id: item.id,
-        team_id,
         name: item.name,
         fields,
         nav_html,
     })
 }
 
-/// Redirect back to the team's events list (via the `hx-redirect` header) after a create
-/// from the standalone `/team-events/:team_id/new` page. Mirrors `events.rs::redirect_to_events`.
-fn redirect_to_team_events(team_id: &str, show_complete: bool) -> Response {
+/// Redirect back to the events list (via the `hx-redirect` header, same mechanism
+/// `items.rs`'s `redirect_to_items` uses) after a create from the standalone `/events/new`
+/// page.
+fn redirect_to_events(show_complete: bool) -> Response {
     let location = if show_complete {
-        format!("/web/team-events/{team_id}?showComplete=1")
+        "/web/events?showComplete=1".to_string()
     } else {
-        format!("/web/team-events/{team_id}")
+        "/web/events".to_string()
     };
     (
         [(
@@ -858,70 +814,56 @@ fn redirect_to_team_events(team_id: &str, show_complete: bool) -> Response {
         .into_response()
 }
 
-pub async fn create_team_event_form(
-    Path(team_id): Path<String>,
+pub async fn create_event_form(
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
-    Extension(teams): Extension<Arc<dyn TeamRepo>>,
     TzOffset(tz): TzOffset,
-    Form(form): Form<TeamEventForm>,
+    Form(form): Form<EventForm>,
 ) -> Result<Response, ItemError> {
     let show_complete = form.show_complete.is_some();
-    let params = create_params_from_form(&team_id, &form, tz);
-    team_item_service::create_team_item(&repo, &teams, &auth_user.user_id, params).await?;
+    let params = create_params_from_form(&auth_user.user_id, &form, tz);
+    item_service::create_item(&repo, params).await?;
     if form.redirect.is_some() {
-        return Ok(redirect_to_team_events(&team_id, show_complete));
+        return Ok(redirect_to_events(show_complete));
     }
-    let items = list_team_events(&repo, &team_id).await?;
-    let rows = render_rows(&items, &team_id, show_complete, tz)?;
-    Ok(render(TeamEventRowsFragmentTemplate {
+    let items = list_events(&repo, &auth_user.user_id).await?;
+    let rows = render_rows(&items, show_complete, tz)?;
+    Ok(render(EventRowsFragmentTemplate {
         rows,
         empty_message: "No events yet.".to_string(),
     })?
     .into_response())
 }
 
-pub async fn update_team_event_form(
-    Path((team_id, item_id)): Path<(String, String)>,
+pub async fn update_event_form(
+    Path(item_id): Path<String>,
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
-    Extension(teams): Extension<Arc<dyn TeamRepo>>,
-    Extension(activity_log): Extension<Arc<dyn ActivityLogRepo>>,
+    Extension(team_repo): Extension<Arc<dyn TeamRepo>>,
     TzOffset(tz): TzOffset,
-    Form(form): Form<TeamEventForm>,
+    Form(form): Form<EventForm>,
 ) -> Result<Response, ItemError> {
-    require_active_member(&teams, &team_id, &auth_user.user_id).await?;
     let current = repo
-        .get_team_item(&team_id, &item_id)
+        .get(&auth_user.user_id, &item_id)
         .await
         .map_err(ItemError::from)?;
-    let current = require_team_event(current)?;
+    let current = require_event(current)?;
     let close = form.redirect.is_some();
-    let params = update_params_from_form(&team_id, &item_id, &current, &form, tz);
-    team_item_service::update_team_item(
-        &repo,
-        &UpdateTeamItemContext {
-            teams: teams.clone(),
-            activity_log,
-        },
-        &auth_user.user_id,
-        params,
-    )
-    .await?;
+    let params = update_params_from_form(&auth_user.user_id, &item_id, &current, &form, tz);
+    item_service::update_item(&repo, params).await?;
 
-    match repo.get_team_item(&team_id, &item_id).await {
+    match repo.get(&auth_user.user_id, &item_id).await {
         Ok(updated) if close => {
-            let view = TeamEventDetailView::from_item(&updated, &team_id, tz).render()?;
+            let view = EventDetailView::from_item(&updated, tz).render()?;
             let nav_html = nav::build_nav_html(
-                &teams,
+                &team_repo,
                 &auth_user.user_id,
-                ActiveContext::Team(team_id.clone()),
+                ActiveContext::Personal,
                 SidebarSection::Events,
             )
             .await?;
-            Ok(render(TeamEventDetailPageTemplate {
+            Ok(render(EventDetailPageTemplate {
                 id: updated.id.clone(),
-                team_id,
                 name: updated.name.clone(),
                 complete: updated.complete,
                 view,
@@ -930,14 +872,15 @@ pub async fn update_team_event_form(
             .into_response())
         }
         Ok(updated) => {
-            let row = TeamEventRow::from_item(&updated, &team_id, tz).render()?;
-            let fields = TeamEventDetailFields::from_item(&updated, &team_id, tz, true).render()?;
-            let view = TeamEventDetailView::from_item(&updated, &team_id, tz).render()?;
+            let row = EventRow::from_item(&updated, tz).render()?;
+            let fields = EventDetailFields::from_item(&updated, tz, true).render()?;
+            let view = EventDetailView::from_item(&updated, tz).render()?;
             Ok(Html(format!("{row}{fields}{view}")).into_response())
         }
         // The event was recurring, just got marked complete, and the service layer replaced
-        // it with a fresh successor under a new id (see `service::team_items::update_team_item`)
-        // — same situation `team_items.rs`'s `update_team_item_form` handles.
+        // it with a fresh successor under a new id (see `service::items::update_item`) — same
+        // situation `items.rs`'s `update_item_form` handles, and the same fix: ask the client
+        // to reload rather than guessing at the new id.
         Err(RepoError::NotFound) => Ok((
             [(
                 axum::http::header::HeaderName::from_static("hx-refresh"),
@@ -950,72 +893,57 @@ pub async fn update_team_event_form(
     }
 }
 
-pub async fn delete_team_event_form(
-    Path((team_id, item_id)): Path<(String, String)>,
+pub async fn delete_event_form(
+    Path(item_id): Path<String>,
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
-    Extension(teams): Extension<Arc<dyn TeamRepo>>,
 ) -> Result<Html<String>, ItemError> {
     let current = repo
-        .get_team_item(&team_id, &item_id)
+        .get(&auth_user.user_id, &item_id)
         .await
         .map_err(ItemError::from)?;
-    require_team_event(current)?;
-    team_item_service::delete_team_item(&repo, &teams, &auth_user.user_id, &team_id, &item_id)
-        .await?;
+    require_event(current)?;
+    item_service::delete_item(&repo, &auth_user.user_id, &item_id).await?;
     Ok(Html(String::new()))
 }
 
-/// A team Event can never have structural children (see `Item::validate`/`create_team_item`'s
-/// parent-kind check) — its "Linked tasks" section instead shows every top-level Task that
-/// references it via `sourceEventId`, via `team_tasks::render_source_event_fragment`.
-pub async fn team_event_children_fragment(
-    Path((team_id, item_id)): Path<(String, String)>,
+/// An Event can never have structural children (see `Item::validate`/`create_item`'s parent-
+/// kind check) — its "Linked tasks" section instead shows every top-level Task that
+/// references it via `sourceEventId`, via `tasks::render_source_event_fragment`.
+pub async fn event_children_fragment(
+    Path(item_id): Path<String>,
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
-    Extension(teams): Extension<Arc<dyn TeamRepo>>,
     TzOffset(tz): TzOffset,
 ) -> Result<Html<String>, ItemError> {
-    require_active_member(&teams, &team_id, &auth_user.user_id).await?;
-    // Ownership gate: list_by_source_event isn't scoped by team, so confirm the event actually
-    // belongs to this team before listing tasks that reference it.
-    repo.get_team_item(&team_id, &item_id)
+    // Ownership gate: list_by_source_event itself isn't scoped by user, so confirm the caller
+    // owns the event before listing tasks that reference it.
+    repo.get(&auth_user.user_id, &item_id)
         .await
         .map_err(ItemError::from)?;
-    team_tasks::render_source_event_fragment(
-        &repo,
-        &teams,
-        &team_id,
-        &item_id,
-        &auth_user.user_id,
-        tz,
-    )
-    .await
+    render_source_event_fragment(&repo, &item_id, tz).await
 }
 
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct TeamEventChildForm {
+pub struct EventChildForm {
     name: String,
     due_offset_days: Option<String>,
 }
 
-/// Creates a top-level team Task that references this event via `sourceEventId` — not a
-/// structural child (team Events can never have children, see
-/// `team_event_children_fragment`'s doc comment). Its `dueDate` is server-computed from
-/// `dueOffsetDays` against the event's own anchor (see
-/// `service::team_items::resolve_offset_anchor_team`), same as a structural child's would be.
-pub async fn create_team_event_child_form(
-    Path((team_id, item_id)): Path<(String, String)>,
+/// Creates a top-level Task that references this event via `sourceEventId` — not a structural
+/// child (Events can never have children, see `event_children_fragment`'s doc comment). Its
+/// `dueDate` is server-computed from `dueOffsetDays` against the event's own anchor (see
+/// `service::items::resolve_offset_anchor`), same as a structural child's would be.
+pub async fn create_event_child_form(
+    Path(item_id): Path<String>,
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
-    Extension(teams): Extension<Arc<dyn TeamRepo>>,
     TzOffset(tz): TzOffset,
-    Form(form): Form<TeamEventChildForm>,
+    Form(form): Form<EventChildForm>,
 ) -> Result<Html<String>, ItemError> {
-    require_active_member(&teams, &team_id, &auth_user.user_id).await?;
-    let params = CreateTeamItemParams {
-        team_id: team_id.clone(),
+    let params = item_service::CreateItemParams {
+        user_id: auth_user.user_id.clone(),
         name: form.name,
         source_event_id: Some(item_id.clone()),
         item_type: Some(ItemKind::Task),
@@ -1028,34 +956,23 @@ pub async fn create_team_event_child_form(
         timezone_offset_minutes: Some(tz),
         ..Default::default()
     };
-    team_item_service::create_team_item(&repo, &teams, &auth_user.user_id, params).await?;
-    team_tasks::render_source_event_fragment(
-        &repo,
-        &teams,
-        &team_id,
-        &item_id,
-        &auth_user.user_id,
-        tz,
-    )
-    .await
+    item_service::create_item(&repo, params).await?;
+    render_source_event_fragment(&repo, &item_id, tz).await
 }
 
-pub async fn save_team_event_as_template(
-    Path((team_id, item_id)): Path<(String, String)>,
+pub async fn save_event_as_template(
+    Path(item_id): Path<String>,
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
-    Extension(teams): Extension<Arc<dyn TeamRepo>>,
 ) -> Result<Html<String>, ItemError> {
     let item = repo
-        .get_team_item(&team_id, &item_id)
+        .get(&auth_user.user_id, &item_id)
         .await
         .map_err(ItemError::from)?;
-    template_service::create_team_template(
+    template_service::create_template(
         &repo,
-        &teams,
-        CreateTeamTemplateParams {
-            team_id,
-            requester_user_id: auth_user.user_id,
+        CreateTemplateParams {
+            user_id: auth_user.user_id.clone(),
             name: item.name.clone(),
             description: None,
             source_item_id: Some(item_id),

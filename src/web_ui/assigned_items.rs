@@ -1,7 +1,7 @@
 use crate::auth::AuthUser;
 use crate::domain::item::{Item, ItemKind};
-use crate::handlers::web_ui::nav::{self, ActiveContext, SidebarSection};
-use crate::handlers::web_ui::to_local;
+use super::nav::{self, ActiveContext, SidebarSection};
+use super::to_local;
 use crate::service::error::ItemError;
 use crate::storage::sqlite::{ItemRepo, TeamRepo};
 use askama::Template;
@@ -10,7 +10,7 @@ use axum::response::Html;
 use chrono::Utc;
 use std::sync::Arc;
 
-use crate::handlers::web_ui::TzOffset;
+use super::TzOffset;
 
 fn render<T: Template>(t: T) -> Result<Html<String>, ItemError> {
     Ok(Html(t.render()?))

@@ -2,9 +2,10 @@ use std::{net::SocketAddr, sync::Arc};
 mod auth;
 mod domain;
 mod email;
-mod handlers;
 mod service;
 mod storage;
+mod web_ui;
+mod json_api;
 
 use crate::storage::sqlite::{
     ActivityLogRepo, ItemRepo, TeamRepo, UserRepo, activity_log::SqliteActivityLogRepo,
@@ -17,36 +18,36 @@ use axum::{
     response::Redirect,
     routing::{get, post, put},
 };
-use handlers::json_api::activity_log::{list_team_activity_log, undo_activity_log_entry};
-use handlers::json_api::invites::send_app_invite;
-use handlers::json_api::items::{
+use json_api::activity_log::{list_team_activity_log, undo_activity_log_entry};
+use json_api::invites::send_app_invite;
+use json_api::items::{
     create_item, delete_item, get_item, list_assigned_items, list_items, list_items_due,
     update_item,
 };
-use handlers::json_api::team_items::{
+use json_api::team_items::{
     create_team_item, delete_team_item, get_team_item, list_team_items, update_team_item,
 };
-use handlers::json_api::team_templates::{create_team_template, list_team_templates};
-use handlers::json_api::teams::{
+use json_api::team_templates::{create_team_template, list_team_templates};
+use json_api::teams::{
     accept_team_invite, create_team, get_team, invite_team_member, leave_team, list_team_members,
     list_teams, set_team_member_role, update_team,
 };
-use handlers::json_api::templates::{create_template, list_templates};
-use handlers::json_api::users::{get_user, list_users, update_user};
-use handlers::web_ui::assigned_items::assigned_items_page;
-use handlers::web_ui::dashboard::*;
-use handlers::web_ui::events::*;
-use handlers::web_ui::login::login_page;
-use handlers::web_ui::simple_lists::*;
-use handlers::web_ui::tasks::*;
-use handlers::web_ui::team_activity::*;
-use handlers::web_ui::team_dashboard::*;
-use handlers::web_ui::team_events::*;
-use handlers::web_ui::team_simple_lists::*;
-use handlers::web_ui::team_tasks::*;
-use handlers::web_ui::team_templates::*;
-use handlers::web_ui::teams::*;
-use handlers::web_ui::templates::*;
+use json_api::templates::{create_template, list_templates};
+use json_api::users::{get_user, list_users, update_user};
+use web_ui::assigned_items::assigned_items_page;
+use web_ui::dashboard::*;
+use web_ui::events::*;
+use web_ui::login::login_page;
+use web_ui::simple_lists::*;
+use web_ui::tasks::handlers::*;
+use web_ui::team_activity::*;
+use web_ui::team_dashboard::*;
+use web_ui::team_events::*;
+use web_ui::team_simple_lists::*;
+use web_ui::team_tasks::*;
+use web_ui::team_templates::*;
+use web_ui::teams::*;
+use web_ui::templates::*;
 use todo_server_sdk::{PeoplesRepublicOfLists, PeoplesRepublicOfListsConfig};
 use tower::ServiceBuilder;
 use tower_cookies::CookieManagerLayer;

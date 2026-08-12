@@ -1,7 +1,7 @@
 use crate::auth::AuthUser;
-use crate::handlers::web_ui::dashboard::{detail_url, preset_range, PRESETS};
-use crate::handlers::web_ui::nav::{self, ActiveContext, SidebarSection};
-use crate::handlers::web_ui::{to_local, TzOffset};
+use super::dashboard::{detail_url, preset_range, PRESETS};
+use super::nav::{self, ActiveContext, SidebarSection};
+use super::{to_local, TzOffset};
 use crate::service::team_items::{
     self as team_item_service, require_active_member, UpdateTeamItemContext, UpdateTeamItemParams,
 };

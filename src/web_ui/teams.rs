@@ -1,6 +1,6 @@
 use crate::auth::AuthUser;
 use crate::domain::team::TeamRole;
-use crate::handlers::web_ui::nav::{self, ActiveContext, SidebarSection};
+use super::nav::{self, ActiveContext, SidebarSection};
 use crate::service::error::ItemError;
 use crate::service::teams as team_service;
 use crate::storage::sqlite::{TeamRepo, UserRepo};

@@ -1,7 +1,7 @@
 use crate::auth::AuthUser;
 use crate::domain::item::{Item, ItemKind};
-use crate::handlers::web_ui::nav::{self, ActiveContext, SidebarSection};
-use crate::handlers::web_ui::{TzOffset, to_local};
+use super::nav::{self, ActiveContext, SidebarSection};
+use super::{TzOffset, to_local};
 use crate::service::items::{self as item_service, ItemError};
 use crate::service::team_items::{self as team_item_service, UpdateTeamItemContext, UpdateTeamItemParams};
 use crate::storage::sqlite::{ActivityLogRepo, DueItem, ItemRepo, RepoError, TeamRepo};

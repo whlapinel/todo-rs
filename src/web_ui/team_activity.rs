@@ -1,7 +1,7 @@
 use crate::auth::AuthUser;
 use crate::domain::activity_log::ActivityLogEntry;
-use crate::handlers::web_ui::nav::{self, ActiveContext, SidebarSection};
-use crate::handlers::web_ui::{TzOffset, to_local};
+use super::nav::{self, ActiveContext, SidebarSection};
+use super::{TzOffset, to_local};
 use crate::service::activity_log as activity_log_service;
 use crate::service::error::ItemError;
 use crate::service::team_items::require_active_member;

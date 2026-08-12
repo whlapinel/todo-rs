@@ -1,8 +1,8 @@
 use crate::auth::AuthUser;
 use crate::domain::item::{Item, ItemKind};
 use crate::domain::recurrence;
-use crate::handlers::web_ui::TzOffset;
-use crate::handlers::web_ui::nav::{self, ActiveContext, SidebarSection};
+use super::TzOffset;
+use super::nav::{self, ActiveContext, SidebarSection};
 use crate::service::items::{self as item_service, ItemError};
 use crate::service::templates::{self as template_service, CreateTemplateParams, UpdateTemplateParams};
 use crate::storage::sqlite::{ItemRepo, TeamRepo};
