@@ -5,6 +5,12 @@ use askama::Template;
 pub struct Row {
     pub expanded_row: bool,
     pub id: String,
+    /// Base URL for this item's own detail page and delete action (e.g.
+    /// `/web/projects/{project_id}/tasks/{id}`) — set once by the caller rather than
+    /// hardcoded here, since `Row` is shared across every project-scoped screen
+    /// (Tasks first, Events/Simple Lists to follow in later B5 sub-stages), each with
+    /// its own URL family.
+    pub item_url: String,
     pub name: String,
     pub complete: bool,
     pub due_date: Option<String>,
@@ -13,6 +19,9 @@ pub struct Row {
     pub has_children: bool,
     pub offset_label: Option<String>,
     pub recurrence: Option<String>,
+    /// Display name of this item's assignee, on a team-backed project — `None` on a
+    /// personal project (no assignment concept) or an unassigned team item.
+    pub assignee_name: Option<String>,
     pub complete_url: Option<String>,
     pub toggle_complete_json: String,
     /// (id, name) of every other item rendered alongside this one in the same list —

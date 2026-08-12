@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Projects · Todo{% endblock %}
+{% block content %}
+<div class="space-y-6">
+  <div class="md:flex md:items-center md:justify-between">
+    <div class="min-w-0 flex-1">
+      <h2 class="text-2xl/7 font-bold text-gray-900 sm:truncate sm:text-3xl sm:tracking-tight dark:text-white">Projects</h2>
+      <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">Preview of the new project-scoped screens. Each project links to its Tasks view.</p>
+    </div>
+  </div>
+
+  <ul class="divide-y divide-gray-100 rounded-lg border border-gray-200 bg-white px-4 dark:divide-white/5 dark:border-white/10 dark:bg-gray-800/50">
+    {% if rows.is_empty() %}
+    <li class="py-3 text-sm text-gray-500 dark:text-gray-400">No projects yet.</li>
+    {% else %}
+    {% for row in rows %}
+    <li class="py-2">
+      <a href="/web/projects/{{ row.id }}/tasks" hx-target="#page" hx-select="#page" hx-swap="innerHTML"
+         class="flex items-center gap-x-3 text-gray-900 dark:text-white">
+        <span class="min-w-0 flex-1 truncate">{{ row.name }}</span>
+        {% if row.is_team_project %}<span class="shrink-0 inline-flex items-center rounded-md bg-indigo-50 px-2 py-1 text-xs font-medium text-indigo-700 inset-ring inset-ring-indigo-700/10 dark:bg-indigo-400/10 dark:text-indigo-400 dark:inset-ring-indigo-400/30">Team</span>{% endif %}
+      </a>
+    </li>
+    {% endfor %}
+    {% endif %}
+  </ul>
+</div>
+{% endblock %}

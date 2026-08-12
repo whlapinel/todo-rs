@@ -1089,6 +1089,118 @@ transition (old untouched until its own sub-stage lands); manual click-through
 smoke test of the new screen's full CRUD + any type-specific behavior
 (recurrence, assignment, calendar, template "Use" flow, etc.).
 
+**B5a implementation notes:** Done, matching the plan closely. New module
+`src/web_ui/project_tasks/{mod.rs, handlers.rs, templates.rs}` (mirroring the
+personal `tasks/` module's three-file split) plus 9 new templates under
+`templates/project_tasks/` and a small new `src/web_ui/projects.rs` +
+`templates/projects/list_page.html`. `src/web_ui/tasks/`, `team_tasks.rs`, and
+their templates are completely untouched, per the plan's "old and new coexist
+until B5f" rule.
+
+No new service-layer code was needed at all — `service::project_items`/
+`service::projects` (stage B4) already provided a fully unified,
+membership-gated CRUD surface, so every handler's shape is "resolve the
+project via `service::projects::get_project` (fetch + membership check in one
+call), then delegate." The one thing confirmed by re-reading `service::
+team_items` during this stage: assignment/points are still enforced through
+the *legacy team system* (`service::teams::require_team_admin`/
+`TeamRepo::add_team_points`), not `ProjectRepo`'s own `project_members.role`/
+`points` columns — `create_project_item`/`update_project_item`'s team branch
+delegates straight into `team_items::create_team_item`/`update_team_item`,
+which is what actually gates/awards points. So the new screen's "is this user
+allowed to set points" check is `service::teams::is_team_admin(&teams,
+team_id, user_id)`, exactly matching `team_tasks.rs`'s existing logic — not a
+new project-level admin concept. `ProjectRepo::member_role`/`points` remain
+unused by any UI, as before this stage.
+
+**`components::row::Row` finished** (stage's stated goal): added `item_url:
+String` (replacing the two hardcoded `/web/tasks/{{ id }}` occurrences in
+`row.html` — used for both the detail `<a href>` and the delete button's
+`hx-delete`) and `assignee_name: Option<String>` (renders a badge in the
+metadata line when `Some`, mirroring `team_tasks/row.html`'s existing markup).
+`ProjectTaskRow::from_item` (`project_tasks/templates.rs`) is `Row`'s first
+real caller — it's a plain function returning a `Row`, not its own template
+struct. `siblings`/`is_source_event_linked` on `Row` are still populated but
+still never read by `row.html` (confirmed this is a **pre-existing** gap
+across the whole codebase, not introduced here — `TaskRow`/`TeamTaskRow`/
+`SimpleItemRow` all have the identical "never read" warning already; the
+"subordinate under…" picker UI these fields were meant to feed was
+apparently never actually wired into any row template. Left as-is,
+out of scope for this stage).
+
+**Merged design specifics:**
+- `ProjectTaskForm` unions `TaskForm`/`TeamTaskForm`'s fields
+  (`assignedToUserId`/`points` always present, silently inert on a personal
+  project since `CreateProjectItemParams`/`UpdateProjectItemParams` carry
+  them through to `service::project_items`, which drops them on the personal
+  branch).
+- `ProjectTaskDetailFields`/`ProjectTaskDetailView` gained an `is_team_project:
+  bool` gate wrapping the assign-to/points markup in the merged templates
+  (`{% if is_team_project %}`) — not "hidden via CSS," the elements simply
+  aren't in the DOM on a personal project, matching `macros::points_field`'s
+  own existing `is_team_admin && is_top_level` gate precedent.
+- Promote/subordinate redirects turned out simpler than the legacy screens':
+  since every destination is always another Task in the *same* project, no
+  `dashboard::detail_url`/`list_url_for`-style per-kind dispatch table was
+  needed — just `/web/projects/{project_id}/tasks` or
+  `/web/projects/{project_id}/tasks/{id}`, built locally in
+  `project_tasks/handlers.rs`.
+- New `top_level_anchor_project` (`project_tasks/mod.rs`) mirrors
+  `service::items::top_level_anchor`/`service::team_items::
+  top_level_anchor_team`, walking the parent chain via `ItemRepo::
+  get_by_project` and reusing the existing `pub(crate) item_anchor` from
+  `service::items` (no new service-layer function needed).
+- `save_project_task_as_template` branches locally between `template_service::
+  create_template`/`create_team_template` based on `project.team_id` — no new
+  `create_project_template` service function was added (that's stage B5d's
+  job, once a project-scoped Templates screen exists to drive its request
+  shape, same reasoning stage B3's own notes gave for deferring
+  `create_project_item`/etc. until B4 had a caller).
+- Calendar view is a **new capability for team-backed projects** — team items
+  never had one before this stage (`team_tasks.rs` has no `/calendar` route
+  at all); unifying under one project-scoped screen gives every project a
+  calendar view "for free," not something separately built.
+- The `/web/projects` listing page is deliberately minimal (list + link to
+  each project's Tasks screen only, no create/attach-team UI) — just enough
+  to reach the new screen manually until stage B5f gives nav real project
+  awareness. Added one static "Projects (preview)" link to
+  `templates/nav_sidebar_inner.html`'s fixed-links group (alongside
+  Dashboard/Assigned to me/Teams) — explicitly not B5f's project switcher.
+
+**Testing:** `cargo check`/`cargo build` clean (only the same pre-existing
+dead-code warnings every prior stage has produced — nothing new). `cargo
+test`: 195/195 passing, zero regressions (no service/storage/domain code was
+touched this stage besides `Row`'s two additive field). No new automated
+tests were added — this stage is `web_ui`-layer only, matching this
+codebase's existing convention that `web_ui` handler modules aren't
+unit-tested at this granularity (same note B2d's `team_activity.rs` change
+made), verified instead by the manual smoke test below.
+
+**Manual smoke test** (built the binary, ran against a throwaway SQLite DB via
+`TODO_AUTH_MODE=caddy` + `TODO_DEV_EMAIL`, migrations 10/11 applied cleanly):
+confirmed `GET /web/projects` lists the auto-created "Personal" project;
+walked its Tasks screen end-to-end — create (with due date) → list (row
+renders with correct `/web/projects/{id}/tasks/...` URLs on checkbox/link/
+delete, confirming `Row`'s new `item_url` field) → detail page → edit page →
+calendar view (task appears on the right day) → sub-item add → children
+fragment → save-as-template ("Saved" returned) → promote-to-top-level
+(`hx-redirect` to the list, as expected with no grandparent) → delete.
+Confirmed the "Assign to"/points fields are entirely absent from the personal
+project's new-task form. Then created a team via the existing Teams screen
+(confirmed `ensure_team_project` fired — the new team's project appeared in
+`/web/projects` immediately with a "Team" badge, no explicit `CreateProject`/
+`AttachTeamToProject` call needed) and walked its Tasks screen: new-task form
+showed both "Assign to" and points fields; created a task, assigned it to
+self with `points=25`; completing an *unassigned* copy was correctly rejected
+(`422`, "cannot complete an unassigned team item"), confirming the
+completion-transition guard still applies through the new screen; after
+assigning and completing, the list page's points badge went from "0 pts" to
+"25 pts", confirming the full award path (`team_items::update_team_item` →
+`TeamRepo::add_team_points`) works unchanged through
+`service::project_items`'s delegation. Scratch DB and both server processes
+cleaned up after verification. No CLI or MCP server changes, per this
+stage's own scope — B5b (Events) is next.
+
 ### B6 — CLI (`todo-cli/`)
 
 - Add `prl projects` (list/create/attach-team/detach-team/members/set-role);

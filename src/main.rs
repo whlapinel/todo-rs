@@ -47,6 +47,8 @@ use web_ui::assigned_items::assigned_items_page;
 use web_ui::dashboard::*;
 use web_ui::events::*;
 use web_ui::login::login_page;
+use web_ui::project_tasks::handlers::*;
+use web_ui::projects::projects_page;
 use web_ui::simple_lists::*;
 use web_ui::tasks::handlers::*;
 use web_ui::team_activity::*;
@@ -128,6 +130,46 @@ fn build_web_router() -> Router {
         .route(
             "/tasks/:item_id/subordinate",
             post(subordinate_task_form),
+        )
+        .route("/projects", get(projects_page))
+        .route(
+            "/projects/:project_id/tasks",
+            get(project_tasks_page).post(create_project_task_form),
+        )
+        .route("/projects/:project_id/tasks/new", get(new_project_task_page))
+        .route(
+            "/projects/:project_id/tasks/calendar",
+            get(project_tasks_calendar_page),
+        )
+        .route(
+            "/projects/:project_id/tasks/batch",
+            post(create_project_tasks_batch),
+        )
+        .route(
+            "/projects/:project_id/tasks/:item_id",
+            get(project_task_detail_page)
+                .put(update_project_task_form)
+                .delete(delete_project_task_form),
+        )
+        .route(
+            "/projects/:project_id/tasks/:item_id/edit",
+            get(project_task_edit_page),
+        )
+        .route(
+            "/projects/:project_id/tasks/:item_id/children",
+            get(project_task_children_fragment),
+        )
+        .route(
+            "/projects/:project_id/tasks/:item_id/save-as-template",
+            post(save_project_task_as_template),
+        )
+        .route(
+            "/projects/:project_id/tasks/:item_id/promote",
+            post(promote_project_task_form),
+        )
+        .route(
+            "/projects/:project_id/tasks/:item_id/subordinate",
+            post(subordinate_project_task_form),
         )
         .route(
             "/simple-lists",

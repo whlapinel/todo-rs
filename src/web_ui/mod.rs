@@ -4,6 +4,8 @@ pub mod error;
 pub mod events;
 pub mod login;
 pub mod nav;
+pub mod project_tasks;
+pub mod projects;
 pub mod simple_lists;
 pub mod tasks;
 pub mod team_activity;
