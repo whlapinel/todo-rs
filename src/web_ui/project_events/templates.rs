@@ -1,0 +1,283 @@
+use askama::Template;
+use crate::domain::item::Item;
+use crate::web_ui::components::row::Row;
+use crate::web_ui::to_local;
+use chrono::Utc;
+
+// ---- templates --------------------------------------------------------------
+
+pub fn recurrence_basis_label(recurrence_basis: &Option<String>) -> String {
+    match recurrence_basis.as_deref() {
+        Some("COMPLETION_DATE") => "completion date".to_string(),
+        Some("SCHEDULED_DATE") => "scheduled date".to_string(),
+        Some(other) if other != "DUE_DATE" => other.to_string(),
+        _ => "due date".to_string(),
+    }
+}
+
+/// Builds a generic `components::row::Row` rather than an Event-specific template of its
+/// own — the same reuse `ProjectTaskRow` (stage B5a) established. An Event is always
+/// top-level (see `project_events::require_event`'s doc comment on why it can never have
+/// structural children), so unlike `ProjectTaskRow` this never sets `offset_label`,
+/// `assignee_name`, or `siblings` — an Event never carries any of those concepts.
+pub struct ProjectEventRow;
+
+impl ProjectEventRow {
+    pub fn from_item(item: &Item, project_id: &str, tz: i32) -> Row {
+        Row {
+            id: item.id.clone(),
+            item_url: format!("/web/projects/{project_id}/events/{}", item.id),
+            name: item.name.clone(),
+            complete: item.complete,
+            due_date: item
+                .due_date()
+                .map(|d| to_local(d, tz).format("%Y-%m-%d %H:%M").to_string()),
+            overdue: item.is_overdue(Utc::now()),
+            scheduled_date: item.scheduled_date().map(|d| {
+                let local = to_local(d, tz);
+                if item.has_scheduled_time() {
+                    local.format("%Y-%m-%d %H:%M").to_string()
+                } else {
+                    local.format("%Y-%m-%d").to_string()
+                }
+            }),
+            scheduled_end_date: item.scheduled_end_date().map(|d| {
+                let local = to_local(d, tz);
+                if item.has_end_time() {
+                    local.format("%Y-%m-%d %H:%M").to_string()
+                } else {
+                    local.format("%Y-%m-%d").to_string()
+                }
+            }),
+            event_type: item.event_type(),
+            expanded_row: true,
+            has_children: false,
+            offset_label: None,
+            recurrence: item.recurrence_pattern(),
+            assignee_name: None,
+            complete_url: Some(format!("/web/projects/{project_id}/events/{}", item.id)),
+            toggle_complete_json: (!item.complete).to_string(),
+            siblings: Vec::new(),
+            is_source_event_linked: false,
+        }
+    }
+}
+
+#[derive(Template)]
+#[template(path = "project_events/detail_fields.html")]
+pub struct ProjectEventDetailFields {
+    pub id: String,
+    pub project_id: String,
+    pub name: String,
+    pub description: String,
+    pub complete: bool,
+    pub scheduled_date_input: String,
+    pub scheduled_time_input: String,
+    pub scheduled_end_date_input: String,
+    pub scheduled_end_time_input: String,
+    pub due_date_input: String,
+    pub due_time_input: String,
+    pub event_type_input: String,
+    pub recurrence: Option<String>,
+    pub recurrence_basis: Option<String>,
+    /// Set only on the fragment returned by a successful save — see `items.rs`'s
+    /// `DetailFields.just_saved` for the full rationale.
+    pub just_saved: bool,
+}
+
+impl ProjectEventDetailFields {
+    pub fn from_item(item: &Item, project_id: &str, tz: i32, just_saved: bool) -> Self {
+        let local_scheduled_date = item.scheduled_date().map(|d| to_local(d, tz));
+        let scheduled_date_input = local_scheduled_date
+            .map(|d| d.format("%Y-%m-%d").to_string())
+            .unwrap_or_default();
+        let scheduled_time_input = if item.has_scheduled_time() {
+            local_scheduled_date
+                .map(|d| d.format("%H:%M").to_string())
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+        let local_scheduled_end_date = item.scheduled_end_date().map(|d| to_local(d, tz));
+        let scheduled_end_date_input = local_scheduled_end_date
+            .map(|d| d.format("%Y-%m-%d").to_string())
+            .unwrap_or_default();
+        let scheduled_end_time_input = if item.has_end_time() {
+            local_scheduled_end_date
+                .map(|d| d.format("%H:%M").to_string())
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+        let local_due_date = item.due_date().map(|d| to_local(d, tz));
+        let due_date_input = local_due_date
+            .map(|d| d.format("%Y-%m-%d").to_string())
+            .unwrap_or_default();
+        let due_time_input = if item.has_due_time() {
+            local_due_date
+                .map(|d| d.format("%H:%M").to_string())
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+        Self {
+            id: item.id.clone(),
+            project_id: project_id.to_string(),
+            name: item.name.clone(),
+            description: item.description.clone().unwrap_or_default(),
+            complete: item.complete,
+            scheduled_date_input,
+            scheduled_time_input,
+            scheduled_end_date_input,
+            scheduled_end_time_input,
+            due_date_input,
+            due_time_input,
+            event_type_input: item.event_type().unwrap_or_default(),
+            recurrence: item.recurrence_pattern(),
+            recurrence_basis: item.recurrence_basis(),
+            just_saved,
+        }
+    }
+}
+
+/// Read-only counterpart to `ProjectEventDetailFields` — see `items.rs`'s `DetailView` for
+/// the row-editing convention this mirrors (complete-toggle lives here too).
+#[derive(Template)]
+#[template(path = "project_events/detail_view.html")]
+pub struct ProjectEventDetailView {
+    pub id: String,
+    pub project_id: String,
+    pub description: Option<String>,
+    pub complete: bool,
+    pub toggle_complete_json: String,
+    pub scheduled_date: Option<String>,
+    pub scheduled_end_date: Option<String>,
+    pub due_date: Option<String>,
+    pub overdue: bool,
+    pub event_type: Option<String>,
+    pub recurrence: Option<String>,
+    pub recurrence_basis_label: String,
+}
+
+impl ProjectEventDetailView {
+    pub fn from_item(item: &Item, project_id: &str, tz: i32) -> Self {
+        let scheduled_date = item.scheduled_date().map(|d| {
+            let local = to_local(d, tz);
+            if item.has_scheduled_time() {
+                local.format("%Y-%m-%d %H:%M").to_string()
+            } else {
+                local.format("%Y-%m-%d").to_string()
+            }
+        });
+        let scheduled_end_date = item.scheduled_end_date().map(|d| {
+            let local = to_local(d, tz);
+            if item.has_end_time() {
+                local.format("%Y-%m-%d %H:%M").to_string()
+            } else {
+                local.format("%Y-%m-%d").to_string()
+            }
+        });
+        let due_date = item.due_date().map(|d| {
+            let local = to_local(d, tz);
+            if item.has_due_time() {
+                local.format("%Y-%m-%d %H:%M").to_string()
+            } else {
+                local.format("%Y-%m-%d").to_string()
+            }
+        });
+        Self {
+            id: item.id.clone(),
+            project_id: project_id.to_string(),
+            description: item.description.clone(),
+            complete: item.complete,
+            toggle_complete_json: (!item.complete).to_string(),
+            scheduled_date,
+            scheduled_end_date,
+            due_date,
+            overdue: item.is_overdue(Utc::now()),
+            event_type: item.event_type(),
+            recurrence: item.recurrence_pattern(),
+            recurrence_basis_label: recurrence_basis_label(&item.recurrence_basis()),
+        }
+    }
+}
+
+#[derive(Template)]
+#[template(path = "project_events/rows_fragment.html")]
+pub struct ProjectEventRowsFragmentTemplate {
+    pub rows: Vec<String>,
+    pub empty_message: String,
+}
+
+#[derive(Template)]
+#[template(path = "project_events/list_page.html")]
+pub struct ProjectEventsListPageTemplate {
+    pub project_id: String,
+    pub rows: Vec<String>,
+    pub show_complete: bool,
+    pub nav_html: String,
+}
+
+#[derive(Template)]
+#[template(path = "project_events/new_page.html")]
+pub struct NewProjectEventPageTemplate {
+    pub project_id: String,
+    pub show_complete: bool,
+    pub blank_recurrence: Option<String>,
+    pub blank_recurrence_basis: Option<String>,
+    pub blank_event_type_input: String,
+    pub blank_scheduled_date_input: String,
+    pub blank_scheduled_time_input: String,
+    pub blank_scheduled_end_date_input: String,
+    pub blank_scheduled_end_time_input: String,
+    pub nav_html: String,
+}
+
+#[derive(Template)]
+#[template(path = "project_events/detail_page.html")]
+pub struct ProjectEventDetailPageTemplate {
+    pub id: String,
+    pub project_id: String,
+    pub name: String,
+    pub complete: bool,
+    pub view: String,
+    pub nav_html: String,
+}
+
+#[derive(Template)]
+#[template(path = "project_events/edit_page.html")]
+pub struct ProjectEventEditPageTemplate {
+    pub id: String,
+    pub project_id: String,
+    pub name: String,
+    pub fields: String,
+    pub nav_html: String,
+}
+
+pub struct CalendarEventEntry {
+    pub id: String,
+    pub name: String,
+    pub time_label: Option<String>,
+}
+
+pub struct CalendarDay {
+    pub date: String,
+    pub day_number: u32,
+    pub is_current_month: bool,
+    pub is_today: bool,
+    pub events: Vec<CalendarEventEntry>,
+}
+
+#[derive(Template)]
+#[template(path = "project_events/calendar_page.html")]
+pub struct ProjectEventsCalendarPageTemplate {
+    pub project_id: String,
+    pub month_label: String,
+    pub month_iso: String,
+    pub prev_year: i32,
+    pub prev_month: u32,
+    pub next_year: i32,
+    pub next_month: u32,
+    pub days: Vec<CalendarDay>,
+    pub nav_html: String,
+}

@@ -293,6 +293,35 @@ pub(crate) async fn render_children_fragment(
     })
 }
 
+/// Renders every task that references `event_id` via `sourceEventId` as `Row`s, scoped to
+/// `project_id` — the project-scoped counterpart of `tasks::render_source_event_fragment`/
+/// `team_tasks::render_source_event_fragment`, called by `project_events`'s "Linked tasks"
+/// section (Events have no children of their own — see `project_events::require_event`'s
+/// doc comment — so there's no `project_events`-owned Task-row renderer to put this in).
+pub(crate) async fn render_source_event_fragment(
+    repo: &Arc<dyn ItemRepo>,
+    teams: &Arc<dyn TeamRepo>,
+    project_id: &str,
+    team_id: Option<&str>,
+    event_id: &str,
+    requester_user_id: &str,
+    tz: i32,
+) -> Result<Html<String>, ItemError> {
+    let tasks = repo
+        .list_by_source_event(event_id)
+        .await
+        .map_err(ItemError::from)?;
+    let names = match team_id {
+        Some(team_id) => names_for(teams, team_id, requester_user_id).await?,
+        None => HashMap::new(),
+    };
+    let rows = super::render_rows(&tasks, project_id, &names, true, tz)?;
+    render(ProjectTaskRowsFragmentTemplate {
+        rows,
+        empty_message: "No linked tasks yet.".to_string(),
+    })
+}
+
 pub async fn project_task_children_fragment(
     Path((project_id, item_id)): Path<(String, String)>,
     Extension(auth_user): Extension<AuthUser>,

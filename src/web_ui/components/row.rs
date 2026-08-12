@@ -16,6 +16,14 @@ pub struct Row {
     pub due_date: Option<String>,
     pub overdue: bool,
     pub scheduled_date: Option<String>,
+    /// Paired with `scheduled_date` to render a window (`start–end`) rather than a bare
+    /// start — added in stage B5b for `ProjectEventRow`, but wired into `ProjectTaskRow` too
+    /// since a Task's own scheduled window was previously invisible at the row level (only
+    /// `ProjectTaskDetailView` showed it).
+    pub scheduled_end_date: Option<String>,
+    /// Event-only field (`Item::validate` restricts `event_type` to `Event`/`Template` — see
+    /// CLAUDE.md's Events section), always `None` for a Task row.
+    pub event_type: Option<String>,
     pub has_children: bool,
     pub offset_label: Option<String>,
     pub recurrence: Option<String>,

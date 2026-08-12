@@ -1201,6 +1201,116 @@ assigning and completing, the list page's points badge went from "0 pts" to
 cleaned up after verification. No CLI or MCP server changes, per this
 stage's own scope — B5b (Events) is next.
 
+**B5b implementation notes:** Done, matching the plan closely and following B5a's own
+structure precedent exactly. New module `src/web_ui/project_events/{mod.rs, handlers.rs,
+templates.rs}` (mirroring `project_tasks/`'s three-file split) plus 9 new templates under
+`templates/project_events/`. `src/web_ui/events.rs`, `team_events.rs`, and their templates
+are completely untouched, per the plan's "old and new coexist until B5f" rule. No new
+service-layer code was needed — same as B5a, `service::project_items`/`service::projects`
+already provided a fully unified, membership-gated CRUD surface; every handler is "resolve
+the project via `service::projects::get_project`, then delegate."
+
+**`Row` extended rather than a new template built**, continuing `components::row::Row`'s own
+doc comment ("Tasks first, Events/Simple Lists to follow in later B5 sub-stages"). Added two
+fields: `scheduled_end_date: Option<String>` (paired with `scheduled_date` to render a
+`start–end` window) and `event_type: Option<String>` (renders a `(type)` badge, matching
+legacy `events/row.html`'s exact markup). `ProjectEventRow::from_item`
+(`project_events/templates.rs`) is `Row`'s second real caller — a plain function, not its own
+template struct, same shape as `ProjectTaskRow::from_item`. Wiring the two new fields into
+`ProjectTaskRow::from_item` too was a deliberate small scope extension beyond "just Events":
+`scheduled_end_date` was previously invisible at the Task row level (only shown in
+`ProjectTaskDetailView`), and `event_type` is always `None` for a Task (`Item::validate`
+restricts it to `Event`/`Template`) so wiring it there is inert but keeps both callers
+symmetric rather than one passing `None`/`event_type: None` by hand.
+
+**Events are simpler than Tasks at the `Row` level, confirmed by re-reading
+`service::items::create_item`/`create_team_item`'s parent-kind check** (`"Events cannot have
+children; link a task to it via sourceEventId instead"`) rather than trusting CLAUDE.md's
+older prose (which describes template-triggered children as "parented under the event
+itself" — stale; the actual mechanism is and remains `sourceEventId`, confirmed by reading
+`events.rs`/`team_events.rs`'s own `create_event_child_form`/`create_team_event_child_form`
+before writing this stage's equivalent). `ProjectEventRow::from_item` therefore hardcodes
+`has_children: false`, `offset_label: None`, `assignee_name: None`, `siblings: Vec::new()`,
+`is_source_event_linked: false`, and `expanded_row: true` unconditionally (legacy
+`events/row.html` always renders its metadata line regardless of content, so `true`
+reproduces that rather than gating on field presence like `ProjectTaskRow` does).
+
+**"Linked tasks" fragment reuses `project_tasks`, not a new renderer**: added
+`pub(crate) async fn render_source_event_fragment` to `project_tasks/handlers.rs` (not
+`project_events`) — it needs `ProjectTaskRow`/`ProjectTaskRowsFragmentTemplate` to render the
+*tasks* referencing an event, and `project_tasks` already owns those. This mirrors the
+existing cross-module precedent exactly: `events.rs` calls
+`tasks::handlers::render_source_event_fragment`, `team_events.rs` calls
+`team_tasks::render_source_event_fragment`; `project_events` calling into
+`project_tasks::handlers::render_source_event_fragment` is the same shape, one level up.
+
+**`resolve_linked_event`'s bridge closed**: `project_tasks/templates.rs`'s
+`resolve_linked_event` (added in B5a with an explicit "still links to the legacy detail URL
+... since there's no project-scoped Events screen yet (that's stage B5b)" comment) now builds
+`/web/projects/{project_id}/events/{id}` directly instead of calling
+`dashboard::detail_url`. Safe without an extra lookup because the event is already fetched
+via `get_by_project(project_id, &event_id)` scoped to the same project. Removed the now-dead
+`use crate::web_ui::dashboard::detail_url;` import from that file as part of this change.
+Verified end-to-end in the smoke test below (a task's "Linked event" link on the project
+Tasks screen points at the new project Events URL, not the legacy one).
+
+**Calendar view is a new capability for team-backed projects here too** (same as B5a's Tasks
+calendar) — `team_events.rs` already had its own calendar route, but a *project*-scoped one
+unifies personal and team-backed under one screen "for free," consistent with B5a's framing.
+
+**Recurrence/repoint behavior confirmed working transparently through the new screen, and
+found to differ from CLAUDE.md's description**: completing a recurring event does **not**
+delete the old item and create a successor under a fresh id (CLAUDE.md's Recurrence section
+says this); the actual code (`service::items::update_item`, `src/service/items.rs` ~line
+343) creates the successor via `repo.create`, then calls `archive_recurrence(&mut item)` and
+updates the **original** item in place (kept, marked complete) rather than deleting it —
+confirmed by reading the code directly rather than trusting the doc, then verified live via
+the smoke test below. One consequence for every recurring-completion handler in the
+codebase, not just this stage's new one: the existing `Err(RepoError::NotFound) =>
+hx-refresh` branch that `events.rs`/`team_events.rs`/`project_tasks`/this stage's
+`update_project_event_form` all carry (re-fetching the old id after a recurring completion,
+expecting it to be gone) appears to be dead code under current service-layer behavior — the
+old id remains fetchable. Not fixed here: this is a pre-existing, repo-wide quirk predating
+this stage (every screen has carried the identical branch since before B5a), not something
+introduced by `project_events`, and fixing it is a cross-cutting cleanup outside one screen's
+own scope. `project_events` reproduces the existing convention verbatim for consistency
+rather than diverging from every other screen unilaterally.
+
+Also confirmed live: an Event's recurrence correctly repoints any task linked to it via
+`sourceEventId` onto the new successor event's id (`repoint_source_event_tasks`,
+`src/service/items.rs`) — a linked task's `sourceEventId` updated automatically when its
+event recurred, with no code in this stage touching that path at all; it rides along for
+free through the shared `service::project_items` → `service::items` delegation, same as
+B2c's implementation notes predicted for same-owner copy/update helpers.
+
+**Testing:** `cargo check`/`cargo build`/`task codegen` clean (no Smithy changes this stage —
+`service::project_items` already had everything needed, same as B5a). `cargo test`: 195/195
+passing, zero regressions (no service/storage/domain code touched besides `Row`'s two
+additive fields and `ProjectTaskRow::from_item`'s two additive assignments — same "web_ui
+layer only, no automated tests added" precedent B5a/B2d established, verified instead by the
+manual smoke test below).
+
+**Manual smoke test** (built the binary, ran against a throwaway SQLite DB via
+`TODO_AUTH_MODE=caddy` + `TODO_DEV_EMAIL`, migrations 10/11 applied cleanly): personal
+project — confirmed `GET /web/projects/:id/events` renders the empty list; created a
+recurring event (`recurrence: "every year"`, `recurrenceBasis: SCHEDULED_DATE`,
+`eventType: "outdoor"`) — row rendered with the `(outdoor)` badge (confirming `Row`'s new
+`event_type` field); detail page showed scheduled/repeat fields; calendar view showed the
+event on the right day; added a linked task via the "Linked tasks" form
+(`dueOffsetDays: -2`) — rendered correctly and, per `ItemRepo::list_by_source_event`, is
+reachable from the event regardless of which screen created it; "Save as template" returned
+"Saved"; completed the recurring event — confirmed via the JSON API that the **original**
+event row persisted (`complete: true`, contradicting CLAUDE.md's delete-and-recreate
+description as noted above) alongside a **new** successor row for next year, and that the
+linked task's `sourceEventId` had been repointed from the old event's id to the new one;
+confirmed the default (non-`showComplete`) list only shows the new occurrence. Then created a
+team (confirmed `ensure_team_project` fired, per B5a's precedent) and walked its Events
+screen: new-event form confirmed to have **zero** assign-to/points fields (Events never carry
+either, personal or team — unlike Tasks, there's no `is_team_project`-gated markup to hide at
+all, since none was ever written); created and deleted a team event via the new screen, and
+loaded its calendar view. Scratch DB and server process cleaned up after verification. No
+CLI or MCP server changes, per this stage's own scope — B5c (Simple lists) is next.
+
 ### B6 — CLI (`todo-cli/`)
 
 - Add `prl projects` (list/create/attach-team/detach-team/members/set-role);

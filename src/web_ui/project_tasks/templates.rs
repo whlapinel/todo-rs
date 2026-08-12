@@ -6,7 +6,6 @@ use crate::domain::item::Item;
 use crate::service::error::ItemError;
 use crate::storage::sqlite::ItemRepo;
 use crate::web_ui::components::row::Row;
-use crate::web_ui::dashboard::detail_url;
 use crate::web_ui::to_local;
 use chrono::Utc;
 
@@ -78,6 +77,15 @@ impl ProjectTaskRow {
                     local.format("%Y-%m-%d").to_string()
                 }
             }),
+            scheduled_end_date: item.scheduled_end_date().map(|d| {
+                let local = to_local(d, tz);
+                if item.has_end_time() {
+                    local.format("%Y-%m-%d %H:%M").to_string()
+                } else {
+                    local.format("%Y-%m-%d").to_string()
+                }
+            }),
+            event_type: item.event_type(),
             expanded_row: item.due_date().is_some()
                 || item.scheduled_date().is_some()
                 || item.due_offset_days().is_some()
@@ -290,9 +298,11 @@ impl ProjectTaskDetailView {
 
 /// Resolves the (name, detail-page URL) of the Event a task references via `sourceEventId`,
 /// scoped to `project_id` — the project-scoped counterpart of `tasks::resolve_linked_event`/
-/// `team_tasks::resolve_linked_event`. Still links to the event's *legacy* detail URL
-/// (`dashboard::detail_url`), since there's no project-scoped Events screen yet (that's
-/// stage B5b) — same bridge pattern the rest of stage B has used throughout.
+/// `team_tasks::resolve_linked_event`. Links to the project-scoped Events screen directly
+/// (`/web/projects/{project_id}/events/{id}`) now that stage B5b has built one — until this
+/// stage it fell back to the event's *legacy* detail URL (`dashboard::detail_url`); the event
+/// is guaranteed to already belong to `project_id` (fetched via `get_by_project` below), so
+/// building the URL locally needs no extra lookup.
 pub async fn resolve_linked_event(
     repo: &Arc<dyn ItemRepo>,
     project_id: &str,
@@ -305,7 +315,10 @@ pub async fn resolve_linked_event(
         .get_by_project(project_id, &event_id)
         .await
         .map_err(ItemError::from)?;
-    Ok(Some((event.name.clone(), detail_url(&event))))
+    Ok(Some((
+        event.name.clone(),
+        format!("/web/projects/{project_id}/events/{}", event.id),
+    )))
 }
 
 #[derive(Template)]
