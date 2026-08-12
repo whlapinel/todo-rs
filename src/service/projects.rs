@@ -82,6 +82,61 @@ pub async fn list_projects(
     Ok(projects.list_for_user(user_id).await?)
 }
 
+/// Idempotent: creates a default personal "Personal" project for `user_id` unless
+/// they already belong to at least one. Called from every `UserRepo::get_or_create_*`
+/// call site (see `auth.rs`) rather than gated on "was this user just created",
+/// since `get_or_create_*` itself doesn't report that — checking "has zero projects"
+/// instead means this also self-heals any user who signed up before Project existed,
+/// without waiting on stage B's dedicated backfill migration.
+pub async fn ensure_default_project(
+    projects: &Arc<dyn ProjectRepo>,
+    user_id: &str,
+) -> Result<(), ItemError> {
+    if projects.list_for_user(user_id).await?.is_empty() {
+        create_project(projects, "Personal", user_id).await?;
+    }
+    Ok(())
+}
+
+/// Fetches a single project. Requires the requester to be a member (owner, for a
+/// personal project; an active team member, for a shared one) — same gating as
+/// `list_project_members`.
+pub async fn get_project(
+    projects: &Arc<dyn ProjectRepo>,
+    teams: &Arc<dyn TeamRepo>,
+    project_id: &str,
+    requester_user_id: &str,
+) -> Result<Project, ItemError> {
+    require_project_member(projects, teams, project_id, requester_user_id).await?;
+    Ok(projects.get(project_id).await?)
+}
+
+/// Renames a project. Requires the requester to already be a project admin, mirroring
+/// `service::teams::update_team`'s own gating.
+pub async fn update_project(
+    projects: &Arc<dyn ProjectRepo>,
+    teams: &Arc<dyn TeamRepo>,
+    project_id: &str,
+    requester_user_id: &str,
+    name: &str,
+) -> Result<(), ItemError> {
+    require_project_admin(projects, teams, project_id, requester_user_id).await?;
+    Ok(projects.update_name(project_id, name).await?)
+}
+
+/// Deletes a project and its whole `project_members` table (cascade lives in
+/// `SqliteProjectRepo::delete`, stage A2). Requires the requester to already be a
+/// project admin.
+pub async fn delete_project(
+    projects: &Arc<dyn ProjectRepo>,
+    teams: &Arc<dyn TeamRepo>,
+    project_id: &str,
+    requester_user_id: &str,
+) -> Result<(), ItemError> {
+    require_project_admin(projects, teams, project_id, requester_user_id).await?;
+    Ok(projects.delete(project_id).await?)
+}
+
 pub async fn list_project_members(
     projects: &Arc<dyn ProjectRepo>,
     teams: &Arc<dyn TeamRepo>,
@@ -303,6 +358,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ensure_default_project_creates_one_when_none_exist() {
+        let mut mock = MockProjectRepo::new();
+        mock.expect_list_for_user().returning(|_| Ok(vec![]));
+        mock.expect_create()
+            .withf(|name, owner_user_id, team_id: &Option<&str>| {
+                name == "Personal" && owner_user_id == "u1" && team_id.is_none()
+            })
+            .returning(|_, _, _| Ok("p1".to_string()));
+
+        let projects: Arc<dyn ProjectRepo> = Arc::new(mock);
+        ensure_default_project(&projects, "u1").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn ensure_default_project_is_a_noop_when_one_already_exists() {
+        let mut mock = MockProjectRepo::new();
+        mock.expect_list_for_user()
+            .returning(|_| Ok(vec![personal_project()]));
+
+        let projects: Arc<dyn ProjectRepo> = Arc::new(mock);
+        ensure_default_project(&projects, "u1").await.unwrap();
+    }
+
+    #[tokio::test]
     async fn list_projects_delegates_to_repo() {
         let mut mock = MockProjectRepo::new();
         mock.expect_list_for_user()
@@ -396,5 +475,91 @@ mod tests {
         let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
         let result = list_project_members(&projects, &teams, "p1", "someone_else").await;
         assert!(matches!(result, Err(ItemError::Invalid(_))));
+    }
+
+    #[tokio::test]
+    async fn get_project_rejects_non_member() {
+        let mut mock = MockProjectRepo::new();
+        mock.expect_get().returning(|_| Ok(personal_project()));
+
+        let projects: Arc<dyn ProjectRepo> = Arc::new(mock);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+        let err = get_project(&projects, &teams, "p1", "someone_else")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ItemError::Invalid(_)));
+    }
+
+    #[tokio::test]
+    async fn get_project_allows_owner() {
+        let mut mock = MockProjectRepo::new();
+        mock.expect_get().returning(|_| Ok(personal_project()));
+
+        let projects: Arc<dyn ProjectRepo> = Arc::new(mock);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+        let project = get_project(&projects, &teams, "p1", "owner1").await.unwrap();
+        assert_eq!(project.id, "p1");
+    }
+
+    #[tokio::test]
+    async fn update_project_rejects_non_admin() {
+        let mut mock = MockProjectRepo::new();
+        mock.expect_get().returning(|_| Ok(personal_project()));
+        mock.expect_member_role()
+            .returning(|_, _| Ok(Some(TeamRole::Member)));
+
+        let projects: Arc<dyn ProjectRepo> = Arc::new(mock);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+        let err = update_project(&projects, &teams, "p1", "owner1", "New name")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ItemError::Invalid(_)));
+    }
+
+    #[tokio::test]
+    async fn update_project_allows_admin() {
+        let mut mock = MockProjectRepo::new();
+        mock.expect_get().returning(|_| Ok(personal_project()));
+        mock.expect_member_role()
+            .returning(|_, _| Ok(Some(TeamRole::Admin)));
+        mock.expect_update_name()
+            .withf(|project_id, name| project_id == "p1" && name == "New name")
+            .returning(|_, _| Ok(()));
+
+        let projects: Arc<dyn ProjectRepo> = Arc::new(mock);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+        update_project(&projects, &teams, "p1", "owner1", "New name")
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn delete_project_rejects_non_admin() {
+        let mut mock = MockProjectRepo::new();
+        mock.expect_get().returning(|_| Ok(personal_project()));
+        mock.expect_member_role()
+            .returning(|_, _| Ok(Some(TeamRole::Member)));
+
+        let projects: Arc<dyn ProjectRepo> = Arc::new(mock);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+        let err = delete_project(&projects, &teams, "p1", "owner1")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ItemError::Invalid(_)));
+    }
+
+    #[tokio::test]
+    async fn delete_project_allows_admin() {
+        let mut mock = MockProjectRepo::new();
+        mock.expect_get().returning(|_| Ok(personal_project()));
+        mock.expect_member_role()
+            .returning(|_, _| Ok(Some(TeamRole::Admin)));
+        mock.expect_delete()
+            .withf(|project_id| project_id == "p1")
+            .returning(|_| Ok(()));
+
+        let projects: Arc<dyn ProjectRepo> = Arc::new(mock);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+        delete_project(&projects, &teams, "p1", "owner1").await.unwrap();
     }
 }

@@ -21,5 +21,9 @@ service PeoplesRepublicOfLists {
         ListTeamTemplates
         ListTeamActivityLog
         UndoActivityLogEntry
+        ListProjectMembers
+        SetProjectMemberRole
+        AttachTeamToProject
+        DetachTeamFromProject
     ]
 }

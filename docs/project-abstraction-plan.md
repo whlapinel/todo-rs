@@ -420,4 +420,112 @@ token, or a throwaway `todo-client` snippet) confirms create → get → list �
 attach-team → list-members → set-role → detach round-trips correctly;
 `cargo test` full pass with zero regressions to any existing team/item test.
 
-**Implementation notes:** _(none yet — fill in before ending this stage)_
+**Implementation notes:** Done, with one deliberate design deviation from the plan's
+wording, confirmed with the user before implementation: `UpdateProject`'s `teamId`
+does **not** use a "three-way-optional convention" (absent = unchanged, explicit
+null = detach, present = attach/switch) — that convention doesn't actually exist
+anywhere else in this codebase (checked `dueDate`/`assignedToUserId`/`parentItemId`
+on existing update operations; all are plain direct-overwrite `Option`s, with
+"preserve current value" handled by the caller round-tripping it, not by JSON
+null-vs-absent detection — see CLAUDE.md's Recurrence/Scheduled-start-end sections).
+Building that convention for real would have been novel, untested machinery for one
+field. Instead, `AttachTeamToProject`/`DetachTeamFromProject` are two dedicated
+operations, mapping 1:1 onto stage A4's `service::projects::attach_team_to_project`/
+`detach_team_from_project` — `UpdateProject` only ever renames. This also mirrors how
+Team itself already exposes small dedicated operations (`InviteTeamMember`/
+`AcceptTeamInvite`/`LeaveTeam`) rather than folding everything into `UpdateTeam`.
+
+`model/src/main/smithy/project.smithy` (new file), modeled closely on `team.smithy`:
+`Project` is **not** a Smithy `resource`, same precedent as `Team` (see CLAUDE.md).
+`CreateProject`/`GetProject`/`UpdateProject`/`DeleteProject`/`ListProjects` are
+`/users/{userId}/projects[...]`-scoped and registered in `User`'s own `operations:
+[...]` list in `user.smithy` (mirroring Team's CRUD placement) — these bind `userId`
+as a plain `@httpLabel` with **no** `@notProperty` (needed only because they're
+listed under `User`'s `operations:`, matching every field-by-field precedent in
+`CreateTeam`/`GetTeam`/`UpdateTeam`/`ListTeamMembers`; every other field in these
+five operations *does* need `@notProperty`, including `projectId` despite being
+`@httpLabel`). `ListProjectMembers`/`SetProjectMemberRole`/`AttachTeamToProject`/
+`DetachTeamFromProject` are `/projects/{projectId}/...`-scoped with no `userId`
+prefix, registered directly in `service.smithy`'s top-level `operations: [...]`
+instead (mirroring `TeamItem`'s own CRUD placement) — none of their fields need
+`@notProperty` (mirrors `ListTeamActivityLog`/`UndoActivityLogEntry`, the closest
+existing precedent for an operation not bound to any resource's `operations:`
+list). `AttachTeamToProject` is `PUT /projects/{projectId}/team/{teamId}`;
+`DetachTeamFromProject` is `DELETE /projects/{projectId}/team` — no request body on
+either, both idempotent. `task codegen` succeeded (one pre-existing, unrelated
+`cargo fmt` trailing-whitespace warning on the generated `todo-client` crate's
+`config.rs`, non-fatal, not caused by this change).
+
+A3 turned out not to have built `get_project`/`update_project`/`delete_project` at
+the service layer (its own plan section only listed `require_project_member`/
+`require_project_admin`/`create_project`/`list_projects`/`list_project_members`/
+`set_project_member_role`) — added all three to `src/service/projects.rs` in this
+stage, same admin/member gating shape as their siblings (`get_project` requires
+membership; `update_project`/`delete_project` require admin), plus 6 new unit
+tests covering allow/reject for each.
+
+**New in this stage, not in the original plan text:** hooking `create_project`
+into new-user creation (the plan's own final bullet) turned out to need a helper,
+since `UserRepo::get_or_create_by_google_id`/`get_or_create_by_email` don't report
+whether they just created a row or returned an existing one (checked
+`src/storage/sqlite/users.rs` — both are a single `SELECT`-then-maybe-`INSERT`
+returning only the `User`, no "was new" flag). Rather than changing that trait
+signature (would ripple through `memory.rs`/`dynamo.rs`/every existing mock),
+added `service::projects::ensure_default_project(projects, user_id)` — idempotent:
+creates a "Personal" project only if `list_for_user` comes back empty. Called
+from all four places a user identity gets resolved: `auth::auth_callback`
+(internal mode, via a new `AppState.project_repo` field — `AppState::new` gained a
+6th parameter, updated at its one call site in `main.rs`), and `caddy_auth_me`/
+`caddy_auth_token`/`caddy_header_middleware` (caddy mode, via a new
+`Extension<Arc<dyn ProjectRepo>>` — the middleware reads it from
+`req.extensions()` the same way it already reads `UserRepo`, since it's not run as
+a typed axum handler). `main.rs` layers `Extension(project_repo)` in the same
+outer position as `Extension(team_repo)` in caddy mode, for the same reason
+documented on that line (the middleware's pre-processing step runs before any
+`Extension` layered inside `build_web_router()`/`api_router`'s own chain takes
+effect). The bearer-token branch of `caddy_header_middleware` (CLI/MCP requests
+carrying an existing JWT) does *not* call `ensure_default_project` — by
+construction that path is only reachable for a user who already completed a
+prior email-based login, so they already have one. Deliberate side effect,
+flagged for awareness: because the check is "zero projects" rather than "user row
+just inserted," this also silently backfills a default project for any
+*pre-existing* user the next time they log in — a nice property, not a conflict
+with Stage B's own planned backfill migration (that migration still needs to run
+for any user who never logs in again, and for backfilling `items.project_id`
+itself, which this stage does not touch).
+
+`main.rs` wiring: `project_repo` (new `Arc<dyn ProjectRepo>`, `SqliteProjectRepo`)
+built alongside the other three repos; layered onto the shared `api` `ServiceBuilder`
+(so every `/api/*` handler can extract it) and onto both auth-mode outer routers
+(caddy: alongside `team_repo`; internal: via `AppState`). Added
+`.route_service("/projects", api.clone())` /
+`.route_service("/projects/*path", api.clone())` to both auth modes' `api_router`s,
+alongside the existing `/users`/`/teams` registrations (`/users/*path` already
+covered the `/users/{userId}/projects...` operations as a prefix match, but the
+no-userId-prefix operations needed their own explicit route). New
+`src/json_api/projects.rs` (registered in `src/json_api/mod.rs`), handler-per-operation,
+following `json_api/teams.rs`'s exact shape — `require_matching_user` guards every
+`userId`-bearing operation; the four `/projects/{projectId}/...` operations have no
+`userId` to check (same as `json_api/team_items.rs`'s handlers), relying entirely on
+`AuthUser` + the service layer's own membership/admin gating.
+
+**Verification:** `task codegen` succeeded. `cargo check`: clean, only the same
+pre-existing dead-code warnings as A1-A4 (nothing new introduced — `ProjectRepo`
+trait/`SqliteProjectRepo`/`Project` domain struct are still flagged unused in
+isolated `cargo check` runs of unrelated modules before this stage's own handlers
+got wired in, but the wiring itself compiles clean). `cargo test`: 157/157 passing
+(149 prior + 6 for `get_project`/`update_project`/`delete_project` + 2 for
+`ensure_default_project`), zero regressions. Manual smoke test: built the binary,
+ran it against a throwaway SQLite DB (`TODO_AUTH_MODE=caddy`,
+`TODO_DEV_EMAIL=smoketest@example.com`, migrations applied cleanly through version
+10), then via curl with a minted bearer token: first `/auth/token` call confirmed
+`ensure_default_project` actually fires (`ListProjects` came back with one
+"Personal" project with no prior `CreateProject` call) — then exercised
+create → get → update (rename) → create-team → attach-team → get (shows `teamId`)
+→ list-members → set-member-role → detach-team → get (no more `teamId`) →
+list-projects (both projects present) → delete → list-projects (back to one). Every
+call returned the expected shape and HTTP 200. Not tested: a second real user
+account attaching to a shared project (would need a second identity in this
+single-dev-email smoke setup) — covered instead by the A3/A4 unit tests' mocked
+shared-project paths. No web UI, CLI, or MCP server changes, per this stage's own
+scope — Stage B is next.

@@ -19,13 +19,15 @@ use tower_cookies::{Cookie, Cookies, cookie::SameSite};
 use tracing::info;
 
 use crate::domain::team::TeamRole;
-use crate::storage::sqlite::{RepoError, TeamRepo, UserRepo};
+use crate::service::projects::ensure_default_project;
+use crate::storage::sqlite::{ProjectRepo, RepoError, TeamRepo, UserRepo};
 
 #[derive(Clone)]
 pub struct AppState {
     pub oauth_client: BasicClient,
     pub jwt_secret: String,
     pub user_repo: Arc<dyn UserRepo>,
+    pub project_repo: Arc<dyn ProjectRepo>,
 }
 
 impl AppState {
@@ -35,6 +37,7 @@ impl AppState {
         base_url: String,
         jwt_secret: String,
         user_repo: Arc<dyn UserRepo>,
+        project_repo: Arc<dyn ProjectRepo>,
     ) -> Self {
         let oauth_client = BasicClient::new(
             ClientId::new(google_client_id),
@@ -48,6 +51,7 @@ impl AppState {
             oauth_client,
             jwt_secret,
             user_repo,
+            project_repo,
         }
     }
 }
@@ -200,6 +204,11 @@ pub async fn auth_callback(
         }
     };
 
+    if let Err(e) = ensure_default_project(&state.project_repo, &user.id).await {
+        tracing::error!("failed to ensure default project for {}: {e:?}", user.id);
+        return (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response();
+    }
+
     let exp = (chrono::Utc::now() + chrono::Duration::days(7)).timestamp() as usize;
     let claims = Claims {
         sub: user.id.clone(),
@@ -332,6 +341,7 @@ pub async fn auth_me(Extension(state): Extension<Arc<AppState>>, cookies: Cookie
 
 pub async fn caddy_auth_me(
     Extension(repo): Extension<Arc<dyn UserRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     req: Request<Body>,
 ) -> Response {
     info!("caddy security injected headers: {:?}", req.headers());
@@ -363,23 +373,29 @@ pub async fn caddy_auth_me(
         }
     };
 
-    match repo.get_or_create_by_email(&email, header_username.as_deref()).await {
-        Ok(user) => Json(serde_json::json!({
-            "userId": user.id,
-            "firstName": user.first_name,
-            "lastName": user.last_name,
-        }))
-        .into_response(),
+    let user = match repo.get_or_create_by_email(&email, header_username.as_deref()).await {
+        Ok(user) => user,
         Err(e) => {
             tracing::error!("caddy /auth/me: failed to resolve user for {email}: {e:?}");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
+    };
+    if let Err(e) = ensure_default_project(&projects, &user.id).await {
+        tracing::error!("caddy /auth/me: failed to ensure default project for {email}: {e:?}");
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
+    Json(serde_json::json!({
+        "userId": user.id,
+        "firstName": user.first_name,
+        "lastName": user.last_name,
+    }))
+    .into_response()
 }
 
 pub async fn caddy_auth_token(
     Extension(jwt_secret): Extension<Arc<String>>,
     Extension(repo): Extension<Arc<dyn UserRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     req: Request<Body>,
 ) -> Response {
     let dev_email = std::env::var("TODO_DEV_EMAIL").ok();
@@ -417,6 +433,10 @@ pub async fn caddy_auth_token(
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     };
+    if let Err(e) = ensure_default_project(&projects, &user.id).await {
+        tracing::error!("caddy /auth/token: failed to ensure default project for {email}: {e:?}");
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
 
     let exp = (chrono::Utc::now() + chrono::Duration::days(365)).timestamp() as usize;
     let claims = Claims { sub: user.id, exp };
@@ -488,13 +508,29 @@ pub async fn caddy_header_middleware(
                 return StatusCode::INTERNAL_SERVER_ERROR.into_response();
             }
         };
-        match repo.get_or_create_by_email(&email, header_username.as_deref()).await {
-            Ok(user) => AuthUser { user_id: user.id },
+        let projects = match req
+            .extensions()
+            .get::<Arc<dyn ProjectRepo>>()
+            .cloned()
+        {
+            Some(r) => r,
+            None => {
+                tracing::error!("ProjectRepo not found in extensions for caddy middleware");
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
+        };
+        let user = match repo.get_or_create_by_email(&email, header_username.as_deref()).await {
+            Ok(user) => user,
             Err(e) => {
                 tracing::error!("Failed to resolve user for email {email}: {e:?}");
                 return StatusCode::INTERNAL_SERVER_ERROR.into_response();
             }
+        };
+        if let Err(e) = ensure_default_project(&projects, &user.id).await {
+            tracing::error!("failed to ensure default project for {email}: {e:?}");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
+        AuthUser { user_id: user.id }
     } else {
         let bearer_token = req
             .headers()

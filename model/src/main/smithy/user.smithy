@@ -31,6 +31,11 @@ resource User {
         LeaveTeam
         SetTeamMemberRole
         SendAppInvite
+        CreateProject
+        GetProject
+        UpdateProject
+        DeleteProject
+        ListProjects
     ]
 }
 

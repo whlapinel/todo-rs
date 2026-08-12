@@ -8,8 +8,9 @@ mod web_ui;
 mod json_api;
 
 use crate::storage::sqlite::{
-    ActivityLogRepo, ItemRepo, TeamRepo, UserRepo, activity_log::SqliteActivityLogRepo,
-    create_pool, items::SqliteItemRepo, teams::SqliteTeamRepo, users::SqliteUserRepo,
+    ActivityLogRepo, ItemRepo, ProjectRepo, TeamRepo, UserRepo,
+    activity_log::SqliteActivityLogRepo, create_pool, items::SqliteItemRepo,
+    projects::SqliteProjectRepo, teams::SqliteTeamRepo, users::SqliteUserRepo,
 };
 use axum::{
     Extension, Router,
@@ -23,6 +24,10 @@ use json_api::invites::send_app_invite;
 use json_api::items::{
     create_item, delete_item, get_item, list_assigned_items, list_items, list_items_due,
     update_item,
+};
+use json_api::projects::{
+    attach_team_to_project, create_project, delete_project, detach_team_from_project,
+    get_project, list_project_members, list_projects, set_project_member_role, update_project,
 };
 use json_api::team_items::{
     create_team_item, delete_team_item, get_team_item, list_team_items, update_team_item,
@@ -336,6 +341,7 @@ async fn main() {
     let user_repo = Arc::new(SqliteUserRepo(pool.clone())) as Arc<dyn UserRepo>;
     let item_repo = Arc::new(SqliteItemRepo(pool.clone())) as Arc<dyn ItemRepo>;
     let team_repo = Arc::new(SqliteTeamRepo(pool.clone())) as Arc<dyn TeamRepo>;
+    let project_repo = Arc::new(SqliteProjectRepo(pool.clone())) as Arc<dyn ProjectRepo>;
     let activity_log_repo = Arc::new(SqliteActivityLogRepo(pool)) as Arc<dyn ActivityLogRepo>;
 
     let config = PeoplesRepublicOfListsConfig::builder().build();
@@ -371,12 +377,22 @@ async fn main() {
         .list_team_templates(list_team_templates)
         .list_team_activity_log(list_team_activity_log)
         .undo_activity_log_entry(undo_activity_log_entry)
+        .create_project(create_project)
+        .get_project(get_project)
+        .update_project(update_project)
+        .delete_project(delete_project)
+        .list_projects(list_projects)
+        .list_project_members(list_project_members)
+        .set_project_member_role(set_project_member_role)
+        .attach_team_to_project(attach_team_to_project)
+        .detach_team_from_project(detach_team_from_project)
         .build_unchecked();
 
     let api = ServiceBuilder::new()
         .layer(Extension(user_repo.clone()))
         .layer(Extension(item_repo.clone()))
         .layer(Extension(team_repo.clone()))
+        .layer(Extension(project_repo.clone()))
         .layer(Extension(activity_log_repo.clone()))
         .map_response(|res: http::Response<_>| res.map(boxed))
         .service(smithy);
@@ -395,6 +411,8 @@ async fn main() {
                 .route_service("/users/*path", api.clone())
                 .route_service("/teams", api.clone())
                 .route_service("/teams/*path", api.clone())
+                .route_service("/projects", api.clone())
+                .route_service("/projects/*path", api.clone())
                 .layer(middleware::from_fn(auth::caddy_header_middleware));
             let auth_router = Router::new()
                 .route("/me", get(auth::caddy_auth_me))
@@ -425,6 +443,7 @@ async fn main() {
                 // extensions during that pre-processing step, so it needs a copy
                 // that's genuinely outer, same as `user_repo` right above.
                 .layer(Extension(team_repo))
+                .layer(Extension(project_repo))
                 .layer(Extension(Arc::new(jwt_secret)))
                 .layer(CookieManagerLayer::new())
         }
@@ -443,6 +462,7 @@ async fn main() {
                 base_url,
                 jwt_secret,
                 user_repo.clone(),
+                project_repo.clone(),
             ));
 
             let auth_router = Router::new()
@@ -457,6 +477,8 @@ async fn main() {
                 .route_service("/users/*path", api.clone())
                 .route_service("/teams", api.clone())
                 .route_service("/teams/*path", api.clone())
+                .route_service("/projects", api.clone())
+                .route_service("/projects/*path", api.clone())
                 .layer(middleware::from_fn(auth::jwt_auth_middleware));
 
             let web_router = build_web_router()
