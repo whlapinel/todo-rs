@@ -1,6 +1,7 @@
 pub mod activity_log;
 pub mod invites;
 pub mod items;
+pub mod project_items;
 pub mod projects;
 pub mod team_items;
 pub mod team_templates;

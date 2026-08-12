@@ -25,6 +25,10 @@ use json_api::items::{
     create_item, delete_item, get_item, list_assigned_items, list_items, list_items_due,
     update_item,
 };
+use json_api::project_items::{
+    create_project_item, delete_project_item, get_project_item, list_project_items,
+    update_project_item,
+};
 use json_api::projects::{
     attach_team_to_project, create_project, delete_project, detach_team_from_project,
     get_project, list_project_members, list_projects, set_project_member_role, update_project,
@@ -386,6 +390,11 @@ async fn main() {
         .set_project_member_role(set_project_member_role)
         .attach_team_to_project(attach_team_to_project)
         .detach_team_from_project(detach_team_from_project)
+        .create_project_item(create_project_item)
+        .get_project_item(get_project_item)
+        .update_project_item(update_project_item)
+        .delete_project_item(delete_project_item)
+        .list_project_items(list_project_items)
         .build_unchecked();
 
     let api = ServiceBuilder::new()

@@ -969,6 +969,93 @@ update → list → delete via the new API), plus a check specifically
 exercising the dual-write bridge: an item created via `ProjectItem` shows up
 correctly via the legacy `Item`/`TeamItem` read APIs, and vice versa.
 
+**Implementation notes:** Done, with one deliberate architectural choice not spelled
+out in the plan's own bullets: at the service layer, `create_project_item`/
+`update_project_item`/`delete_project_item` (`src/service/project_items.rs`) do
+**not** reimplement the recurrence/offset/event-trigger/points/completion-guard
+machinery a third time. Each resolves `project_id` down to a plain `user_id`
+(personal project, `team_id: None`) or `team_id` (team-backed project) and
+delegates straight to the existing `service::items::{create_item,update_item,
+delete_item}` / `service::team_items::{create_team_item,update_team_item,
+delete_team_item}` — the same functions the legacy `Item`/`TeamItem` operations
+already call. This is *why* the dual-write bridge holds automatically: an item
+created via `ProjectItem` gets `user_id`/`team_id` set exactly like a legacy-API
+create would, because it's the same code path underneath. Access gating is the one
+genuinely new thing at this layer: `require_project_member` (stage A3) runs first,
+then `projects.get(project_id)` is fetched a second time to read `team_id` and
+branch — an extra repo round-trip per call, accepted as negligible. Each delegated
+call also re-runs its own internal membership check (`create_team_item`'s
+`require_active_member`, `delete_team_item`'s equivalent) — a harmless redundant
+`teams.member_status` lookup, not worth threading a "trust me, already checked"
+bypass through for.
+
+`CreateProjectItemParams`/`UpdateProjectItemParams` (`project_items.rs`) mirror
+`CreateTeamItemParams`/`UpdateTeamItemParams` field-for-field (including
+`assigned_to_user_id`/`points`, since a project can be team-backed) rather than
+`CreateItemParams`/`UpdateItemParams`'s narrower personal-only shape — the
+`ProjectItem` Smithy resource always carries both fields (see `project_item.smithy`'s
+own doc comment), and they're simply dropped on the personal-project branch since
+`CreateItemParams`/`UpdateItemParams` have no slot for them at all. No new
+validation was added for "can a personal project have points/assignment" — the
+question doesn't arise structurally, matching how personal items never carried a
+`TeamAssignment` before this stage either.
+
+`model/src/main/smithy/project_item.smithy` (new file) mirrors `team.smithy`'s
+`TeamItem` resource shape exactly: identifiers `{projectId, itemId}`, full property
+list including `points`/`assignedToUserId`/`sourceEventId`, CRUD + list operations
+at `/projects/{projectId}/items[...]`. Registered the same way `TeamItem`'s own
+operations are — not added to the service's `resources: [...]` list, just the five
+operation names appended to `service.smithy`'s top-level `operations: [...]`
+(alongside the other no-`userId`-prefix Project operations from stage A5).
+`ProjectItemSummary` includes `assignedToUserName` (resolved server-side the same
+way `TeamItemSummary`'s is) even though it's always empty for a personal-project
+item. `task codegen` succeeded — same pre-existing, unrelated `cargo fmt`
+trailing-whitespace warning on generated `todo-client/config.rs` noted in A5's
+notes, not caused by this change.
+
+`src/json_api/project_items.rs` (new file, registered in `src/json_api/mod.rs`)
+follows `json_api/team_items.rs`'s exact shape — one difference: it does *not*
+call any membership-check helper itself before delegating, because
+`project_items::{get_project_item,list_project_items,create_project_item,
+update_project_item,delete_project_item}` (service layer) already gate on
+`require_project_member` internally, unlike `json_api::team_items`'s handlers
+which call `require_active_member` themselves before hitting the repo directly.
+`main.rs` wiring: five new `use` imports plus five new `.create_project_item(...)`-
+style builder calls on `PeoplesRepublicOfListsBuilder` — no new `Extension` layers
+or `route_service` registrations needed, since `/projects/*path` already routed to
+`api` (stage A5) and `api`'s `ServiceBuilder` already layers all five repos
+(`user_repo`/`item_repo`/`team_repo`/`project_repo`/`activity_log_repo`) stage B2
+onward.
+
+**Testing:** 7 new unit tests in `service::project_items` (195 total, up from B3's
+188): `create_project_item`/`update_project_item`/`delete_project_item` each get a
+"delegates to personal path" and "delegates to team path" test (verifying the
+right `user_id`/`team_id` lands on the constructed `Item`, via `MockItemRepo`
+`.withf(...)` assertions on `item.user_id`/`item.team_id`), plus one
+`create_project_item_rejects_non_member` test — `get_project_item`/
+`list_project_items`'s own membership-rejection coverage from B3 already covers
+the pattern for update/delete, not duplicated per-operation. `cargo test`:
+195/195 passing, zero regressions. `cargo check`: clean, same pre-existing
+dead-code warnings as every prior stage (nothing new — the wiring itself compiles
+warning-free).
+
+**Manual smoke test:** built the binary, ran against a throwaway SQLite DB
+(`TODO_AUTH_MODE=caddy` + `TODO_DEV_EMAIL`, migrations 10/11 applied cleanly),
+minted a token, and round-tripped both branches over HTTP:
+personal — `CreateProjectItem` → `GetProjectItem` → `ListProjectItems` → confirmed
+identical output via legacy `GetItem` (dual-write bridge, project→legacy
+direction) → created a second item via legacy `CreateItem` and confirmed it read
+back correctly via `GetProjectItem` (legacy→project direction) → `UpdateProjectItem`
+(rename + complete) → `DeleteProjectItem` on both items → `ListProjectItems` back to
+empty. Team-backed — `CreateTeam` (confirmed stage B2's `ensure_team_project` fired,
+showing up in `ListProjects`) → `CreateProjectItem` with `points`/`assignedToUserId`
+set → confirmed identical output via legacy `GetTeamItem` → completed it via
+`UpdateProjectItem` → confirmed the completion awarded points by reading the legacy
+`GET /teams/{teamId}/activity-log` endpoint (a `pointsDelta: 50` entry, `reversed:
+false`) → `DeleteProjectItem`. Every call returned the expected shape and HTTP 200.
+Scratch DB and server process cleaned up after verification. No web UI, CLI, or MCP
+server changes, per this stage's own scope — Stage B5 (web UI cutover) is next.
+
 ### B5 — Web UI cutover, one item type per sub-stage
 
 The actual duplication-elimination the whole plan was for, and the largest

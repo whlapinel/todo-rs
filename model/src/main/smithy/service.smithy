@@ -25,5 +25,10 @@ service PeoplesRepublicOfLists {
         SetProjectMemberRole
         AttachTeamToProject
         DetachTeamFromProject
+        CreateProjectItem
+        GetProjectItem
+        UpdateProjectItem
+        DeleteProjectItem
+        ListProjectItems
     ]
 }
