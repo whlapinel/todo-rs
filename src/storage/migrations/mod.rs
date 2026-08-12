@@ -4,6 +4,7 @@ mod add_item_points;
 mod add_item_source_event_id;
 mod add_projects;
 mod add_team_member_role;
+mod backfill_projects;
 mod has_tasks_to_simple;
 mod item_type_event_type;
 mod scheduled_end_date;
@@ -16,6 +17,7 @@ use add_item_source_event_id::AddItemSourceEventId;
 use add_projects::AddProjects;
 use add_team_member_role::AddTeamMemberRole;
 use async_trait::async_trait;
+use backfill_projects::BackfillProjects;
 use has_tasks_to_simple::HasTasksToSimple;
 use item_type_event_type::ItemTypeEventType;
 use scheduled_end_date::ScheduledEndDate;
@@ -65,6 +67,7 @@ fn all_migrations() -> Vec<Box<dyn Migration>> {
         Box::new(AddItemDescription),
         Box::new(AddItemSourceEventId),
         Box::new(AddProjects),
+        Box::new(BackfillProjects),
     ]
 }
 
@@ -141,12 +144,29 @@ mod tests {
         .unwrap();
     }
 
+    /// `users`/`teams` predate the migration system (part of the original hand-written
+    /// base schema, like `items.user_id`/`items.team_id` below) — every schema-pool
+    /// fixture that exercises the full `run_migrations()` pipeline needs them present,
+    /// since stage B1's `BackfillProjects` (see `backfill_projects.rs`) reads both.
+    async fn users_and_teams_tables(pool: &SqlitePool) {
+        sqlx::query("CREATE TABLE users (id TEXT PRIMARY KEY, first_name TEXT NOT NULL)")
+            .execute(pool)
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE teams (id TEXT PRIMARY KEY, name TEXT NOT NULL)")
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+
     async fn old_schema_pool() -> SqlitePool {
         let pool = memory_pool().await;
         sqlx::query(
             "CREATE TABLE items (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
+                user_id TEXT,
+                team_id TEXT,
                 due_date INTEGER,
                 is_template INTEGER NOT NULL DEFAULT 0,
                 parent_item_id TEXT
@@ -156,6 +176,7 @@ mod tests {
         .await
         .unwrap();
         old_team_members_table(&pool).await;
+        users_and_teams_tables(&pool).await;
         pool
     }
 
@@ -165,6 +186,8 @@ mod tests {
             "CREATE TABLE items (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
+                user_id TEXT,
+                team_id TEXT,
                 description TEXT,
                 due_date INTEGER,
                 scheduled_date INTEGER,
@@ -180,6 +203,7 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
+        users_and_teams_tables(&pool).await;
         sqlx::query(
             "CREATE TABLE team_members (
                 team_id TEXT NOT NULL,
@@ -203,7 +227,8 @@ mod tests {
                 item_name TEXT NOT NULL,
                 points_delta INTEGER NOT NULL,
                 reversed INTEGER NOT NULL DEFAULT 0,
-                created_at INTEGER NOT NULL
+                created_at INTEGER NOT NULL,
+                project_id TEXT
             )",
         )
         .execute(&pool)
@@ -241,6 +266,8 @@ mod tests {
             "CREATE TABLE items (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
+                user_id TEXT,
+                team_id TEXT,
                 due_date INTEGER,
                 scheduled_date INTEGER,
                 scheduled_end_date INTEGER,
@@ -255,6 +282,7 @@ mod tests {
         .await
         .unwrap();
         old_team_members_table(&pool).await;
+        users_and_teams_tables(&pool).await;
         pool
     }
 
@@ -264,6 +292,8 @@ mod tests {
             "CREATE TABLE items (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
+                user_id TEXT,
+                team_id TEXT,
                 due_date INTEGER,
                 parent_item_id TEXT,
                 item_type TEXT NOT NULL DEFAULT 'TASK'
@@ -273,6 +303,7 @@ mod tests {
         .await
         .unwrap();
         old_team_members_table(&pool).await;
+        users_and_teams_tables(&pool).await;
         pool
     }
 
@@ -374,7 +405,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 10);
+        assert_eq!(applied_count, 11);
     }
 
     #[tokio::test]
@@ -387,7 +418,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 10);
+        assert_eq!(applied_count, 11);
     }
 
     #[tokio::test]
@@ -401,6 +432,6 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 10);
+        assert_eq!(applied_count, 11);
     }
 }

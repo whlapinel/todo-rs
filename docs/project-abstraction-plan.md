@@ -529,3 +529,311 @@ account attaching to a shared project (would need a second identity in this
 single-dev-email smoke setup) — covered instead by the A3/A4 unit tests' mocked
 shared-project paths. No web UI, CLI, or MCP server changes, per this stage's own
 scope — Stage B is next.
+
+## Stage B — Backfill migration + web UI cutover
+
+**Decisions confirmed before drafting this stage** (asked directly, since each
+is a real fork rather than a "recommend and flag" call — recorded here since
+this file, not chat history, is what survives to the next session):
+
+- **API shape:** a brand-new `ProjectItem` Smithy resource
+  (`/projects/{projectId}/items/{itemId}`), used alongside the untouched
+  legacy `User → Item`/`TeamItem` resources during the whole of Stage B.
+  Dual-write (B2) keeps all three in sync; Stage C retires the two legacy
+  ones once every caller has moved off them. Rejected alternative: mutating
+  the two existing resources in place — smaller Smithy diff, but no gradual
+  bridge, so every existing caller (web UI, CLI, MCP, prod data) would need
+  to move atomically.
+- **Migration rollout:** B1's data-backfill migration auto-runs at startup
+  like every migration so far (A1's `add_projects` included), verified
+  against a `task db copy` snapshot first. No separate manual-trigger
+  mechanism — same safety pattern already established, not a new one.
+- **Team-backed project `owner_user_id` backfill:** deterministic pick
+  (`MIN(user_id)` among a team's active admins, falling back to any active
+  member) rather than adding a real `teams.owner_user_id`/creator concept.
+  Confirmed low-risk: per the plan's own access-check formula, `owner_user_id`
+  is only ever consulted for personal projects (`team_id IS NULL`) — once a
+  project has a `team_id`, this column is write-once-and-ignored. Production
+  currently has exactly one team with exactly one admin, so the "which admin"
+  question is moot in practice today. This leaves the original Stage A "does
+  Team drop role/ownership entirely" open call (A2's implementation notes)
+  unresolved, on purpose — revisit only if it becomes load-bearing later.
+- **Activity log scope:** `activity_log` moves from `team_id`- to
+  `project_id`-keyed, as part of this stage (B1 backfills a new column, B2
+  cuts reads/writes over) — not deferred to Stage C. Keeps every
+  item-adjacent concept on one "which entity owns this row" model instead of
+  leaving activity_log as a second, team-scoped exception.
+
+**Scope check, from the repo as it stands today** (gathered before drafting,
+so later sessions don't need to re-derive it): the personal/team screen pairs
+Stage B collapses total ~8,800 lines (`src/web_ui/tasks/{mod,handlers,templates}.rs`
+595+447+355, `team_tasks.rs` 1372, `events.rs` 986, `team_events.rs` 1069,
+`simple_lists.rs` 591, `team_simple_lists.rs` 672, `templates.rs` 651,
+`team_templates.rs` 673, `dashboard.rs` 511, `team_dashboard.rs` 198,
+`assigned_items.rs` 93, `teams.rs` 297, `team_activity.rs` 147, `nav.rs` 131).
+The shared `components::row::Row`/`templates/components/row.html` mentioned in
+this doc's intro as "already started" is real but still a 27-line unused stub
+(`components/mod.rs` is empty) — `TaskRow`/`TeamTaskRow` and their event/
+simple-list equivalents still fully duplicate row rendering today; nothing
+currently constructs a `Row`. `src/handlers/web_ui/` from this doc's earlier
+stages and CLAUDE.md is now `src/web_ui/` (flattened in the same commit that
+started the `Row` stub — see `git log --oneline -- src/web_ui/`); CLAUDE.md
+itself hasn't been updated for the rename, worth fixing whenever it's next
+touched but out of scope here.
+
+Given the scale, Stage B is broken into its own sequence of independently-
+landable sub-stages (B1-B7), following the exact same one-stage-per-session,
+update-this-file-before-clearing process A1-A5 used. **B1 is the one sub-stage
+that actually mutates existing production data** — everything before it (A1-A5)
+was additive-only (new empty tables/columns nothing read from). Treat B1 with
+correspondingly more caution: verify against a `task db copy` snapshot,
+reconciliation-query the result, and don't skip that step to save time.
+
+### B1 — Backfill migration (data only, no app code changes)
+
+New migration (next version after `add_projects`, i.e. version 11):
+- **Personal projects:** for every user without an existing personal project
+  (a `projects` row with `team_id IS NULL AND owner_user_id = users.id`),
+  create one named `"Personal"` (matching `ensure_default_project`'s naming).
+  Must skip-existing, not blindly insert — `ensure_default_project` (A5) has
+  been creating these live in production on every login since A5 shipped, so
+  by the time this migration runs some users already have one.
+- **Team projects:** for every team without an existing attached project (no
+  `projects` row with that `team_id`), create one: `name = teams.name`,
+  `team_id = teams.id`, `owner_user_id` = the deterministic admin pick above.
+  Also seed `project_members` for every currently-`ACTIVE` team member — this
+  is effectively "attach this team to its own brand-new project" without
+  going through A4's service-layer `attach_team_to_project`, so mirror what
+  that cascade does (`ACTIVE` members only, `NOT EXISTS` guard against
+  clobbering the owner's own already-inserted row).
+- **`items.project_id` backfill:** personal items —
+  `UPDATE items SET project_id = (SELECT id FROM projects WHERE owner_user_id
+  = items.user_id AND team_id IS NULL) WHERE user_id IS NOT NULL AND
+  project_id IS NULL`; team items — the analogous join on
+  `items.team_id = projects.team_id`.
+- **`activity_log.project_id`:** new nullable column, added in this same
+  migration (guarded with `column_exists`, per convention), backfilled from
+  each row's `team_id` via the same `projects.team_id` join. `team_id` stays
+  on the table but becomes unused after B2 cuts reads/writes over — actual
+  column drop is Stage C, per this doc's existing "drop unused columns in
+  Stage C" precedent.
+
+**Verify:** run against a `task db copy` snapshot first. Reconciliation
+queries: every `items` row has non-null `project_id` after migration; project
+count == (users without a pre-existing personal project) + (teams without a
+pre-existing attached project) + prior count; every team's `project_members`
+row count matches its active `team_members` count; spot-check the one
+production team's project landed the right admin as owner. Only after that
+passes does this land as a normal auto-run migration (per the rollout decision
+above). Same `cargo test storage::migrations` idempotency-test pattern as
+`add_projects` (re-running the migration a second time must be a no-op).
+
+**Implementation notes:** Done, matching the plan's SQL/logic shape closely, with one
+structural difference forced by the row-generation need: the personal- and
+team-project creation halves are **Rust loops over fetched ids**, not pure `INSERT
+... SELECT` statements — every other migration in this codebase (including A1's
+`add_projects`) is pure SQL, but generating a fresh UUID per row (matching
+`SqliteProjectRepo::create`'s own `uuid::Uuid::new_v4()` convention, not SQLite's
+`randomblob`-based id shape) isn't expressible in a single SQL statement, so each new
+project needed its own `INSERT` bound to a Rust-side-generated id. `src/storage/
+migrations/backfill_projects.rs` (`BackfillProjects`, version `11`), registered in
+`all_migrations()`.
+
+**Team-project owner pick:** implemented exactly as the plan's deterministic-admin
+decision states — lowest `user_id` (`ORDER BY user_id ASC LIMIT 1`) among the team's
+`ACTIVE` `role = 'admin'` members, falling back to the lowest `user_id` among any
+`ACTIVE` member if no active admin exists. One case the plan's prose didn't address
+directly: a team with *zero* active members at all has no valid `owner_user_id` to
+backfill (the column is `NOT NULL`) — handled by skipping that team's project creation
+entirely (`continue`), which in practice should never fire (`TeamRepo::create` always
+seeds the creator as an ACTIVE admin) but is there so the migration doesn't panic/error
+on a hypothetical malformed row.
+
+**`project_members` seeding:** the team-project half seeds the owner's own `admin` row
+explicitly (mirroring `ProjectRepo::create`'s two-insert shape), then seeds every other
+`ACTIVE` team member as `member` via the same `NOT EXISTS`-guarded `INSERT ... SELECT`
+`SqliteProjectRepo::attach_team` already uses — copied verbatim rather than re-derived,
+so the two "seed project_members from a team's active members" code paths (this
+migration, and A4's `attach_team`) stay textually identical.
+
+**`activity_log.project_id`:** added via the usual `column_exists`-guarded `ALTER
+TABLE`, backfilled via a `team_id`-keyed correlated subquery, index created inside this
+migration (not the `create_pool()` baseline) — same index-ordering reasoning as
+`add_projects.rs`'s `idx_items_project_id`, called out explicitly in both this
+migration's own doc comment and a new comment left in `create_pool()` next to the
+baseline `activity_log` table (which *does* now include the `project_id` column
+itself, just not its index, matching the plan's "add the column to the baseline, index
+stays migration-only" pattern). Baseline `activity_log` `CREATE TABLE IF NOT EXISTS`
+in `src/storage/sqlite/mod.rs` updated identically.
+
+**Known accepted gap, carried over from the plan text verbatim:** the `items.project_id`
+personal-item backfill (`SELECT id FROM projects WHERE owner_user_id = items.user_id
+AND team_id IS NULL`) has no way to disambiguate if a user has more than one personal
+(team-less) project — possible since stage A5's `CreateProject` operation shipped.
+SQLite picks one arbitrarily in that case. Not handled in this migration; flagged in the
+plan already as a known, accepted risk, not a new one introduced here.
+
+**Test-fixture fallout:** the four `run_migrations()`-exercising schema-pool test
+helpers in `storage/migrations/mod.rs` (`old_schema_pool`, `current_schema_pool`,
+`pre_simple_schema_pool`, `pre_source_event_id_schema_pool`) all predate `users`/`teams`
+tables and `items.user_id`/`items.team_id` columns existing in their synthetic schemas —
+those columns/tables predate the migration system entirely in real production DBs (part
+of the original hand-written base schema, same category as `parent_item_id`), so no
+earlier migration's test fixtures needed them. This migration is the first to actually
+read `users`/`teams`/`items.user_id`/`items.team_id`, so all four helpers needed
+`user_id`/`team_id` columns added to their `items` table defs plus a new shared
+`users_and_teams_tables()` helper creating minimal `users`/`teams` tables, or every
+existing test exercising the full migration pipeline would fail with "no such table"/
+"no such column" the moment migration 11 runs. This is test-fixture-only churn — no
+production schema implication, since real DBs already have all of these.
+
+11 new unit tests in `backfill_projects.rs` (`test_pool()`-per-file pattern, matching
+`add_projects.rs`/`projects.rs`'s precedent) covering: personal-project creation and
+its skip-if-exists case; team-project creation with deterministic-admin-pick (including
+a fallback-to-any-active-member case), its skip-if-exists case, and its `NOT EXISTS`-
+guarded member seeding (active-only, PENDING excluded); `items.project_id` backfill for
+both a personal and a team item in the same test; `activity_log.project_id` column
+creation + backfill; and a full idempotency test (running `up()` twice produces no
+duplicate `projects`/`project_members` rows). `cargo test`: 165/165 passing (157 prior +
+8 new — the plan text above describes 11 sub-checks but several share one `#[tokio::test]`
+fn, so the actual new-test count is 8), zero regressions. `cargo check`: clean, same
+pre-existing dead-code warnings as every prior stage.
+
+**Verified against real prod-shaped data**, not just synthetic fixtures: copied the
+existing local `todo.db` (a prior `task copy-prod-db` snapshot already present in the
+repo root, itself still on migration version 9 — i.e. it predated even stage A1's
+`add_projects`, version 10) to a scratch path, ran the actual server binary against the
+copy via `TODO_DATABASE_URL` (letting it panic on missing `TODO_GOOGLE_CLIENT_ID` right
+after `create_pool()`/`run_migrations()` complete — sufficient, since migrations run
+before any auth-mode branching). Versions 10 and 11 both applied cleanly in sequence.
+Reconciliation queries against the migrated copy: 3 users → 3 personal projects created
+(0 pre-existing, since this snapshot predates `ensure_default_project` too); 2 teams →
+2 team projects created; total `projects` count 5 = 3 + 2 + 0, matching the plan's own
+formula; all 60 `items` rows ended with non-null `project_id`; each team's
+`project_members` count matched its `ACTIVE` `team_members` count exactly (3-and-3,
+1-and-1); both team projects' `owner_user_id` resolved to a user whose `team_members`
+role was actually `'admin'` on that team; all 31 `activity_log` rows got a non-null
+`project_id`. Re-ran the binary a second time against the same now-migrated copy — no
+"applied migration" log lines (both versions already recorded in `_migrations`), and
+`projects`/`project_members` row counts were unchanged, confirming idempotency against
+real data too, not just the in-memory unit tests. Scratch copy deleted after
+verification; the original `todo.db` in the repo root was never written to. Migration
+has **not** yet been run against actual production (`todo.lapinel-fam.club`) — it lands
+there the next time the deployed server restarts with this code, same as every prior
+migration's rollout (per the plan's "Migration rollout" decision — no separate
+manual-trigger mechanism). No app code (service/handler layer) changes in this stage,
+per its own scope — B2 is next.
+
+### B2 — Dual-write + activity_log cutover
+
+- `service::items.rs`/`service::team_items.rs` create/update paths resolve
+  and set `project_id` on every write, alongside the still-written legacy
+  `user_id`/`team_id`. Resolution: "the caller's personal project" (personal
+  path) or "the project backing this team" (team path). A team can in
+  principle back multiple projects (that's the whole point of the model),
+  but nothing before B4 exists to create a second one — the legacy
+  `TeamItem` create path can assume exactly one attached project per team for
+  now. Flagged, not enforced: B4's `ProjectItem` API is what has to make
+  "which of this team's projects" a first-class, explicit choice instead of
+  an assumption.
+- `service::activity_log.rs`/`storage/sqlite/activity_log.rs`: writes move to
+  `project_id` (resolved the same way); reads move to `project_id`-keyed
+  queries. `team_activity.rs` (the one web screen reading this) repoints at
+  the new query — the one piece of B2 that's user-visible before B4/B5, worth
+  verifying end-to-end on its own.
+
+**Verify:** existing item CRUD tests (personal + team) unmodified and still
+passing; new tests assert `project_id` populated correctly on create for both
+paths; `team_activity.rs`'s existing points/activity display verified
+unchanged end-to-end (same data, now sourced via `project_id`).
+
+### B3 — Project-scoped item repo/service read paths
+
+- `ItemRepo` gains `list_by_project`/`get_by_project` (and
+  update/delete-by-project) methods, alongside the existing `user_id`/
+  `team_id`-keyed ones — additive, nothing removed.
+- New `service::project_items.rs`, wrapping these with A3's
+  `require_project_member`/`require_project_admin` — replaces the
+  personal-vs-team authorization branch with the plan's unified check
+  (`project.team_id.is_some()` → team-membership check; else →
+  `owner_user_id` check).
+- Not reachable via HTTP yet — unit-tested only, same precedent A2/A3 set.
+
+**Verify:** unit tests mirroring `service::teams.rs`'s/A3's coverage —
+member/non-member/admin cases for both personal and team-backed projects.
+
+### B4 — Smithy surface: `ProjectItem` resource
+
+- New `model/src/main/smithy/project_item.smithy`, modeled on `TeamItem`
+  (identifiers `{projectId, itemId}`, full CRUD + list, assignment/points
+  fields carried over since a project can be team-backed).
+  `/projects/{projectId}/items/{itemId}`.
+- `task codegen`, then `src/json_api/project_items.rs` wiring B3's service
+  functions, following `json_api/team_items.rs`'s shape.
+- Leave `User → Item` and `TeamItem` operations completely in place and
+  functional — B2's dual-write is what keeps them consistent with the new
+  surface.
+
+**Verify:** same curl round-trip smoke test pattern A5 used (create → get →
+update → list → delete via the new API), plus a check specifically
+exercising the dual-write bridge: an item created via `ProjectItem` shows up
+correctly via the legacy `Item`/`TeamItem` read APIs, and vice versa.
+
+### B5 — Web UI cutover, one item type per sub-stage
+
+The actual duplication-elimination the whole plan was for, and the largest
+remaining chunk of work — treat each of the following as its own session:
+
+- **B5a — Tasks:** new project-scoped screen replacing `src/web_ui/tasks/`
+  and `team_tasks.rs` with one `/web/projects/:project_id/tasks[...]`
+  screen. First real user of `components::row::Row`/`row.html` — finishing
+  that shared component happens as part of this sub-stage, not before it.
+- **B5b — Events:** `events.rs` + `team_events.rs`, including the calendar
+  view and `sourceEventId`/template-trigger machinery.
+- **B5c — Simple lists:** `simple_lists.rs` + `team_simple_lists.rs`.
+- **B5d — Templates:** `templates.rs` + `team_templates.rs`, including the
+  "Use" flow and the event-triggered auto-copy (reads `list_templates`/
+  `list_team_templates` today — needs a project-scoped
+  `list_project_templates`).
+- **B5e — Dashboard, assigned-items, activity, teams admin:** `dashboard.rs`
+  + `team_dashboard.rs` merge into one project-aware dashboard;
+  `assigned_items.rs` becomes a cross-project query; `team_activity.rs`
+  repoints its display at B2's `project_id`-scoped log (already correct data
+  since B2 — this sub-stage is UI/URL cleanup only); `teams.rs` stays
+  team-membership-only (unaffected — Team is a pure group now) but its "View
+  items" link retargets to the team's default/first attached project.
+- **B5f — Nav + legacy retirement:** `nav.rs` sidebar becomes a project
+  switcher; decide (before this sub-stage starts, not during) whether old
+  URLs (`/web/tasks`, `/web/team-tasks/:team_id`, etc.) redirect to the
+  equivalent `/web/projects/:project_id/...` URL or are removed outright.
+
+**Verify (each sub-stage):** old and new screens both functional during the
+transition (old untouched until its own sub-stage lands); manual click-through
+smoke test of the new screen's full CRUD + any type-specific behavior
+(recurrence, assignment, calendar, template "Use" flow, etc.).
+
+### B6 — CLI (`todo-cli/`)
+
+- Add `prl projects` (list/create/attach-team/detach-team/members/set-role);
+  repoint `prl items` at `ProjectItem` once a project is selected. Resolves
+  the CLI's standing "no team item support" known issue (CLAUDE.md Known
+  Issues) as a side effect — one unified item surface instead of a missing
+  team-item one.
+
+**Verify:** manual CLI smoke test against a dev server.
+
+### B7 — MCP server (`mcp-server/`)
+
+- Add project tools (`list_projects`/`create_project`/
+  `attach_team_to_project`/etc.); repoint item tools at `ProjectItem`
+  operations.
+
+**Verify:** manual tool-call smoke test via this repo's own `.mcp.json`.
+
+---
+
+Stage C (already sketched earlier in this doc) then retires: legacy
+`Item`/`TeamItem` Smithy operations + dual-write, `items.user_id`/`team_id`
+columns, `activity_log.team_id`, old web_ui screens (whatever B5f's
+legacy-URL choice left behind), `team_members.role`/`points`, and the
+`TODO_BOOTSTRAP_ADMIN_TEAM_ID` bootstrap rework.

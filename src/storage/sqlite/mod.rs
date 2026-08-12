@@ -429,7 +429,8 @@ pub async fn create_pool(url: &str) -> Result<SqlitePool, sqlx::Error> {
             item_name TEXT NOT NULL,
             points_delta INTEGER NOT NULL,
             reversed INTEGER NOT NULL DEFAULT 0,
-            created_at INTEGER NOT NULL
+            created_at INTEGER NOT NULL,
+            project_id TEXT
         )",
     )
     .execute(&pool)
@@ -442,6 +443,9 @@ pub async fn create_pool(url: &str) -> Result<SqlitePool, sqlx::Error> {
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_activity_log_item_id ON activity_log (item_id)")
         .execute(&pool)
         .await?;
+    // idx_activity_log_project_id is deliberately NOT created here — same
+    // index-ordering reason as idx_items_project_id above: it lives in
+    // backfill_projects.rs, the migration that added the column, not the baseline.
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS projects (
