@@ -324,7 +324,71 @@ team backs (test with 2+ attached projects); a `remove_member`/leave removes
 it everywhere; detaching a project from a team removes only that project's
 rows, not other projects sharing the same team.
 
-**Implementation notes:** _(none yet — fill in before ending this stage)_
+**Implementation notes:** Done, with one deliberate placement deviation from
+the plan's wording. The plan describes `attach_team_to_project`/
+`detach_team_from_project` in `service::projects.rs` as the things that "insert"/
+"remove" `project_members` rows. In the actual implementation, the *seed-on-attach*
+and *clear-on-detach* SQL lives in `SqliteProjectRepo::attach_team`/`detach_team`
+(`src/storage/sqlite/projects.rs`) instead — which is where A2's own doc comments
+already pointed ("Plain column write, no member-sync cascade — that's stage A4," on
+both methods). The service-layer functions of the same name are thin gates: call
+`require_project_admin`, then delegate to the now-cascading repo method. No new
+`ProjectRepo` trait methods were needed — both cascades are single SQL statements
+(`INSERT ... SELECT ... FROM team_members WHERE ... AND NOT EXISTS (...)` on
+attach; `DELETE FROM project_members WHERE project_id = ? AND user_id !=
+(SELECT owner_user_id FROM projects WHERE id = ?)` on detach), since
+`SqliteProjectRepo`/`SqliteTeamRepo` both just wrap the same `SqlitePool` and can
+reach across tables directly.
+
+The "sync hook" half (new team-membership changes cascading to *already-attached*
+projects) is implemented directly in `SqliteTeamRepo::accept`/`remove_member`
+(`src/storage/sqlite/teams.rs`), per the plan — each does its normal
+`team_members` write, then a second SQL statement against `project_members`/
+`projects` for every project with `team_id` matching. Same "single SQL statement,
+no new trait methods" shape as the attach/detach side; `accept`'s insert uses the
+same `NOT EXISTS` guard as `attach_team` (so accepting an invite never clobbers an
+existing `project_members` row, e.g. if the invitee already owns one of the
+team's attached projects). `remove_member`'s cascade delete has no owner
+exception — it fires unconditionally for whichever `(project_id, user_id)` rows
+exist, including a departing project owner's own row; this was a deliberate
+choice, not an oversight: once a project has an attached team, the access-check
+formula (`docs/project-abstraction-plan.md`'s "Target shape" section) already
+ignores `owner_user_id` in favor of team membership, so an owner who leaves the
+team has already lost access regardless of what happens to their `project_members`
+row — no separate protection needed. No explicit `sqlx` transactions were added
+around any of these two-statement sequences — matches the pre-existing style in
+both files (`remove_member`'s original two-statement member-delete-then-maybe-
+delete-team was already like this before A4).
+
+Neither `attach_team_to_project` nor `detach_team_from_project` take an explicit
+`owner_user_id` parameter — `detach_team`'s SQL reads it directly off the
+`projects` row via a subquery instead, so the owner-preservation guarantee can't
+drift out of sync with whatever `projects.owner_user_id` actually says.
+
+Tests: 8 new sqlite-level tests in `storage::sqlite::projects` (seed-from-active-
+only, skip-pending, don't-clobber-owner-role on attach; keep-owner-remove-synced,
+don't-touch-other-projects-sharing-the-team on detach; the original
+`attach_and_detach_team_round_trip` from A2 untouched) — `projects.rs`'s
+`test_pool()` gained a `team_members` table for these. 4 new sqlite-level tests
+in a **new** `storage::sqlite::teams` test module (`teams.rs` had none before this
+stage, per A2's own note) covering `accept`'s cascade-to-every-backed-project,
+active-only seeding, don't-clobber, and `remove_member`'s cascade-removes-
+everywhere — its own `test_pool()` duplicates the `users`/`teams`/`team_members`/
+`projects`/`project_members` schema subset needed, following the existing
+per-file `test_pool()` duplication precedent (`activity_log.rs` vs. `projects.rs`
+already do this). 4 new service-layer tests in `service::projects` (admin-allowed/
+non-admin-rejected for both `attach_team_to_project`/`detach_team_from_project`,
+via `MockProjectRepo`'s auto-generated `expect_attach_team`/`expect_detach_team`
+— no trait signature changes were needed for mockall to pick these up, since A2
+already declared both methods on `ProjectRepo`).
+
+`cargo test`: 149/149 passing (137 prior + 12 new: 8 in
+`storage::sqlite::projects`, 4 in `storage::sqlite::teams`, 4 in
+`service::projects`). `cargo check`: clean,
+same pre-existing dead-code warnings as before (everything in
+`service::projects`/`storage::sqlite::{projects,teams}`'s new surface still
+unconstructed/unused outside tests — A4 is still not reachable via HTTP, per this
+stage's own scope; that's A5). No `main.rs`/handler changes.
 
 ## A5 — Smithy surface + wiring
 

@@ -231,7 +231,31 @@ impl TeamRepo for SqliteTeamRepo {
         .await
         .map_err(db_err)?
         .rows_affected();
-        if rows == 0 { Err(not_found()) } else { Ok(()) }
+        if rows == 0 {
+            return Err(not_found());
+        }
+        // Cascades the new ACTIVE membership to every project this team backs —
+        // see docs/project-abstraction-plan.md stage A4. NOT EXISTS skips a
+        // project where this user is already a member (e.g. they're also that
+        // project's owner) so an existing role is never clobbered.
+        sqlx::query(
+            "INSERT INTO project_members (project_id, user_id, role, points)
+             SELECT projects.id, ?, 'member', 0
+             FROM projects
+             WHERE projects.team_id = ?
+               AND NOT EXISTS (
+                   SELECT 1 FROM project_members
+                   WHERE project_members.project_id = projects.id
+                     AND project_members.user_id = ?
+               )",
+        )
+        .bind(user_id)
+        .bind(team_id)
+        .bind(user_id)
+        .execute(&self.0)
+        .await
+        .map_err(db_err)?;
+        Ok(())
     }
 
     async fn remove_member(&self, team_id: &str, user_id: &str) -> Result<(), RepoError> {
@@ -245,6 +269,17 @@ impl TeamRepo for SqliteTeamRepo {
         if rows == 0 {
             return Err(not_found());
         }
+        // Cascades the departure to every project this team backs — the mirror
+        // of the `accept` cascade above.
+        sqlx::query(
+            "DELETE FROM project_members
+             WHERE user_id = ? AND project_id IN (SELECT id FROM projects WHERE team_id = ?)",
+        )
+        .bind(user_id)
+        .bind(team_id)
+        .execute(&self.0)
+        .await
+        .map_err(db_err)?;
         sqlx::query(
             "DELETE FROM teams WHERE id = ? AND NOT EXISTS (SELECT 1 FROM team_members WHERE team_id = ?)",
         )
@@ -269,5 +304,224 @@ impl TeamRepo for SqliteTeamRepo {
         .await
         .map_err(db_err)?;
         Ok(row.is_some())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+
+    // Mirrors `sqlite::projects`'s own `test_pool()` pattern (teams.rs had no
+    // sqlite-level tests before stage A4 — see the plan's A2 implementation
+    // notes). Includes `projects`/`project_members` alongside `teams`/
+    // `team_members`/`users` since this stage's whole point is the cascade
+    // between the two pairs of tables — see docs/project-abstraction-plan.md
+    // stage A4.
+    async fn test_pool() -> SqlitePool {
+        let opts = SqliteConnectOptions::from_str("sqlite::memory:")
+            .unwrap()
+            .shared_cache(true);
+        let pool = SqlitePoolOptions::new().connect_with(opts).await.unwrap();
+        sqlx::query(
+            "CREATE TABLE users (
+                id TEXT PRIMARY KEY,
+                first_name TEXT NOT NULL,
+                last_name TEXT NOT NULL,
+                email TEXT,
+                google_id TEXT
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE teams (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE team_members (
+                team_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'PENDING',
+                invited_by TEXT,
+                role TEXT NOT NULL DEFAULT 'member',
+                points INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (team_id, user_id)
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE projects (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                owner_user_id TEXT NOT NULL,
+                team_id TEXT
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE project_members (
+                project_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                role TEXT NOT NULL DEFAULT 'member',
+                points INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (project_id, user_id)
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool
+    }
+
+    async fn insert_user(pool: &SqlitePool, id: &str) {
+        sqlx::query("INSERT INTO users (id, first_name, last_name) VALUES (?, ?, '')")
+            .bind(id)
+            .bind(id)
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+
+    async fn insert_project(pool: &SqlitePool, id: &str, owner_user_id: &str, team_id: &str) {
+        sqlx::query("INSERT INTO projects (id, name, owner_user_id, team_id) VALUES (?, ?, ?, ?)")
+            .bind(id)
+            .bind(id)
+            .bind(owner_user_id)
+            .bind(team_id)
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+
+    async fn project_member_role(pool: &SqlitePool, project_id: &str, user_id: &str) -> Option<String> {
+        sqlx::query("SELECT role FROM project_members WHERE project_id = ? AND user_id = ?")
+            .bind(project_id)
+            .bind(user_id)
+            .fetch_optional(pool)
+            .await
+            .unwrap()
+            .map(|row| row.get::<String, _>("role"))
+    }
+
+    #[tokio::test]
+    async fn accept_adds_project_member_row_to_every_project_the_team_backs() {
+        let pool = test_pool().await;
+        let repo = SqliteTeamRepo(pool.clone());
+        insert_user(&pool, "owner1").await;
+        insert_user(&pool, "member1").await;
+        sqlx::query("INSERT INTO teams (id, name) VALUES ('team1', 'Family')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO team_members (team_id, user_id, status, role) VALUES ('team1', 'owner1', 'ACTIVE', 'admin')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        insert_project(&pool, "p1", "owner1", "team1").await;
+        insert_project(&pool, "p2", "owner1", "team1").await;
+        repo.invite("team1", "member1", "owner1").await.unwrap();
+
+        repo.accept("team1", "member1").await.unwrap();
+
+        assert_eq!(
+            project_member_role(&pool, "p1", "member1").await,
+            Some("member".to_string())
+        );
+        assert_eq!(
+            project_member_role(&pool, "p2", "member1").await,
+            Some("member".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn accept_only_seeds_from_active_members_not_pending() {
+        let pool = test_pool().await;
+        let repo = SqliteTeamRepo(pool.clone());
+        insert_user(&pool, "owner1").await;
+        insert_user(&pool, "member1").await;
+        insert_user(&pool, "member2").await;
+        sqlx::query("INSERT INTO teams (id, name) VALUES ('team1', 'Family')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        insert_project(&pool, "p1", "owner1", "team1").await;
+        repo.invite("team1", "member1", "owner1").await.unwrap();
+        repo.invite("team1", "member2", "owner1").await.unwrap();
+
+        repo.accept("team1", "member1").await.unwrap();
+
+        assert!(project_member_role(&pool, "p1", "member1").await.is_some());
+        // member2 is still PENDING — never accepted — so no row for them yet.
+        assert!(project_member_role(&pool, "p1", "member2").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn accept_does_not_clobber_an_existing_project_members_row() {
+        let pool = test_pool().await;
+        let repo = SqliteTeamRepo(pool.clone());
+        insert_user(&pool, "owner1").await;
+        sqlx::query("INSERT INTO teams (id, name) VALUES ('team1', 'Family')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        insert_project(&pool, "p1", "owner1", "team1").await;
+        // owner1 already has an admin row on p1 (as if seeded at project
+        // creation) — accepting an invite for the same team must not downgrade it.
+        sqlx::query(
+            "INSERT INTO project_members (project_id, user_id, role, points) VALUES ('p1', 'owner1', 'admin', 0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        repo.invite("team1", "owner1", "owner1").await.unwrap();
+
+        repo.accept("team1", "owner1").await.unwrap();
+
+        assert_eq!(
+            project_member_role(&pool, "p1", "owner1").await,
+            Some("admin".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn remove_member_removes_project_member_row_from_every_backed_project() {
+        let pool = test_pool().await;
+        let repo = SqliteTeamRepo(pool.clone());
+        insert_user(&pool, "owner1").await;
+        insert_user(&pool, "member1").await;
+        sqlx::query("INSERT INTO teams (id, name) VALUES ('team1', 'Family')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO team_members (team_id, user_id, status, role) VALUES ('team1', 'owner1', 'ACTIVE', 'admin')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        insert_project(&pool, "p1", "owner1", "team1").await;
+        insert_project(&pool, "p2", "owner1", "team1").await;
+        repo.invite("team1", "member1", "owner1").await.unwrap();
+        repo.accept("team1", "member1").await.unwrap();
+        assert!(project_member_role(&pool, "p1", "member1").await.is_some());
+        assert!(project_member_role(&pool, "p2", "member1").await.is_some());
+
+        repo.remove_member("team1", "member1").await.unwrap();
+
+        assert!(project_member_role(&pool, "p1", "member1").await.is_none());
+        assert!(project_member_role(&pool, "p2", "member1").await.is_none());
     }
 }

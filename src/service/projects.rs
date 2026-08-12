@@ -118,6 +118,36 @@ pub async fn set_project_member_role(
         })
 }
 
+/// Attaches `team_id` to `project_id`, seeding `project_members` from the team's
+/// current ACTIVE members (`ProjectRepo::attach_team` does the actual seed insert —
+/// see docs/project-abstraction-plan.md stage A4). Requires the requester to
+/// already be a project admin; a personal project's only admin is its owner (seeded
+/// at `create`), so in practice this means "the owner attaches a team."
+pub async fn attach_team_to_project(
+    projects: &Arc<dyn ProjectRepo>,
+    teams: &Arc<dyn TeamRepo>,
+    project_id: &str,
+    requester_user_id: &str,
+    team_id: &str,
+) -> Result<(), ItemError> {
+    require_project_admin(projects, teams, project_id, requester_user_id).await?;
+    Ok(projects.attach_team(project_id, team_id).await?)
+}
+
+/// Detaches whatever team is attached to `project_id`, clearing every
+/// team-synced `project_members` row (`ProjectRepo::detach_team` does the actual
+/// clear — see docs/project-abstraction-plan.md stage A4). Same admin gating as
+/// `attach_team_to_project`.
+pub async fn detach_team_from_project(
+    projects: &Arc<dyn ProjectRepo>,
+    teams: &Arc<dyn TeamRepo>,
+    project_id: &str,
+    requester_user_id: &str,
+) -> Result<(), ItemError> {
+    require_project_admin(projects, teams, project_id, requester_user_id).await?;
+    Ok(projects.detach_team(project_id).await?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -281,6 +311,80 @@ mod tests {
         let projects: Arc<dyn ProjectRepo> = Arc::new(mock);
         let result = list_projects(&projects, "owner1").await.unwrap();
         assert_eq!(result.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn attach_team_to_project_rejects_non_admin_requester() {
+        let mut mock = MockProjectRepo::new();
+        mock.expect_get().returning(|_| Ok(personal_project()));
+        mock.expect_member_role()
+            .returning(|_, _| Ok(Some(TeamRole::Member)));
+
+        let projects: Arc<dyn ProjectRepo> = Arc::new(mock);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+        let err = attach_team_to_project(&projects, &teams, "p1", "owner1", "team1")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ItemError::Invalid(_)));
+    }
+
+    #[tokio::test]
+    async fn attach_team_to_project_allows_admin_requester() {
+        let mut mock = MockProjectRepo::new();
+        mock.expect_get().returning(|_| Ok(personal_project()));
+        mock.expect_member_role()
+            .returning(|_, _| Ok(Some(TeamRole::Admin)));
+        mock.expect_attach_team()
+            .withf(|project_id, team_id| project_id == "p1" && team_id == "team1")
+            .returning(|_, _| Ok(()));
+
+        let projects: Arc<dyn ProjectRepo> = Arc::new(mock);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+        attach_team_to_project(&projects, &teams, "p1", "owner1", "team1")
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn detach_team_from_project_rejects_non_admin_requester() {
+        let mut mock = MockProjectRepo::new();
+        mock.expect_get().returning(|_| Ok(shared_project()));
+        mock.expect_member_role()
+            .returning(|_, _| Ok(Some(TeamRole::Member)));
+
+        let mut teams_mock = MockTeamRepo::new();
+        teams_mock
+            .expect_member_status()
+            .returning(|_, _| Ok(Some("ACTIVE".to_string())));
+
+        let projects: Arc<dyn ProjectRepo> = Arc::new(mock);
+        let teams: Arc<dyn TeamRepo> = Arc::new(teams_mock);
+        let err = detach_team_from_project(&projects, &teams, "p1", "member1")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ItemError::Invalid(_)));
+    }
+
+    #[tokio::test]
+    async fn detach_team_from_project_allows_admin_requester() {
+        let mut mock = MockProjectRepo::new();
+        mock.expect_get().returning(|_| Ok(shared_project()));
+        mock.expect_member_role()
+            .returning(|_, _| Ok(Some(TeamRole::Admin)));
+        mock.expect_detach_team()
+            .withf(|project_id| project_id == "p1")
+            .returning(|_| Ok(()));
+
+        let mut teams_mock = MockTeamRepo::new();
+        teams_mock
+            .expect_member_status()
+            .returning(|_, _| Ok(Some("ACTIVE".to_string())));
+
+        let projects: Arc<dyn ProjectRepo> = Arc::new(mock);
+        let teams: Arc<dyn TeamRepo> = Arc::new(teams_mock);
+        detach_team_from_project(&projects, &teams, "p1", "owner1")
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
