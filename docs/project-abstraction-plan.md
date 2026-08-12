@@ -257,7 +257,48 @@ not modify an existing combined trait.
 existing coverage) — access checks pass/fail correctly for owner vs.
 non-member; `create_project` produces the right row shape.
 
-**Implementation notes:** _(none yet — fill in before ending this stage)_
+**Implementation notes:** Done. `src/service/projects.rs`, registered in
+`src/service/mod.rs`. `require_project_member`/`require_project_admin` match the
+plan's access-check formula exactly (`team_id: Some` → `TeamRepo::member_status ==
+ACTIVE`; `None` → `user_id == project.owner_user_id`), and — matching
+`require_team_admin`'s shape as instructed — both return `Result<(), ItemError>`,
+not the fetched `Project`; each internally calls `projects.get()` to read `team_id`
+but doesn't expose it. `require_project_admin` checks membership first (via
+`require_project_member`) then `ProjectRepo::member_role == Admin`, so a non-member
+gets "not a member" rather than "not an admin".
+
+`create_project(projects, name, owner_user_id)` always passes `team_id: None` to
+`ProjectRepo::create` — no `team_id` parameter on the service fn at all, since A3
+never attaches a team (matches the plan). `list_projects` is a thin
+`list_for_user` wrapper. `list_project_members` gates on `require_project_member`
+then delegates. `set_project_member_role` gates on `require_project_admin` then
+delegates — **deviation from the plan's "same shape as
+`service::teams.rs`'s equivalents":** it does *not* reimplement
+`set_team_member_role`'s last-remaining-admin guard, because `ProjectRepo` has no
+`count_active_admins` equivalent (out of A2's scope, and adding one wasn't part of
+this stage). Flagged in a doc comment on the function; worth reconsidering once
+this is reachable via HTTP (A5) if that gap matters in practice.
+
+11 new unit tests in `projects.rs` (mirroring `teams.rs`'s in-file
+`MockTeamRepo`-based pattern, now also using the A2-generated `MockProjectRepo`)
+covering: owner-allowed/non-owner-rejected on a personal project, active/inactive
+team member on a shared project (`team_id: Some`, exercised via a mocked
+`TeamRepo` even though nothing in the app can actually create such a project yet),
+admin-allowed/non-admin-rejected for both `require_project_admin` and
+`set_project_member_role`, `create_project`'s `team_id: None` argument (asserted
+via `mockall`'s `.withf(...)`), and `list_projects`/`list_project_members`
+delegation. One friction point: `ProjectMemberInfo` (`src/storage/sqlite/mod.rs`)
+has no `#[derive(Debug)]`, so a test can't `.unwrap_err()` a
+`Result<Vec<ProjectMemberInfo>, _>` directly — worked around with a `matches!` on
+the `Result` itself rather than adding the derive, to keep this stage's diff
+scoped to `src/service/`.
+
+`cargo test`: 137/137 passing (126 prior + 11 new), zero regressions. `cargo
+check`: clean — same pre-existing dead-code warnings as before (`ProjectRepo`
+trait, `SqliteProjectRepo`, `Project`/`ProjectMember` domain structs still
+unconstructed/unused outside tests, as expected — nothing in the running app
+calls any of this yet, per this stage's own scope). Not reachable via HTTP; no
+`main.rs`/handler changes.
 
 ## A4 — Team↔project membership sync
 
