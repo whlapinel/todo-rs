@@ -5,7 +5,7 @@ use super::TzOffset;
 use super::nav::{self, ActiveContext, SidebarSection};
 use crate::service::items::{self as item_service, ItemError};
 use crate::service::templates::{self as template_service, CreateTemplateParams, UpdateTemplateParams};
-use crate::storage::sqlite::{ItemRepo, TeamRepo};
+use crate::storage::sqlite::{ItemRepo, ProjectRepo, TeamRepo};
 use askama::Template;
 use axum::extract::{Extension, Form, Path};
 use axum::response::{Html, IntoResponse, Response};
@@ -439,6 +439,7 @@ pub async fn create_template_child_form(
     Path(template_id): Path<String>,
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Form(form): Form<TemplateChildForm>,
 ) -> Result<Html<String>, ItemError> {
     let params = item_service::CreateItemParams {
@@ -448,7 +449,7 @@ pub async fn create_template_child_form(
         due_offset_days: parse_offset(&form.due_offset_days),
         ..Default::default()
     };
-    item_service::create_item(&repo, params).await?;
+    item_service::create_item(&repo, &projects, params).await?;
     render_children_fragment(&repo, &template_id).await
 }
 
@@ -596,6 +597,7 @@ pub async fn use_template_form(
     Path(template_id): Path<String>,
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     TzOffset(tz): TzOffset,
     Form(form): Form<UseTemplateForm>,
 ) -> Result<Response, ItemError> {
@@ -626,7 +628,7 @@ pub async fn use_template_form(
         timezone_offset_minutes: Some(tz),
         ..Default::default()
     };
-    let new_item_id = item_service::create_item(&repo, params).await?;
+    let new_item_id = item_service::create_item(&repo, &projects, params).await?;
 
     // Re-fetch: if the template carries its own recurrence and no due date was submitted
     // above, create_item auto-computes an initial deadline server-side — the offset root for

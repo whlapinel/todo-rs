@@ -1,6 +1,7 @@
 use crate::domain::team::{Team, TeamRole};
 use crate::service::items::ItemError;
-use crate::storage::sqlite::{RepoError, TeamMemberInfo, TeamRepo, TeamWithStatus, UserRepo};
+use crate::service::projects::ensure_team_project;
+use crate::storage::sqlite::{ProjectRepo, RepoError, TeamMemberInfo, TeamRepo, TeamWithStatus, UserRepo};
 use std::sync::Arc;
 
 /// Checks that `user_id` is an `ACTIVE` member of `team_id` **and** holds `admin`
@@ -73,9 +74,17 @@ pub async fn set_team_member_role(
         })
 }
 
-/// Moved from `json_api::teams::create_team`.
-pub async fn create_team(teams: &Arc<dyn TeamRepo>, name: &str, user_id: &str) -> Result<String, ItemError> {
-    Ok(teams.create(name, user_id).await?)
+/// Moved from `json_api::teams::create_team`. Also ensures the new team has a backing
+/// project (stage B2's `ensure_team_project`) — see docs/project-abstraction-plan.md.
+pub async fn create_team(
+    teams: &Arc<dyn TeamRepo>,
+    projects: &Arc<dyn ProjectRepo>,
+    name: &str,
+    user_id: &str,
+) -> Result<String, ItemError> {
+    let team_id = teams.create(name, user_id).await?;
+    ensure_team_project(projects, &team_id, name, user_id).await?;
+    Ok(team_id)
 }
 
 /// Moved from `json_api::teams::get_team`.

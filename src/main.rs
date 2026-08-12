@@ -422,6 +422,7 @@ async fn main() {
                 .layer(Extension(user_repo.clone()))
                 .layer(Extension(item_repo.clone()))
                 .layer(Extension(team_repo.clone()))
+                .layer(Extension(project_repo.clone()))
                 .layer(Extension(activity_log_repo.clone()))
                 .layer(middleware::from_fn(auth::caddy_header_middleware));
             let public_web_router = build_public_web_router();
@@ -485,6 +486,7 @@ async fn main() {
                 .layer(Extension(user_repo))
                 .layer(Extension(item_repo.clone()))
                 .layer(Extension(team_repo.clone()))
+                .layer(Extension(project_repo))
                 .layer(Extension(activity_log_repo))
                 .layer(middleware::from_fn(auth::web_auth_middleware));
             let public_web_router = build_public_web_router();

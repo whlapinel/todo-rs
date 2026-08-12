@@ -7,7 +7,7 @@ use crate::storage::sqlite::{DueItem, ItemRepo, RepoError, db_err, not_found, ro
 pub struct SqliteItemRepo(pub SqlitePool);
 
 const ITEM_SELECT: &str =
-    "SELECT id, user_id, team_id, parent_item_id, name, description, due_date, scheduled_date, scheduled_end_date, complete, recurrence, recurrence_basis,
+    "SELECT id, user_id, team_id, project_id, parent_item_id, name, description, due_date, scheduled_date, scheduled_end_date, complete, recurrence, recurrence_basis,
             has_due_time, has_scheduled_time, has_end_time,
             item_type, event_type, due_offset_days, assigned_to_user_id, points, source_event_id,
             EXISTS(SELECT 1 FROM items c WHERE c.parent_item_id = items.id) AS has_children";
@@ -117,12 +117,13 @@ impl ItemRepo for SqliteItemRepo {
         let has_end_time: i64 = item.has_end_time() as i64;
         let item_type: &str = item.kind().as_str();
         sqlx::query(
-            "INSERT INTO items (id, user_id, team_id, parent_item_id, name, description, due_date, scheduled_date, scheduled_end_date, complete, recurrence, recurrence_basis, has_due_time, has_scheduled_time, has_end_time, item_type, event_type, due_offset_days, assigned_to_user_id, points, source_event_id)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO items (id, user_id, team_id, project_id, parent_item_id, name, description, due_date, scheduled_date, scheduled_end_date, complete, recurrence, recurrence_basis, has_due_time, has_scheduled_time, has_end_time, item_type, event_type, due_offset_days, assigned_to_user_id, points, source_event_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(&item.user_id)
         .bind(&item.team_id)
+        .bind(&item.project_id)
         .bind(&item.parent_item_id)
         .bind(&item.name)
         .bind(&item.description)
@@ -158,7 +159,7 @@ impl ItemRepo for SqliteItemRepo {
         let item_type: &str = item.kind().as_str();
         let rows = sqlx::query(
             "UPDATE items SET name = ?, description = ?, due_date = ?, scheduled_date = ?, scheduled_end_date = ?, complete = ?, recurrence = ?, recurrence_basis = ?, \
-             has_due_time = ?, has_scheduled_time = ?, has_end_time = ?, parent_item_id = ?, item_type = ?, event_type = ?, due_offset_days = ?, assigned_to_user_id = ?, source_event_id = ? \
+             has_due_time = ?, has_scheduled_time = ?, has_end_time = ?, parent_item_id = ?, item_type = ?, event_type = ?, due_offset_days = ?, assigned_to_user_id = ?, source_event_id = ?, project_id = ? \
              WHERE id = ? AND user_id = ?",
         )
         .bind(&item.name)
@@ -178,6 +179,7 @@ impl ItemRepo for SqliteItemRepo {
         .bind(item.due_offset_days())
         .bind(item.assigned_to_user_id())
         .bind(item.source_event_id())
+        .bind(&item.project_id)
         .bind(&item.id)
         .bind(&item.user_id)
         .execute(&self.0)
@@ -198,7 +200,7 @@ impl ItemRepo for SqliteItemRepo {
         let item_type: &str = item.kind().as_str();
         let rows = sqlx::query(
             "UPDATE items SET name = ?, description = ?, due_date = ?, scheduled_date = ?, scheduled_end_date = ?, complete = ?, recurrence = ?, recurrence_basis = ?, \
-             has_due_time = ?, has_scheduled_time = ?, has_end_time = ?, parent_item_id = ?, item_type = ?, event_type = ?, due_offset_days = ?, assigned_to_user_id = ?, points = ?, source_event_id = ? \
+             has_due_time = ?, has_scheduled_time = ?, has_end_time = ?, parent_item_id = ?, item_type = ?, event_type = ?, due_offset_days = ?, assigned_to_user_id = ?, points = ?, source_event_id = ?, project_id = ? \
              WHERE id = ? AND team_id = ?",
         )
         .bind(&item.name)
@@ -219,6 +221,7 @@ impl ItemRepo for SqliteItemRepo {
         .bind(item.assigned_to_user_id())
         .bind(item.points())
         .bind(item.source_event_id())
+        .bind(&item.project_id)
         .bind(&item.id)
         .bind(&item.team_id)
         .execute(&self.0)
@@ -245,7 +248,7 @@ impl ItemRepo for SqliteItemRepo {
         due_date_before: Option<i64>,
     ) -> Result<Vec<DueItem>, RepoError> {
         sqlx::query(
-            "SELECT items.id, items.user_id, items.team_id, items.parent_item_id, items.name, items.description, items.due_date, items.scheduled_date, items.scheduled_end_date,
+            "SELECT items.id, items.user_id, items.team_id, items.project_id, items.parent_item_id, items.name, items.description, items.due_date, items.scheduled_date, items.scheduled_end_date,
                     items.complete, items.recurrence, items.recurrence_basis, items.has_due_time, items.has_scheduled_time, items.has_end_time,
                     items.item_type, items.event_type, items.due_offset_days, items.assigned_to_user_id, items.points, items.source_event_id,
                     COALESCE(parent.name, '') AS parent_name,
@@ -283,7 +286,7 @@ impl ItemRepo for SqliteItemRepo {
         due_date_before: Option<i64>,
     ) -> Result<Vec<DueItem>, RepoError> {
         sqlx::query(
-            "SELECT items.id, items.user_id, items.team_id, items.parent_item_id, items.name, items.description, items.due_date, items.scheduled_date, items.scheduled_end_date,
+            "SELECT items.id, items.user_id, items.team_id, items.project_id, items.parent_item_id, items.name, items.description, items.due_date, items.scheduled_date, items.scheduled_end_date,
                     items.complete, items.recurrence, items.recurrence_basis, items.has_due_time, items.has_scheduled_time, items.has_end_time,
                     items.item_type, items.event_type, items.due_offset_days, items.assigned_to_user_id, items.points, items.source_event_id,
                     COALESCE(parent.name, '') AS parent_name,

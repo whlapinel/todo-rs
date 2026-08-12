@@ -1,6 +1,6 @@
 use crate::domain::item::{Item, ItemKind, ItemType, Recurrence, Schedule};
 use crate::domain::recurrence;
-use crate::storage::sqlite::{ItemRepo, RepoError};
+use crate::storage::sqlite::{ItemRepo, ProjectRepo, RepoError};
 use chrono::{DateTime, Utc};
 use std::future::Future;
 use std::pin::Pin;
@@ -70,6 +70,7 @@ fn build_item_type(
 /// place "what does creating an item mean" is decided; `json_api` and `web_ui` both call in.
 pub async fn create_item(
     repo: &Arc<dyn ItemRepo>,
+    projects: &Arc<dyn ProjectRepo>,
     params: CreateItemParams,
 ) -> Result<String, ItemError> {
     if let Some(ref r) = params.recurrence {
@@ -144,6 +145,14 @@ pub async fn create_item(
     item.complete = params.complete.unwrap_or(false);
     item.parent_item_id = params.parent_item_id.clone();
     item.description = params.description.clone();
+    // Dual-write, stage B2 (docs/project-abstraction-plan.md) — alongside the
+    // still-authoritative `user_id`. Left `None` if the user somehow has no personal
+    // project yet (shouldn't happen post-login, see `ensure_default_project`) rather
+    // than hard-failing item creation over it.
+    item.project_id = projects
+        .find_personal_project(&params.user_id)
+        .await?
+        .map(|p| p.id);
 
     item.validate().map_err(ItemError::Invalid)?;
 
@@ -309,6 +318,9 @@ pub async fn update_item(
     item.complete = params.complete;
     item.parent_item_id = params.parent_item_id.clone();
     item.description = params.description.clone();
+    // Carried forward from `current` rather than re-resolved (stage B2) — an item's
+    // owner, and thus its personal project, never changes after creation.
+    item.project_id = current.project_id.clone();
 
     let tz_offset = params.timezone_offset_minutes.unwrap_or(0);
     if item.is_offset_driven() {
@@ -793,7 +805,16 @@ pub(crate) fn copy_children_as_template<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::sqlite::MockItemRepo;
+    use crate::storage::sqlite::{MockItemRepo, MockProjectRepo};
+
+    /// `create_item`'s `find_personal_project` lookup, stubbed to "none found" — none
+    /// of these tests care about the resolved `project_id`, so this keeps them from
+    /// each having to build their own `MockProjectRepo`.
+    fn no_personal_project() -> Arc<dyn ProjectRepo> {
+        let mut mock = MockProjectRepo::new();
+        mock.expect_find_personal_project().returning(|_| Ok(None));
+        Arc::new(mock)
+    }
 
     fn template_item(id: &str, user_id: &str, event_type: &str) -> Item {
         Item {
@@ -893,6 +914,7 @@ mod tests {
 
         let item_id = create_item(
             &repo,
+            &no_personal_project(),
             CreateItemParams {
                 user_id: "u1".to_string(),
                 name: "It rained".to_string(),
@@ -926,6 +948,7 @@ mod tests {
 
         create_item(
             &repo,
+            &no_personal_project(),
             CreateItemParams {
                 user_id: "u1".to_string(),
                 name: "It rained".to_string(),
@@ -970,6 +993,7 @@ mod tests {
 
         let err = create_item(
             &repo,
+            &no_personal_project(),
             CreateItemParams {
                 user_id: "u1".to_string(),
                 name: "Sneaky child".to_string(),
@@ -1009,6 +1033,7 @@ mod tests {
 
         create_item(
             &repo,
+            &no_personal_project(),
             CreateItemParams {
                 user_id: "u1".to_string(),
                 name: "Buy cake".to_string(),
@@ -1091,6 +1116,7 @@ mod tests {
 
         let err = create_item(
             &repo,
+            &no_personal_project(),
             CreateItemParams {
                 user_id: "u1".to_string(),
                 name: "Sneaky template".to_string(),
@@ -1209,6 +1235,7 @@ mod tests {
 
         let err = create_item(
             &repo,
+            &no_personal_project(),
             CreateItemParams {
                 user_id: "u1".to_string(),
                 name: "Backwards window".to_string(),
@@ -1496,5 +1523,73 @@ mod tests {
         )
         .await
         .expect("pure toggle should be allowed on a completed item");
+    }
+
+    #[tokio::test]
+    async fn create_item_resolves_project_id_from_personal_project() {
+        let mut mock = MockItemRepo::new();
+        mock.expect_create()
+            .withf(|item: &Item| item.project_id.as_deref() == Some("p1"))
+            .times(1)
+            .returning(|_| Ok("new-item-id".to_string()));
+        let repo: Arc<dyn ItemRepo> = Arc::new(mock);
+
+        let mut projects_mock = MockProjectRepo::new();
+        projects_mock
+            .expect_find_personal_project()
+            .withf(|user_id: &str| user_id == "u1")
+            .returning(|_| {
+                Ok(Some(crate::domain::project::Project {
+                    id: "p1".to_string(),
+                    name: "Personal".to_string(),
+                    owner_user_id: "u1".to_string(),
+                    team_id: None,
+                }))
+            });
+        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
+
+        create_item(
+            &repo,
+            &projects,
+            CreateItemParams {
+                user_id: "u1".to_string(),
+                name: "Buy milk".to_string(),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("should create item");
+    }
+
+    #[tokio::test]
+    async fn update_item_carries_forward_project_id_from_current() {
+        let mut mock = MockItemRepo::new();
+        mock.expect_get().returning(|_, _| {
+            Ok(Item {
+                id: "item1".to_string(),
+                user_id: Some("u1".to_string()),
+                project_id: Some("p1".to_string()),
+                name: "Same name".to_string(),
+                ..Item::default()
+            })
+        });
+        mock.expect_update()
+            .withf(|item: &Item| item.project_id.as_deref() == Some("p1"))
+            .times(1)
+            .returning(|_| Ok(()));
+        let repo: Arc<dyn ItemRepo> = Arc::new(mock);
+
+        update_item(
+            &repo,
+            UpdateItemParams {
+                user_id: "u1".to_string(),
+                item_id: "item1".to_string(),
+                name: "Renamed".to_string(),
+                complete: false,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("should update and carry project_id forward");
     }
 }

@@ -6,7 +6,7 @@ use crate::service::activity_log as activity_log_service;
 use crate::service::error::ItemError;
 use crate::service::team_items::require_active_member;
 use crate::service::teams as team_service;
-use crate::storage::sqlite::{ActivityLogRepo, TeamRepo};
+use crate::storage::sqlite::{ActivityLogRepo, ProjectRepo, TeamRepo};
 use askama::Template;
 use axum::extract::{Extension, Path};
 use axum::response::Html;
@@ -89,16 +89,27 @@ struct TeamActivityPageTemplate {
 
 async fn render_activity_page(
     teams: &Arc<dyn TeamRepo>,
+    projects: &Arc<dyn ProjectRepo>,
     activity_log: &Arc<dyn ActivityLogRepo>,
     team_id: &str,
     requester_user_id: &str,
     tz: i32,
 ) -> Result<Html<String>, ItemError> {
     require_active_member(teams, team_id, requester_user_id).await?;
-    let entries = activity_log
-        .list_activity_for_team(team_id, ACTIVITY_LOG_LIMIT)
-        .await
-        .map_err(ItemError::from)?;
+    // Stage B2 (docs/project-abstraction-plan.md): reads move to the project_id-keyed
+    // query. Falls back to the legacy team_id-keyed query only if this team somehow
+    // has no backing project yet (shouldn't happen post-B2 — every team gets one via
+    // `ensure_team_project`/stage B1's backfill) so the page never silently goes blank.
+    let entries = match projects.get_by_team(team_id).await.map_err(ItemError::from)? {
+        Some(project) => activity_log
+            .list_activity_for_project(&project.id, ACTIVITY_LOG_LIMIT)
+            .await
+            .map_err(ItemError::from)?,
+        None => activity_log
+            .list_activity_for_team(team_id, ACTIVITY_LOG_LIMIT)
+            .await
+            .map_err(ItemError::from)?,
+    };
     let names = names_for(teams, team_id, requester_user_id).await?;
     let rows = entries
         .iter()
@@ -122,16 +133,18 @@ pub async fn team_activity_page(
     Path(team_id): Path<String>,
     Extension(auth_user): Extension<AuthUser>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(activity_log): Extension<Arc<dyn ActivityLogRepo>>,
     TzOffset(tz): TzOffset,
 ) -> Result<Html<String>, ItemError> {
-    render_activity_page(&teams, &activity_log, &team_id, &auth_user.user_id, tz).await
+    render_activity_page(&teams, &projects, &activity_log, &team_id, &auth_user.user_id, tz).await
 }
 
 pub async fn undo_activity_log_entry_form(
     Path((team_id, entry_id)): Path<(String, String)>,
     Extension(auth_user): Extension<AuthUser>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(activity_log): Extension<Arc<dyn ActivityLogRepo>>,
     TzOffset(tz): TzOffset,
 ) -> Result<Html<String>, ItemError> {
@@ -143,5 +156,5 @@ pub async fn undo_activity_log_entry_form(
         &auth_user.user_id,
     )
     .await?;
-    render_activity_page(&teams, &activity_log, &team_id, &auth_user.user_id, tz).await
+    render_activity_page(&teams, &projects, &activity_log, &team_id, &auth_user.user_id, tz).await
 }

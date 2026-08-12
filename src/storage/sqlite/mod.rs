@@ -166,6 +166,13 @@ pub trait ProjectRepo: Send + Sync {
         team_id: Option<&'a str>,
     ) -> Result<String, RepoError>;
     async fn get(&self, project_id: &str) -> Result<Project, RepoError>;
+    /// Stage B2's personal-item resolution: the caller's own team-less project, if
+    /// any. Arbitrary pick if a user somehow has more than one (same accepted gap as
+    /// stage B1's backfill migration — see docs/project-abstraction-plan.md).
+    async fn find_personal_project(&self, user_id: &str) -> Result<Option<Project>, RepoError>;
+    /// Stage B2's team-item resolution: the (at most one) project a team currently
+    /// backs.
+    async fn get_by_team(&self, team_id: &str) -> Result<Option<Project>, RepoError>;
     async fn update_name(&self, project_id: &str, name: &str) -> Result<(), RepoError>;
     /// Plain column write, no member-sync cascade — that's stage A4.
     async fn attach_team(&self, project_id: &str, team_id: &str) -> Result<(), RepoError>;
@@ -200,12 +207,16 @@ pub trait ProjectRepo: Send + Sync {
 #[cfg_attr(test, mockall::automock)]
 #[async_trait]
 pub trait ActivityLogRepo: Send + Sync {
-    async fn log_activity(
-        &self,
-        team_id: &str,
-        user_id: &str,
-        item_id: &str,
-        item_name: &str,
+    /// Explicit `<'a>` lifetime on the trait method (same fix `ProjectRepo::create`
+    /// needed — see docs/project-abstraction-plan.md stage A2's implementation notes):
+    /// `#[async_trait]`'s desugaring can't elide a lifetime buried inside `Option<&str>`.
+    async fn log_activity<'a>(
+        &'a self,
+        team_id: &'a str,
+        project_id: Option<&'a str>,
+        user_id: &'a str,
+        item_id: &'a str,
+        item_name: &'a str,
         points_delta: i32,
     ) -> Result<String, RepoError>;
     /// Server-capped by the caller — this trait has no pagination concept (the whole
@@ -214,6 +225,15 @@ pub trait ActivityLogRepo: Send + Sync {
     async fn list_activity_for_team(
         &self,
         team_id: &str,
+        limit: i64,
+    ) -> Result<Vec<ActivityLogEntry>, RepoError>;
+    /// Stage B2's project_id-keyed read — see docs/project-abstraction-plan.md.
+    /// `team_activity.rs` resolves the team's backing project and calls this instead
+    /// of `list_activity_for_team`; the team-keyed method stays for the legacy
+    /// `ListTeamActivityLog` JSON API operation, untouched until stage B4.
+    async fn list_activity_for_project(
+        &self,
+        project_id: &str,
         limit: i64,
     ) -> Result<Vec<ActivityLogEntry>, RepoError>;
     async fn most_recent_unreversed(
@@ -318,6 +338,7 @@ fn row_to_item(row: &sqlx::sqlite::SqliteRow) -> Item {
         id: row.get("id"),
         user_id: row.get("user_id"),
         team_id: row.get("team_id"),
+        project_id: row.get("project_id"),
         parent_item_id: row.get("parent_item_id"),
         name: row.get("name"),
         description: row.get("description"),
@@ -334,6 +355,7 @@ fn row_to_activity_log_entry(row: &sqlx::sqlite::SqliteRow) -> ActivityLogEntry 
     ActivityLogEntry {
         id: row.get("id"),
         team_id: row.get("team_id"),
+        project_id: row.get("project_id"),
         user_id: row.get("user_id"),
         item_id: row.get("item_id"),
         item_name: row.get("item_name"),

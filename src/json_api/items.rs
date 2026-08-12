@@ -1,6 +1,6 @@
 use super::{internal, not_found, to_domain_item_type, to_sdk_item_type};
 use crate::service::items::{self as item_service, ItemError};
-use crate::storage::sqlite::{ItemRepo, RepoError};
+use crate::storage::sqlite::{ItemRepo, ProjectRepo, RepoError};
 use std::sync::Arc;
 use todo_server_sdk::{error, input, output, server, types::DateTime as SmithyDateTime};
 
@@ -28,6 +28,7 @@ fn to_delete_item_error(e: ItemError) -> error::DeleteItemError {
 pub async fn create_item(
     input: input::CreateItemInput,
     server::Extension(repo): server::Extension<Arc<dyn ItemRepo>>,
+    server::Extension(projects): server::Extension<Arc<dyn ProjectRepo>>,
 ) -> Result<output::CreateItemOutput, error::CreateItemError> {
     let due_date = input
         .due_date
@@ -43,6 +44,7 @@ pub async fn create_item(
         .map(|d| d.with_timezone(&chrono::Utc));
     let item_id = item_service::create_item(
         &repo,
+        &projects,
         item_service::CreateItemParams {
             user_id: input.user_id,
             name: input.name,

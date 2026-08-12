@@ -10,7 +10,7 @@ use crate::service::team_items::{
 };
 use crate::service::teams as team_service;
 use crate::service::templates::{self as template_service, CreateTeamTemplateParams};
-use crate::storage::sqlite::{ActivityLogRepo, ItemRepo, RepoError, TeamRepo};
+use crate::storage::sqlite::{ActivityLogRepo, ItemRepo, ProjectRepo, RepoError, TeamRepo};
 use askama::Template;
 use axum::extract::{Extension, Form, Path, Query};
 use axum::response::{Html, IntoResponse, Response};
@@ -863,12 +863,13 @@ pub async fn create_team_event_form(
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     TzOffset(tz): TzOffset,
     Form(form): Form<TeamEventForm>,
 ) -> Result<Response, ItemError> {
     let show_complete = form.show_complete.is_some();
     let params = create_params_from_form(&team_id, &form, tz);
-    team_item_service::create_team_item(&repo, &teams, &auth_user.user_id, params).await?;
+    team_item_service::create_team_item(&repo, &teams, &projects, &auth_user.user_id, params).await?;
     if form.redirect.is_some() {
         return Ok(redirect_to_team_events(&team_id, show_complete));
     }
@@ -1010,6 +1011,7 @@ pub async fn create_team_event_child_form(
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     TzOffset(tz): TzOffset,
     Form(form): Form<TeamEventChildForm>,
 ) -> Result<Html<String>, ItemError> {
@@ -1028,7 +1030,7 @@ pub async fn create_team_event_child_form(
         timezone_offset_minutes: Some(tz),
         ..Default::default()
     };
-    team_item_service::create_team_item(&repo, &teams, &auth_user.user_id, params).await?;
+    team_item_service::create_team_item(&repo, &teams, &projects, &auth_user.user_id, params).await?;
     team_tasks::render_source_event_fragment(
         &repo,
         &teams,

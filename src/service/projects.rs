@@ -98,6 +98,30 @@ pub async fn ensure_default_project(
     Ok(())
 }
 
+/// Idempotent: creates and attaches a backing project for `team_id`, named after the
+/// team and owned by `creator_user_id`, unless one already exists. Closes the gap left
+/// by `ensure_default_project` only ever covering *personal* projects — without this,
+/// every team created after stage B1's backfill migration ran would have zero attached
+/// projects until someone manually created and attached one via the Project API, and
+/// stage B2's team-item `project_id` resolution would silently find nothing for it.
+/// Uses `create`-then-`attach_team` (stage A4's shape) rather than passing `team_id`
+/// directly to `create`, so `attach_team`'s own member-seed cascade runs — though in
+/// practice a brand-new team's only `ACTIVE` member is its own creator, already seeded
+/// as the project's owner/admin by `create` itself.
+pub async fn ensure_team_project(
+    projects: &Arc<dyn ProjectRepo>,
+    team_id: &str,
+    team_name: &str,
+    creator_user_id: &str,
+) -> Result<(), ItemError> {
+    if projects.get_by_team(team_id).await?.is_some() {
+        return Ok(());
+    }
+    let project_id = projects.create(team_name, creator_user_id, None).await?;
+    projects.attach_team(&project_id, team_id).await?;
+    Ok(())
+}
+
 /// Fetches a single project. Requires the requester to be a member (owner, for a
 /// personal project; an active team member, for a shared one) — same gating as
 /// `list_project_members`.
@@ -379,6 +403,39 @@ mod tests {
 
         let projects: Arc<dyn ProjectRepo> = Arc::new(mock);
         ensure_default_project(&projects, "u1").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn ensure_team_project_creates_and_attaches_when_none_exists() {
+        let mut mock = MockProjectRepo::new();
+        mock.expect_get_by_team()
+            .withf(|team_id| team_id == "t1")
+            .returning(|_| Ok(None));
+        mock.expect_create()
+            .withf(|name, owner_user_id, team_id: &Option<&str>| {
+                name == "Family" && owner_user_id == "u1" && team_id.is_none()
+            })
+            .returning(|_, _, _| Ok("p1".to_string()));
+        mock.expect_attach_team()
+            .withf(|project_id, team_id| project_id == "p1" && team_id == "t1")
+            .returning(|_, _| Ok(()));
+
+        let projects: Arc<dyn ProjectRepo> = Arc::new(mock);
+        ensure_team_project(&projects, "t1", "Family", "u1")
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn ensure_team_project_is_a_noop_when_one_already_exists() {
+        let mut mock = MockProjectRepo::new();
+        mock.expect_get_by_team()
+            .returning(|_| Ok(Some(shared_project())));
+
+        let projects: Arc<dyn ProjectRepo> = Arc::new(mock);
+        ensure_team_project(&projects, "team1", "Family", "u1")
+            .await
+            .unwrap();
     }
 
     #[tokio::test]

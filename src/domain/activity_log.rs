@@ -12,6 +12,10 @@ use chrono::{DateTime, Utc};
 pub struct ActivityLogEntry {
     pub id: String,
     pub team_id: String,
+    /// Dual-written alongside `team_id` (see docs/project-abstraction-plan.md stage
+    /// B2) — `team_id` stays authoritative for points (still `team_members`-keyed,
+    /// see CLAUDE.md's Points section), `project_id` is what reads now key off.
+    pub project_id: Option<String>,
     pub user_id: String,
     pub item_id: String,
     pub item_name: String,

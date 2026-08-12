@@ -8,22 +8,24 @@ pub struct SqliteActivityLogRepo(pub SqlitePool);
 
 #[async_trait]
 impl ActivityLogRepo for SqliteActivityLogRepo {
-    async fn log_activity(
-        &self,
-        team_id: &str,
-        user_id: &str,
-        item_id: &str,
-        item_name: &str,
+    async fn log_activity<'a>(
+        &'a self,
+        team_id: &'a str,
+        project_id: Option<&'a str>,
+        user_id: &'a str,
+        item_id: &'a str,
+        item_name: &'a str,
         points_delta: i32,
     ) -> Result<String, RepoError> {
         let id = uuid::Uuid::new_v4().to_string();
         let created_at = chrono::Utc::now().timestamp();
         sqlx::query(
-            "INSERT INTO activity_log (id, team_id, user_id, item_id, item_name, points_delta, reversed, created_at) \
-             VALUES (?, ?, ?, ?, ?, ?, 0, ?)",
+            "INSERT INTO activity_log (id, team_id, project_id, user_id, item_id, item_name, points_delta, reversed, created_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)",
         )
         .bind(&id)
         .bind(team_id)
+        .bind(project_id)
         .bind(user_id)
         .bind(item_id)
         .bind(item_name)
@@ -41,7 +43,7 @@ impl ActivityLogRepo for SqliteActivityLogRepo {
         limit: i64,
     ) -> Result<Vec<ActivityLogEntry>, RepoError> {
         sqlx::query(
-            "SELECT id, team_id, user_id, item_id, item_name, points_delta, reversed, created_at \
+            "SELECT id, team_id, project_id, user_id, item_id, item_name, points_delta, reversed, created_at \
              FROM activity_log \
              WHERE team_id = ? \
              ORDER BY created_at DESC \
@@ -55,13 +57,33 @@ impl ActivityLogRepo for SqliteActivityLogRepo {
         .map(|rows| rows.iter().map(row_to_activity_log_entry).collect())
     }
 
+    async fn list_activity_for_project(
+        &self,
+        project_id: &str,
+        limit: i64,
+    ) -> Result<Vec<ActivityLogEntry>, RepoError> {
+        sqlx::query(
+            "SELECT id, team_id, project_id, user_id, item_id, item_name, points_delta, reversed, created_at \
+             FROM activity_log \
+             WHERE project_id = ? \
+             ORDER BY created_at DESC \
+             LIMIT ?",
+        )
+        .bind(project_id)
+        .bind(limit)
+        .fetch_all(&self.0)
+        .await
+        .map_err(db_err)
+        .map(|rows| rows.iter().map(row_to_activity_log_entry).collect())
+    }
+
     async fn most_recent_unreversed(
         &self,
         item_id: &str,
         user_id: &str,
     ) -> Result<Option<ActivityLogEntry>, RepoError> {
         sqlx::query(
-            "SELECT id, team_id, user_id, item_id, item_name, points_delta, reversed, created_at \
+            "SELECT id, team_id, project_id, user_id, item_id, item_name, points_delta, reversed, created_at \
              FROM activity_log \
              WHERE item_id = ? AND user_id = ? AND reversed = 0 \
              ORDER BY created_at DESC \
@@ -77,7 +99,7 @@ impl ActivityLogRepo for SqliteActivityLogRepo {
 
     async fn get_entry(&self, entry_id: &str) -> Result<ActivityLogEntry, RepoError> {
         sqlx::query(
-            "SELECT id, team_id, user_id, item_id, item_name, points_delta, reversed, created_at \
+            "SELECT id, team_id, project_id, user_id, item_id, item_name, points_delta, reversed, created_at \
              FROM activity_log \
              WHERE id = ?",
         )
@@ -116,6 +138,7 @@ mod tests {
             "CREATE TABLE activity_log (
                 id TEXT PRIMARY KEY,
                 team_id TEXT NOT NULL,
+                project_id TEXT,
                 user_id TEXT NOT NULL,
                 item_id TEXT NOT NULL,
                 item_name TEXT NOT NULL,
@@ -228,15 +251,34 @@ mod tests {
         let repo = SqliteActivityLogRepo(pool.clone());
 
         let id = repo
-            .log_activity("t1", "u1", "i1", "Wash dishes", 5)
+            .log_activity("t1", Some("p1"), "u1", "i1", "Wash dishes", 5)
             .await
             .unwrap();
 
         let entries = repo.list_activity_for_team("t1", 10).await.unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].id, id);
+        assert_eq!(entries[0].project_id.as_deref(), Some("p1"));
         assert_eq!(entries[0].item_name, "Wash dishes");
         assert_eq!(entries[0].points_delta, 5);
         assert!(!entries[0].reversed);
+    }
+
+    #[tokio::test]
+    async fn list_activity_for_project_scopes_to_project() {
+        let pool = test_pool().await;
+        let repo = SqliteActivityLogRepo(pool.clone());
+        sqlx::query(
+            "INSERT INTO activity_log (id, team_id, project_id, user_id, item_id, item_name, points_delta, created_at) \
+             VALUES ('e1', 't1', 'p1', 'u1', 'i1', 'Item', 5, 100), \
+                    ('e2', 't2', 'p2', 'u1', 'i2', 'Other', 5, 100)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let entries = repo.list_activity_for_project("p1", 100).await.unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].id, "e1");
     }
 }

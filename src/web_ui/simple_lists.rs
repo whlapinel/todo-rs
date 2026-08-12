@@ -3,7 +3,7 @@ use crate::domain::item::{Item, ItemKind};
 use super::dashboard::{detail_url, list_url_for};
 use super::nav::{self, ActiveContext, SidebarSection};
 use crate::service::items::{self as item_service, ItemError};
-use crate::storage::sqlite::{ItemRepo, TeamRepo};
+use crate::storage::sqlite::{ItemRepo, ProjectRepo, TeamRepo};
 use askama::Template;
 use axum::extract::{Extension, Form, Path};
 use axum::response::{Html, IntoResponse, Response};
@@ -367,12 +367,13 @@ fn redirect_to_simple_lists() -> Response {
 pub async fn create_simple_item_form(
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Form(form): Form<SimpleItemForm>,
 ) -> Result<Response, ItemError> {
     let redirect = form.redirect.is_some();
     let params = create_params_from_form(&auth_user.user_id, &form);
     let parent_item_id = params.parent_item_id.clone();
-    item_service::create_item(&repo, params).await?;
+    item_service::create_item(&repo, &projects, params).await?;
     if redirect {
         return Ok(redirect_to_simple_lists());
     }
@@ -394,6 +395,7 @@ pub struct BatchForm {
 pub async fn create_simple_items_batch(
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Form(form): Form<BatchForm>,
 ) -> Result<Response, ItemError> {
     let parent_item_id = non_empty(&form.parent_item_id);
@@ -409,7 +411,7 @@ pub async fn create_simple_items_batch(
             item_type: Some(ItemKind::Simple),
             ..Default::default()
         };
-        item_service::create_item(&repo, params).await?;
+        item_service::create_item(&repo, &projects, params).await?;
     }
     if form.redirect.is_some() {
         return Ok(redirect_to_simple_lists());

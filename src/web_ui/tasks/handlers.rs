@@ -6,7 +6,7 @@ use super::super::nav::{self, ActiveContext, SidebarSection};
 use super::super::{TzOffset, to_local};
 use crate::service::items::{self as item_service, ItemError, top_level_anchor};
 use crate::service::templates::{self as template_service, CreateTemplateParams};
-use crate::storage::sqlite::{ItemRepo, RepoError, TeamRepo};
+use crate::storage::sqlite::{ItemRepo, ProjectRepo, RepoError, TeamRepo};
 use askama::Template;
 use axum::extract::{Extension, Form, Path, Query};
 use axum::response::{Html, IntoResponse, Response};
@@ -254,6 +254,7 @@ fn redirect_to_tasks(show_complete: bool) -> Response {
 pub async fn create_task_form(
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     TzOffset(tz): TzOffset,
     Form(form): Form<TaskForm>,
 ) -> Result<Response, ItemError> {
@@ -261,7 +262,7 @@ pub async fn create_task_form(
     let redirect = form.redirect.is_some();
     let params = create_params_from_form(&auth_user.user_id, &form, tz);
     let parent_item_id = params.parent_item_id.clone();
-    item_service::create_item(&repo, params).await?;
+    item_service::create_item(&repo, &projects, params).await?;
     if redirect {
         return Ok(redirect_to_tasks(show_complete));
     }
@@ -288,6 +289,7 @@ pub struct BatchForm {
 pub async fn create_tasks_batch(
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     TzOffset(tz): TzOffset,
     Form(form): Form<BatchForm>,
 ) -> Result<Response, ItemError> {
@@ -305,7 +307,7 @@ pub async fn create_tasks_batch(
             timezone_offset_minutes: Some(tz),
             ..Default::default()
         };
-        item_service::create_item(&repo, params).await?;
+        item_service::create_item(&repo, &projects, params).await?;
     }
     if form.redirect.is_some() {
         return Ok(redirect_to_tasks(form.show_complete.is_some()));

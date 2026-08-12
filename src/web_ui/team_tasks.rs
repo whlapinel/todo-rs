@@ -10,7 +10,7 @@ use crate::service::team_items::{
 };
 use crate::service::teams as team_service;
 use crate::service::templates::{self as template_service, CreateTeamTemplateParams};
-use crate::storage::sqlite::{ActivityLogRepo, ItemRepo, RepoError, TeamRepo};
+use crate::storage::sqlite::{ActivityLogRepo, ItemRepo, ProjectRepo, RepoError, TeamRepo};
 use askama::Template;
 use axum::extract::{Extension, Form, Path, Query};
 use axum::response::{Html, IntoResponse, Response};
@@ -990,6 +990,7 @@ pub async fn create_team_task_form(
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     TzOffset(tz): TzOffset,
     Form(form): Form<TeamTaskForm>,
 ) -> Result<Response, ItemError> {
@@ -997,7 +998,7 @@ pub async fn create_team_task_form(
     let redirect = form.redirect.is_some();
     let params = create_params_from_form(&team_id, &form, tz);
     let parent_item_id = params.parent_item_id.clone();
-    team_item_service::create_team_item(&repo, &teams, &auth_user.user_id, params).await?;
+    team_item_service::create_team_item(&repo, &teams, &projects, &auth_user.user_id, params).await?;
     if redirect {
         return Ok(redirect_to_team_tasks(&team_id, show_complete));
     }
@@ -1028,6 +1029,7 @@ pub async fn create_team_tasks_batch(
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     TzOffset(tz): TzOffset,
     Form(form): Form<BatchForm>,
 ) -> Result<Response, ItemError> {
@@ -1045,7 +1047,7 @@ pub async fn create_team_tasks_batch(
             timezone_offset_minutes: Some(tz),
             ..Default::default()
         };
-        team_item_service::create_team_item(&repo, &teams, &auth_user.user_id, params).await?;
+        team_item_service::create_team_item(&repo, &teams, &projects, &auth_user.user_id, params).await?;
     }
     if form.redirect.is_some() {
         return Ok(redirect_to_team_tasks(

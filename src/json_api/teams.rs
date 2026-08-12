@@ -3,7 +3,7 @@ use crate::auth::AuthUser;
 use crate::domain::team::TeamRole;
 use crate::service::items::ItemError;
 use crate::service::teams as team_service;
-use crate::storage::sqlite::{TeamRepo, UserRepo};
+use crate::storage::sqlite::{ProjectRepo, TeamRepo, UserRepo};
 use std::sync::Arc;
 use std::str::FromStr;
 use todo_server_sdk::{error, input, model, output, server};
@@ -31,10 +31,11 @@ fn require_matching_user(auth: &AuthUser, path_user_id: &str) -> Result<(), Item
 pub async fn create_team(
     input: input::CreateTeamInput,
     server::Extension(teams): server::Extension<Arc<dyn TeamRepo>>,
+    server::Extension(projects): server::Extension<Arc<dyn ProjectRepo>>,
     server::Extension(auth): server::Extension<AuthUser>,
 ) -> Result<output::CreateTeamOutput, error::CreateTeamError> {
     require_matching_user(&auth, &input.user_id).map_err(|e| error::CreateTeamError::from(to_msg(e)))?;
-    let team_id = team_service::create_team(&teams, &input.name, &auth.user_id)
+    let team_id = team_service::create_team(&teams, &projects, &input.name, &auth.user_id)
         .await
         .map_err(|e| error::CreateTeamError::from(to_msg(e)))?;
     Ok(output::CreateTeamOutput { team_id })

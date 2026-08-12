@@ -7,7 +7,7 @@ use crate::service::items::{
     sync_source_event_tasks, unlink_source_event_tasks, ItemError,
 };
 use crate::service::teams::require_team_admin;
-use crate::storage::sqlite::{ActivityLogRepo, ItemRepo, TeamRepo};
+use crate::storage::sqlite::{ActivityLogRepo, ItemRepo, ProjectRepo, TeamRepo};
 use chrono::{DateTime, Utc};
 use std::sync::Arc;
 
@@ -115,6 +115,7 @@ pub(crate) async fn resolve_offset_anchor_team(
 pub async fn create_team_item(
     repo: &Arc<dyn ItemRepo>,
     teams: &Arc<dyn TeamRepo>,
+    projects: &Arc<dyn ProjectRepo>,
     requester_user_id: &str,
     params: CreateTeamItemParams,
 ) -> Result<String, ItemError> {
@@ -206,6 +207,12 @@ pub async fn create_team_item(
     item.complete = params.complete.unwrap_or(false);
     item.parent_item_id = params.parent_item_id.clone();
     item.description = params.description.clone();
+    // Dual-write, stage B2 (docs/project-abstraction-plan.md) — alongside the
+    // still-authoritative `team_id`. Left `None` if no project currently backs this
+    // team (shouldn't happen post stage-B2, since `create_team` now seeds one via
+    // `ensure_team_project`, and every pre-existing team got one from stage B1's
+    // backfill) rather than hard-failing item creation over it.
+    item.project_id = projects.get_by_team(&params.team_id).await?.map(|p| p.id);
 
     let tz_offset = params.timezone_offset_minutes.unwrap_or(0);
     if item.is_offset_driven() {
@@ -460,6 +467,9 @@ pub async fn update_team_item(
     item.complete = params.complete;
     item.parent_item_id = params.parent_item_id.clone();
     item.description = params.description.clone();
+    // Carried forward from `current` rather than re-resolved (stage B2) — a team
+    // item's team, and thus its backing project, never changes after creation.
+    item.project_id = current.project_id.clone();
     item.item_type = build_item_type(
         kind,
         schedule,
@@ -522,7 +532,14 @@ pub async fn update_team_item(
             .assigned_to_user_id()
             .expect("just-completed team item must be assigned");
         activity_log
-            .log_activity(&params.team_id, &assignee, &current.id, &current.name, points)
+            .log_activity(
+                &params.team_id,
+                item.project_id.as_deref(),
+                &assignee,
+                &current.id,
+                &current.name,
+                points,
+            )
             .await?;
         teams
             .add_team_points(&params.team_id, &assignee, points)
@@ -566,7 +583,17 @@ mod tests {
     use super::*;
     use crate::domain::activity_log::ActivityLogEntry;
     use crate::domain::team::TeamRole;
-    use crate::storage::sqlite::{MockActivityLogRepo, MockItemRepo, MockTeamRepo};
+    use crate::storage::sqlite::{
+        MockActivityLogRepo, MockItemRepo, MockProjectRepo, MockTeamRepo,
+    };
+
+    /// `create_team_item`'s `get_by_team` lookup, stubbed to "no backing project" —
+    /// none of these tests care about the resolved `project_id`.
+    fn no_backing_project() -> Arc<dyn ProjectRepo> {
+        let mut mock = MockProjectRepo::new();
+        mock.expect_get_by_team().returning(|_| Ok(None));
+        Arc::new(mock)
+    }
 
     /// A context whose `activity_log` has no expectations set — fine for any test
     /// whose update never crosses a `complete` transition, since `log_activity`/
@@ -603,6 +630,7 @@ mod tests {
         create_team_item(
             &items,
             &teams,
+            &no_backing_project(),
             "member1",
             CreateTeamItemParams {
                 team_id: "t1".to_string(),
@@ -638,6 +666,7 @@ mod tests {
         create_team_item(
             &items,
             &teams,
+            &no_backing_project(),
             "admin1",
             CreateTeamItemParams {
                 team_id: "t1".to_string(),
@@ -1018,7 +1047,7 @@ mod tests {
         let mut activity_log = MockActivityLogRepo::new();
         activity_log
             .expect_log_activity()
-            .withf(|team_id, user_id, item_id, item_name, points_delta| {
+            .withf(|team_id, _project_id, user_id, item_id, item_name, points_delta| {
                 team_id == "t1"
                     && user_id == "member1"
                     && item_id == "item1"
@@ -1026,7 +1055,7 @@ mod tests {
                     && *points_delta == 20
             })
             .times(1)
-            .returning(|_, _, _, _, _| Ok("entry1".to_string()));
+            .returning(|_, _, _, _, _, _| Ok("entry1".to_string()));
 
         let items: Arc<dyn ItemRepo> = Arc::new(items);
         let teams_mock = {
@@ -1132,6 +1161,7 @@ mod tests {
                 Ok(Some(ActivityLogEntry {
                     id: "entry1".to_string(),
                     team_id: "t1".to_string(),
+                    project_id: Some("p1".to_string()),
                     user_id: "member1".to_string(),
                     item_id: "item1".to_string(),
                     item_name: "Mow the lawn".to_string(),
@@ -1269,13 +1299,13 @@ mod tests {
         let mut activity_log = MockActivityLogRepo::new();
         activity_log
             .expect_log_activity()
-            .withf(|team_id, user_id, item_id, _item_name, points_delta| {
+            .withf(|team_id, _project_id, user_id, item_id, _item_name, points_delta| {
                 // Must be logged against the *old* item's id, never the
                 // not-yet-created successor's.
                 team_id == "t1" && user_id == "member1" && item_id == "item1" && *points_delta == 20
             })
             .times(1)
-            .returning(|_, _, _, _, _| Ok("entry1".to_string()));
+            .returning(|_, _, _, _, _, _| Ok("entry1".to_string()));
 
         let items: Arc<dyn ItemRepo> = Arc::new(items);
         let teams_mock = {
@@ -1314,5 +1344,82 @@ mod tests {
         )
         .await
         .expect("should award points even though recurrence also fires");
+    }
+
+    #[tokio::test]
+    async fn create_team_item_resolves_project_id_from_teams_backing_project() {
+        let mut items = MockItemRepo::new();
+        items
+            .expect_create()
+            .withf(|item: &Item| item.project_id.as_deref() == Some("p1"))
+            .times(1)
+            .returning(|_| Ok("new-item-id".to_string()));
+        let items: Arc<dyn ItemRepo> = Arc::new(items);
+
+        let teams = active_member_teams(TeamRole::Member);
+
+        let mut projects_mock = MockProjectRepo::new();
+        projects_mock
+            .expect_get_by_team()
+            .withf(|team_id: &str| team_id == "t1")
+            .returning(|_| {
+                Ok(Some(crate::domain::project::Project {
+                    id: "p1".to_string(),
+                    name: "Family".to_string(),
+                    owner_user_id: "owner1".to_string(),
+                    team_id: Some("t1".to_string()),
+                }))
+            });
+        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
+
+        create_team_item(
+            &items,
+            &teams,
+            &projects,
+            "member1",
+            CreateTeamItemParams {
+                team_id: "t1".to_string(),
+                name: "Mow the lawn".to_string(),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("should create team item");
+    }
+
+    #[tokio::test]
+    async fn update_team_item_carries_forward_project_id_from_current() {
+        let mut items = MockItemRepo::new();
+        items.expect_get_team_item().returning(|_, _| {
+            Ok(Item {
+                id: "item1".to_string(),
+                team_id: Some("t1".to_string()),
+                project_id: Some("p1".to_string()),
+                name: "Same name".to_string(),
+                ..Item::default()
+            })
+        });
+        items
+            .expect_update_team_item()
+            .withf(|item: &Item| item.project_id.as_deref() == Some("p1"))
+            .times(1)
+            .returning(|_| Ok(()));
+        let items: Arc<dyn ItemRepo> = Arc::new(items);
+        let teams = active_member_teams(TeamRole::Member);
+
+        update_team_item(
+            &items,
+            &ctx(teams),
+            "member1",
+            UpdateTeamItemParams {
+                team_id: "t1".to_string(),
+                item_id: "item1".to_string(),
+                name: "Renamed".to_string(),
+                complete: false,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("should update and carry project_id forward");
     }
 }

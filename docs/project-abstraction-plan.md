@@ -747,6 +747,142 @@ passing; new tests assert `project_id` populated correctly on create for both
 paths; `team_activity.rs`'s existing points/activity display verified
 unchanged end-to-end (same data, now sourced via `project_id`).
 
+**Implementation notes:** Done, sub-staged into four independently-verified pieces
+(B2a-B2d) within one session — the plan's own scope turned out to touch 18 production
+call sites plus the activity_log read cutover, larger than a single sitting should be
+reviewed as one diff, so it was broken down the same way A1-A5/B1 already were. No
+new migration was needed for any of B2 — `items.project_id` and
+`activity_log.project_id` already exist as columns from stages A1/B1; B2 is purely
+app-code wiring on top of them.
+
+**B2a (storage/domain additions):** `Item` (`src/domain/item.rs`) and
+`ActivityLogEntry` (`src/domain/activity_log.rs`) both gained `project_id:
+Option<String>`. `ITEM_SELECT`, `create`/`update`/`update_team_item`'s SQL, and the
+two raw `list_due`/`list_due_team_items` SELECTs (`src/storage/sqlite/items.rs`) all
+round-trip the column now; `row_to_item`/`row_to_activity_log_entry`
+(`src/storage/sqlite/mod.rs`) read it back. Two new `ProjectRepo` methods
+(`src/storage/sqlite/mod.rs`'s trait, impl in `src/storage/sqlite/projects.rs`):
+`find_personal_project(user_id) -> Option<Project>` (`WHERE owner_user_id = ? AND
+team_id IS NULL LIMIT 1` — arbitrary pick if a user has more than one, same accepted
+gap as stage B1's backfill) and `get_by_team(team_id) -> Option<Project>`. One new
+`ActivityLogRepo` method, `list_activity_for_project` — the team-keyed
+`list_activity_for_team` was deliberately left untouched rather than migrated
+internally, since it still backs the legacy `ListTeamActivityLog` JSON API operation
+until stage B4 retires it; only `team_activity.rs`'s own read moved. `log_activity`
+gained a `project_id: Option<&str>` parameter and, following A2's precedent for
+`ProjectRepo::create`, needed an explicit `<'a>` lifetime
+(`log_activity<'a>(&'a self, team_id: &'a str, project_id: Option<&'a str>, ...)`) —
+`#[async_trait]`'s desugaring can't elide a lifetime buried inside `Option<&str>`.
+
+**B2b (`ensure_team_project`):** A gap not flagged in the original plan text, found
+during implementation: `service::teams::create_team` never created or attached a
+project at all, so any team created after stage B1's backfill migration ran (i.e.
+any team created from then until B2 shipped) would have had zero attached
+projects — B2's team-item resolution would have silently found nothing for it.
+Closed by adding `service::projects::ensure_team_project(projects, team_id,
+team_name, creator_user_id)` (idempotent — `get_by_team` short-circuits if one
+already exists) and calling it from `create_team` right after `TeamRepo::create`
+succeeds. Uses the create-then-`attach_team` shape (mirroring stage A4) rather than
+passing `team_id` directly to `ProjectRepo::create`, so `attach_team`'s member-seed
+cascade runs — moot in practice for a brand-new team (its only `ACTIVE` member is
+already the creator, seeded as the project's own owner/admin by `create`), but keeps
+the two "create a project for a team" code paths (this, and stage B1's migration)
+structurally consistent. `create_team`'s signature gained a `&Arc<dyn ProjectRepo>`
+parameter — its two call sites (`src/web_ui/teams.rs`, `src/json_api/teams.rs`) both
+already had `TeamRepo` available via `Extension`/`server::Extension` and needed only
+the one new parameter added alongside it.
+
+**B2c (item create/update dual-write):** `create_item`/`create_team_item`
+(`src/service/items.rs`/`src/service/team_items.rs`) each gained a `&Arc<dyn
+ProjectRepo>` parameter and resolve+set `item.project_id` right where `complete`/
+`parent_item_id`/`description` are already overlaid, just before `item.validate()`.
+**Deliberate, lower-risk deviation from the plan text's "create/update paths
+resolve":** `update_item`/`update_team_item` do **not** take a new `ProjectRepo`
+parameter at all — instead `item.project_id = current.project_id.clone();` carries
+the value forward from the already-fetched `current` row. This is safe because an
+item's owner (personal: `user_id`; team: `team_id`) never changes after creation, so
+its resolved project can't change either — carrying forward is exactly as correct as
+re-resolving, without the cost of a second `ProjectRepo` round-trip on every edit or
+a second wave of call-site changes. (The one accepted gap this leaves: an item
+created between stage B1's migration and B2 shipping has `project_id: NULL` in the
+DB, and an update on it will keep propagating `NULL` until it's recreated or a future
+backfill catches it — same class of gap as B1's own "which personal project"
+ambiguity, not new risk introduced here.) This cut the blast radius roughly in
+half: only the **create** paths needed their ~18 call sites updated (`json_api/
+items.rs`, `json_api/team_items.rs`, and the dedicated per-type web_ui screens —
+`simple_lists.rs`, `tasks/handlers.rs`, `events.rs`, `templates.rs` and their
+`team_*.rs` counterparts, each needing one new `Extension<Arc<dyn ProjectRepo>>`
+parameter threaded through, all of which already had a `ProjectRepo` extension
+reachable per stage A5's wiring). Recursive same-owner copy helpers (`clone_children`,
+`sync_offset_children`, `repoint_source_event_tasks`, `sync_source_event_tasks`) needed
+no changes at all — they clone or update existing `Item`s fetched straight from the
+repo, which already carry the right `project_id` from the DB, so it rides along for
+free. **Known, accepted gap, not fixed in this pass:** the cross-ownership-boundary
+copy helpers (`copy_template_children`, `copy_template_children_to_event`,
+`copy_children_as_template` — template library ⇄ real item) were **not** threaded
+with an explicit target `project_id`, so a copied child's row carries whatever
+`project_id` was on the *template* child it was cloned from, not necessarily the new
+parent item's own. In every case reachable today (a user's own personal template
+used on their own personal item; a team's own template library used on that same
+team's item) these coincide, so this is inert in practice — same bounded-risk shape as
+B1's "which personal project" gap, worth revisiting only if it becomes load-bearing
+(e.g. once stage B5d's project-scoped template screens make cross-project template
+use possible).
+
+Also found during B2c: `main.rs`'s internal-auth-mode `web_router` (the `_ =>` match
+arm) had never layered `Extension(project_repo)` at all — stage A5's wiring notes had
+already flagged this gap for future stages. Fixed by adding `.layer(Extension(
+project_repo))` alongside the other four repos in that arm. Caddy mode already had
+`project_repo` layered on the *outer* router (for `caddy_header_middleware`'s own
+pre-processing needs, per that line's existing comment), but for consistency with
+`item_repo`/`team_repo`/`activity_log_repo` — and to remove any doubt about whether a
+typed `Extension` extractor inside `build_web_router()`'s own chain needs its own
+inner-layered copy — `project_repo.clone()` was also added to caddy mode's *inner*
+`web_router` layer chain, matching the shape every other repo already had there.
+
+**B2d (activity_log write + `team_activity.rs` read cutover):**
+`update_team_item`'s points-award branch (`src/service/team_items.rs`) now passes
+`item.project_id.as_deref()` to `log_activity` — `item.project_id` is already
+correct at that point via B2c's carry-forward. `team_activity.rs`'s
+`render_activity_page` resolves `projects.get_by_team(team_id)` and calls the new
+`list_activity_for_project`, falling back to the legacy `list_activity_for_team`
+only if no project currently backs the team (a defensive fallback, not expected to
+fire post-B2b/B1 — added so the activity page can never silently render blank due to
+a resolution gap). Both `team_activity_page` and `undo_activity_log_entry_form`
+gained an `Extension<Arc<dyn ProjectRepo>>` parameter.
+
+**Testing:** 11 new tests (176 total, up from B1's 165): 4 in
+`storage::sqlite::projects` (`find_personal_project`/`get_by_team`, found/not-found
+cases), 1 in `storage::sqlite::activity_log` (`list_activity_for_project` scoping), 2
+in `service::projects` (`ensure_team_project` create-and-attach vs. no-op), 2 in
+`service::items` (`create_item` resolves from `find_personal_project`; `update_item`
+carries `project_id` forward from `current`), 2 in `service::team_items` (the same
+pair for `create_team_item`/`update_team_item`, team-keyed). `team_activity.rs`
+itself has no unit tests, matching this codebase's existing convention that `web_ui`
+handler modules aren't unit-tested at this granularity (verified by manual smoke
+test instead, below). `cargo test`: 176/176 passing, zero regressions. `cargo check`:
+clean, only the same pre-existing dead-code warnings as every prior stage.
+
+**Manual smoke test** (built the binary, ran against a throwaway SQLite DB,
+`TODO_AUTH_MODE=caddy` + `TODO_DEV_EMAIL`, migrations 10 and 11 both applied
+cleanly): minted a token; confirmed `ListProjects` showed the auto-created
+"Personal" project; created a personal item via `CreateItem` and confirmed via
+direct SQLite query that its `project_id` matched the Personal project's id exactly;
+created a team via `CreateTeam` and confirmed `ensure_team_project` fired (a
+`projects` row with that `team_id` existed with no explicit `AttachTeamToProject`
+call); created a team item with `points`/`assignedToUserId` and confirmed its
+`project_id` matched the team's backing project; completed it via `UpdateTeamItem`
+and confirmed the resulting `activity_log` row had both `team_id` and the correct
+`project_id` populated; loaded `GET /web/team-activity/:team_id` and confirmed the
+completion rendered correctly (proving `render_activity_page`'s
+`get_by_team`-then-`list_activity_for_project` resolution works end to end, not just
+at the mock level); called the legacy `GET /teams/:teamId/activity-log` JSON API
+operation and confirmed it still returns the same entry via the untouched
+`list_activity_for_team` path, proving the dual-write bridge holds from both
+directions. Scratch DB and server process cleaned up after verification. No web UI
+screens beyond the existing `team_activity.rs` were touched, per this stage's own
+scope — B3 is next.
+
 ### B3 — Project-scoped item repo/service read paths
 
 - `ItemRepo` gains `list_by_project`/`get_by_project` (and

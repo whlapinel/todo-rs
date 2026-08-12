@@ -3,7 +3,7 @@ use crate::domain::team::TeamRole;
 use super::nav::{self, ActiveContext, SidebarSection};
 use crate::service::error::ItemError;
 use crate::service::teams as team_service;
-use crate::storage::sqlite::{TeamRepo, UserRepo};
+use crate::storage::sqlite::{ProjectRepo, TeamRepo, UserRepo};
 use askama::Template;
 use axum::extract::{Extension, Form, Path};
 use axum::response::{Html, IntoResponse, Response};
@@ -88,9 +88,10 @@ pub struct CreateTeamForm {
 pub async fn create_team_form(
     Extension(auth_user): Extension<AuthUser>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Form(form): Form<CreateTeamForm>,
 ) -> Result<Html<String>, ItemError> {
-    team_service::create_team(&teams, &form.name, &auth_user.user_id).await?;
+    team_service::create_team(&teams, &projects, &form.name, &auth_user.user_id).await?;
     // A new team changes only the active-teams section, but accept/leave below also need to
     // touch the pending section — rendering the whole page keeps this handler consistent with
     // those, rather than being the one exception that returns a narrower fragment.

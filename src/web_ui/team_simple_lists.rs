@@ -8,7 +8,7 @@ use crate::service::team_items::{
     UpdateTeamItemParams,
 };
 use crate::service::teams as team_service;
-use crate::storage::sqlite::{ActivityLogRepo, ItemRepo, TeamRepo};
+use crate::storage::sqlite::{ActivityLogRepo, ItemRepo, ProjectRepo, TeamRepo};
 use askama::Template;
 use axum::extract::{Extension, Form, Path};
 use axum::response::{Html, IntoResponse, Response};
@@ -407,12 +407,13 @@ pub async fn create_team_simple_item_form(
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Form(form): Form<TeamSimpleItemForm>,
 ) -> Result<Response, ItemError> {
     let redirect = form.redirect.is_some();
     let params = create_params_from_form(&team_id, &form);
     let parent_item_id = params.parent_item_id.clone();
-    team_item_service::create_team_item(&repo, &teams, &auth_user.user_id, params).await?;
+    team_item_service::create_team_item(&repo, &teams, &projects, &auth_user.user_id, params).await?;
     if redirect {
         return Ok(redirect_to_team_simple_lists(&team_id));
     }
@@ -436,6 +437,7 @@ pub async fn create_team_simple_items_batch(
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Form(form): Form<BatchForm>,
 ) -> Result<Response, ItemError> {
     let parent_item_id = non_empty(&form.parent_item_id);
@@ -451,7 +453,7 @@ pub async fn create_team_simple_items_batch(
             item_type: Some(ItemKind::Simple),
             ..Default::default()
         };
-        team_item_service::create_team_item(&repo, &teams, &auth_user.user_id, params).await?;
+        team_item_service::create_team_item(&repo, &teams, &projects, &auth_user.user_id, params).await?;
     }
     if form.redirect.is_some() {
         return Ok(redirect_to_team_simple_lists(&team_id));

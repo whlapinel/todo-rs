@@ -4,7 +4,7 @@ use crate::service::items::ItemError;
 use crate::service::team_items::{
     self as team_item_service, CreateTeamItemParams, UpdateTeamItemContext, UpdateTeamItemParams,
 };
-use crate::storage::sqlite::{ActivityLogRepo, ItemRepo, RepoError, TeamRepo, UserRepo};
+use crate::storage::sqlite::{ActivityLogRepo, ItemRepo, ProjectRepo, RepoError, TeamRepo, UserRepo};
 use std::collections::HashMap;
 use std::sync::Arc;
 use todo_server_sdk::{error, input, output, server, types::DateTime as SmithyDateTime};
@@ -37,6 +37,7 @@ pub async fn create_team_item(
     input: input::CreateTeamItemInput,
     server::Extension(repo): server::Extension<Arc<dyn ItemRepo>>,
     server::Extension(teams): server::Extension<Arc<dyn TeamRepo>>,
+    server::Extension(projects): server::Extension<Arc<dyn ProjectRepo>>,
     server::Extension(auth): server::Extension<AuthUser>,
 ) -> Result<output::CreateTeamItemOutput, error::CreateTeamItemError> {
     let due_date = input
@@ -54,6 +55,7 @@ pub async fn create_team_item(
     let item_id = team_item_service::create_team_item(
         &repo,
         &teams,
+        &projects,
         &auth.user_id,
         CreateTeamItemParams {
             team_id: input.team_id,

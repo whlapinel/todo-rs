@@ -69,6 +69,7 @@ mod tests {
         ActivityLogEntry {
             id: "e1".to_string(),
             team_id: team_id.to_string(),
+            project_id: Some("p1".to_string()),
             user_id: user_id.to_string(),
             item_id: "item1".to_string(),
             item_name: "Mow the lawn".to_string(),
@@ -172,6 +173,7 @@ mod tests {
                 "CREATE TABLE activity_log (
                     id TEXT PRIMARY KEY,
                     team_id TEXT NOT NULL,
+                    project_id TEXT,
                     user_id TEXT NOT NULL,
                     item_id TEXT NOT NULL,
                     item_name TEXT NOT NULL,
@@ -199,7 +201,7 @@ mod tests {
         let activity_log: Arc<dyn ActivityLogRepo> = Arc::new(SqliteActivityLogRepo(pool.clone()));
 
         let entry_id = activity_log
-            .log_activity("t1", "u1", "item1", "Mow the lawn", 30)
+            .log_activity("t1", Some("p1"), "u1", "item1", "Mow the lawn", 30)
             .await
             .unwrap();
 

@@ -8,7 +8,7 @@ use crate::service::items::{self as item_service};
 use crate::service::team_items::{self as team_item_service, require_active_member, CreateTeamItemParams, UpdateTeamItemContext, UpdateTeamItemParams};
 use crate::service::teams as team_service;
 use crate::service::templates::{self as template_service, CreateTeamTemplateParams, UpdateTeamTemplateParams};
-use crate::storage::sqlite::{ActivityLogRepo, ItemRepo, TeamRepo};
+use crate::storage::sqlite::{ActivityLogRepo, ItemRepo, ProjectRepo, TeamRepo};
 use askama::Template;
 use axum::extract::{Extension, Form, Path};
 use axum::response::{Html, IntoResponse, Response};
@@ -475,6 +475,7 @@ pub async fn create_team_template_child_form(
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Form(form): Form<TeamTemplateChildForm>,
 ) -> Result<Html<String>, ItemError> {
     let params = CreateTeamItemParams {
@@ -484,7 +485,7 @@ pub async fn create_team_template_child_form(
         due_offset_days: parse_offset(&form.due_offset_days),
         ..Default::default()
     };
-    team_item_service::create_team_item(&repo, &teams, &auth_user.user_id, params).await?;
+    team_item_service::create_team_item(&repo, &teams, &projects, &auth_user.user_id, params).await?;
     render_children_fragment(&repo, &team_id, &template_id).await
 }
 
@@ -622,6 +623,7 @@ pub async fn use_team_template_form(
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     TzOffset(tz): TzOffset,
     Form(form): Form<UseTeamTemplateForm>,
 ) -> Result<Response, ItemError> {
@@ -654,7 +656,7 @@ pub async fn use_team_template_form(
         timezone_offset_minutes: Some(tz),
         ..Default::default()
     };
-    let new_item_id = team_item_service::create_team_item(&repo, &teams, &auth_user.user_id, params).await?;
+    let new_item_id = team_item_service::create_team_item(&repo, &teams, &projects, &auth_user.user_id, params).await?;
 
     let new_item = repo.get_team_item(&team_id, &new_item_id).await.map_err(ItemError::from)?;
 

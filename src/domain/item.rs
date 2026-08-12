@@ -256,6 +256,12 @@ pub struct Item {
     pub id: String,
     pub user_id: Option<String>,
     pub team_id: Option<String>,
+    /// Dual-written alongside `user_id`/`team_id` (see docs/project-abstraction-plan.md
+    /// stage B2) — the project this item belongs to under the new Project abstraction.
+    /// Populated on create; on update it's carried forward from the fetched `current`
+    /// row rather than re-resolved, since an item's owner (and thus its project) never
+    /// changes after creation.
+    pub project_id: Option<String>,
     pub parent_item_id: Option<String>,
     pub name: String,
     pub description: Option<String>,

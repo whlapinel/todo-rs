@@ -54,6 +54,41 @@ impl ProjectRepo for SqliteProjectRepo {
             .ok_or_else(not_found)
     }
 
+    async fn find_personal_project(&self, user_id: &str) -> Result<Option<Project>, RepoError> {
+        sqlx::query(
+            "SELECT id, name, owner_user_id, team_id FROM projects \
+             WHERE owner_user_id = ? AND team_id IS NULL LIMIT 1",
+        )
+        .bind(user_id)
+        .fetch_optional(&self.0)
+        .await
+        .map_err(db_err)
+        .map(|row| {
+            row.map(|row| Project {
+                id: row.get("id"),
+                name: row.get("name"),
+                owner_user_id: row.get("owner_user_id"),
+                team_id: row.get("team_id"),
+            })
+        })
+    }
+
+    async fn get_by_team(&self, team_id: &str) -> Result<Option<Project>, RepoError> {
+        sqlx::query("SELECT id, name, owner_user_id, team_id FROM projects WHERE team_id = ? LIMIT 1")
+            .bind(team_id)
+            .fetch_optional(&self.0)
+            .await
+            .map_err(db_err)
+            .map(|row| {
+                row.map(|row| Project {
+                    id: row.get("id"),
+                    name: row.get("name"),
+                    owner_user_id: row.get("owner_user_id"),
+                    team_id: row.get("team_id"),
+                })
+            })
+    }
+
     async fn update_name(&self, project_id: &str, name: &str) -> Result<(), RepoError> {
         let rows = sqlx::query("UPDATE projects SET name = ? WHERE id = ?")
             .bind(name)
@@ -365,6 +400,48 @@ mod tests {
 
         let project = repo.get(&id).await.unwrap();
         assert_eq!(project.team_id, Some("t1".to_string()));
+    }
+
+    #[tokio::test]
+    async fn find_personal_project_finds_team_less_project_owned_by_user() {
+        let pool = test_pool().await;
+        let repo = SqliteProjectRepo(pool.clone());
+        insert_user(&pool, "u1", "Ann").await;
+        let personal_id = repo.create("Personal", "u1", None).await.unwrap();
+        repo.create("Family", "u1", Some("t1")).await.unwrap();
+
+        let found = repo.find_personal_project("u1").await.unwrap();
+        assert_eq!(found.map(|p| p.id), Some(personal_id));
+    }
+
+    #[tokio::test]
+    async fn find_personal_project_returns_none_when_absent() {
+        let pool = test_pool().await;
+        let repo = SqliteProjectRepo(pool.clone());
+        insert_user(&pool, "u1", "Ann").await;
+        repo.create("Family", "u1", Some("t1")).await.unwrap();
+
+        let found = repo.find_personal_project("u1").await.unwrap();
+        assert!(found.is_none());
+    }
+
+    #[tokio::test]
+    async fn get_by_team_finds_the_attached_project() {
+        let pool = test_pool().await;
+        let repo = SqliteProjectRepo(pool.clone());
+        insert_user(&pool, "u1", "Ann").await;
+        let id = repo.create("Family", "u1", Some("t1")).await.unwrap();
+
+        let found = repo.get_by_team("t1").await.unwrap();
+        assert_eq!(found.map(|p| p.id), Some(id));
+    }
+
+    #[tokio::test]
+    async fn get_by_team_returns_none_when_no_project_backs_the_team() {
+        let pool = test_pool().await;
+        let repo = SqliteProjectRepo(pool.clone());
+        let found = repo.get_by_team("missing-team").await.unwrap();
+        assert!(found.is_none());
     }
 
     #[tokio::test]
