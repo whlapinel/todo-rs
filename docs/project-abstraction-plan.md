@@ -2568,6 +2568,18 @@ Five independently-landable sub-stages, same one-stage-per-session process as A/
   here, since fixing it means either removing the five tools or repointing
   them at `ProjectItem`, a code change outside this pass's scope.
 
+  **Follow-up (same session, after C5 landed):** at the user's request, the
+  five broken tools were removed outright from `mcp-server/src/index.ts`
+  (both their tool definitions and their `case` handlers) rather than
+  repointed — the `list_items`/`get_item`/`create_item`/`update_item`/
+  `delete_item` family already covers team-backed projects via `projectId`,
+  so there was nothing left for a repointed version to do that the existing
+  tools don't already do. `npm run build` (in `mcp-server/`) confirmed clean
+  with no TypeScript errors. `CLAUDE.md`'s MCP section note was updated from
+  "known bug, not yet fixed" to describe the tools as removed. No server,
+  Smithy, or Rust-side change was needed — this was purely dead client-side
+  code in the MCP server calling a route that no longer existed.
+
   `docs/prl-user-guide.md` got the equivalent treatment: every `items`
   subcommand example updated to include the now-required `--project
   <project-id>`, the "optional, falls through to personal items" framing
