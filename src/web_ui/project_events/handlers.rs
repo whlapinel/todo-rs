@@ -19,11 +19,8 @@ use axum::response::{Html, IntoResponse, Response};
 use chrono::{Datelike, NaiveDate, Utc};
 use std::sync::Arc;
 
-fn active_context(team_id: &Option<String>) -> ActiveContext {
-    match team_id {
-        Some(team_id) => ActiveContext::Team(team_id.clone()),
-        None => ActiveContext::Personal,
-    }
+fn active_context(project_id: &str) -> ActiveContext {
+    ActiveContext::Project(project_id.to_string())
 }
 
 #[derive(serde::Deserialize)]
@@ -41,14 +38,14 @@ pub async fn project_events_page(
     TzOffset(tz): TzOffset,
     Query(q): Query<ShowCompleteQuery>,
 ) -> Result<Html<String>, ItemError> {
-    let project = project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
+    let _project = project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
     let show_complete = q.show_complete.is_some();
     let items = list_project_events(&repo, &project_id).await?;
     let rows = super::render_rows(&items, &project_id, show_complete, tz)?;
     let nav_html = nav::build_nav_html(
-        &teams,
+        &projects,
         &auth_user.user_id,
-        active_context(&project.team_id),
+        active_context(&project_id),
         SidebarSection::Events,
     )
     .await?;
@@ -67,11 +64,11 @@ pub async fn new_project_event_page(
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Query(q): Query<ShowCompleteQuery>,
 ) -> Result<Html<String>, ItemError> {
-    let project = project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
+    let _project = project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
     let nav_html = nav::build_nav_html(
-        &teams,
+        &projects,
         &auth_user.user_id,
-        active_context(&project.team_id),
+        active_context(&project_id),
         SidebarSection::Events,
     )
     .await?;
@@ -104,7 +101,7 @@ pub async fn project_events_calendar_page(
     TzOffset(tz): TzOffset,
     Query(q): Query<CalendarQuery>,
 ) -> Result<Html<String>, ItemError> {
-    let project = project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
+    let _project = project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
     let today = crate::web_ui::to_local(Utc::now(), tz).date_naive();
     let year = q.year.unwrap_or_else(|| today.year());
     let month = q
@@ -117,9 +114,9 @@ pub async fn project_events_calendar_page(
     let (prev_year, prev_month) = prev_month(year, month);
     let (next_year, next_month) = next_month(year, month);
     let nav_html = nav::build_nav_html(
-        &teams,
+        &projects,
         &auth_user.user_id,
-        active_context(&project.team_id),
+        active_context(&project_id),
         SidebarSection::Events,
     )
     .await?;
@@ -148,7 +145,7 @@ pub async fn project_event_detail_page(
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     TzOffset(tz): TzOffset,
 ) -> Result<Html<String>, ItemError> {
-    let project = project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
+    let _project = project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
     let item = repo
         .get_by_project(&project_id, &item_id)
         .await
@@ -156,9 +153,9 @@ pub async fn project_event_detail_page(
     let item = require_event(item)?;
     let view = ProjectEventDetailView::from_item(&item, &project_id, tz).render()?;
     let nav_html = nav::build_nav_html(
-        &teams,
+        &projects,
         &auth_user.user_id,
-        active_context(&project.team_id),
+        active_context(&project_id),
         SidebarSection::Events,
     )
     .await?;
@@ -180,7 +177,7 @@ pub async fn project_event_edit_page(
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     TzOffset(tz): TzOffset,
 ) -> Result<Html<String>, ItemError> {
-    let project = project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
+    let _project = project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
     let item = repo
         .get_by_project(&project_id, &item_id)
         .await
@@ -188,9 +185,9 @@ pub async fn project_event_edit_page(
     let item = require_event(item)?;
     let fields = ProjectEventDetailFields::from_item(&item, &project_id, tz, false).render()?;
     let nav_html = nav::build_nav_html(
-        &teams,
+        &projects,
         &auth_user.user_id,
-        active_context(&project.team_id),
+        active_context(&project_id),
         SidebarSection::Events,
     )
     .await?;
@@ -339,7 +336,7 @@ pub async fn update_project_event_form(
     TzOffset(tz): TzOffset,
     Form(form): Form<ProjectEventForm>,
 ) -> Result<Response, ItemError> {
-    let project = project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
+    let _project = project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
     let current = repo
         .get_by_project(&project_id, &item_id)
         .await
@@ -361,9 +358,9 @@ pub async fn update_project_event_form(
         Ok(updated) if close => {
             let view = ProjectEventDetailView::from_item(&updated, &project_id, tz).render()?;
             let nav_html = nav::build_nav_html(
-                &teams,
+                &projects,
                 &auth_user.user_id,
-                active_context(&project.team_id),
+                active_context(&project_id),
                 SidebarSection::Events,
             )
             .await?;

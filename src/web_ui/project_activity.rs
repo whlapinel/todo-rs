@@ -114,11 +114,8 @@ async fn render_activity_page(
         .iter()
         .map(|e| ProjectActivityRow::from_entry(e, project_id, &names, requester_user_id, tz).render())
         .collect::<Result<Vec<_>, _>>()?;
-    let active = match &project.team_id {
-        Some(team_id) => ActiveContext::Team(team_id.clone()),
-        None => ActiveContext::Personal,
-    };
-    let nav_html = nav::build_nav_html(teams, requester_user_id, active, SidebarSection::None).await?;
+    let active = ActiveContext::Project(project_id.to_string());
+    let nav_html = nav::build_nav_html(projects, requester_user_id, active, SidebarSection::None).await?;
     render(ProjectActivityPageTemplate {
         project_id: project_id.to_string(),
         rows,

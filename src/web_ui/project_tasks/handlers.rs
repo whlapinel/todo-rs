@@ -29,11 +29,8 @@ fn project_tasks_list_url(project_id: &str) -> String {
     format!("/web/projects/{project_id}/tasks")
 }
 
-fn active_context(team_id: &Option<String>) -> ActiveContext {
-    match team_id {
-        Some(team_id) => ActiveContext::Team(team_id.clone()),
-        None => ActiveContext::Personal,
-    }
+fn active_context(project_id: &str) -> ActiveContext {
+    ActiveContext::Project(project_id.to_string())
 }
 
 #[derive(serde::Deserialize)]
@@ -67,9 +64,9 @@ pub async fn project_tasks_page(
         None => None,
     };
     let nav_html = nav::build_nav_html(
-        &teams,
+        &projects,
         &auth_user.user_id,
-        active_context(&project.team_id),
+        active_context(&project_id),
         SidebarSection::Tasks,
     )
     .await?;
@@ -99,9 +96,9 @@ pub async fn new_project_task_page(
         None => (Vec::new(), false),
     };
     let nav_html = nav::build_nav_html(
-        &teams,
+        &projects,
         &auth_user.user_id,
-        active_context(&project.team_id),
+        active_context(&project_id),
         SidebarSection::Tasks,
     )
     .await?;
@@ -138,7 +135,7 @@ pub async fn project_tasks_calendar_page(
     TzOffset(tz): TzOffset,
     Query(q): Query<CalendarQuery>,
 ) -> Result<Html<String>, ItemError> {
-    let project = project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
+    let _project = project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
     let today = crate::web_ui::to_local(Utc::now(), tz).date_naive();
     let year = q.year.unwrap_or_else(|| today.year());
     let month = q
@@ -151,9 +148,9 @@ pub async fn project_tasks_calendar_page(
     let (prev_year, prev_month) = prev_month(year, month);
     let (next_year, next_month) = next_month(year, month);
     let nav_html = nav::build_nav_html(
-        &teams,
+        &projects,
         &auth_user.user_id,
-        active_context(&project.team_id),
+        active_context(&project_id),
         SidebarSection::Tasks,
     )
     .await?;
@@ -203,9 +200,9 @@ pub async fn project_task_detail_page(
     )
     .render()?;
     let nav_html = nav::build_nav_html(
-        &teams,
+        &projects,
         &auth_user.user_id,
-        active_context(&project.team_id),
+        active_context(&project_id),
         SidebarSection::Tasks,
     )
     .await?;
@@ -251,9 +248,9 @@ pub async fn project_task_edit_page(
     )
     .render()?;
     let nav_html = nav::build_nav_html(
-        &teams,
+        &projects,
         &auth_user.user_id,
-        active_context(&project.team_id),
+        active_context(&project_id),
         SidebarSection::Tasks,
     )
     .await?;
@@ -501,9 +498,9 @@ pub async fn update_project_task_form(
             )
             .render()?;
             let nav_html = nav::build_nav_html(
-                &teams,
+                &projects,
                 &auth_user.user_id,
-                active_context(&project.team_id),
+                active_context(&project_id),
                 SidebarSection::Tasks,
             )
             .await?;

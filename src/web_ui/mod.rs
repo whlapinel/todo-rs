@@ -1,7 +1,5 @@
 pub mod assigned_items;
-pub mod dashboard;
 pub mod error;
-pub mod events;
 pub mod login;
 pub mod nav;
 pub mod project_activity;
@@ -11,16 +9,7 @@ pub mod project_simple_lists;
 pub mod project_tasks;
 pub mod project_templates;
 pub mod projects;
-pub mod simple_lists;
-pub mod tasks;
-pub mod team_activity;
-pub mod team_dashboard;
-pub mod team_events;
-pub mod team_simple_lists;
-pub mod team_tasks;
-pub mod team_templates;
 pub mod teams;
-pub mod templates;
 pub mod components;
 
 use async_trait::async_trait;

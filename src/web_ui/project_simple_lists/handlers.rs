@@ -16,11 +16,8 @@ use axum::extract::{Extension, Form, Path};
 use axum::response::{Html, IntoResponse, Response};
 use std::sync::Arc;
 
-fn active_context(team_id: &Option<String>) -> ActiveContext {
-    match team_id {
-        Some(team_id) => ActiveContext::Team(team_id.clone()),
-        None => ActiveContext::Personal,
-    }
+fn active_context(project_id: &str) -> ActiveContext {
+    ActiveContext::Project(project_id.to_string())
 }
 
 pub async fn project_simple_lists_page(
@@ -42,9 +39,9 @@ pub async fn project_simple_lists_page(
         None => None,
     };
     let nav_html = nav::build_nav_html(
-        &teams,
+        &projects,
         &auth_user.user_id,
-        active_context(&project.team_id),
+        active_context(&project_id),
         SidebarSection::SimpleLists,
     )
     .await?;
@@ -68,12 +65,12 @@ pub async fn new_project_simple_item_page(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
 ) -> Result<Html<String>, ItemError> {
-    let project =
+    let _project =
         project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
     let nav_html = nav::build_nav_html(
-        &teams,
+        &projects,
         &auth_user.user_id,
-        active_context(&project.team_id),
+        active_context(&project_id),
         SidebarSection::SimpleLists,
     )
     .await?;
@@ -87,7 +84,7 @@ pub async fn project_simple_item_detail_page(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
 ) -> Result<Html<String>, ItemError> {
-    let project =
+    let _project =
         project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
     let item = repo
         .get_by_project(&project_id, &item_id)
@@ -95,9 +92,9 @@ pub async fn project_simple_item_detail_page(
         .map_err(ItemError::from)?;
     let item = require_simple(item)?;
     let nav_html = nav::build_nav_html(
-        &teams,
+        &projects,
         &auth_user.user_id,
-        active_context(&project.team_id),
+        active_context(&project_id),
         SidebarSection::SimpleLists,
     )
     .await?;
@@ -118,7 +115,7 @@ pub async fn project_simple_item_edit_page(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
 ) -> Result<Html<String>, ItemError> {
-    let project =
+    let _project =
         project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
     let item = repo
         .get_by_project(&project_id, &item_id)
@@ -127,9 +124,9 @@ pub async fn project_simple_item_edit_page(
     let item = require_simple(item)?;
     let fields = ProjectSimpleItemDetailFields::from_item(&item, &project_id, false).render()?;
     let nav_html = nav::build_nav_html(
-        &teams,
+        &projects,
         &auth_user.user_id,
-        active_context(&project.team_id),
+        active_context(&project_id),
         SidebarSection::SimpleLists,
     )
     .await?;
@@ -255,7 +252,7 @@ pub async fn update_project_simple_item_form(
     Extension(activity_log): Extension<Arc<dyn crate::storage::sqlite::ActivityLogRepo>>,
     Form(form): Form<ProjectSimpleItemForm>,
 ) -> Result<Response, ItemError> {
-    let project =
+    let _project =
         project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
     let current = repo
         .get_by_project(&project_id, &item_id)
@@ -284,9 +281,9 @@ pub async fn update_project_simple_item_form(
         .map_err(ItemError::from)?;
     if close {
         let nav_html = nav::build_nav_html(
-            &teams,
+            &projects,
             &auth_user.user_id,
-            active_context(&project.team_id),
+            active_context(&project_id),
             SidebarSection::SimpleLists,
         )
         .await?;

@@ -1604,6 +1604,121 @@ unaffected, proving old and new coexist per this stage's own scope. Scratch DB a
 process cleaned up after verification. No CLI or MCP server changes, per this stage's own
 scope — B5f (Nav + legacy retirement) is next.
 
+**B5f implementation notes:** Done. **Decision confirmed with the user before this stage
+started** (the one open call the plan flagged): legacy URLs are **removed outright**, not
+redirected — every `/web/tasks`, `/web/team-tasks/:team_id`, `/web/events`,
+`/web/team-events/:team_id`, `/web/simple-lists`, `/web/team-simple-lists/:team_id`,
+`/web/templates`, `/web/team-templates/:team_id`, `/web/dashboard`, `/web/team-dashboard/:team_id`,
+and `/web/team-activity/:team_id` route now 404s via the existing `web_not_found` fallback,
+same as any other unmatched `/web/*` path.
+
+**Deleted outright** (source, not just routes): `src/web_ui/{tasks/, team_tasks.rs, events.rs,
+team_events.rs, simple_lists.rs, team_simple_lists.rs, templates.rs, team_templates.rs,
+dashboard.rs, team_dashboard.rs, team_activity.rs}` and their `templates/{tasks,team_tasks,
+events,team_events,simple_lists,team_simple_lists,templates,team_templates,dashboard,
+team_dashboard,team_activity}/` directories, plus the corresponding 11 `pub mod` lines in
+`src/web_ui/mod.rs`, all `use web_ui::<legacy>::*` imports and route blocks in `src/main.rs`.
+`teams.rs` and `assigned_items.rs` were kept and updated in place, exactly as the plan scoped
+("Team is a pure group now"/"already a cross-project query") — neither was superseded by a
+project-scoped equivalent.
+
+**`nav.rs` rewritten as a project switcher**, not a mechanical rename of the old Personal/Team
+switcher: `ActiveContext` is now `Project(String) | None` (previously `Personal | Team(String)`)
+— `None` covers every page with no single natural project (the `/web/projects` list itself,
+`/web/assigned-items`, and the teams list), where the plan's own "no single natural section"
+precedent (`SidebarSection::None`) already existed for an analogous case. `build_nav_html` now
+takes `&Arc<dyn ProjectRepo>` instead of `&Arc<dyn TeamRepo>` — the top switcher's pills are
+every project the requesting user belongs to (`service::projects::list_projects`), not
+Personal-plus-teams. One deliberate simplification not spelled out in the plan text: the sidebar's
+4 section links (Tasks/Events/Simple Lists/Templates) and two new fixed-position Dashboard/Activity
+links are all wrapped in a project-presence check (`ActiveContext::Project(id)` vs `None`) — on a
+page with no active project these are omitted entirely rather than guessing a target, which
+`templates/nav_sidebar_inner.html` implements via two `{% if let Some(href) = ... %}` blocks
+(`dashboard_href`/`activity_href`, new `NavTemplate` fields) around the fixed-links group. This is
+new behavior the old switcher never needed (Personal was always a valid fallback context before;
+there's no equivalent "default project" now that Team dropped the item-container role). The
+logo link and `nav_sidebar_inner.html`'s own always-present "Dashboard" fixed link both moved off
+`/web/dashboard` — the logo now points at `/web/projects`, and the old always-present "Dashboard"
+entry became the new conditional one described above (there's no project-agnostic dashboard to
+send the logo to anymore).
+
+**Every surviving handler's `active_context(&project.team_id)` helper simplified to
+`active_context(project_id: &str)`** (`project_tasks/handlers.rs`, `project_events/handlers.rs`,
+`project_simple_lists/handlers.rs`, `project_templates/handlers.rs`, `project_dashboard.rs` — 5
+files, each with its own local copy of the helper per existing per-screen-duplication precedent) —
+now a trivial `ActiveContext::Project(project_id.to_string())` wrapper, since `ActiveContext` keys
+on project id directly rather than being derived from the project's `team_id`. `project_activity.rs`
+had the equivalent logic inlined rather than as a named helper; simplified the same way. This
+mechanical change had a side effect worth flagging: several handlers had fetched `project` (via
+`service::projects::get_project`, which doubles as the membership-check gate) *solely* to read
+`.team_id` for the old `active_context` call — with `project_id` now passed directly, those
+bindings became compiler-flagged unused variables. Renamed each to `let _project = ...` (18 call
+sites across `project_events/handlers.rs`, `project_simple_lists/handlers.rs`, and
+`project_templates/handlers.rs`) rather than deleting the fetch — the call's membership-check side
+effect is still required, only its return value became unused. Every handler that still reads
+`project.team_id` for something else (points labels, assignee dropdowns, names-for-team lookups)
+kept its binding named `project` unchanged.
+
+**`preset_range`/`PRESETS` duplicated into `project_dashboard.rs`** (task 4, called out separately
+in the plan since it was flagged as the one real compile-blocker): both were `pub(crate)` in the
+now-deleted `dashboard.rs` and imported via `use super::dashboard::{preset_range, PRESETS}` —
+copied verbatim into `project_dashboard.rs` as private items, matching the "duplicate per-screen
+helpers rather than widen a legacy module's visibility" precedent every prior B5 sub-stage already
+established (most recently B5e's own `dashboard_date`/`dashboard_has_time`/`type_symbol`).
+
+**Two dead-link fallbacks fixed** (both previously pointed at a legacy URL that no longer exists
+after this stage's deletions):
+- `teams.rs`'s `render_team_detail`: `view_items_href`'s `None` branch (no project backs the team
+  yet — defensively unreachable in practice per B2b's `ensure_team_project`, but the `Option` still
+  exists in the type) used to fall back to `/web/team-tasks/{team_id}`; now falls back to
+  `/web/projects` (the list page) for all three of `view_items_href`/`dashboard_href`/
+  `activity_href`, computed together from one `projects.get_by_team(team_id)` call rather than
+  three separate ones.
+- `assigned_items.rs`'s `detail_url`: previously branched on `item.project_id` being `Some`/`None`,
+  falling back to a legacy `/web/team-tasks/{team_id}/...`-style URL for a pre-B2 item with no
+  `project_id`. That legacy target no longer exists, so `AssignedItemRow::from_item` now requires
+  `project_id` to be `Some` (`item.project_id.clone()?`, alongside the pre-existing `team_id`
+  requirement) and silently omits the row via the same `filter_map` otherwise — an accepted,
+  bounded gap in the same class as the one B2c/B5e notes already flagged for this exact scenario,
+  now resolved by omission (a row disappears) rather than by linking somewhere that 404s.
+
+**`templates/teams/detail_page.html`'s Dashboard/Activity links retargeted** — B5e's own notes had
+explicitly deferred this ("left for a future pass") since the legacy targets still worked at the
+time; this stage's deletions made deferring no longer an option. `TeamDetailPageTemplate` gained
+`dashboard_href`/`activity_href` fields (alongside the existing `view_items_href`, all three
+resolved together as described above) and the template's two hardcoded `/web/team-dashboard/{{ id
+}}`/`/web/team-activity/{{ id }}` `<a href>`s became `{{ dashboard_href }}`/`{{ activity_href }}`.
+
+**Verification:** `cargo check`/`cargo build`: clean after the deletions and rewiring — the only
+compile errors encountered mid-stage were the expected transient ones from legacy files not yet
+deleted (each resolved by either finishing that file's nav-call update or, for the legacy files
+themselves, deleting them outright) plus a handful of `active_context`'s newly-unused-`project`
+warnings (see above), all resolved before the final check. `cargo test`: 202/202 passing, zero
+regressions — this stage touched no service/storage/domain code, matching every prior B5
+sub-stage's "web_ui layer only" precedent. `task web-styles`: clean.
+
+**Manual smoke test** (built the binary, ran against a throwaway SQLite DB via
+`TODO_AUTH_MODE=caddy` + `TODO_DEV_EMAIL`, migrations 10/11 applied cleanly, exercised via curl
+with a minted bearer token): confirmed `GET /` now 303s to `/web/projects` (not `/web/dashboard`);
+confirmed every legacy URL (`/web/tasks`, `/web/dashboard`, and the rest of the list above) now
+404s; confirmed every project-scoped and unaffected screen (`/web/projects`,
+`/web/projects/:id/{tasks,dashboard,activity}`, `/web/teams`, `/web/assigned-items`) still returns
+HTTP 200. Inspected the rendered nav HTML directly: on the Personal project's Tasks page, the top
+switcher showed a single active "Personal" pill and the sidebar showed both the conditional
+Dashboard/Activity links and the 4 section links; created a team via `CreateTeam` (confirming
+`ensure_team_project` still fires) and confirmed `ListProjects` returned both projects; on
+`/web/projects` itself (no active project) confirmed the top switcher showed both project pills
+with neither active and the sidebar's conditional group was empty (no Dashboard/Activity entries,
+only the always-present Assigned to me/Teams/Projects links) — confirming `ActiveContext::None`
+correctly suppresses the project-scoped links rather than guessing a target. Loaded the team's
+`/web/teams/:id` detail page and confirmed all three of "View items"/"Dashboard"/"View activity"
+now point at `/web/projects/{project_id}/tasks`/`.../dashboard`/`.../activity` respectively (not
+any legacy URL). Created a team task with `points` via the `ProjectItem` API and confirmed it
+rendered correctly on the project-scoped Tasks page with the "Family" pill shown active. Grepped
+the entire `templates/`/`src/` tree for every legacy URL pattern post-deletion and confirmed zero
+remaining references anywhere in the codebase. Scratch DB and server process cleaned up after
+verification. No CLI or MCP server changes, per this stage's own scope — B6 (CLI) is next.
+
 ### B6 — CLI (`todo-cli/`)
 
 - Add `prl projects` (list/create/attach-team/detach-team/members/set-role);

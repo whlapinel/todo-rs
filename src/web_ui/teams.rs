@@ -39,6 +39,7 @@ struct TeamsListPageTemplate {
 
 async fn render_teams_page(
     teams: &Arc<dyn TeamRepo>,
+    projects: &Arc<dyn ProjectRepo>,
     user_id: &str,
 ) -> Result<Html<String>, ItemError> {
     let memberships = team_service::list_teams(teams, user_id).await?;
@@ -65,7 +66,7 @@ async fn render_teams_page(
         }
     }
     let nav_html =
-        nav::build_nav_html(teams, user_id, ActiveContext::Personal, SidebarSection::None).await?;
+        nav::build_nav_html(projects, user_id, ActiveContext::None, SidebarSection::None).await?;
     render(TeamsListPageTemplate {
         active_rows,
         pending_rows,
@@ -76,8 +77,9 @@ async fn render_teams_page(
 pub async fn teams_page(
     Extension(auth_user): Extension<AuthUser>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
 ) -> Result<Html<String>, ItemError> {
-    render_teams_page(&teams, &auth_user.user_id).await
+    render_teams_page(&teams, &projects, &auth_user.user_id).await
 }
 
 #[derive(serde::Deserialize)]
@@ -95,16 +97,17 @@ pub async fn create_team_form(
     // A new team changes only the active-teams section, but accept/leave below also need to
     // touch the pending section — rendering the whole page keeps this handler consistent with
     // those, rather than being the one exception that returns a narrower fragment.
-    render_teams_page(&teams, &auth_user.user_id).await
+    render_teams_page(&teams, &projects, &auth_user.user_id).await
 }
 
 pub async fn accept_team_invite_form(
     Path(team_id): Path<String>,
     Extension(auth_user): Extension<AuthUser>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
 ) -> Result<Html<String>, ItemError> {
     team_service::accept_team_invite(&teams, &team_id, &auth_user.user_id).await?;
-    render_teams_page(&teams, &auth_user.user_id).await
+    render_teams_page(&teams, &projects, &auth_user.user_id).await
 }
 
 /// Also used for "Decline" on a pending invite — declining a team invite and leaving a team
@@ -114,12 +117,13 @@ pub async fn leave_team_form(
     Path(team_id): Path<String>,
     Extension(auth_user): Extension<AuthUser>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
 ) -> Result<Response, ItemError> {
     team_service::leave_team(&teams, &team_id, &auth_user.user_id).await?;
     // Only reachable from the teams list page today (no "leave" affordance is wired into the
     // detail page's markup below yet, though the handler already supports being called from
     // there) — re-rendering the list in place covers the current call site.
-    Ok(render_teams_page(&teams, &auth_user.user_id)
+    Ok(render_teams_page(&teams, &projects, &auth_user.user_id)
         .await?
         .into_response())
 }
@@ -154,12 +158,14 @@ struct TeamDetailPageTemplate {
     invite_candidates: Vec<(String, String)>,
     is_active_member: bool,
     is_admin: bool,
-    /// Stage B5e: retargets at the team's backing project's Tasks screen
-    /// (`/web/projects/:project_id/tasks`) rather than the legacy `/web/team-tasks/:team_id`
-    /// — every team has had one since `ensure_team_project`/stage B1's backfill, but this
-    /// falls back to the legacy URL defensively if somehow none exists yet, same precedent
-    /// `team_activity.rs`'s own project resolution already set.
+    /// Stage B5e/B5f: retargets at the team's backing project's Tasks/Dashboard/Activity
+    /// screens (`/web/projects/:project_id/...`) — every team has had a backing project since
+    /// `ensure_team_project`/stage B1's backfill, but all three fall back to the `/web/projects`
+    /// list page defensively if somehow none exists yet (the legacy per-type/team-dashboard/
+    /// team-activity URLs these used to fall back to were removed in stage B5f).
     view_items_href: String,
+    dashboard_href: String,
+    activity_href: String,
     nav_html: String,
 }
 
@@ -208,15 +214,26 @@ async fn render_team_detail(
         .map(|u| (u.id, format!("{} {}", u.first_name, u.last_name)))
         .collect();
 
-    let view_items_href = match projects.get_by_team(team_id).await.map_err(ItemError::from)? {
-        Some(project) => format!("/web/projects/{}/tasks", project.id),
-        None => format!("/web/team-tasks/{team_id}"),
+    let backing_project = projects.get_by_team(team_id).await.map_err(ItemError::from)?;
+    let (view_items_href, dashboard_href, activity_href, active) = match &backing_project {
+        Some(project) => (
+            format!("/web/projects/{}/tasks", project.id),
+            format!("/web/projects/{}/dashboard", project.id),
+            format!("/web/projects/{}/activity", project.id),
+            ActiveContext::Project(project.id.clone()),
+        ),
+        None => (
+            "/web/projects".to_string(),
+            "/web/projects".to_string(),
+            "/web/projects".to_string(),
+            ActiveContext::None,
+        ),
     };
 
     let nav_html = nav::build_nav_html(
-        teams,
+        projects,
         requester_user_id,
-        ActiveContext::Team(team_id.to_string()),
+        active,
         SidebarSection::None,
     )
     .await?;
@@ -229,6 +246,8 @@ async fn render_team_detail(
         is_active_member,
         is_admin: viewer_is_admin,
         view_items_href,
+        dashboard_href,
+        activity_href,
         nav_html,
     })
 }

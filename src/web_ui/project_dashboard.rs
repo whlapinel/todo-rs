@@ -1,6 +1,5 @@
 use crate::auth::AuthUser;
 use crate::domain::item::{Item, ItemKind};
-use super::dashboard::{preset_range, PRESETS};
 use super::nav::{self, ActiveContext, SidebarSection};
 use super::{to_local, TzOffset};
 use crate::service::project_items::{self as project_item_service, UpdateProjectItemParams};
@@ -19,12 +18,31 @@ fn render<T: Template>(t: T) -> Result<Html<String>, ItemError> {
     Ok(Html(t.render()?))
 }
 
-fn active_context(team_id: &Option<String>) -> ActiveContext {
-    match team_id {
-        Some(team_id) => ActiveContext::Team(team_id.clone()),
-        None => ActiveContext::Personal,
+fn active_context(project_id: &str) -> ActiveContext {
+    ActiveContext::Project(project_id.to_string())
+}
+
+/// Duplicated from the now-deleted legacy `dashboard.rs` rather than shared — that module's
+/// own equivalent was `pub(crate)`-visible only to itself, and every other B5 sub-stage
+/// duplicated its per-screen helpers rather than widening a legacy module's visibility just to
+/// reuse a handful of small functions (see e.g. `project_tasks/mod.rs`'s identical rationale).
+fn preset_range(preset: &str, now: DateTime<Utc>, tz_offset_minutes: i32) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
+    let offset = Duration::minutes(tz_offset_minutes as i64);
+    let local_now = now - offset;
+    let local_date = local_now.date_naive();
+    let to_utc = |naive: chrono::NaiveDateTime| DateTime::<Utc>::from_naive_utc_and_offset(naive, Utc) + offset;
+    let today_start = to_utc(local_date.and_hms_opt(0, 0, 0).unwrap());
+
+    match preset {
+        "Today" => (Some(today_start), Some(to_utc(local_date.and_hms_opt(23, 59, 59).unwrap()))),
+        "This Week" => (Some(today_start), Some(today_start + Duration::days(7))),
+        "Next 30 Days" => (Some(today_start), Some(today_start + Duration::days(30))),
+        "Overdue" => (None, Some(now)),
+        _ => (None, None),
     }
 }
+
+const PRESETS: [&str; 6] = ["All", "All with due date", "Today", "This Week", "Next 30 Days", "Overdue"];
 
 /// Duplicated from `dashboard.rs` rather than shared (that module's own equivalents are
 /// private, and every other B5 sub-stage has duplicated its per-screen helpers rather than
@@ -228,9 +246,9 @@ pub async fn project_dashboard_page(
 
     let presets = PRESETS.iter().map(|&p| (p, p == preset)).collect();
     let nav_html = nav::build_nav_html(
-        &teams,
+        &projects,
         &auth_user.user_id,
-        active_context(&project.team_id),
+        active_context(&project_id),
         SidebarSection::None,
     )
     .await?;
@@ -346,7 +364,7 @@ pub async fn project_dashboard_calendar_page(
     TzOffset(tz): TzOffset,
     Query(q): Query<CalendarQuery>,
 ) -> Result<Html<String>, ItemError> {
-    let project = project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
+    let _project = project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
     let today = to_local(Utc::now(), tz).date_naive();
     let year = q.year.unwrap_or_else(|| today.year());
     let month = q
@@ -362,9 +380,9 @@ pub async fn project_dashboard_calendar_page(
     let (prev_year, prev_month) = prev_month(year, month);
     let (next_year, next_month) = next_month(year, month);
     let nav_html = nav::build_nav_html(
-        &teams,
+        &projects,
         &auth_user.user_id,
-        active_context(&project.team_id),
+        active_context(&project_id),
         SidebarSection::None,
     )
     .await?;

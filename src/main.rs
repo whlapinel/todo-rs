@@ -44,8 +44,6 @@ use json_api::teams::{
 use json_api::templates::{create_template, list_templates};
 use json_api::users::{get_user, list_users, update_user};
 use web_ui::assigned_items::assigned_items_page;
-use web_ui::dashboard::*;
-use web_ui::events::*;
 use web_ui::login::login_page;
 use web_ui::project_activity::*;
 use web_ui::project_dashboard::*;
@@ -54,16 +52,7 @@ use web_ui::project_simple_lists::handlers::*;
 use web_ui::project_tasks::handlers::*;
 use web_ui::project_templates::handlers::*;
 use web_ui::projects::projects_page;
-use web_ui::simple_lists::*;
-use web_ui::tasks::handlers::*;
-use web_ui::team_activity::*;
-use web_ui::team_dashboard::*;
-use web_ui::team_events::*;
-use web_ui::team_simple_lists::*;
-use web_ui::team_tasks::*;
-use web_ui::team_templates::*;
 use web_ui::teams::*;
-use web_ui::templates::*;
 use todo_server_sdk::{PeoplesRepublicOfLists, PeoplesRepublicOfListsConfig};
 use tower::ServiceBuilder;
 use tower_cookies::CookieManagerLayer;
@@ -71,71 +60,6 @@ use tower_http::services::ServeDir;
 
 fn build_web_router() -> Router {
     Router::new()
-        .route("/events", get(events_page).post(create_event_form))
-        .route("/events/new", get(new_event_page))
-        .route("/events/calendar", get(events_calendar_page))
-        .route(
-            "/events/:item_id",
-            get(event_detail_page)
-                .put(update_event_form)
-                .delete(delete_event_form),
-        )
-        .route("/events/:item_id/edit", get(event_edit_page))
-        .route(
-            "/events/:item_id/children",
-            get(event_children_fragment).post(create_event_child_form),
-        )
-        .route(
-            "/events/:item_id/save-as-template",
-            post(save_event_as_template),
-        )
-        .route(
-            "/team-events/:team_id",
-            get(team_events_page).post(create_team_event_form),
-        )
-        .route("/team-events/:team_id/new", get(new_team_event_page))
-        .route(
-            "/team-events/:team_id/calendar",
-            get(team_events_calendar_page),
-        )
-        .route(
-            "/team-events/:team_id/:item_id",
-            get(team_event_detail_page)
-                .put(update_team_event_form)
-                .delete(delete_team_event_form),
-        )
-        .route(
-            "/team-events/:team_id/:item_id/edit",
-            get(team_event_edit_page),
-        )
-        .route(
-            "/team-events/:team_id/:item_id/children",
-            get(team_event_children_fragment).post(create_team_event_child_form),
-        )
-        .route("/tasks", get(tasks_page).post(create_task_form))
-        .route("/tasks/new", get(new_task_page))
-        .route("/tasks/calendar", get(tasks_calendar_page))
-        .route("/tasks/batch", post(create_tasks_batch))
-        .route(
-            "/tasks/:item_id",
-            get(task_detail_page)
-                .put(update_task_form)
-                .delete(delete_task_form),
-        )
-        .route("/tasks/:item_id/edit", get(task_edit_page))
-        .route(
-            "/tasks/:item_id/children",
-            get(task_children_fragment),
-        )
-        .route(
-            "/tasks/:item_id/save-as-template",
-            post(save_task_as_template),
-        )
-        .route("/tasks/:item_id/promote", post(promote_task_form))
-        .route(
-            "/tasks/:item_id/subordinate",
-            post(subordinate_task_form),
-        )
         .route("/projects", get(projects_page))
         .route(
             "/projects/:project_id/tasks",
@@ -240,71 +164,7 @@ fn build_web_router() -> Router {
             "/projects/:project_id/simple-lists/:item_id/subordinate",
             post(subordinate_project_simple_item_form),
         )
-        .route(
-            "/simple-lists",
-            get(simple_lists_page).post(create_simple_item_form),
-        )
-        .route("/simple-lists/new", get(new_simple_item_page))
-        .route("/simple-lists/batch", post(create_simple_items_batch))
-        .route(
-            "/simple-lists/:item_id",
-            get(simple_item_detail_page)
-                .put(update_simple_item_form)
-                .delete(delete_simple_item_form),
-        )
-        .route("/simple-lists/:item_id/edit", get(simple_item_edit_page))
-        .route(
-            "/simple-lists/:item_id/children",
-            get(simple_item_children_fragment),
-        )
-        .route(
-            "/simple-lists/:item_id/promote",
-            post(promote_simple_item_form),
-        )
-        .route(
-            "/simple-lists/:item_id/subordinate",
-            post(subordinate_simple_item_form),
-        )
-        .route("/dashboard", get(dashboard_page))
-        .route("/dashboard/calendar", get(dashboard_calendar_page))
-        .route("/dashboard/items/:item_id", put(toggle_item_complete))
-        .route(
-            "/dashboard/team-items/:team_id/:item_id",
-            put(toggle_team_item_complete),
-        )
         .route("/assigned-items", get(assigned_items_page))
-        .route("/team-dashboard/:team_id", get(team_dashboard_page))
-        .route(
-            "/team-dashboard/:team_id/items/:item_id",
-            put(toggle_team_dashboard_item_complete),
-        )
-        .route(
-            "/templates",
-            get(templates_page).post(create_template_form),
-        )
-        .route(
-            "/templates/:template_id",
-            get(template_detail_page)
-                .post(create_template_child_form)
-                .put(update_template_form)
-                .delete(delete_template_form),
-        )
-        .route("/templates/:template_id/edit", get(template_edit_page))
-        .route(
-            "/templates/:template_id/items",
-            get(template_children_fragment),
-        )
-        .route(
-            "/templates/:template_id/items/:item_id",
-            get(template_child_detail_page)
-                .put(update_template_child_form)
-                .delete(delete_template_child_form),
-        )
-        .route(
-            "/templates/:template_id/items/:item_id/edit",
-            get(template_child_edit_page),
-        )
-        .route("/templates/:template_id/use", post(use_template_form))
         .route(
             "/projects/:project_id/templates",
             get(project_templates_page).post(create_project_template_form),
@@ -366,117 +226,6 @@ fn build_web_router() -> Router {
         .route(
             "/teams/:team_id/members/:user_id/role",
             put(set_team_member_role_form),
-        )
-        .route("/team-activity/:team_id", get(team_activity_page))
-        .route(
-            "/team-activity/:team_id/:entry_id/undo",
-            put(undo_activity_log_entry_form),
-        )
-        .route(
-            "/team-simple-lists/:team_id",
-            get(team_simple_lists_page).post(create_team_simple_item_form),
-        )
-        .route(
-            "/team-simple-lists/:team_id/new",
-            get(new_team_simple_item_page),
-        )
-        .route(
-            "/team-simple-lists/:team_id/batch",
-            post(create_team_simple_items_batch),
-        )
-        .route(
-            "/team-simple-lists/:team_id/:item_id",
-            get(team_simple_item_detail_page)
-                .put(update_team_simple_item_form)
-                .delete(delete_team_simple_item_form),
-        )
-        .route(
-            "/team-simple-lists/:team_id/:item_id/edit",
-            get(team_simple_item_edit_page),
-        )
-        .route(
-            "/team-simple-lists/:team_id/:item_id/children",
-            get(team_simple_item_children_fragment),
-        )
-        .route(
-            "/team-simple-lists/:team_id/:item_id/promote",
-            post(promote_team_simple_item_form),
-        )
-        .route(
-            "/team-simple-lists/:team_id/:item_id/subordinate",
-            post(subordinate_team_simple_item_form),
-        )
-        .route(
-            "/team-tasks/:team_id",
-            get(team_tasks_page).post(create_team_task_form),
-        )
-        .route("/team-tasks/:team_id/new", get(new_team_task_page))
-        .route(
-            "/team-tasks/:team_id/batch",
-            post(create_team_tasks_batch),
-        )
-        .route(
-            "/team-tasks/:team_id/:item_id",
-            get(team_task_detail_page)
-                .put(update_team_task_form)
-                .delete(delete_team_task_form),
-        )
-        .route(
-            "/team-tasks/:team_id/:item_id/edit",
-            get(team_task_edit_page),
-        )
-        .route(
-            "/team-tasks/:team_id/:item_id/children",
-            get(team_task_children_fragment),
-        )
-        .route(
-            "/team-tasks/:team_id/:item_id/save-as-template",
-            post(save_team_task_as_template),
-        )
-        .route(
-            "/team-tasks/:team_id/:item_id/promote",
-            post(promote_team_task_form),
-        )
-        .route(
-            "/team-tasks/:team_id/:item_id/subordinate",
-            post(subordinate_team_task_form),
-        )
-        .route(
-            "/team-events/:team_id/:item_id/save-as-template",
-            post(save_team_event_as_template),
-        )
-        .route(
-            "/team-templates/:team_id",
-            get(team_templates_page).post(create_team_template_form),
-        )
-        .route(
-            "/team-templates/:team_id/:template_id",
-            get(team_template_detail_page)
-                .post(create_team_template_child_form)
-                .put(update_team_template_form)
-                .delete(delete_team_template_form),
-        )
-        .route(
-            "/team-templates/:team_id/:template_id/edit",
-            get(team_template_edit_page),
-        )
-        .route(
-            "/team-templates/:team_id/:template_id/items",
-            get(team_template_children_fragment),
-        )
-        .route(
-            "/team-templates/:team_id/:template_id/items/:item_id",
-            get(team_template_child_detail_page)
-                .put(update_team_template_child_form)
-                .delete(delete_team_template_child_form),
-        )
-        .route(
-            "/team-templates/:team_id/:template_id/items/:item_id/edit",
-            get(team_template_child_edit_page),
-        )
-        .route(
-            "/team-templates/:team_id/:template_id/use",
-            post(use_team_template_form),
         )
         // Without this, a path under /web/ that doesn't match any route above falls through
         // to the outer router's fallback_service (the SPA's frontend/dist/index.html) — a
@@ -598,7 +347,7 @@ async fn main() {
             let public_web_router = build_public_web_router();
 
             Router::new()
-                .route("/", get(|| async { Redirect::to("/web/dashboard") }))
+                .route("/", get(|| async { Redirect::to("/web/projects") }))
                 .nest("/api", api_router)
                 .nest("/auth", auth_router)
                 .nest("/web", web_router.merge(public_web_router))
@@ -662,7 +411,7 @@ async fn main() {
             let public_web_router = build_public_web_router();
 
             Router::new()
-                .route("/", get(|| async { Redirect::to("/web/dashboard") }))
+                .route("/", get(|| async { Redirect::to("/web/projects") }))
                 .nest("/auth", auth_router)
                 .nest("/api", api_router)
                 .nest("/web", web_router.merge(public_web_router))

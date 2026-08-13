@@ -1,18 +1,18 @@
 use crate::service::error::ItemError;
-use crate::service::teams as team_service;
-use crate::storage::sqlite::TeamRepo;
+use crate::service::projects as project_service;
+use crate::storage::sqlite::ProjectRepo;
 use askama::Template;
 use std::sync::Arc;
 
-/// Which "profile" the current page is scoped to. Derived purely from the request's URL by
-/// each handler (personal routes vs. `/team-items/:team_id/...` routes) — there is
-/// deliberately no persisted "active team" cookie/session (see the nav plan's locked-in
-/// decisions): pages with no natural single-team scope (Dashboard, Assigned to me, the
-/// Teams list) just pass `Personal`.
+/// Which project (if any) the current page is scoped to. Derived purely from the request's
+/// URL by each handler (`/web/projects/:project_id/...` routes vs. pages with no single
+/// natural project, like `/web/projects` itself, `/web/assigned-items`, or the teams list) —
+/// there is deliberately no persisted "active project" cookie/session, same precedent the
+/// old Personal/Team `ActiveContext` set.
 #[derive(Clone, PartialEq)]
 pub enum ActiveContext {
-    Personal,
-    Team(String),
+    Project(String),
+    None,
 }
 
 /// Which item-type screen (if any) the current page belongs to. Drives both the sidebar's
@@ -27,7 +27,7 @@ pub enum SidebarSection {
     None,
 }
 
-struct TeamPill {
+struct ProjectPill {
     name: String,
     href: String,
     is_active: bool,
@@ -42,90 +42,85 @@ struct SectionLink {
 #[derive(Template)]
 #[template(path = "nav.html")]
 struct NavTemplate {
-    me_href: String,
-    is_personal_active: bool,
-    team_pills: Vec<TeamPill>,
+    project_pills: Vec<ProjectPill>,
     section_links: Vec<SectionLink>,
+    dashboard_href: Option<String>,
+    activity_href: Option<String>,
 }
 
-/// The one place that knows how a given (section, context) pair maps to a URL — used both
-/// for the sidebar's 4 section links (context fixed at the page's own `active`, section
-/// varies over Tasks/Events/SimpleLists/Templates) and the top switcher's Me/Team pills
-/// (section fixed at the page's own `section`, context varies over Personal/each team).
-/// That shared derivation is what makes "switching team preserves the current section" (a
-/// locked-in product decision) fall out for free rather than needing special-case code.
+/// The one place that knows how a given (section, project) pair maps to a URL — used both
+/// for the sidebar's 4 section links (project fixed at the page's own active project, section
+/// varies over Tasks/Events/SimpleLists/Templates) and the top switcher's project pills
+/// (section fixed at the page's own `section`, project varies over every project the user
+/// belongs to). That shared derivation is what makes "switching project preserves the current
+/// section" fall out for free rather than needing special-case code — same property the
+/// Personal/Team switcher this replaces already had.
 ///
-/// Every section now has a fully dedicated screen in both contexts — Templates was the
-/// last holdout (team-scoped templates, Stage 8). `SidebarSection::None` (pages with no
-/// single natural section: Dashboard, Assigned-to-me, the Teams list) falls back to the
-/// Dashboard for Personal and the Tasks screen for Team — Tasks is the canonical "default
-/// landing type" for a team context wherever a generic entry point is needed, consistent
-/// with `ItemType`'s own default variant (Stage 10 retired the generic `/items`/
-/// `/team-items` catch-alls this used to fall back to).
-fn section_href(section: SidebarSection, ctx: &ActiveContext) -> String {
-    match (section, ctx) {
-        (SidebarSection::Tasks, ActiveContext::Personal) => "/web/tasks".to_string(),
-        (SidebarSection::Tasks, ActiveContext::Team(id)) => {
-            format!("/web/team-tasks/{id}")
-        }
-        (SidebarSection::Events, ActiveContext::Personal) => "/web/events".to_string(),
-        (SidebarSection::Events, ActiveContext::Team(id)) => {
-            format!("/web/team-events/{id}")
-        }
-        (SidebarSection::SimpleLists, ActiveContext::Personal) => {
-            "/web/simple-lists".to_string()
-        }
-        (SidebarSection::SimpleLists, ActiveContext::Team(id)) => {
-            format!("/web/team-simple-lists/{id}")
-        }
-        (SidebarSection::Templates, ActiveContext::Personal) => "/web/templates".to_string(),
-        (SidebarSection::Templates, ActiveContext::Team(id)) => {
-            format!("/web/team-templates/{id}")
-        }
-        (SidebarSection::None, ActiveContext::Personal) => "/web/dashboard".to_string(),
-        (SidebarSection::None, ActiveContext::Team(id)) => format!("/web/team-tasks/{id}"),
-    }
+/// `SidebarSection::None` maps to that project's Dashboard — the closest analog of the old
+/// Personal/Team switcher's "no single section" fallback.
+fn section_href(section: SidebarSection, project_id: &str) -> String {
+    let path = match section {
+        SidebarSection::Tasks => "tasks",
+        SidebarSection::Events => "events",
+        SidebarSection::SimpleLists => "simple-lists",
+        SidebarSection::Templates => "templates",
+        SidebarSection::None => "dashboard",
+    };
+    format!("/web/projects/{project_id}/{path}")
 }
 
 pub async fn build_nav_html(
-    team_repo: &Arc<dyn TeamRepo>,
+    projects: &Arc<dyn ProjectRepo>,
     user_id: &str,
     active: ActiveContext,
     section: SidebarSection,
 ) -> Result<String, ItemError> {
-    let team_pills = team_service::list_teams(team_repo, user_id)
+    let project_pills = project_service::list_projects(projects, user_id)
         .await?
         .into_iter()
-        .filter(|t| t.status == "ACTIVE")
-        .map(|t| {
-            let id = t.team.id;
-            TeamPill {
-                is_active: active == ActiveContext::Team(id.clone()),
-                href: section_href(section, &ActiveContext::Team(id)),
-                name: t.team.name,
+        .map(|p| {
+            let id = p.id.clone();
+            ProjectPill {
+                is_active: active == ActiveContext::Project(id.clone()),
+                href: section_href(section, &id),
+                name: p.name,
             }
         })
         .collect();
 
-    let section_links = [
-        (SidebarSection::Tasks, "Tasks"),
-        (SidebarSection::Events, "Events"),
-        (SidebarSection::SimpleLists, "Simple Lists"),
-        (SidebarSection::Templates, "Templates"),
-    ]
-    .into_iter()
-    .map(|(s, label)| SectionLink {
-        label,
-        href: section_href(s, &active),
-        is_active: s == section,
-    })
-    .collect();
+    // The 4 section links and the Dashboard/Activity fixed links only make sense once a
+    // project is actually active — a page like the projects list or the teams list has no
+    // single project to scope them to, so they're simply omitted there rather than pointing
+    // at an arbitrary project.
+    let (section_links, dashboard_href, activity_href) = match &active {
+        ActiveContext::Project(project_id) => {
+            let links = [
+                (SidebarSection::Tasks, "Tasks"),
+                (SidebarSection::Events, "Events"),
+                (SidebarSection::SimpleLists, "Simple Lists"),
+                (SidebarSection::Templates, "Templates"),
+            ]
+            .into_iter()
+            .map(|(s, label)| SectionLink {
+                label,
+                href: section_href(s, project_id),
+                is_active: s == section,
+            })
+            .collect();
+            (
+                links,
+                Some(section_href(SidebarSection::None, project_id)),
+                Some(format!("/web/projects/{project_id}/activity")),
+            )
+        }
+        ActiveContext::None => (Vec::new(), None, None),
+    };
 
     Ok(NavTemplate {
-        me_href: section_href(section, &ActiveContext::Personal),
-        is_personal_active: active == ActiveContext::Personal,
-        team_pills,
+        project_pills,
         section_links,
+        dashboard_href,
+        activity_href,
     }
     .render()?)
 }

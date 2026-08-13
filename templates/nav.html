@@ -14,11 +14,9 @@
         <path d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" stroke-linecap="round" stroke-linejoin="round" />
       </svg>
     </button>
-    <a href="/web/dashboard" class="shrink-0 text-sm font-semibold text-gray-900 dark:text-white">Todo</a>
+    <a href="/web/projects" class="shrink-0 text-sm font-semibold text-gray-900 dark:text-white">Todo</a>
     <nav class="flex flex-1 items-center gap-x-2 overflow-x-auto">
-      <a href="{{ me_href }}"
-         class="shrink-0 rounded-full px-3 py-1 text-sm font-medium {% if is_personal_active %}bg-indigo-600 text-white{% else %}text-gray-600 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-white/5{% endif %}">Me</a>
-      {% for pill in team_pills %}
+      {% for pill in project_pills %}
       <a href="{{ pill.href }}"
          class="shrink-0 rounded-full px-3 py-1 text-sm font-medium {% if pill.is_active %}bg-indigo-600 text-white{% else %}text-gray-600 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-white/5{% endif %}">{{ pill.name }}</a>
       {% endfor %}

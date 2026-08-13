@@ -1,5 +1,11 @@
 <nav class="flex flex-1 flex-col gap-y-7 px-6">
   <ul role="list" class="-mx-2 space-y-1">
+    {% if let Some(href) = dashboard_href %}
+    <li>
+      <a href="{{ href }}" hx-boost="false"
+         class="block rounded-md p-2 text-sm/6 font-semibold text-gray-700 hover:bg-gray-50 hover:text-indigo-600 dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-white">Dashboard</a>
+    </li>
+    {% endif %}
     {% for link in section_links %}
     <li>
       <a href="{{ link.href }}" hx-boost="false"
@@ -8,12 +14,14 @@
       </a>
     </li>
     {% endfor %}
+    {% if let Some(href) = activity_href %}
+    <li>
+      <a href="{{ href }}" hx-boost="false"
+         class="block rounded-md p-2 text-sm/6 font-semibold text-gray-700 hover:bg-gray-50 hover:text-indigo-600 dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-white">Activity</a>
+    </li>
+    {% endif %}
   </ul>
   <ul role="list" class="mt-auto -mx-2 space-y-1 border-t border-gray-200 pt-4 dark:border-white/10">
-    <li>
-      <a href="/web/dashboard" hx-boost="false"
-         class="block rounded-md p-2 text-sm/6 font-semibold text-gray-700 hover:bg-gray-50 hover:text-indigo-600 dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-white">Dashboard</a>
-    </li>
     <li>
       <a href="/web/assigned-items" hx-boost="false"
          class="block rounded-md p-2 text-sm/6 font-semibold text-gray-700 hover:bg-gray-50 hover:text-indigo-600 dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-white">Assigned to me</a>
@@ -24,7 +32,7 @@
     </li>
     <li>
       <a href="/web/projects" hx-boost="false"
-         class="block rounded-md p-2 text-sm/6 font-semibold text-gray-700 hover:bg-gray-50 hover:text-indigo-600 dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-white">Projects (preview)</a>
+         class="block rounded-md p-2 text-sm/6 font-semibold text-gray-700 hover:bg-gray-50 hover:text-indigo-600 dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-white">Projects</a>
     </li>
   </ul>
 </nav>

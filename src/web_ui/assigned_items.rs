@@ -3,7 +3,7 @@ use crate::domain::item::{Item, ItemKind};
 use super::nav::{self, ActiveContext, SidebarSection};
 use super::to_local;
 use crate::service::error::ItemError;
-use crate::storage::sqlite::{ItemRepo, TeamRepo};
+use crate::storage::sqlite::{ItemRepo, ProjectRepo};
 use askama::Template;
 use axum::extract::Extension;
 use axum::response::Html;
@@ -28,35 +28,30 @@ struct AssignedItemRow {
     toggle_complete_json: String,
 }
 
-/// Stage B5e: "cross-project query" — every row on this page always has a `team_id`
-/// (assignment is a team-item-only concept), but now prefers the project-scoped URL
-/// once the item actually carries a `project_id` (set at creation since stage B2c;
-/// see docs/project-abstraction-plan.md). Falls back to the legacy team-owned URL for
-/// an item that predates B2 and has never been touched since — same accepted,
-/// bounded gap B2c's own implementation notes flagged, not new here.
-fn detail_url(item: &Item, team_id: &str) -> String {
-    match &item.project_id {
-        Some(project_id) => match item.kind() {
-            ItemKind::Task => format!("/web/projects/{project_id}/tasks/{}", item.id),
-            ItemKind::Event => format!("/web/projects/{project_id}/events/{}", item.id),
-            ItemKind::Simple => format!("/web/projects/{project_id}/simple-lists/{}", item.id),
-            ItemKind::Template => format!("/web/projects/{project_id}/templates/{}", item.id),
-        },
-        None => match item.kind() {
-            ItemKind::Task => format!("/web/team-tasks/{team_id}/{}", item.id),
-            ItemKind::Event => format!("/web/team-events/{team_id}/{}", item.id),
-            ItemKind::Simple => format!("/web/team-simple-lists/{team_id}/{}", item.id),
-            ItemKind::Template => format!("/web/team-templates/{team_id}/{}", item.id),
-        },
+/// Stage B5e/B5f: "cross-project query" — every row on this page always has a `team_id`
+/// (assignment is a team-item-only concept), and links to the project-scoped URL for the
+/// item's own `project_id` (set at creation since stage B2c; see
+/// docs/project-abstraction-plan.md). Stage B5f removed the legacy per-type/team-scoped
+/// screens this used to fall back to for an item that predated B2c and never got a
+/// `project_id` — such a row is now skipped in `from_item` below rather than linking
+/// somewhere that no longer exists (same accepted, bounded gap B2c's own implementation
+/// notes flagged, now resolved by omission instead of a dead link).
+fn detail_url(item: &Item, project_id: &str) -> String {
+    match item.kind() {
+        ItemKind::Task => format!("/web/projects/{project_id}/tasks/{}", item.id),
+        ItemKind::Event => format!("/web/projects/{project_id}/events/{}", item.id),
+        ItemKind::Simple => format!("/web/projects/{project_id}/simple-lists/{}", item.id),
+        ItemKind::Template => format!("/web/projects/{project_id}/templates/{}", item.id),
     }
 }
 
 impl AssignedItemRow {
     fn from_item(item: &Item, tz: i32) -> Option<Self> {
-        let team_id = item.team_id.clone()?;
+        item.team_id.as_ref()?;
+        let project_id = item.project_id.clone()?;
         Some(Self {
             id: item.id.clone(),
-            detail_link: detail_url(item, &team_id),
+            detail_link: detail_url(item, &project_id),
             name: item.name.clone(),
             complete: item.complete,
             due_date: item
@@ -78,7 +73,7 @@ struct AssignedItemsPageTemplate {
 pub async fn assigned_items_page(
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
-    Extension(team_repo): Extension<Arc<dyn TeamRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     TzOffset(tz): TzOffset,
 ) -> Result<Html<String>, ItemError> {
     let items = repo
@@ -88,15 +83,15 @@ pub async fn assigned_items_page(
     let rows = items
         .iter()
         // Assignment is a team-item-only concept (see CLAUDE.md's Recurrence/domain notes) —
-        // every row here has a team_id; the filter_map is just a defensive skip, not an
-        // expected case.
+        // every row here has a team_id; the filter_map also skips a row lacking project_id
+        // (see detail_url's doc comment above).
         .filter_map(|i| AssignedItemRow::from_item(i, tz))
         .map(|row| row.render())
         .collect::<Result<Vec<_>, _>>()?;
     let nav_html = nav::build_nav_html(
-        &team_repo,
+        &projects,
         &auth_user.user_id,
-        ActiveContext::Personal,
+        ActiveContext::None,
         SidebarSection::None,
     )
     .await?;

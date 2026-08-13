@@ -20,11 +20,8 @@ use axum::response::{Html, IntoResponse, Response};
 use chrono::{DateTime, Utc};
 use std::sync::Arc;
 
-fn active_context(team_id: &Option<String>) -> ActiveContext {
-    match team_id {
-        Some(team_id) => ActiveContext::Team(team_id.clone()),
-        None => ActiveContext::Personal,
-    }
+fn active_context(project_id: &str) -> ActiveContext {
+    ActiveContext::Project(project_id.to_string())
 }
 
 /// A plain "YYYY-MM-DD" local date (the "Use" form only ever collects a date, never a time —
@@ -125,9 +122,9 @@ pub async fn project_templates_page(
     };
     let rows = render_rows(&templates, &project_id, is_team_project, &assignee_options)?;
     let nav_html = nav::build_nav_html(
-        &teams,
+        &projects,
         &auth_user.user_id,
-        active_context(&project.team_id),
+        active_context(&project_id),
         SidebarSection::Templates,
     )
     .await?;
@@ -197,7 +194,7 @@ pub async fn project_template_detail_page(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
 ) -> Result<Html<String>, ItemError> {
-    let project =
+    let _project =
         project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
     let template = repo
         .get_by_project(&project_id, &template_id)
@@ -205,9 +202,9 @@ pub async fn project_template_detail_page(
         .map_err(ItemError::from)?;
     let template = require_project_template(template)?;
     let nav_html = nav::build_nav_html(
-        &teams,
+        &projects,
         &auth_user.user_id,
-        active_context(&project.team_id),
+        active_context(&project_id),
         SidebarSection::Templates,
     )
     .await?;
@@ -229,7 +226,7 @@ pub async fn project_template_edit_page(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
 ) -> Result<Html<String>, ItemError> {
-    let project =
+    let _project =
         project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
     let template = repo
         .get_by_project(&project_id, &template_id)
@@ -237,9 +234,9 @@ pub async fn project_template_edit_page(
         .map_err(ItemError::from)?;
     let template = require_project_template(template)?;
     let nav_html = nav::build_nav_html(
-        &teams,
+        &projects,
         &auth_user.user_id,
-        active_context(&project.team_id),
+        active_context(&project_id),
         SidebarSection::Templates,
     )
     .await?;
@@ -284,16 +281,16 @@ pub async fn update_project_template_form(
         },
     )
     .await?;
-    let project =
+    let _project =
         project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
     let template = repo
         .get_by_project(&project_id, &template_id)
         .await
         .map_err(ItemError::from)?;
     let nav_html = nav::build_nav_html(
-        &teams,
+        &projects,
         &auth_user.user_id,
-        active_context(&project.team_id),
+        active_context(&project_id),
         SidebarSection::Templates,
     )
     .await?;
@@ -364,7 +361,7 @@ pub async fn project_template_child_detail_page(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
 ) -> Result<Html<String>, ItemError> {
-    let project =
+    let _project =
         project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
     let item = repo
         .get_by_project(&project_id, &item_id)
@@ -372,9 +369,9 @@ pub async fn project_template_child_detail_page(
         .map_err(ItemError::from)?;
     let view = ProjectTemplateChildDetailView::from_item(&item).render()?;
     let nav_html = nav::build_nav_html(
-        &teams,
+        &projects,
         &auth_user.user_id,
-        active_context(&project.team_id),
+        active_context(&project_id),
         SidebarSection::Templates,
     )
     .await?;
@@ -395,7 +392,7 @@ pub async fn project_template_child_edit_page(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
 ) -> Result<Html<String>, ItemError> {
-    let project =
+    let _project =
         project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
     let item = repo
         .get_by_project(&project_id, &item_id)
@@ -404,9 +401,9 @@ pub async fn project_template_child_edit_page(
     let fields = ProjectTemplateChildDetailFields::from_item(&project_id, &template_id, &item, false)
         .render()?;
     let nav_html = nav::build_nav_html(
-        &teams,
+        &projects,
         &auth_user.user_id,
-        active_context(&project.team_id),
+        active_context(&project_id),
         SidebarSection::Templates,
     )
     .await?;
@@ -465,13 +462,13 @@ pub async fn update_project_template_child_form(
         .await
         .map_err(ItemError::from)?;
     if close {
-        let project =
+        let _project =
             project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
         let view = ProjectTemplateChildDetailView::from_item(&updated).render()?;
         let nav_html = nav::build_nav_html(
-            &teams,
+            &projects,
             &auth_user.user_id,
-            active_context(&project.team_id),
+            active_context(&project_id),
             SidebarSection::Templates,
         )
         .await?;
