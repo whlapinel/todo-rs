@@ -285,21 +285,6 @@ impl TeamRepo for SqliteTeamRepo {
         .map_err(db_err)?;
         Ok(())
     }
-
-    async fn share_active_team(&self, user_a: &str, user_b: &str) -> Result<bool, RepoError> {
-        let row = sqlx::query(
-            "SELECT 1 FROM team_members a
-             JOIN team_members b ON a.team_id = b.team_id
-             WHERE a.user_id = ? AND a.status = 'ACTIVE' AND b.user_id = ? AND b.status = 'ACTIVE'
-             LIMIT 1",
-        )
-        .bind(user_a)
-        .bind(user_b)
-        .fetch_optional(&self.0)
-        .await
-        .map_err(db_err)?;
-        Ok(row.is_some())
-    }
 }
 
 #[cfg(test)]

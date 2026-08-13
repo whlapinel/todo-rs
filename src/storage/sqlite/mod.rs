@@ -164,7 +164,6 @@ pub trait TeamRepo: Send + Sync {
     ) -> Result<(), RepoError>;
     async fn accept(&self, team_id: &str, user_id: &str) -> Result<(), RepoError>;
     async fn remove_member(&self, team_id: &str, user_id: &str) -> Result<(), RepoError>;
-    async fn share_active_team(&self, user_a: &str, user_b: &str) -> Result<bool, RepoError>;
 }
 
 /// See docs/project-abstraction-plan.md, stage A2. Not yet called from anywhere in

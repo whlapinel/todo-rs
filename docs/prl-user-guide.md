@@ -76,44 +76,47 @@ prl --user abc123 items list
 
 ## Items
 
-Every `items` subcommand accepts an optional `--project <project-id>` flag
-(see [Projects](#projects)). Without it, commands operate on your personal
-items exactly as before. With it, they operate on that project's items
-instead — personal or team-backed, the same command either way. This is the
-only way to set `--assign`/`--points` on an item, since assignment and
-points only exist on team-backed projects.
+Every `items` subcommand requires a `--project <project-id>` flag (see
+[Projects](#projects)) — `list`, `add`, `done`, `delete`, and `get` all
+route through that project's items, personal or team-backed, the same
+command either way; omitting `--project` on any of them is a client-side
+error. `due` and `assigned` are the two exceptions — they're deliberately
+cross-project queries (see their own sections below) and have no `--project`
+flag at all. Every user has an auto-created personal project ("Personal" —
+see [Projects](#projects)) to pass here for everyday personal items;
+`--project` doesn't default to it automatically, so you do need to look up
+its ID once with `prl projects list` and pass it explicitly (or save it in
+a shell variable/alias).
 
 ### List items
 
 ```sh
-prl items list
 prl items list --project <project-id>
 ```
 
-Output columns: `ID`, `DONE`, `DUE`, `NAME` (personal); with `--project`,
-an `ASSIGNED` column is added. Items with sub-tasks show a `▸` suffix.
+Output columns: `ID`, `DONE`, `DUE`, `ASSIGNED`, `NAME`. Items with
+sub-tasks show a `▸` suffix.
 
 ### List sub-tasks
 
 ```sh
-prl items list --parent <item-id>
 prl items list --parent <item-id> --project <project-id>
 ```
 
 ### Add an item
 
 ```sh
-prl items add "Buy groceries"
-prl items add "Submit report" --due 2026-06-20
-prl items add "Water plants" --recurrence "every week"
-prl items add "Chapter notes" --parent <parent-item-id>
-prl items add "Pack bag" --parent <parent-item-id> --due-offset-days -1
-prl items add "Team offsite" --item-type event --due 2026-09-01
-prl items add "Rain today" --item-type event --event-type rain
-prl items add "Write report" --scheduled 2026-06-18 --scheduled-end 2026-06-20
-prl items add "Milk" --item-type simple
-prl items add "Trip planning" --description "Book flights, hotel, and rental car"
-prl items add "Buy cake" --source-event-id <event-item-id> --due-offset-days -2
+prl items add "Buy groceries" --project <project-id>
+prl items add "Submit report" --due 2026-06-20 --project <project-id>
+prl items add "Water plants" --recurrence "every week" --project <project-id>
+prl items add "Chapter notes" --parent <parent-item-id> --project <project-id>
+prl items add "Pack bag" --parent <parent-item-id> --due-offset-days -1 --project <project-id>
+prl items add "Team offsite" --item-type event --due 2026-09-01 --project <project-id>
+prl items add "Rain today" --item-type event --event-type rain --project <project-id>
+prl items add "Write report" --scheduled 2026-06-18 --scheduled-end 2026-06-20 --project <project-id>
+prl items add "Milk" --item-type simple --project <project-id>
+prl items add "Trip planning" --description "Book flights, hotel, and rental car" --project <project-id>
+prl items add "Buy cake" --source-event-id <event-item-id> --due-offset-days -2 --project <project-id>
 ```
 
 `--description` is free-form notes text (up to 5000 characters), separate from the
@@ -149,10 +152,10 @@ that a child item (`--parent`) or event-linked task (`--source-event-id`) can't
 use `--scheduled`/`--scheduled-end` at all — the server rejects it, since their
 only supported date is the offset-derived due date.
 
-Add `--project <project-id>` to create the item in that project instead of
-your personal items — required if you also pass `--assign <user-id>` or
-`--points <n>`, since those only apply on a team-backed project (silently
-dropped by the server on a personal one):
+`--project <project-id>` is required on every `add` (see the note at the
+top of this section); `--assign <user-id>`/`--points <n>` only take effect
+on a team-backed project (silently dropped by the server on a personal
+one):
 
 ```sh
 prl items add "Mow the lawn" --project <project-id> --assign <user-id> --points 25
@@ -169,7 +172,6 @@ prl items add "Mow the lawn" --project <project-id> --assign <user-id> --points 
 ### Mark complete
 
 ```sh
-prl items done <item-id>
 prl items done <item-id> --project <project-id>
 ```
 
@@ -182,16 +184,15 @@ below.
 ### Get item details
 
 ```sh
-prl items get <item-id>
 prl items get <item-id> --project <project-id>
 ```
 
-With `--project`, the output also includes `assigned`/`points`.
+The output includes `assigned`/`points` (blank/`-` on a personal project,
+where they're never set).
 
 ### Delete an item
 
 ```sh
-prl items delete <item-id>
 prl items delete <item-id> --project <project-id>
 ```
 
@@ -459,7 +460,7 @@ prl items due --before $(date -d "+7 days" +%Y-%m-%d)
 The ID column is always first, fixed-width, and space-separated — easy to cut:
 
 ```sh
-prl items list | grep "shopping" | awk '{print $1}' | xargs prl items done
+prl items list --project <project-id> | grep "shopping" | awk '{print $1}' | xargs prl items done --project <project-id>
 ```
 
 **Use environment variables in scripts**
@@ -469,5 +470,5 @@ export TODO_URL=https://todo.lapinel-fam.club
 export TODO_TOKEN=eyJhbGci...
 export TODO_USER=<your-user-id>
 
-prl items add "Automated task"
+prl items add "Automated task" --project <project-id>
 ```

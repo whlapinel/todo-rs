@@ -2515,6 +2515,86 @@ Five independently-landable sub-stages, same one-stage-per-session process as A/
   reference to the removed operations/columns anywhere in `src/`/`docs/`/
   `CLAUDE.md`.
 
+  **Implementation notes:** Done, with the scope turning out considerably
+  larger than this bullet's own text anticipated. `CLAUDE.md` wasn't just
+  stale on `team_members.role`/`points` and the `Item`/`TeamItem` operations
+  this bullet called out — its entire Web UI/JSON API description predated a
+  restructuring that had evidently already landed (Stage B5's per-item-type
+  personal/team screen split was collapsed into a single project-scoped
+  screen set: `src/handlers/web_ui/` → `src/web_ui/` with
+  `project_tasks/`/`project_events/`/`project_simple_lists/`/`project_templates/`
+  subdirectories plus `projects.rs`/`project_dashboard.rs`/`project_activity.rs`;
+  `src/handlers/json_api/` → `src/json_api/`), and the `memory`/`dynamo`
+  storage backends the Storage Layer section described had been removed
+  entirely (sqlite-only now). None of that was reflected anywhere in the doc.
+  Rather than fix only the bullet's literal three items and leave the rest
+  wrong, ran two parallel read-only Explore agents to ground-truth the actual
+  current architecture (routing in `src/main.rs`, the `ItemRepo`/`ProjectRepo`/
+  `TeamRepo` trait shapes in `src/storage/sqlite/mod.rs`, which service
+  functions still own recurrence/events/points/completion-guard logic and how
+  `project_items.rs` dispatches into them, the full `src/web_ui/` screen
+  survey, and separately the CLI/MCP `--project`/`projectId` requiredness),
+  then rewrote `CLAUDE.md` section by section against those findings: Full
+  Pipeline diagram, Smithy Model (`ProjectItem` as the sole item resource),
+  Storage Layer (sqlite-only; `ItemRepo`'s three coexisting method shapes —
+  personal, team, and project — explained rather than pretending only one
+  exists), Per-team roles & admin bootstrap (split into team-management
+  authority, still `team_members.role`-gated, versus item/points authority,
+  moved to `project_members.role` per C1), Points & the activity log
+  (`project_members.points`; `activity_log`'s `team_id`/`project_id` living
+  side by side, per C4's own scope correction), the Web UI section (full
+  screens rewrite — project-scoped, not personal/team-scoped), and the CLI/MCP
+  sections (`--project`/`projectId` now hard-required, not
+  optional-with-legacy-fallback — confirmed against `todo-cli/src/items.rs`
+  and `mcp-server/src/index.ts` directly, not inferred from the commit
+  message). Recurrence/Events/Scheduled/Points sections' function-level prose
+  (`create_item`/`update_item`/`create_team_item`/`update_team_item` and the
+  helpers they call) turned out to still be accurate as internal
+  implementation description — Stage C3 only removed the Smithy-level HTTP
+  surface, not these functions — so a single clarifying paragraph was added
+  near the top of the Recurrence section explaining the current dispatch path
+  (`project_items.rs` → `items.rs`/`team_items.rs`) rather than rewriting
+  every downstream reference to those functions.
+
+  One genuine bug surfaced during the MCP-side investigation, out of this
+  stage's own docs-only scope to fix: `mcp-server/src/index.ts`'s
+  `list_team_items`/`get_team_item`/`create_team_item`/`update_team_item`/
+  `delete_team_item` tools (a separate, older set from the `list_items`/etc.
+  family Stage B7 repointed at `ProjectItem`) still call `/teams/:teamId/items...`
+  REST paths that were never re-wired after `TeamItem`'s Smithy surface was
+  removed in C3 — every call from these five now 404s against the live
+  server. Documented as a known bug in `CLAUDE.md`'s MCP section rather than
+  silently fixed or silently left undocumented; not scheduled as a stage
+  here, since fixing it means either removing the five tools or repointing
+  them at `ProjectItem`, a code change outside this pass's scope.
+
+  `docs/prl-user-guide.md` got the equivalent treatment: every `items`
+  subcommand example updated to include the now-required `--project
+  <project-id>`, the "optional, falls through to personal items" framing
+  removed from the Items section intro and the `add`/`get` prose, and the two
+  Tips-section examples fixed the same way.
+
+  `share_active_team` (`TeamRepo` trait method in `src/storage/sqlite/mod.rs`
+  + its sole implementation in `src/storage/sqlite/teams.rs`) removed after
+  confirming zero callers anywhere in `src/`/`todo-cli/`/`mcp-server/` via
+  grep — no service-layer or test caller ever existed, matching the original
+  Stage-C research. No dedicated test existed for it either, so nothing to
+  remove there.
+
+  **Verify:** `cargo check` clean (only pre-existing dead-code warnings,
+  none new — confirmed by diffing the warning set before/after). `cargo
+  test`: 213/213 passing, zero regressions (the same count as after C4,
+  since this stage touched no schema or behavior). Grep across
+  `src/`/`CLAUDE.md`/`docs/prl-user-guide.md`/`todo-cli/`/`mcp-server/src/`
+  for `share_active_team`, `handlers/web_ui`, and `handlers/json_api` returns
+  no matches.
+
+  This closes out C1-C5 in full — see the closing note below. C4.5 (whether
+  `team_members.role` should also retire onto `project_members`) remains the
+  one deliberately unscheduled open call from C4's own notes; it wasn't
+  touched here, since resolving it means a real design decision (per C4's
+  own text), not a documentation fix.
+
 This is the last stage this plan currently anticipates — once C1-C5 land, the
 Project abstraction work this whole document tracks is complete. No Stage D is
 implied by anything above (the `items.user_id`/`team_id`-to-`project_id`
