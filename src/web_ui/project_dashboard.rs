@@ -3,10 +3,10 @@ use crate::domain::item::{Item, ItemKind};
 use super::nav::{self, ActiveContext, SidebarSection};
 use super::{to_local, TzOffset};
 use crate::service::project_items::{self as project_item_service, UpdateProjectItemParams};
-use crate::service::projects::{self as project_service, require_project_member};
+use crate::service::projects::{self as project_service};
 use crate::service::teams as team_service;
 use crate::service::error::ItemError;
-use crate::storage::sqlite::{ActivityLogRepo, DueItem, ItemRepo, ProjectRepo, RepoError, TeamRepo};
+use crate::storage::sqlite::{ActivityLogRepo, DueItem, ItemRepo, ProjectRepo, TeamRepo};
 use askama::Template;
 use axum::extract::{Extension, Form, Path, Query};
 use axum::response::Html;
@@ -224,10 +224,9 @@ pub async fn project_dashboard_page(
     let show_complete = q.show_complete.is_some();
     let (after, before) = preset_range(&preset, Utc::now(), tz_offset);
 
-    let due_items = repo
-        .list_due_by_project(&project_id, None, None)
-        .await
-        .map_err(ItemError::from)?;
+    let due_items =
+        project_item_service::list_due_project_items_unchecked(&repo, &project_id, None, None)
+            .await?;
     let names = match &project.team_id {
         Some(team_id) => names_for(&teams, team_id, &auth_user.user_id).await?,
         None => HashMap::new(),
@@ -364,7 +363,6 @@ pub async fn project_dashboard_calendar_page(
     TzOffset(tz): TzOffset,
     Query(q): Query<CalendarQuery>,
 ) -> Result<Html<String>, ItemError> {
-    let _project = project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
     let today = to_local(Utc::now(), tz).date_naive();
     let year = q.year.unwrap_or_else(|| today.year());
     let month = q
@@ -372,10 +370,16 @@ pub async fn project_dashboard_calendar_page(
         .filter(|m| (1..=12).contains(m))
         .unwrap_or_else(|| today.month());
 
-    let due_items = repo
-        .list_due_by_project(&project_id, None, None)
-        .await
-        .map_err(ItemError::from)?;
+    let due_items = project_item_service::list_due_project_items(
+        &repo,
+        &projects,
+        &teams,
+        &project_id,
+        &auth_user.user_id,
+        None,
+        None,
+    )
+    .await?;
     let days = build_calendar_days(year, month, &project_id, &due_items, tz, today);
     let (prev_year, prev_month) = prev_month(year, month);
     let (next_year, next_month) = next_month(year, month);
@@ -419,8 +423,15 @@ pub async fn toggle_project_dashboard_item_complete(
     TzOffset(tz): TzOffset,
     Form(form): Form<ToggleForm>,
 ) -> Result<Html<String>, ItemError> {
-    require_project_member(&projects, &teams, &project_id, &auth_user.user_id).await?;
-    let current = repo.get_by_project(&project_id, &item_id).await.map_err(ItemError::from)?;
+    let current = project_item_service::get_project_item(
+        &repo,
+        &projects,
+        &teams,
+        &project_id,
+        &auth_user.user_id,
+        &item_id,
+    )
+    .await?;
     let params = UpdateProjectItemParams {
         project_id: project_id.clone(),
         item_id: item_id.clone(),
@@ -454,12 +465,12 @@ pub async fn toggle_project_dashboard_item_complete(
     )
     .await?;
 
-    let project = projects.get(&project_id).await.map_err(ItemError::from)?;
+    let project = project_item_service::get_project_unchecked(&projects, &project_id).await?;
     let names = match &project.team_id {
         Some(team_id) => names_for(&teams, team_id, &auth_user.user_id).await?,
         None => HashMap::new(),
     };
-    match repo.get_by_project(&project_id, &item_id).await {
+    match project_item_service::get_project_item_unchecked(&repo, &project_id, &item_id).await {
         Ok(updated) => render(ProjectDashboardRow::from_due_item(
             &DueItem { parent_name: String::new(), item: updated },
             &project_id,
@@ -473,7 +484,7 @@ pub async fn toggle_project_dashboard_item_complete(
         // service-layer behavior actually keeps the original row and this branch may be
         // dead in practice, but every other screen in this codebase still carries it
         // verbatim, so this one does too rather than diverging unilaterally.
-        Err(RepoError::NotFound) => Ok(Html(String::new())),
-        Err(e) => Err(ItemError::from(e)),
+        Err(ItemError::NotFound) => Ok(Html(String::new())),
+        Err(e) => Err(e),
     }
 }

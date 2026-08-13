@@ -281,17 +281,16 @@ fn sort_key(item: &Item) -> i64 {
         .unwrap_or(i64::MAX)
 }
 
-/// `repo.list_by_project` already scopes to top-level, non-Template items — this narrows
+/// `list_project_items_unchecked` already scopes to top-level, non-Template items — this narrows
 /// further to `Event` and re-sorts by the scheduled-primary key above, mirroring
 /// `events::list_events`/`team_events::list_team_events`.
 pub(crate) async fn list_project_events(
     repo: &Arc<dyn ItemRepo>,
     project_id: &str,
 ) -> Result<Vec<Item>, ItemError> {
-    let mut items = repo
-        .list_by_project(project_id, None)
-        .await
-        .map_err(ItemError::from)?;
+    let mut items =
+        crate::service::project_items::list_project_items_unchecked(repo, project_id, None)
+            .await?;
     items.retain(|i| i.kind() == ItemKind::Event);
     items.sort_by_key(sort_key);
     Ok(items)

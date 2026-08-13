@@ -1,11 +1,12 @@
 use crate::domain::item::{Item, ItemKind};
+use crate::domain::project::Project;
 use crate::service::error::ItemError;
-use crate::service::items::{self, CreateItemParams, UpdateItemParams};
+use crate::service::items::{self, item_anchor, CreateItemParams, UpdateItemParams};
 use crate::service::projects::require_project_member;
 use crate::service::team_items::{
     self, CreateTeamItemParams, UpdateTeamItemContext, UpdateTeamItemParams,
 };
-use crate::storage::sqlite::{ActivityLogRepo, ItemRepo, ProjectRepo, TeamRepo};
+use crate::storage::sqlite::{ActivityLogRepo, DueItem, ItemRepo, ProjectRepo, TeamRepo};
 use chrono::{DateTime, Utc};
 use std::sync::Arc;
 
@@ -39,6 +40,182 @@ pub async fn list_project_items(
 ) -> Result<Vec<Item>, ItemError> {
     require_project_member(projects, teams, project_id, requester_user_id).await?;
     Ok(repo.list_by_project(project_id, parent_item_id).await?)
+}
+
+/// Unchecked twin of `get_project_item` — for use only when the caller has already verified
+/// project membership earlier in the same request (e.g. via `get_project`, `get_project_item`,
+/// or another checked call in this file). Exists so a follow-up read within an
+/// already-authorized request doesn't have to pay for a second, redundant
+/// `require_project_member` call — while still keeping the repo call itself inside the
+/// service layer rather than in `web_ui`.
+pub async fn get_project_item_unchecked(
+    repo: &Arc<dyn ItemRepo>,
+    project_id: &str,
+    item_id: &str,
+) -> Result<Item, ItemError> {
+    Ok(repo.get_by_project(project_id, item_id).await?)
+}
+
+/// Unchecked twin of `list_project_items` — see `get_project_item_unchecked`'s doc comment.
+/// Also covers what used to be raw `ItemRepo::list_children(parent_item_id)` calls in
+/// `web_ui` (pass `parent_item_id: Some(..)`) — this is strictly more scoped than that, since
+/// it additionally requires the parent to belong to `project_id`.
+pub async fn list_project_items_unchecked(
+    repo: &Arc<dyn ItemRepo>,
+    project_id: &str,
+    parent_item_id: Option<String>,
+) -> Result<Vec<Item>, ItemError> {
+    Ok(repo.list_by_project(project_id, parent_item_id).await?)
+}
+
+/// Lists the Tasks linked to an Event via `sourceEventId` (see CLAUDE.md's Events section) —
+/// `ItemRepo::list_by_source_event` isn't itself scoped by project, so this confirms the event
+/// belongs to `project_id` first. Unchecked: assumes the caller already verified project
+/// membership earlier in the same request (see `get_project_item_unchecked`'s doc comment).
+pub async fn list_project_event_children_unchecked(
+    repo: &Arc<dyn ItemRepo>,
+    project_id: &str,
+    event_item_id: &str,
+) -> Result<Vec<Item>, ItemError> {
+    repo.get_by_project(project_id, event_item_id).await?;
+    Ok(repo.list_by_source_event(event_item_id).await?)
+}
+
+/// Unchecked project fetch — see `get_project_item_unchecked`'s doc comment.
+pub async fn get_project_unchecked(
+    projects: &Arc<dyn ProjectRepo>,
+    project_id: &str,
+) -> Result<Project, ItemError> {
+    Ok(projects.get(project_id).await?)
+}
+
+/// Checked read of a project's due items, mirroring `get_project_item`/`list_project_items`'s
+/// shape — use as the sole membership check for a request when no other `Project` data (e.g.
+/// `team_id`) is needed. See `list_due_project_items_unchecked` for the already-checked case.
+pub async fn list_due_project_items(
+    repo: &Arc<dyn ItemRepo>,
+    projects: &Arc<dyn ProjectRepo>,
+    teams: &Arc<dyn TeamRepo>,
+    project_id: &str,
+    requester_user_id: &str,
+    deadline_after: Option<i64>,
+    deadline_before: Option<i64>,
+) -> Result<Vec<DueItem>, ItemError> {
+    require_project_member(projects, teams, project_id, requester_user_id).await?;
+    Ok(repo
+        .list_due_by_project(project_id, deadline_after, deadline_before)
+        .await?)
+}
+
+/// Unchecked twin of `list_due_project_items` — see `get_project_item_unchecked`'s doc
+/// comment.
+pub async fn list_due_project_items_unchecked(
+    repo: &Arc<dyn ItemRepo>,
+    project_id: &str,
+    deadline_after: Option<i64>,
+    deadline_before: Option<i64>,
+) -> Result<Vec<DueItem>, ItemError> {
+    Ok(repo
+        .list_due_by_project(project_id, deadline_after, deadline_before)
+        .await?)
+}
+
+/// Walks `item`'s `parent_item_id` chain up to its true top-level ancestor within
+/// `project_id` and returns that ancestor's own `item_anchor` — the project-scoped
+/// counterpart to `service::items::top_level_anchor`/`service::team_items::top_level_anchor_team`.
+/// Not exposed to `web_ui` directly: only called from `resolve_promotion_target`/
+/// `resolve_subordination_target` below, which each own the single membership check for the
+/// request this walk happens inside of.
+async fn resolve_top_level_anchor_unchecked(
+    repo: &Arc<dyn ItemRepo>,
+    project_id: &str,
+    item: &Item,
+) -> Result<Option<DateTime<Utc>>, ItemError> {
+    let mut current = item.clone();
+    while let Some(parent_id) = current.parent_item_id.clone() {
+        current = repo.get_by_project(project_id, &parent_id).await?;
+    }
+    Ok(item_anchor(&current))
+}
+
+/// What a promote action needs to reparent an item onto its own grandparent (see CLAUDE.md's
+/// promote/subordinate reparent actions): the item itself, its new parent (`grandparent`,
+/// `None` if the item's parent was already top-level), and — when reparenting to top level —
+/// the offset anchor the item's own children should now be measured from.
+pub struct PromotionTarget {
+    pub current: Item,
+    pub grandparent: Option<Item>,
+    pub offset_anchor: Option<DateTime<Utc>>,
+}
+
+/// Resolves a promotion in one membership-checked call — replaces a handler doing a
+/// membership-only `get_project` call followed by up to three raw, unchecked
+/// `repo.get_by_project` calls (current, parent, grandparent) plus a separate top-level-anchor
+/// walk. Checks membership exactly once, then walks the repo directly since the check has
+/// already happened within this same call.
+pub async fn resolve_promotion_target(
+    repo: &Arc<dyn ItemRepo>,
+    projects: &Arc<dyn ProjectRepo>,
+    teams: &Arc<dyn TeamRepo>,
+    project_id: &str,
+    requester_user_id: &str,
+    item_id: &str,
+) -> Result<PromotionTarget, ItemError> {
+    require_project_member(projects, teams, project_id, requester_user_id).await?;
+    let current = repo.get_by_project(project_id, item_id).await?;
+    let Some(parent_id) = current.parent_item_id.clone() else {
+        return Err(ItemError::Invalid(
+            "item has no parent to promote from".to_string(),
+        ));
+    };
+    let parent = repo.get_by_project(project_id, &parent_id).await?;
+    let grandparent = match &parent.parent_item_id {
+        Some(gp_id) => Some(repo.get_by_project(project_id, gp_id).await?),
+        None => None,
+    };
+    let offset_anchor = match &grandparent {
+        Some(gp) => resolve_top_level_anchor_unchecked(repo, project_id, gp).await?,
+        None => None,
+    };
+    Ok(PromotionTarget {
+        current,
+        grandparent,
+        offset_anchor,
+    })
+}
+
+/// What a subordinate action needs to reparent an item onto a sibling (`new_parent`).
+pub struct SubordinationTarget {
+    pub current: Item,
+    pub new_parent: Item,
+    pub offset_anchor: Option<DateTime<Utc>>,
+}
+
+/// Resolves a subordination in one membership-checked call — same rationale as
+/// `resolve_promotion_target`.
+pub async fn resolve_subordination_target(
+    repo: &Arc<dyn ItemRepo>,
+    projects: &Arc<dyn ProjectRepo>,
+    teams: &Arc<dyn TeamRepo>,
+    project_id: &str,
+    requester_user_id: &str,
+    item_id: &str,
+    new_parent_id: &str,
+) -> Result<SubordinationTarget, ItemError> {
+    require_project_member(projects, teams, project_id, requester_user_id).await?;
+    let current = repo.get_by_project(project_id, item_id).await?;
+    let new_parent = repo.get_by_project(project_id, new_parent_id).await?;
+    if new_parent.parent_item_id != current.parent_item_id {
+        return Err(ItemError::Invalid(
+            "target is not a sibling of this item".to_string(),
+        ));
+    }
+    let offset_anchor = resolve_top_level_anchor_unchecked(repo, project_id, &new_parent).await?;
+    Ok(SubordinationTarget {
+        current,
+        new_parent,
+        offset_anchor,
+    })
 }
 
 #[derive(Debug, Default)]

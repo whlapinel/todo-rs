@@ -3,6 +3,7 @@ pub mod handlers;
 
 use crate::domain::item::{Item, ItemKind};
 use crate::service::error::ItemError;
+use crate::service::project_items::list_project_items_unchecked;
 use crate::storage::sqlite::ItemRepo;
 use crate::web_ui::project_simple_lists::templates::{
     ProjectSimpleItemRow, ProjectSimpleItemRowsFragmentTemplate,
@@ -111,17 +112,14 @@ pub(crate) fn render_rows(items: &[Item], project_id: &str) -> Result<Vec<String
         .map_err(ItemError::from)
 }
 
-/// `repo.list_by_project` already scopes to top-level, non-Template items — this narrows
-/// further to `Simple`. No sort key: unlike Tasks/Events there's no date field to order by,
-/// mirroring `simple_lists::list_simple_items`/`team_simple_lists::list_team_simple_items`.
+/// `list_project_items_unchecked` already scopes to top-level, non-Template items — this
+/// narrows further to `Simple`. No sort key: unlike Tasks/Events there's no date field to
+/// order by, mirroring `simple_lists::list_simple_items`/`team_simple_lists::list_team_simple_items`.
 pub(crate) async fn list_project_simple_items(
     repo: &Arc<dyn ItemRepo>,
     project_id: &str,
 ) -> Result<Vec<Item>, ItemError> {
-    let mut items = repo
-        .list_by_project(project_id, None)
-        .await
-        .map_err(ItemError::from)?;
+    let mut items = list_project_items_unchecked(repo, project_id, None).await?;
     items.retain(|i| i.kind() == ItemKind::Simple);
     Ok(items)
 }
@@ -134,7 +132,9 @@ pub(crate) async fn sibling_group(
     parent_item_id: Option<&str>,
 ) -> Result<Vec<Item>, ItemError> {
     match parent_item_id {
-        Some(pid) => repo.list_children(pid).await.map_err(ItemError::from),
+        Some(pid) => {
+            list_project_items_unchecked(repo, project_id, Some(pid.to_string())).await
+        }
         None => list_project_simple_items(repo, project_id).await,
     }
 }
@@ -146,9 +146,7 @@ pub(crate) async fn render_scope_fragment(
 ) -> Result<Html<String>, ItemError> {
     let (items, empty_message) = if let Some(parent_id) = parent_item_id {
         (
-            repo.list_children(parent_id)
-                .await
-                .map_err(ItemError::from)?,
+            list_project_items_unchecked(repo, project_id, Some(parent_id.to_string())).await?,
             "No sub-items yet.",
         )
     } else {

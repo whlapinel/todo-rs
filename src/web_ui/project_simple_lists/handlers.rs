@@ -84,12 +84,15 @@ pub async fn project_simple_item_detail_page(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
 ) -> Result<Html<String>, ItemError> {
-    let _project =
-        project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
-    let item = repo
-        .get_by_project(&project_id, &item_id)
-        .await
-        .map_err(ItemError::from)?;
+    let item = project_item_service::get_project_item(
+        &repo,
+        &projects,
+        &teams,
+        &project_id,
+        &auth_user.user_id,
+        &item_id,
+    )
+    .await?;
     let item = require_simple(item)?;
     let nav_html = nav::build_nav_html(
         &projects,
@@ -115,12 +118,15 @@ pub async fn project_simple_item_edit_page(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
 ) -> Result<Html<String>, ItemError> {
-    let _project =
-        project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
-    let item = repo
-        .get_by_project(&project_id, &item_id)
-        .await
-        .map_err(ItemError::from)?;
+    let item = project_item_service::get_project_item(
+        &repo,
+        &projects,
+        &teams,
+        &project_id,
+        &auth_user.user_id,
+        &item_id,
+    )
+    .await?;
     let item = require_simple(item)?;
     let fields = ProjectSimpleItemDetailFields::from_item(&item, &project_id, false).render()?;
     let nav_html = nav::build_nav_html(
@@ -147,16 +153,15 @@ pub async fn project_simple_item_children_fragment(
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
 ) -> Result<Html<String>, ItemError> {
     project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
-    // Ownership gate: list_children isn't scoped by project, so confirm the parent actually
-    // belongs to this project before listing its children (mirrors project_tasks.rs's
-    // equivalent).
-    repo.get_by_project(&project_id, &item_id)
-        .await
-        .map_err(ItemError::from)?;
-    let children = repo
-        .list_children(&item_id)
-        .await
-        .map_err(ItemError::from)?;
+    // Ownership gate: confirm the parent actually belongs to this project before listing its
+    // children (mirrors project_tasks.rs's equivalent).
+    project_item_service::get_project_item_unchecked(&repo, &project_id, &item_id).await?;
+    let children = project_item_service::list_project_items_unchecked(
+        &repo,
+        &project_id,
+        Some(item_id.clone()),
+    )
+    .await?;
     let rows = render_rows_scoped(&children, &project_id)?;
     render(ProjectSimpleItemRowsFragmentTemplate {
         rows,
@@ -252,12 +257,15 @@ pub async fn update_project_simple_item_form(
     Extension(activity_log): Extension<Arc<dyn crate::storage::sqlite::ActivityLogRepo>>,
     Form(form): Form<ProjectSimpleItemForm>,
 ) -> Result<Response, ItemError> {
-    let _project =
-        project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
-    let current = repo
-        .get_by_project(&project_id, &item_id)
-        .await
-        .map_err(ItemError::from)?;
+    let current = project_item_service::get_project_item(
+        &repo,
+        &projects,
+        &teams,
+        &project_id,
+        &auth_user.user_id,
+        &item_id,
+    )
+    .await?;
     let current = require_simple(current)?;
     let close = form.redirect.is_some();
     let params = update_params_from_form(&project_id, &item_id, &current, &form);
@@ -275,10 +283,8 @@ pub async fn update_project_simple_item_form(
     // under a new id" case to handle here — Item::validate rejects `recurrence` outright for
     // ItemType::Simple, so `next_recurrence` can never fire and the id above is guaranteed
     // still valid.
-    let updated = repo
-        .get_by_project(&project_id, &item_id)
-        .await
-        .map_err(ItemError::from)?;
+    let updated =
+        project_item_service::get_project_item_unchecked(&repo, &project_id, &item_id).await?;
     if close {
         let nav_html = nav::build_nav_html(
             &projects,
@@ -316,10 +322,15 @@ pub async fn delete_project_simple_item_form(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
 ) -> Result<Html<String>, ItemError> {
-    let current = repo
-        .get_by_project(&project_id, &item_id)
-        .await
-        .map_err(ItemError::from)?;
+    let current = project_item_service::get_project_item(
+        &repo,
+        &projects,
+        &teams,
+        &project_id,
+        &auth_user.user_id,
+        &item_id,
+    )
+    .await?;
     require_simple(current)?;
     project_item_service::delete_project_item(
         &repo,
@@ -375,29 +386,17 @@ pub async fn promote_project_simple_item_form(
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(activity_log): Extension<Arc<dyn crate::storage::sqlite::ActivityLogRepo>>,
 ) -> Result<Response, ItemError> {
-    project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
-    let current = repo
-        .get_by_project(&project_id, &item_id)
-        .await
-        .map_err(ItemError::from)?;
-    let current = require_simple(current)?;
-    let Some(parent_id) = current.parent_item_id.clone() else {
-        return Err(ItemError::Invalid(
-            "item has no parent to promote from".to_string(),
-        ));
-    };
-    let parent = repo
-        .get_by_project(&project_id, &parent_id)
-        .await
-        .map_err(ItemError::from)?;
-    let grandparent = match parent.parent_item_id {
-        Some(gp_id) => Some(
-            repo.get_by_project(&project_id, &gp_id)
-                .await
-                .map_err(ItemError::from)?,
-        ),
-        None => None,
-    };
+    let target = project_item_service::resolve_promotion_target(
+        &repo,
+        &projects,
+        &teams,
+        &project_id,
+        &auth_user.user_id,
+        &item_id,
+    )
+    .await?;
+    let current = require_simple(target.current)?;
+    let grandparent = target.grandparent;
     let params = reparent_params(
         &project_id,
         &item_id,
@@ -437,21 +436,18 @@ pub async fn subordinate_project_simple_item_form(
     Extension(activity_log): Extension<Arc<dyn crate::storage::sqlite::ActivityLogRepo>>,
     Form(form): Form<SubordinateForm>,
 ) -> Result<Response, ItemError> {
-    project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
-    let current = repo
-        .get_by_project(&project_id, &item_id)
-        .await
-        .map_err(ItemError::from)?;
-    let current = require_simple(current)?;
-    let new_parent = repo
-        .get_by_project(&project_id, &form.new_parent_id)
-        .await
-        .map_err(ItemError::from)?;
-    if new_parent.parent_item_id != current.parent_item_id {
-        return Err(ItemError::Invalid(
-            "target is not a sibling of this item".to_string(),
-        ));
-    }
+    let target = project_item_service::resolve_subordination_target(
+        &repo,
+        &projects,
+        &teams,
+        &project_id,
+        &auth_user.user_id,
+        &item_id,
+        &form.new_parent_id,
+    )
+    .await?;
+    let current = require_simple(target.current)?;
+    let new_parent = target.new_parent;
     let params = reparent_params(&project_id, &item_id, &current, Some(new_parent.id.clone()));
     project_item_service::update_project_item(
         &repo,

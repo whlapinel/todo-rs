@@ -89,7 +89,12 @@ async fn render_children_fragment(
     project_id: &str,
     template_id: &str,
 ) -> Result<Html<String>, ItemError> {
-    let children = repo.list_children(template_id).await.map_err(ItemError::from)?;
+    let children = project_item_service::list_project_items_unchecked(
+        repo,
+        project_id,
+        Some(template_id.to_string()),
+    )
+    .await?;
     let rows = render_children_rows(project_id, template_id, &children)?;
     render(ProjectTemplateChildrenFragmentTemplate { rows })
 }
@@ -194,12 +199,15 @@ pub async fn project_template_detail_page(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
 ) -> Result<Html<String>, ItemError> {
-    let _project =
-        project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
-    let template = repo
-        .get_by_project(&project_id, &template_id)
-        .await
-        .map_err(ItemError::from)?;
+    let template = project_item_service::get_project_item(
+        &repo,
+        &projects,
+        &teams,
+        &project_id,
+        &auth_user.user_id,
+        &template_id,
+    )
+    .await?;
     let template = require_project_template(template)?;
     let nav_html = nav::build_nav_html(
         &projects,
@@ -226,12 +234,15 @@ pub async fn project_template_edit_page(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
 ) -> Result<Html<String>, ItemError> {
-    let _project =
-        project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
-    let template = repo
-        .get_by_project(&project_id, &template_id)
-        .await
-        .map_err(ItemError::from)?;
+    let template = project_item_service::get_project_item(
+        &repo,
+        &projects,
+        &teams,
+        &project_id,
+        &auth_user.user_id,
+        &template_id,
+    )
+    .await?;
     let template = require_project_template(template)?;
     let nav_html = nav::build_nav_html(
         &projects,
@@ -281,12 +292,8 @@ pub async fn update_project_template_form(
         },
     )
     .await?;
-    let _project =
-        project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
-    let template = repo
-        .get_by_project(&project_id, &template_id)
-        .await
-        .map_err(ItemError::from)?;
+    let template =
+        project_item_service::get_project_item_unchecked(&repo, &project_id, &template_id).await?;
     let nav_html = nav::build_nav_html(
         &projects,
         &auth_user.user_id,
@@ -312,14 +319,15 @@ pub async fn project_template_children_fragment(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
 ) -> Result<Html<String>, ItemError> {
-    project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
-    // Ownership gate: list_children isn't scoped by project, so confirm the template actually
-    // belongs to this project before listing its items (mirrors project_simple_lists.rs's
-    // equivalent).
-    let template = repo
-        .get_by_project(&project_id, &template_id)
-        .await
-        .map_err(ItemError::from)?;
+    let template = project_item_service::get_project_item(
+        &repo,
+        &projects,
+        &teams,
+        &project_id,
+        &auth_user.user_id,
+        &template_id,
+    )
+    .await?;
     require_project_template(template)?;
     render_children_fragment(&repo, &project_id, &template_id).await
 }
@@ -361,12 +369,15 @@ pub async fn project_template_child_detail_page(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
 ) -> Result<Html<String>, ItemError> {
-    let _project =
-        project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
-    let item = repo
-        .get_by_project(&project_id, &item_id)
-        .await
-        .map_err(ItemError::from)?;
+    let item = project_item_service::get_project_item(
+        &repo,
+        &projects,
+        &teams,
+        &project_id,
+        &auth_user.user_id,
+        &item_id,
+    )
+    .await?;
     let view = ProjectTemplateChildDetailView::from_item(&item).render()?;
     let nav_html = nav::build_nav_html(
         &projects,
@@ -392,12 +403,15 @@ pub async fn project_template_child_edit_page(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
 ) -> Result<Html<String>, ItemError> {
-    let _project =
-        project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
-    let item = repo
-        .get_by_project(&project_id, &item_id)
-        .await
-        .map_err(ItemError::from)?;
+    let item = project_item_service::get_project_item(
+        &repo,
+        &projects,
+        &teams,
+        &project_id,
+        &auth_user.user_id,
+        &item_id,
+    )
+    .await?;
     let fields = ProjectTemplateChildDetailFields::from_item(&project_id, &template_id, &item, false)
         .render()?;
     let nav_html = nav::build_nav_html(
@@ -427,10 +441,15 @@ pub async fn update_project_template_child_form(
     Form(form): Form<ProjectTemplateChildForm>,
 ) -> Result<Response, ItemError> {
     let close = form.redirect.is_some();
-    let current = repo
-        .get_by_project(&project_id, &item_id)
-        .await
-        .map_err(ItemError::from)?;
+    let current = project_item_service::get_project_item(
+        &repo,
+        &projects,
+        &teams,
+        &project_id,
+        &auth_user.user_id,
+        &item_id,
+    )
+    .await?;
     let name = if form.name.trim().is_empty() {
         current.name.clone()
     } else {
@@ -457,13 +476,9 @@ pub async fn update_project_template_child_form(
         params,
     )
     .await?;
-    let updated = repo
-        .get_by_project(&project_id, &item_id)
-        .await
-        .map_err(ItemError::from)?;
+    let updated =
+        project_item_service::get_project_item_unchecked(&repo, &project_id, &item_id).await?;
     if close {
-        let _project =
-            project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
         let view = ProjectTemplateChildDetailView::from_item(&updated).render()?;
         let nav_html = nav::build_nav_html(
             &projects,
@@ -525,10 +540,15 @@ pub async fn use_project_template_form(
     TzOffset(tz): TzOffset,
     Form(form): Form<UseProjectTemplateForm>,
 ) -> Result<Response, ItemError> {
-    let template = repo
-        .get_by_project(&project_id, &template_id)
-        .await
-        .map_err(ItemError::from)?;
+    let template = project_item_service::get_project_item(
+        &repo,
+        &projects,
+        &teams,
+        &project_id,
+        &auth_user.user_id,
+        &template_id,
+    )
+    .await?;
 
     let due_date = form
         .due_date
@@ -566,10 +586,8 @@ pub async fn use_project_template_form(
     // above, create_item auto-computes an initial deadline server-side — the offset root for
     // copied children must reflect that actual deadline, not the blank form input. Same
     // rationale as `templates::use_template_form`.
-    let new_item = repo
-        .get_by_project(&project_id, &new_item_id)
-        .await
-        .map_err(ItemError::from)?;
+    let new_item =
+        project_item_service::get_project_item_unchecked(&repo, &project_id, &new_item_id).await?;
 
     item_service::copy_template_children(&repo, &template_id, &new_item_id, new_item.due_date(), tz)
         .await

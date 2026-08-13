@@ -5,12 +5,12 @@ use crate::service::project_items::{self as project_item_service, UpdateProjectI
 use crate::service::projects::{self as project_service};
 use crate::service::teams as team_service;
 use crate::service::templates::{self as template_service, CreateProjectTemplateParams};
-use crate::storage::sqlite::{ActivityLogRepo, ItemRepo, ProjectRepo, RepoError, TeamRepo};
+use crate::storage::sqlite::{ActivityLogRepo, ItemRepo, ProjectRepo, TeamRepo};
 use crate::web_ui::nav::{self, ActiveContext, SidebarSection};
 use crate::web_ui::project_tasks::{
     active_member_options, build_calendar_days, create_params_from_form, list_project_tasks,
     names_for, next_month, non_empty, prev_month, render, render_scope_fragment, require_task,
-    sibling_group, top_level_anchor_project, update_params_from_form, ProjectTaskForm,
+    sibling_group, update_params_from_form, ProjectTaskForm,
 };
 use crate::web_ui::project_tasks::templates::*;
 use crate::web_ui::TzOffset;
@@ -181,10 +181,7 @@ pub async fn project_task_detail_page(
     TzOffset(tz): TzOffset,
 ) -> Result<Html<String>, ItemError> {
     let project = project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
-    let item = repo
-        .get_by_project(&project_id, &item_id)
-        .await
-        .map_err(ItemError::from)?;
+    let item = project_item_service::get_project_item_unchecked(&repo, &project_id, &item_id).await?;
     let item = require_task(item)?;
     let names = match &project.team_id {
         Some(team_id) => names_for(&teams, team_id, &auth_user.user_id).await?,
@@ -226,10 +223,7 @@ pub async fn project_task_edit_page(
     TzOffset(tz): TzOffset,
 ) -> Result<Html<String>, ItemError> {
     let project = project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
-    let item = repo
-        .get_by_project(&project_id, &item_id)
-        .await
-        .map_err(ItemError::from)?;
+    let item = project_item_service::get_project_item_unchecked(&repo, &project_id, &item_id).await?;
     let item = require_task(item)?;
     let (assignee_options, is_team_admin) = match &project.team_id {
         Some(team_id) => (
@@ -277,10 +271,12 @@ pub(crate) async fn render_children_fragment(
     requester_user_id: &str,
     tz: i32,
 ) -> Result<Html<String>, ItemError> {
-    let children = repo
-        .list_children(parent_item_id)
-        .await
-        .map_err(ItemError::from)?;
+    let children = project_item_service::list_project_items_unchecked(
+        repo,
+        project_id,
+        Some(parent_item_id.to_string()),
+    )
+    .await?;
     let names = match team_id {
         Some(team_id) => names_for(teams, team_id, requester_user_id).await?,
         None => HashMap::new(),
@@ -306,10 +302,9 @@ pub(crate) async fn render_source_event_fragment(
     requester_user_id: &str,
     tz: i32,
 ) -> Result<Html<String>, ItemError> {
-    let tasks = repo
-        .list_by_source_event(event_id)
-        .await
-        .map_err(ItemError::from)?;
+    let tasks =
+        project_item_service::list_project_event_children_unchecked(repo, project_id, event_id)
+            .await?;
     let names = match team_id {
         Some(team_id) => names_for(teams, team_id, requester_user_id).await?,
         None => HashMap::new(),
@@ -330,11 +325,9 @@ pub async fn project_task_children_fragment(
     TzOffset(tz): TzOffset,
 ) -> Result<Html<String>, ItemError> {
     let project = project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
-    // Ownership gate: list_children isn't scoped by project, so confirm the parent actually
-    // belongs to this project before listing its children (mirrors tasks.rs's equivalent).
-    repo.get_by_project(&project_id, &item_id)
-        .await
-        .map_err(ItemError::from)?;
+    // Ownership gate: confirm the parent actually belongs to this project before listing its
+    // children (mirrors tasks.rs's equivalent).
+    project_item_service::get_project_item_unchecked(&repo, &project_id, &item_id).await?;
     render_children_fragment(
         &repo,
         &teams,
@@ -466,10 +459,7 @@ pub async fn update_project_task_form(
     Form(form): Form<ProjectTaskForm>,
 ) -> Result<Response, ItemError> {
     let project = project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
-    let current = repo
-        .get_by_project(&project_id, &item_id)
-        .await
-        .map_err(ItemError::from)?;
+    let current = project_item_service::get_project_item_unchecked(&repo, &project_id, &item_id).await?;
     let current = require_task(current)?;
     let close = form.redirect.is_some();
     let params = update_params_from_form(&project_id, &item_id, &current, &form, tz);
@@ -483,7 +473,7 @@ pub async fn update_project_task_form(
     )
     .await?;
 
-    match repo.get_by_project(&project_id, &item_id).await {
+    match project_item_service::get_project_item_unchecked(&repo, &project_id, &item_id).await {
         Ok(updated) if close => {
             let names = match &project.team_id {
                 Some(team_id) => names_for(&teams, team_id, &auth_user.user_id).await?,
@@ -560,7 +550,7 @@ pub async fn update_project_task_form(
         // The task was recurring, just got marked complete, and the service layer replaced it
         // with a fresh successor under a new id — same situation `tasks.rs`'s
         // `update_task_form` handles.
-        Err(RepoError::NotFound) => Ok((
+        Err(ItemError::NotFound) => Ok((
             [(
                 axum::http::header::HeaderName::from_static("hx-refresh"),
                 "true",
@@ -568,7 +558,7 @@ pub async fn update_project_task_form(
             Html(String::new()),
         )
             .into_response()),
-        Err(e) => Err(ItemError::from(e)),
+        Err(e) => Err(e),
     }
 }
 
@@ -579,10 +569,15 @@ pub async fn delete_project_task_form(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
 ) -> Result<Html<String>, ItemError> {
-    let current = repo
-        .get_by_project(&project_id, &item_id)
-        .await
-        .map_err(ItemError::from)?;
+    let current = project_item_service::get_project_item(
+        &repo,
+        &projects,
+        &teams,
+        &project_id,
+        &auth_user.user_id,
+        &item_id,
+    )
+    .await?;
     require_task(current)?;
     project_item_service::delete_project_item(
         &repo,
@@ -664,39 +659,23 @@ pub async fn promote_project_task_form(
     Extension(activity_log): Extension<Arc<dyn ActivityLogRepo>>,
     TzOffset(tz): TzOffset,
 ) -> Result<Response, ItemError> {
-    project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
-    let current = repo
-        .get_by_project(&project_id, &item_id)
-        .await
-        .map_err(ItemError::from)?;
-    let current = require_task(current)?;
-    let Some(parent_id) = current.parent_item_id.clone() else {
-        return Err(ItemError::Invalid(
-            "item has no parent to promote from".to_string(),
-        ));
-    };
-    let parent = repo
-        .get_by_project(&project_id, &parent_id)
-        .await
-        .map_err(ItemError::from)?;
-    let grandparent = match parent.parent_item_id {
-        Some(gp_id) => Some(
-            repo.get_by_project(&project_id, &gp_id)
-                .await
-                .map_err(ItemError::from)?,
-        ),
-        None => None,
-    };
-    let offset_anchor = match &grandparent {
-        Some(gp) => top_level_anchor_project(&repo, &project_id, gp).await?,
-        None => None,
-    };
+    let target = project_item_service::resolve_promotion_target(
+        &repo,
+        &projects,
+        &teams,
+        &project_id,
+        &auth_user.user_id,
+        &item_id,
+    )
+    .await?;
+    let current = require_task(target.current)?;
+    let grandparent = target.grandparent;
     let params = reparent_params(
         &project_id,
         &item_id,
         &current,
         grandparent.as_ref().map(|gp| gp.id.clone()),
-        offset_anchor,
+        target.offset_anchor,
         tz,
     );
     project_item_service::update_project_item(
@@ -733,28 +712,24 @@ pub async fn subordinate_project_task_form(
     TzOffset(tz): TzOffset,
     Form(form): Form<SubordinateForm>,
 ) -> Result<Response, ItemError> {
-    project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
-    let current = repo
-        .get_by_project(&project_id, &item_id)
-        .await
-        .map_err(ItemError::from)?;
-    let current = require_task(current)?;
-    let new_parent = repo
-        .get_by_project(&project_id, &form.new_parent_id)
-        .await
-        .map_err(ItemError::from)?;
-    if new_parent.parent_item_id != current.parent_item_id {
-        return Err(ItemError::Invalid(
-            "target is not a sibling of this item".to_string(),
-        ));
-    }
-    let offset_anchor = top_level_anchor_project(&repo, &project_id, &new_parent).await?;
+    let target = project_item_service::resolve_subordination_target(
+        &repo,
+        &projects,
+        &teams,
+        &project_id,
+        &auth_user.user_id,
+        &item_id,
+        &form.new_parent_id,
+    )
+    .await?;
+    let current = require_task(target.current)?;
+    let new_parent = target.new_parent;
     let params = reparent_params(
         &project_id,
         &item_id,
         &current,
         Some(new_parent.id.clone()),
-        offset_anchor,
+        target.offset_anchor,
         tz,
     );
     project_item_service::update_project_item(
@@ -776,10 +751,15 @@ pub async fn save_project_task_as_template(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
 ) -> Result<Html<String>, ItemError> {
-    let item = repo
-        .get_by_project(&project_id, &item_id)
-        .await
-        .map_err(ItemError::from)?;
+    let item = project_item_service::get_project_item(
+        &repo,
+        &projects,
+        &teams,
+        &project_id,
+        &auth_user.user_id,
+        &item_id,
+    )
+    .await?;
     template_service::create_project_template(
         &repo,
         &projects,

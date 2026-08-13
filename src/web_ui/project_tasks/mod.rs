@@ -3,9 +3,9 @@ pub mod handlers;
 
 use crate::domain::item::{Item, ItemKind};
 use crate::service::error::ItemError;
-use crate::service::items::item_anchor;
+use crate::service::project_items::list_project_items_unchecked;
 use crate::service::teams as team_service;
-use crate::storage::sqlite::{ItemRepo, RepoError, TeamRepo};
+use crate::storage::sqlite::{ItemRepo, TeamRepo};
 use crate::web_ui::project_tasks::templates::{
     CalendarDay, CalendarTaskEntry, DateType, ProjectTaskRow, ProjectTaskRowsFragmentTemplate,
 };
@@ -345,7 +345,7 @@ pub(crate) fn render_rows(
         .map_err(ItemError::from)
 }
 
-/// `repo.list_by_project` already scopes to top-level, non-Template items — this narrows
+/// `list_project_items_unchecked` already scopes to top-level, non-Template items — this narrows
 /// further to `Task` and sorts by due date (undated tasks last), mirroring
 /// `tasks::list_tasks`/`team_tasks::list_team_tasks`.
 fn sort_key(item: &Item) -> i64 {
@@ -356,10 +356,7 @@ pub(crate) async fn list_project_tasks(
     repo: &Arc<dyn ItemRepo>,
     project_id: &str,
 ) -> Result<Vec<Item>, ItemError> {
-    let mut items = repo
-        .list_by_project(project_id, None)
-        .await
-        .map_err(ItemError::from)?;
+    let mut items = list_project_items_unchecked(repo, project_id, None).await?;
     items.retain(|i| i.kind() == ItemKind::Task);
     items.sort_by_key(sort_key);
     Ok(items)
@@ -373,7 +370,9 @@ pub(crate) async fn sibling_group(
     parent_item_id: Option<&str>,
 ) -> Result<Vec<Item>, ItemError> {
     match parent_item_id {
-        Some(pid) => repo.list_children(pid).await.map_err(ItemError::from),
+        Some(pid) => {
+            list_project_items_unchecked(repo, project_id, Some(pid.to_string())).await
+        }
         None => list_project_tasks(repo, project_id).await,
     }
 }
@@ -390,9 +389,7 @@ pub(crate) async fn render_scope_fragment(
 ) -> Result<Html<String>, ItemError> {
     let (items, empty_message) = if let Some(parent_id) = parent_item_id {
         (
-            repo.list_children(parent_id)
-                .await
-                .map_err(ItemError::from)?,
+            list_project_items_unchecked(repo, project_id, Some(parent_id.to_string())).await?,
             "No sub-items yet.",
         )
     } else {
@@ -413,23 +410,6 @@ pub(crate) async fn render_scope_fragment(
         rows,
         empty_message: empty_message.to_string(),
     })
-}
-
-/// Walks `item`'s `parent_item_id` chain up to its true top-level ancestor (scoped to
-/// `project_id` rather than a `user_id`/`team_id`) and returns that ancestor's own
-/// `item_anchor` — the project-scoped counterpart to `service::items::top_level_anchor`/
-/// `service::team_items::top_level_anchor_team`, needed since promote/subordinate here
-/// operate through `ItemRepo::get_by_project` rather than either legacy accessor.
-pub(crate) async fn top_level_anchor_project(
-    repo: &Arc<dyn ItemRepo>,
-    project_id: &str,
-    item: &Item,
-) -> Result<Option<DateTime<Utc>>, RepoError> {
-    let mut current = item.clone();
-    while let Some(parent_id) = current.parent_item_id.clone() {
-        current = repo.get_by_project(project_id, &parent_id).await?;
-    }
-    Ok(item_anchor(&current))
 }
 
 pub(crate) fn prev_month(year: i32, month: u32) -> (i32, u32) {

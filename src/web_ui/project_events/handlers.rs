@@ -4,7 +4,7 @@ use crate::service::error::ItemError;
 use crate::service::project_items::{self as project_item_service};
 use crate::service::projects::{self as project_service};
 use crate::service::templates::{self as template_service, CreateProjectTemplateParams};
-use crate::storage::sqlite::{ItemRepo, ProjectRepo, RepoError, TeamRepo};
+use crate::storage::sqlite::{ItemRepo, ProjectRepo, TeamRepo};
 use crate::web_ui::nav::{self, ActiveContext, SidebarSection};
 use crate::web_ui::project_events::{
     build_calendar_days, create_params_from_form, list_project_events, next_month, prev_month,
@@ -145,11 +145,15 @@ pub async fn project_event_detail_page(
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     TzOffset(tz): TzOffset,
 ) -> Result<Html<String>, ItemError> {
-    let _project = project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
-    let item = repo
-        .get_by_project(&project_id, &item_id)
-        .await
-        .map_err(ItemError::from)?;
+    let item = project_item_service::get_project_item(
+        &repo,
+        &projects,
+        &teams,
+        &project_id,
+        &auth_user.user_id,
+        &item_id,
+    )
+    .await?;
     let item = require_event(item)?;
     let view = ProjectEventDetailView::from_item(&item, &project_id, tz).render()?;
     let nav_html = nav::build_nav_html(
@@ -177,11 +181,15 @@ pub async fn project_event_edit_page(
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     TzOffset(tz): TzOffset,
 ) -> Result<Html<String>, ItemError> {
-    let _project = project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
-    let item = repo
-        .get_by_project(&project_id, &item_id)
-        .await
-        .map_err(ItemError::from)?;
+    let item = project_item_service::get_project_item(
+        &repo,
+        &projects,
+        &teams,
+        &project_id,
+        &auth_user.user_id,
+        &item_id,
+    )
+    .await?;
     let item = require_event(item)?;
     let fields = ProjectEventDetailFields::from_item(&item, &project_id, tz, false).render()?;
     let nav_html = nav::build_nav_html(
@@ -214,11 +222,8 @@ pub async fn project_event_children_fragment(
     TzOffset(tz): TzOffset,
 ) -> Result<Html<String>, ItemError> {
     let project = project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
-    // Ownership gate: list_by_source_event isn't scoped by project, so confirm the caller's
-    // project actually owns the event before listing tasks that reference it.
-    repo.get_by_project(&project_id, &item_id)
-        .await
-        .map_err(ItemError::from)?;
+    // Ownership gate (event belongs to this project) is folded into
+    // `list_project_event_children_unchecked`, called inside `render_source_event_fragment`.
     render_source_event_fragment(
         &repo,
         &teams,
@@ -336,11 +341,15 @@ pub async fn update_project_event_form(
     TzOffset(tz): TzOffset,
     Form(form): Form<ProjectEventForm>,
 ) -> Result<Response, ItemError> {
-    let _project = project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
-    let current = repo
-        .get_by_project(&project_id, &item_id)
-        .await
-        .map_err(ItemError::from)?;
+    let current = project_item_service::get_project_item(
+        &repo,
+        &projects,
+        &teams,
+        &project_id,
+        &auth_user.user_id,
+        &item_id,
+    )
+    .await?;
     let current = require_event(current)?;
     let close = form.redirect.is_some();
     let params = update_params_from_form(&project_id, &item_id, &current, &form, tz);
@@ -354,7 +363,7 @@ pub async fn update_project_event_form(
     )
     .await?;
 
-    match repo.get_by_project(&project_id, &item_id).await {
+    match project_item_service::get_project_item_unchecked(&repo, &project_id, &item_id).await {
         Ok(updated) if close => {
             let view = ProjectEventDetailView::from_item(&updated, &project_id, tz).render()?;
             let nav_html = nav::build_nav_html(
@@ -386,7 +395,7 @@ pub async fn update_project_event_form(
         // `service::team_items::update_team_item`) — same situation `events.rs`'s
         // `update_event_form` handles, and the same fix: ask the client to reload rather than
         // guessing at the new id.
-        Err(RepoError::NotFound) => Ok((
+        Err(ItemError::NotFound) => Ok((
             [(
                 axum::http::header::HeaderName::from_static("hx-refresh"),
                 "true",
@@ -394,7 +403,7 @@ pub async fn update_project_event_form(
             Html(String::new()),
         )
             .into_response()),
-        Err(e) => Err(ItemError::from(e)),
+        Err(e) => Err(e),
     }
 }
 
@@ -405,10 +414,15 @@ pub async fn delete_project_event_form(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
 ) -> Result<Html<String>, ItemError> {
-    let current = repo
-        .get_by_project(&project_id, &item_id)
-        .await
-        .map_err(ItemError::from)?;
+    let current = project_item_service::get_project_item(
+        &repo,
+        &projects,
+        &teams,
+        &project_id,
+        &auth_user.user_id,
+        &item_id,
+    )
+    .await?;
     require_event(current)?;
     project_item_service::delete_project_item(
         &repo,
@@ -429,10 +443,15 @@ pub async fn save_project_event_as_template(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
 ) -> Result<Html<String>, ItemError> {
-    let item = repo
-        .get_by_project(&project_id, &item_id)
-        .await
-        .map_err(ItemError::from)?;
+    let item = project_item_service::get_project_item(
+        &repo,
+        &projects,
+        &teams,
+        &project_id,
+        &auth_user.user_id,
+        &item_id,
+    )
+    .await?;
     template_service::create_project_template(
         &repo,
         &projects,
