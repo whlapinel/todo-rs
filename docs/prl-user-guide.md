@@ -76,18 +76,28 @@ prl --user abc123 items list
 
 ## Items
 
+Every `items` subcommand accepts an optional `--project <project-id>` flag
+(see [Projects](#projects)). Without it, commands operate on your personal
+items exactly as before. With it, they operate on that project's items
+instead — personal or team-backed, the same command either way. This is the
+only way to set `--assign`/`--points` on an item, since assignment and
+points only exist on team-backed projects.
+
 ### List items
 
 ```sh
 prl items list
+prl items list --project <project-id>
 ```
 
-Output columns: `ID`, `DONE`, `DUE`, `NAME`. Items with sub-tasks show a `▸` suffix.
+Output columns: `ID`, `DONE`, `DUE`, `NAME` (personal); with `--project`,
+an `ASSIGNED` column is added. Items with sub-tasks show a `▸` suffix.
 
 ### List sub-tasks
 
 ```sh
 prl items list --parent <item-id>
+prl items list --parent <item-id> --project <project-id>
 ```
 
 ### Add an item
@@ -139,9 +149,14 @@ that a child item (`--parent`) or event-linked task (`--source-event-id`) can't
 use `--scheduled`/`--scheduled-end` at all — the server rejects it, since their
 only supported date is the offset-derived due date.
 
-> **Note:** Assignment is no longer supported on personal items. To create an
-> assignable task, use the web UI to create a team item under a team you
-> belong to (see [Teams](#teams)).
+Add `--project <project-id>` to create the item in that project instead of
+your personal items — required if you also pass `--assign <user-id>` or
+`--points <n>`, since those only apply on a team-backed project (silently
+dropped by the server on a personal one):
+
+```sh
+prl items add "Mow the lawn" --project <project-id> --assign <user-id> --points 25
+```
 
 > **Note:** `--recurrence` only works on items with no `--parent`/
 > `--source-event-id` — child and event-linked items can't have their own
@@ -155,20 +170,29 @@ only supported date is the offset-derived due date.
 
 ```sh
 prl items done <item-id>
+prl items done <item-id> --project <project-id>
 ```
 
 If the item has a recurrence rule, completing it automatically spawns the next occurrence with an updated due date, and any child items are carried over to the new occurrence — with their own due dates recalculated from their offset (or cleared, if they have none). A child's due date is always recalculated this way when its top-level ancestor recurs; manually setting one in the meantime won't survive the next recurrence.
+
+On a team-backed project, completing an assigned, points-bearing item awards
+those points to the assignee — see `prl teams activity`/`undo-activity`
+below.
 
 ### Get item details
 
 ```sh
 prl items get <item-id>
+prl items get <item-id> --project <project-id>
 ```
+
+With `--project`, the output also includes `assigned`/`points`.
 
 ### Delete an item
 
 ```sh
 prl items delete <item-id>
+prl items delete <item-id> --project <project-id>
 ```
 
 Deletes the item and all its descendants.
@@ -181,6 +205,8 @@ prl items due --after 2026-06-01 --before 2026-06-30
 ```
 
 Output includes the parent item name so you can see context at a glance.
+This is a cross-project query — there's no `--project` flag, since it's
+meant to answer "what's due" regardless of which project it lives in.
 
 ### List items assigned to you
 
@@ -189,11 +215,13 @@ prl items assigned
 ```
 
 Shows team items other members have assigned to you, across all teams,
-regardless of due date.
+regardless of due date. Also cross-project, for the same reason as `due`
+above.
 
-> **Note:** `prl items assign` / `prl items unassign` have been removed.
-> Assignment is now a team-item-only concept and is managed via the web UI or
-> MCP server. CLI support for team items is planned.
+> **Note:** there's still no dedicated `prl items assign`/`unassign` — set
+> assignment at creation with `prl items add --project ... --assign
+> <user-id>`, or re-assign by re-running `prl items add` and deleting the
+> old item, or use the web UI/MCP server for an in-place change.
 
 ---
 
@@ -239,12 +267,11 @@ admin automatically. Only an admin can set a `points` value on a top-level
 team item or change another member's role, and a team can never be left
 with zero admins — demoting the last one is rejected.
 
-> **Note:** Team items themselves (create/list/update/delete, including
-> setting `points` or `assignedToUserId`) are not yet manageable from
-> `prl` — use the web UI or MCP server for that (see [Known
-> Issues](../CLAUDE.md#known-issues)). The commands below cover team
-> membership, roles, and the points activity log, all of which `prl` does
-> support today.
+Team items themselves — create/list/get/done/delete, including setting
+`points`/`assignedToUserId` — are managed through `prl items ... --project
+<project-id>` once a team has a project (every team gets one automatically;
+see [Projects](#projects)), not through `prl teams`. The commands below
+cover team membership, roles, and the points activity log.
 
 ### List your teams
 
@@ -333,6 +360,69 @@ be undone again.
 
 ```sh
 prl teams undo-activity <team-id> <entry-id>
+```
+
+---
+
+## Projects
+
+A **project** is the one namespace every item belongs to. Every user gets
+an auto-created personal project ("Personal") the first time they log in,
+and every team gets its own project automatically the first time it's
+created — you don't need to create or attach anything by hand to start
+using `prl items ... --project <project-id>` on a team's items. A project
+is either personal (no attached team, only its owner can access it) or
+team-backed (attached to exactly one team; every active member of that team
+can access it) — attach/detach change which one it is. Role (`admin`/
+`member`) and points on a project are tracked separately from the
+underlying team's own role/points (see [Teams](#teams)) — in practice
+they're kept in sync automatically whenever the attached team's own
+membership changes, so you rarely need `prl projects set-role` directly
+except to fine-tune a project without touching the team.
+
+### List your projects
+
+```sh
+prl projects list
+```
+
+### Create a personal project
+
+Creates a new project with no attached team — just another namespace of
+your own, alongside the auto-created "Personal" one.
+
+```sh
+prl projects create "Side hustle"
+```
+
+### List a project's members
+
+Shows each member's role, points balance (team-backed projects only — see
+[Teams](#teams) for how points/completion work), and name.
+
+```sh
+prl projects members <project-id>
+```
+
+### Attach or detach a team
+
+Attaching seeds project membership from the team's current active members;
+detaching removes it (keeping the project's owner). You must already be a
+project admin. A project can have at most one attached team at a time, but
+the same team can back multiple projects.
+
+```sh
+prl projects attach-team <project-id> <team-id>
+prl projects detach-team <project-id>
+```
+
+### Promote or demote a project member
+
+You must already be a project admin.
+
+```sh
+prl projects set-role <project-id> <target-user-id> admin
+prl projects set-role <project-id> <target-user-id> member
 ```
 
 ---

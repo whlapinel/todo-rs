@@ -1,4 +1,4 @@
-use crate::helpers::{fmt_date, fmt_date_opt, parse_date, require_user, unwrap_or_exit};
+use crate::helpers::{fmt_date_opt, parse_date, require_user, unwrap_or_exit};
 use clap::Subcommand;
 use todo_client::types::ItemType;
 use todo_client::Client;
@@ -21,6 +21,11 @@ pub enum ItemsCommand {
     List {
         #[arg(long, help = "Filter by parent item ID")]
         parent: Option<String>,
+        #[arg(
+            long,
+            help = "Project ID — list that project's items instead of your personal ones"
+        )]
+        project: Option<String>,
     },
     /// Add a new item
     Add {
@@ -57,13 +62,40 @@ pub enum ItemsCommand {
             help = "Event item ID this task references (top-level only; mutually exclusive with --parent)"
         )]
         source_event_id: Option<String>,
+        #[arg(
+            long,
+            help = "Project ID — create in that project instead of your personal items (required for --assign/--points)"
+        )]
+        project: Option<String>,
+        #[arg(
+            long,
+            help = "Assign to this user ID (requires --project on a team-backed project)"
+        )]
+        assign: Option<String>,
+        #[arg(
+            long,
+            help = "Points awarded on completion (requires --project on a team-backed project; project admin only)"
+        )]
+        points: Option<i32>,
     },
     /// Mark an item complete
-    Done { item_id: String },
+    Done {
+        item_id: String,
+        #[arg(long, help = "Project ID the item belongs to")]
+        project: Option<String>,
+    },
     /// Delete an item
-    Delete { item_id: String },
+    Delete {
+        item_id: String,
+        #[arg(long, help = "Project ID the item belongs to")]
+        project: Option<String>,
+    },
     /// Show item details
-    Get { item_id: String },
+    Get {
+        item_id: String,
+        #[arg(long, help = "Project ID the item belongs to")]
+        project: Option<String>,
+    },
     /// List items due in a time window
     Due {
         #[arg(long, help = "Only items due after this date (YYYY-MM-DD)")]
@@ -77,7 +109,43 @@ pub enum ItemsCommand {
 
 pub async fn cmd_items(client: &Client, cmd: ItemsCommand, user_id: Option<String>) {
     match cmd {
-        ItemsCommand::List { parent } => {
+        ItemsCommand::List { parent, project } => {
+            if let Some(project_id) = project {
+                let mut req = client.list_project_items().project_id(project_id);
+                if let Some(p) = parent {
+                    req = req.parent_item_id(p);
+                }
+                let out = unwrap_or_exit(req.send().await, "list project items");
+                if out.items().is_empty() {
+                    println!("(no items)");
+                    return;
+                }
+                println!(
+                    "{:<36}  {:<4}  {:<12}  {:<20}  {}",
+                    "ID", "DONE", "DUE", "ASSIGNED", "NAME"
+                );
+                for i in out.items() {
+                    let id = i.item_id().unwrap_or("-");
+                    let name = i.name().unwrap_or("-");
+                    let done = if i.complete().unwrap_or(false) {
+                        "✓"
+                    } else {
+                        " "
+                    };
+                    let due = fmt_date_opt(i.due_date());
+                    let assignee = i.assigned_to_user_name().unwrap_or("-");
+                    let suffix = if i.has_children().unwrap_or(false) {
+                        " ▸"
+                    } else {
+                        ""
+                    };
+                    println!(
+                        "{:<36}  {:<4}  {:<12}  {:<20}  {}{}",
+                        id, done, due, assignee, name, suffix
+                    );
+                }
+                return;
+            }
             let uid = require_user(user_id);
             let mut req = client.list_items().user_id(uid);
             if let Some(p) = parent {
@@ -118,6 +186,9 @@ pub async fn cmd_items(client: &Client, cmd: ItemsCommand, user_id: Option<Strin
             scheduled,
             scheduled_end,
             source_event_id,
+            project,
+            assign,
+            points,
         } => {
             if parent.is_some() && recurrence.is_some() {
                 eprintln!(
@@ -125,7 +196,9 @@ pub async fn cmd_items(client: &Client, cmd: ItemsCommand, user_id: Option<Strin
                 );
                 std::process::exit(1);
             }
-            if event_type.is_some() && item_type.as_deref().map(str::to_lowercase).as_deref() != Some("event") {
+            if event_type.is_some()
+                && item_type.as_deref().map(str::to_lowercase).as_deref() != Some("event")
+            {
                 eprintln!(
                     "error: --event-type can only be used with --item-type event — only events can auto-trigger a matching template"
                 );
@@ -143,6 +216,71 @@ pub async fn cmd_items(client: &Client, cmd: ItemsCommand, user_id: Option<Strin
                 );
                 std::process::exit(1);
             }
+            if (assign.is_some() || points.is_some()) && project.is_none() {
+                eprintln!(
+                    "error: --assign/--points require --project — assignment and points only exist on team-backed projects"
+                );
+                std::process::exit(1);
+            }
+
+            if let Some(project_id) = project {
+                let mut req = client
+                    .create_project_item()
+                    .project_id(project_id)
+                    .name(name);
+                if let Some(d) = description {
+                    req = req.description(d);
+                }
+                if let Some(ref s) = due {
+                    let due_date = parse_date(s).unwrap_or_else(|e| {
+                        eprintln!("{e}");
+                        std::process::exit(1);
+                    });
+                    req = req.due_date(due_date);
+                }
+                if let Some(p) = parent {
+                    req = req.parent_item_id(p);
+                }
+                if let Some(r) = recurrence {
+                    req = req.recurrence(r);
+                }
+                if let Some(o) = due_offset_days {
+                    req = req.due_offset_days(o);
+                }
+                if let Some(t) = item_type {
+                    req = req.item_type(parse_item_type_flag(&t));
+                }
+                if let Some(e) = event_type {
+                    req = req.event_type(e);
+                }
+                if let Some(ref s) = scheduled {
+                    let scheduled_date = parse_date(s).unwrap_or_else(|e| {
+                        eprintln!("{e}");
+                        std::process::exit(1);
+                    });
+                    req = req.scheduled_date(scheduled_date);
+                }
+                if let Some(ref s) = scheduled_end {
+                    let scheduled_end_date = parse_date(s).unwrap_or_else(|e| {
+                        eprintln!("{e}");
+                        std::process::exit(1);
+                    });
+                    req = req.scheduled_end_date(scheduled_end_date);
+                }
+                if let Some(e) = source_event_id {
+                    req = req.source_event_id(e);
+                }
+                if let Some(a) = assign {
+                    req = req.assigned_to_user_id(a);
+                }
+                if let Some(pts) = points {
+                    req = req.points(pts);
+                }
+                let out = unwrap_or_exit(req.send().await, "add project item");
+                println!("created item {}", out.item_id());
+                return;
+            }
+
             let uid = require_user(user_id);
             let mut req = client.create_item().user_id(uid).name(name);
             if let Some(d) = description {
@@ -190,7 +328,74 @@ pub async fn cmd_items(client: &Client, cmd: ItemsCommand, user_id: Option<Strin
             let out = unwrap_or_exit(req.send().await, "add item");
             println!("created item {}", out.item_id());
         }
-        ItemsCommand::Done { item_id } => {
+        ItemsCommand::Done { item_id, project } => {
+            if let Some(project_id) = project {
+                let item = unwrap_or_exit(
+                    client
+                        .get_project_item()
+                        .project_id(&project_id)
+                        .item_id(&item_id)
+                        .send()
+                        .await,
+                    "get project item",
+                );
+                let mut req = client
+                    .update_project_item()
+                    .project_id(&project_id)
+                    .item_id(&item_id)
+                    .name(item.name())
+                    .complete(true)
+                    .set_due_date(item.due_date().cloned());
+                if let Some(d) = item.description() {
+                    req = req.description(d);
+                }
+                if let Some(r) = item.recurrence() {
+                    req = req.recurrence(r);
+                }
+                if let Some(b) = item.recurrence_basis() {
+                    req = req.recurrence_basis(b);
+                }
+                if let Some(t) = item.has_due_time() {
+                    req = req.has_due_time(t);
+                }
+                if let Some(p) = item.parent_item_id() {
+                    req = req.parent_item_id(p);
+                }
+                if let Some(o) = item.due_offset_days() {
+                    req = req.due_offset_days(o);
+                }
+                if let Some(t) = item.item_type() {
+                    req = req.item_type(t.clone());
+                }
+                if let Some(e) = item.event_type() {
+                    req = req.event_type(e);
+                }
+                if let Some(d) = item.scheduled_date() {
+                    req = req.scheduled_date(d.clone());
+                }
+                if let Some(d) = item.scheduled_end_date() {
+                    req = req.scheduled_end_date(d.clone());
+                }
+                if let Some(t) = item.has_scheduled_time() {
+                    req = req.has_scheduled_time(t);
+                }
+                if let Some(t) = item.has_end_time() {
+                    req = req.has_end_time(t);
+                }
+                if let Some(e) = item.source_event_id() {
+                    req = req.source_event_id(e);
+                }
+                if let Some(a) = item.assigned_to_user_id() {
+                    req = req.assigned_to_user_id(a);
+                }
+                if let Some(pts) = item.points() {
+                    req = req.points(pts);
+                }
+                unwrap_or_exit(req.send().await, "mark done");
+                println!("marked {item_id} complete");
+                return;
+            }
+
             let uid = require_user(user_id);
             let item = unwrap_or_exit(
                 client
@@ -207,7 +412,7 @@ pub async fn cmd_items(client: &Client, cmd: ItemsCommand, user_id: Option<Strin
                 .item_id(&item_id)
                 .name(item.name())
                 .complete(true)
-                .due_date(item.due_date().cloned().unwrap());
+                .set_due_date(item.due_date().cloned());
             if let Some(d) = item.description() {
                 req = req.description(d);
             }
@@ -281,7 +486,20 @@ pub async fn cmd_items(client: &Client, cmd: ItemsCommand, user_id: Option<Strin
                 );
             }
         }
-        ItemsCommand::Delete { item_id } => {
+        ItemsCommand::Delete { item_id, project } => {
+            if let Some(project_id) = project {
+                unwrap_or_exit(
+                    client
+                        .delete_project_item()
+                        .project_id(project_id)
+                        .item_id(&item_id)
+                        .send()
+                        .await,
+                    "delete project item",
+                );
+                println!("deleted {item_id}");
+                return;
+            }
             let uid = require_user(user_id);
             unwrap_or_exit(
                 client
@@ -294,7 +512,45 @@ pub async fn cmd_items(client: &Client, cmd: ItemsCommand, user_id: Option<Strin
             );
             println!("deleted {item_id}");
         }
-        ItemsCommand::Get { item_id } => {
+        ItemsCommand::Get { item_id, project } => {
+            if let Some(project_id) = project {
+                let item = unwrap_or_exit(
+                    client
+                        .get_project_item()
+                        .project_id(project_id)
+                        .item_id(&item_id)
+                        .send()
+                        .await,
+                    "get project item",
+                );
+                println!("id:         {item_id}");
+                println!("name:       {}", item.name());
+                println!("description: {}", item.description().unwrap_or("-"));
+                println!("complete:   {}", item.complete());
+                println!("due:        {}", fmt_date_opt(item.due_date()));
+                println!("scheduled:  {}", fmt_date_opt(item.scheduled_date()));
+                println!("sched end:  {}", fmt_date_opt(item.scheduled_end_date()));
+                println!("recurrence: {}", item.recurrence().unwrap_or("-"));
+                println!(
+                    "offset:     {}",
+                    item.due_offset_days()
+                        .map(|d| d.to_string())
+                        .unwrap_or_else(|| "-".to_string())
+                );
+                println!("children:   {}", item.has_children().unwrap_or(false));
+                println!("assigned:   {}", item.assigned_to_user_id().unwrap_or("-"));
+                println!(
+                    "points:     {}",
+                    item.points()
+                        .map(|p| p.to_string())
+                        .unwrap_or_else(|| "-".to_string())
+                );
+                println!("item type:  {:?}", item.item_type());
+                println!("event type: {}", item.event_type().unwrap_or("-"));
+                println!("src event:  {}", item.source_event_id().unwrap_or("-"));
+                return;
+            }
+
             let uid = require_user(user_id);
             let item = unwrap_or_exit(
                 client
@@ -311,10 +567,7 @@ pub async fn cmd_items(client: &Client, cmd: ItemsCommand, user_id: Option<Strin
             println!("complete:   {}", item.complete());
             println!("due:        {}", fmt_date_opt(item.due_date()));
             println!("scheduled:  {}", fmt_date_opt(item.scheduled_date()));
-            println!(
-                "sched end:  {}",
-                fmt_date_opt(item.scheduled_end_date())
-            );
+            println!("sched end:  {}", fmt_date_opt(item.scheduled_end_date()));
             println!("recurrence: {}", item.recurrence().unwrap_or("-"));
             println!(
                 "offset:     {}",

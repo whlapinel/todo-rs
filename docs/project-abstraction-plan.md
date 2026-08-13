@@ -1729,6 +1729,109 @@ verification. No CLI or MCP server changes, per this stage's own scope — B6 (C
 
 **Verify:** manual CLI smoke test against a dev server.
 
+**Implementation notes:** Done, matching the plan closely, plus one real bug found and
+fixed mid-stage. New `todo-cli/src/projects.rs` (registered in `main.rs`/`commands.rs`
+alongside `items`/`teams`/`users`), `ProjectsCommand`: exactly the six subcommands the
+plan lists (`list`/`create`/`members`/`attach-team`/`detach-team`/`set-role`) — no
+`get`/`rename`/`delete` added beyond that, matching the plan's own enumeration rather
+than mirroring `prl teams`' full surface. `list`/`create` take `user_id` (the
+`/users/{userId}/projects...`-scoped operations, per stage A5's Smithy notes);
+`members`/`attach-team`/`detach-team`/`set-role` don't (the no-`userId`-prefix
+`/projects/{projectId}/...` operations), matching the generated client builders exactly
+— confirmed by reading each operation's fluent builder before wiring rather than
+guessing which ones needed `.user_id(...)`.
+
+**`prl items` repointed via an additive `--project <project-id>` flag, not a
+mode-switching global one:** added to `list`/`add`/`done`/`delete`/`get` (5 of 7
+subcommands) as a per-variant `Option<String>` field, mirroring how every other
+optional CLI flag in this file is already declared per-variant rather than globally.
+`due`/`assigned` deliberately got no `--project` variant — both are inherently
+cross-project queries ("what's due", "what's assigned to me across every team") with
+no project-scoped Smithy operation to route to in the first place (`ProjectItem`'s
+Smithy surface, stage B4, is create/get/update/delete/list only — no due-window or
+assigned-items equivalent). Each of the 5 repointed subcommands branches early
+(`if let Some(project_id) = project { ...; return; }`) into a parallel block calling
+the `ProjectItem` operations, falling through to the original `user_id`-scoped legacy
+code unchanged when `--project` is omitted — chosen over unifying the two branches
+into one generic helper, since the legacy and `ProjectItem` fluent builders are
+distinct generated types with only partially-overlapping setters (`ProjectItem`'s add
+`assigned_to_user_id`/`points`; legacy personal `Item` has neither), so a shared helper
+would need its own abstraction over two different builder types for little benefit at
+this call-site count.
+
+**`add` gained `--assign <user-id>`/`--points <n>`, rejected client-side without
+`--project`** (mirroring the existing `--event-type`-without-`--item-type event`
+rejection precedent already in this file) — `error: --assign/--points require
+--project — assignment and points only exist on team-backed projects`. This is the
+piece that actually resolves the CLI's "no team item support" gap: unlike legacy
+`CreateItemInput`, `CreateProjectItemInput` has `assigned_to_user_id`/`points` setters
+(stage B4's Smithy surface always carries both, dropped server-side on the personal
+branch — see B4's own implementation notes), so passing them through was a direct,
+no-new-machinery wire-up once `--project` selected the right builder.
+
+**`done`'s round-trip extended to forward `assignedToUserId`/`points` too, on the
+`--project` branch only** — `if let Some(a) = item.assigned_to_user_id() { req =
+req.assigned_to_user_id(a); }` / same for `points()`, added alongside the existing
+`dueOffsetDays`/`eventType`/scheduled-fields round-trip this function already did.
+Legacy `done` (no `--project`) is unchanged — `UpdateItemInput` has no such fields to
+round-trip in the first place.
+
+**Real bug found via the manual smoke test below, not caught until then: `done`
+panicked on any item with no due date**, in both the legacy and new `--project`
+branches — `.due_date(item.due_date().cloned().unwrap())` (pre-existing in the code
+this stage started from) panics whenever `due_date` is `None`, which is the common
+case for a team item (assignment/points are far more likely on a bare task than a
+`--due`-dated one, and the smoke test's own first team item had no due date at all).
+Confirmed via `todo-client`'s generated types that `due_date` is `Option<DateTime>` on
+both `UpdateItemInput` and `UpdateProjectItemInput` with no `build()`-time
+required-field error, so the fix was a straight swap to the non-panicking equivalent:
+`.set_due_date(item.due_date().cloned())` (takes the `Option` directly) in both the
+legacy and `--project` branches — same direct-overwrite semantics as before (a `None`
+due date stays `None` after the round-trip), just without the crash. This was a
+latent bug in the code this stage started from, not introduced by B6, but B6 is what
+first exercised it in a realistic path (a team item with no due date), so fixing it
+was in scope rather than deferring — `prl items done` on a due-date-less item would
+otherwise panic today, `--project` or not.
+
+**Docs updated to match:** `docs/prl-user-guide.md` gained a new "Projects" section
+(list/create/members/attach-team/detach-team/set-role, placed after Teams) and every
+`items` subcommand example that changed gained a `--project` variant; the stale "`prl
+items assign`/`unassign` have been removed... CLI support for team items is planned"
+note was replaced with one pointing at `--project`/`--assign` on `add`; the Teams
+section's "team items are not yet manageable from `prl`" note was removed (no longer
+true). `CLAUDE.md`'s CLI section gained a paragraph on `prl projects`/`--project`
+(replacing the now-stale "No `prl items assign`/`unassign`" paragraph), and the Known
+Issues section's "CLI has no team item support" bullet was replaced with an
+"MCP server has no Project support" bullet — the equivalent gap on that side, since
+B7 (next) is what closes it there; `mcp-server/src/index.ts` confirmed to have zero
+references to "project" before writing that bullet, not assumed.
+
+**Testing:** no automated tests exist in `todo-cli/` (a thin CLI crate wrapping the
+generated `todo-client`, with no prior test precedent to match — confirmed by
+grepping for `#[test]`/`#[tokio::test]` before concluding this). `cargo build`:
+clean, both before and after the `due_date` fix (the panic is a runtime bug, not a
+compile error). Verified instead by a manual smoke test, same pattern as A5/B1-B5's
+own precedent: built the server binary and `prl`, ran the server against a throwaway
+SQLite DB (`TODO_AUTH_MODE=caddy` + `TODO_DEV_EMAIL` + `TODO_JWT_SECRET` + explicit
+`TODO_BIND`, migrations 10/11 applied cleanly), minted a token via `/auth/token`, and
+exercised: `prl projects list` (showed the auto-created "Personal" project) →
+personal-project item lifecycle via `--project` (`add` → `list` → `get` → `done`,
+including the `ASSIGNED` list column and `assigned`/`points` `get` fields) →
+`prl teams create` (confirmed `ensure_team_project` fired — the new team's project
+appeared in `prl projects list` immediately, no explicit `attach-team` needed) →
+`prl projects members` on it → `prl items add --project ... --assign ... --points 25`
+(a plain personal-item flag combination rejected first, confirming the client-side
+guard) → `prl items done --project ...` on that assigned/points item with no due
+date (this is what surfaced the panic above; fixed, rebuilt, retried, passed) →
+`prl teams activity`/`teams members` confirmed the 25-point award landed and
+`teams undo-activity` correctly reversed it back to 0 → `prl projects detach-team`
+then `attach-team` round-tripped correctly (project's `TEAM ID` column went to `-`
+and back) → `prl projects set-role ... admin` succeeded → deleted both items via
+`--project` → confirmed the plain (no `--project`) legacy `add`/`list`/`get`/`done`/
+`delete`/`due`/`assigned` commands are all still fully functional, unchanged. Scratch
+DB and server process cleaned up after verification. No MCP server changes, per this
+stage's own scope — B7 is next.
+
 ### B7 — MCP server (`mcp-server/`)
 
 - Add project tools (`list_projects`/`create_project`/

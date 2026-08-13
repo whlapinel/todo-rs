@@ -5,6 +5,7 @@ mod commands;
 mod config;
 mod helpers;
 mod items;
+mod projects;
 mod teams;
 mod users;
 
@@ -32,6 +33,10 @@ async fn main() {
         commands::Command::Teams { command } => {
             let client = build_client(url, token);
             teams::cmd_teams(&client, command, user).await;
+        }
+        commands::Command::Projects { command } => {
+            let client = build_client(url, token);
+            projects::cmd_projects(&client, command, user).await;
         }
     }
 }

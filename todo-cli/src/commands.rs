@@ -1,4 +1,5 @@
 use crate::items::ItemsCommand;
+use crate::projects::ProjectsCommand;
 use crate::teams::TeamsCommand;
 use crate::users::UsersCommand;
 use crate::config::ConfigCommand;
@@ -39,6 +40,11 @@ pub enum Command {
     Teams {
         #[command(subcommand)]
         command: TeamsCommand,
+    },
+    /// Manage projects
+    Projects {
+        #[command(subcommand)]
+        command: ProjectsCommand,
     },
     /// Configure prl
     Config {
