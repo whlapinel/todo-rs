@@ -4,7 +4,7 @@ use crate::service::error::ItemError;
 use crate::service::project_items::{self as project_item_service, UpdateProjectItemParams};
 use crate::service::projects::{self as project_service};
 use crate::service::teams as team_service;
-use crate::service::templates::{self as template_service, CreateTeamTemplateParams, CreateTemplateParams};
+use crate::service::templates::{self as template_service, CreateProjectTemplateParams};
 use crate::storage::sqlite::{ActivityLogRepo, ItemRepo, ProjectRepo, RepoError, TeamRepo};
 use crate::web_ui::nav::{self, ActiveContext, SidebarSection};
 use crate::web_ui::project_tasks::{
@@ -769,11 +769,6 @@ pub async fn subordinate_project_task_form(
     Ok(hx_redirect(project_task_url(&project_id, &new_parent.id)))
 }
 
-/// Branches locally between the personal and team-scoped template-creation service
-/// functions — no `create_project_template` service function exists yet (a project-scoped
-/// Templates screen with its own is stage B5d's job), so this mirrors what
-/// `service::project_items` itself does internally: resolve the project down to a plain
-/// `user_id` or `team_id` and delegate straight to the existing function.
 pub async fn save_project_task_as_template(
     Path((project_id, item_id)): Path<(String, String)>,
     Extension(auth_user): Extension<AuthUser>,
@@ -781,41 +776,24 @@ pub async fn save_project_task_as_template(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
 ) -> Result<Html<String>, ItemError> {
-    let project = project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
     let item = repo
         .get_by_project(&project_id, &item_id)
         .await
         .map_err(ItemError::from)?;
-    match &project.team_id {
-        Some(team_id) => {
-            template_service::create_team_template(
-                &repo,
-                &teams,
-                CreateTeamTemplateParams {
-                    team_id: team_id.clone(),
-                    requester_user_id: auth_user.user_id,
-                    name: item.name.clone(),
-                    description: None,
-                    source_item_id: Some(item_id),
-                    event_type: None,
-                },
-            )
-            .await?;
-        }
-        None => {
-            template_service::create_template(
-                &repo,
-                CreateTemplateParams {
-                    user_id: project.owner_user_id,
-                    name: item.name.clone(),
-                    description: None,
-                    source_item_id: Some(item_id),
-                    event_type: None,
-                },
-            )
-            .await?;
-        }
-    }
+    template_service::create_project_template(
+        &repo,
+        &projects,
+        &teams,
+        &auth_user.user_id,
+        CreateProjectTemplateParams {
+            project_id,
+            name: item.name.clone(),
+            description: None,
+            source_item_id: Some(item_id),
+            event_type: None,
+        },
+    )
+    .await?;
     Ok(Html(
         r#"<span class="text-xs text-green-600">Saved</span>"#.to_string(),
     ))

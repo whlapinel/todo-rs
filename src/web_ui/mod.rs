@@ -7,6 +7,7 @@ pub mod nav;
 pub mod project_events;
 pub mod project_simple_lists;
 pub mod project_tasks;
+pub mod project_templates;
 pub mod projects;
 pub mod simple_lists;
 pub mod tasks;

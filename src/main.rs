@@ -50,6 +50,7 @@ use web_ui::login::login_page;
 use web_ui::project_events::handlers::*;
 use web_ui::project_simple_lists::handlers::*;
 use web_ui::project_tasks::handlers::*;
+use web_ui::project_templates::handlers::*;
 use web_ui::projects::projects_page;
 use web_ui::simple_lists::*;
 use web_ui::tasks::handlers::*;
@@ -302,6 +303,39 @@ fn build_web_router() -> Router {
             get(template_child_edit_page),
         )
         .route("/templates/:template_id/use", post(use_template_form))
+        .route(
+            "/projects/:project_id/templates",
+            get(project_templates_page).post(create_project_template_form),
+        )
+        .route(
+            "/projects/:project_id/templates/:template_id",
+            get(project_template_detail_page)
+                .post(create_project_template_child_form)
+                .put(update_project_template_form)
+                .delete(delete_project_template_form),
+        )
+        .route(
+            "/projects/:project_id/templates/:template_id/edit",
+            get(project_template_edit_page),
+        )
+        .route(
+            "/projects/:project_id/templates/:template_id/items",
+            get(project_template_children_fragment),
+        )
+        .route(
+            "/projects/:project_id/templates/:template_id/items/:item_id",
+            get(project_template_child_detail_page)
+                .put(update_project_template_child_form)
+                .delete(delete_project_template_child_form),
+        )
+        .route(
+            "/projects/:project_id/templates/:template_id/items/:item_id/edit",
+            get(project_template_child_edit_page),
+        )
+        .route(
+            "/projects/:project_id/templates/:template_id/use",
+            post(use_project_template_form),
+        )
         .route("/teams", get(teams_page).post(create_team_form))
         .route(
             "/teams/:team_id",

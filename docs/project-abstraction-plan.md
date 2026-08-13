@@ -1392,6 +1392,120 @@ still renders HTTP 200 unaffected, proving the old and new screens genuinely coe
 stage's own scope. Scratch DB and server process cleaned up after verification. No CLI or MCP
 server changes, per this stage's own scope — B5d (Templates) is next.
 
+**B5d implementation notes:** Done, matching the plan closely, plus one real bug found and
+fixed mid-stage that the plan's own text had flagged as a risk but not resolved (see below).
+New module `src/web_ui/project_templates/{mod.rs, handlers.rs, templates.rs}` (same three-file
+split as B5a-c) plus 11 new templates under `templates/project_templates/` mirroring
+`templates/templates/`+`templates/team_templates/` merged with an `is_team_project` gate on the
+row's "Use…" form (same gating shape `ProjectTaskDetailFields`'s assign-to/points markup already
+established) rather than two separate row templates. `src/web_ui/templates.rs`,
+`team_templates.rs`, and their templates are completely untouched and confirmed still returning
+HTTP 200 live — same "old and new coexist until B5f" rule as B5a-c.
+
+**The `list_project_templates`/project_id gap the plan flagged, resolved by delegation rather
+than backfill:** `templates::create_template`/`create_team_template` build an `Item` and call
+`repo.create` directly — they never routed through `items::create_item`/`team_items::
+create_team_item`, so (unlike every real item) a template's row never got `project_id` set by
+B2's dual-write at all. Two options existed: backfill `project_id` onto every template row (a
+migration, plus every existing call site), or resolve a project's templates through its already-
+known `owner_user_id`/`team_id` instead of the `project_id` column, mirroring exactly how stage
+B4's `create_project_item`/`update_project_item`/`delete_project_item` already resolve a project
+down to a plain `user_id`/`team_id` and delegate. Went with the latter — no migration, no schema
+change, always correct regardless of whether a given template row happens to carry `project_id`.
+Landed as three new functions in `src/service/templates.rs`: `list_project_templates` (delegates
+to `repo.list_templates(owner_user_id)`/`repo.list_team_templates(team_id)`),
+`create_project_template`/`CreateProjectTemplateParams` and `update_project_template`/
+`UpdateProjectTemplateParams` (delegate to the four existing personal/team functions), all three
+gated by `require_project_member` first, matching every other stage B3/B4 service function's
+shape. `project_tasks::save_project_task_as_template`/`project_events::
+save_project_event_as_template` (B5a/B5b's own local personal-vs-team branching, each flagged in
+its own doc comment as "no `create_project_template` service function exists yet — that's stage
+B5d's job") were repointed to call this new function, deleting the duplicated branching in both
+handlers.
+
+**One real bug found via manual smoke test, not caught by unit tests, fixed before this stage
+shipped:** the resolve-by-owner approach above is correct for *listing* a project's templates,
+but every other project-scoped lookup in this new screen (children fragment, detail/edit
+redisplay, the "Use" form's template fetch) was written using `repo.get_by_project(project_id,
+template_id)` — the same lookup every other B5 screen uses, since a real item's `project_id`
+*is* reliably set. A template's `project_id` being permanently `None` meant every one of those
+lookups 404'd immediately after creating a template through the new screen (confirmed live: POST
+`/templates` succeeded and returned a row, but the very next `GET .../items` children-fragment
+request came back "not found"). Fixed by having `create_project_template` do one extra
+read-modify-write immediately after delegating to `create_template`/`create_team_template`:
+fetch the just-created row via `repo.get`/`repo.get_team_item` (owner-scoped, always works),
+set `item.project_id = Some(project_id)`, and persist via `repo.update`/`repo.update_team_item`
+(both already had `project_id` in their `SET` clause from stage B2, so no storage-layer change
+was needed — confirmed by reading `src/storage/sqlite/items.rs` before assuming so). This makes
+every `get_by_project`-based lookup elsewhere in this screen work like any other project-owned
+row, at the cost of one extra write per template creation. Legacy `templates.rs`/
+`team_templates.rs`-created templates (and any created before this fix, during this same
+session) still carry `project_id: NULL` — an accepted, bounded gap in the same class as B1/B2's
+own "pre-existing row won't have this field until touched again" notes, not fixed by a migration
+here. The two `create_project_template_delegates_to_*` unit tests were updated to mock the
+follow-up `get`/`update` (or `get_team_item`/`update_team_item`) pair this introduced.
+
+**Children creation/update reuses `service::project_items` directly, no template-specific
+service code needed:** `create_project_template_child_form`/`update_project_template_child_form`
+call `project_item_service::create_project_item`/`update_project_item` with `parent_item_id:
+Some(template_id)` (create) or explicit `item_type: Some(ItemKind::Task)` (update) — verified by
+reading `service::items::create_item`/`team_items::create_team_item` before assuming this would
+work: `create_item`'s parent-is-Template auto-detection upgrades a personal child to `Template`
+kind automatically, while `create_team_item` has no such detection and leaves a team child as
+plain `Task` kind — a pre-existing asymmetry between the two legacy functions that `templates.rs`/
+`team_templates.rs` already lived with (their own child forms round-trip through the same
+functions), reproduced here verbatim rather than "fixed," since fixing it is a cross-cutting
+change to `create_team_item` outside this stage's scope. Because children are created via the
+normal `create_item`/`create_team_item` path (not the direct-`repo.create` path templates
+themselves use), they get `project_id` set automatically at creation — no equivalent backfill
+needed for children, confirmed live (children fragment worked immediately, before the
+project_id-backfill fix above was even applied to the template root). Template *deletion*
+(`delete_project_template_form`, whole template) and child deletion both reuse
+`project_item_service::delete_project_item` unchanged — safe regardless of the `project_id` gap,
+since that path's underlying `items::delete_item`/`team_items::delete_team_item` fetch by
+`repo.get`/`repo.get_team_item` (owner-scoped), never `get_by_project`.
+
+**"Use" flow unified across personal/team in one code path**, simpler than the legacy pair it
+replaces: `use_project_template_form` always calls `project_item_service::create_project_item`
+with `assigned_to_user_id` passed through unconditionally — dropped automatically on the personal
+branch (`CreateItemParams` has no slot for it), exactly as `project_tasks`/`project_simple_lists`
+already established for the same field. No `is_team_project` branch needed in the handler itself,
+only in the row template's assignee `<select>`. Redirects to
+`/web/projects/{project_id}/tasks/{new_item_id}` (the new project-scoped Tasks screen), not the
+legacy `/web/tasks/{id}`/`/web/team-tasks/{team_id}/{id}` legacy `use_template_form`/
+`use_team_template_form` redirect to.
+
+**Testing:** 7 new unit tests in `service::templates` (202 total, up from B2's/B5c's 195):
+`list_project_templates` delegates-personal/delegates-team/rejects-non-member,
+`create_project_template` delegates-personal/delegates-team (each asserting both the delegated
+`create` call *and* the follow-up `get`+`update`/`get_team_item`+`update_team_item` pair),
+`update_project_template` delegates-personal/delegates-team. `cargo test`: 202/202 passing, zero
+regressions. `cargo check`/`cargo build`: clean, only the same pre-existing dead-code warnings
+every prior stage has produced.
+
+**Manual smoke test** (built the binary, ran against a throwaway SQLite DB via
+`TODO_AUTH_MODE=caddy` + `TODO_DEV_EMAIL`, migrations 10/11 applied cleanly): personal project —
+created a template with `eventType=rain` via the new screen's inline form; detail page showed the
+"Auto-triggered by event type: rain" line; added a child with `dueOffsetDays=-3`; children
+fragment rendered correctly (this is what caught the `project_id` bug above — first attempt
+404'd, fixed, retried, passed); renamed the template via its edit form; used it with an explicit
+due date and confirmed via the JSON API that the new task's child ("Pack boxes") landed with a
+due date exactly 3 days before the parent's, `dueOffsetDays: -3` preserved. Then confirmed
+`project_tasks::save_project_task_as_template` (repointed this stage) correctly creates a
+project-scoped template findable via the new screen. Team-backed project — confirmed
+`ensure_team_project`'s project appeared with a "Team" badge; created a team template, confirmed
+the row's "Use…" form showed the assignee `<select>` (personal project's did not); added a child;
+created a team Event via the `ProjectItem` API with a matching `eventType: "rain"` and confirmed
+the auto-trigger fired end-to-end through the new unified surface — the template's child appeared
+as a new top-level task with `sourceEventId` pointing at the new event, no code in this stage
+touching that trigger path at all (it rides along for free through `service::project_items`' →
+`service::items`/`team_items` delegation, same as B5b's notes predicted for a different feature);
+exercised child edit (rename + offset change, "Save and close"), child delete, and template
+delete. Confirmed both legacy `GET /web/templates` and `GET /web/team-templates/:team_id` still
+return HTTP 200 unaffected, proving old and new coexist per this stage's own scope. Scratch DB
+and server process cleaned up after verification. No CLI or MCP server changes, per this stage's
+own scope — B5e (Dashboard, assigned-items, activity, teams admin) is next.
+
 ### B6 — CLI (`todo-cli/`)
 
 - Add `prl projects` (list/create/attach-team/detach-team/members/set-role);
