@@ -64,6 +64,23 @@ pub async fn require_project_admin(
     Ok(())
 }
 
+/// Non-erroring variant of `require_project_admin`, for gating optional UI (mirrors
+/// `service::teams::is_team_admin`) — added in stage C1
+/// (docs/project-abstraction-plan.md), since points/assignment authority moved off
+/// `team_members.role` onto `project_members.role`, and the web UI's own
+/// show-the-points-field gate needs to match whatever the server will actually
+/// honor.
+pub async fn is_project_admin(
+    projects: &Arc<dyn ProjectRepo>,
+    teams: &Arc<dyn TeamRepo>,
+    project_id: &str,
+    user_id: &str,
+) -> bool {
+    require_project_admin(projects, teams, project_id, user_id)
+        .await
+        .is_ok()
+}
+
 /// Creates a personal project (no attached team — that's stage A4's
 /// `attach_team_to_project`, not part of `create_project` itself).
 pub async fn create_project(

@@ -122,14 +122,6 @@ pub async fn list_team_members(
     Ok(teams.list_members(team_id).await?)
 }
 
-/// Non-erroring variant of `require_team_admin`, for gating optional UI (the Stage 7
-/// admin-only `points` input) rather than rejecting a request — a plain member simply
-/// gets `false`, not an error, since "you're not an admin" isn't a failure when all
-/// that's being decided is whether to render a field.
-pub async fn is_team_admin(teams: &Arc<dyn TeamRepo>, team_id: &str, user_id: &str) -> bool {
-    require_team_admin(teams, team_id, user_id).await.is_ok()
-}
-
 /// `user_id`'s current point balance on `team_id` — the Stage 7 points badge's data
 /// source. Goes through `list_team_members` (so the requester's own active-membership
 /// check still applies) rather than a dedicated repo round trip; defaults to 0 if

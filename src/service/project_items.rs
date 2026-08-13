@@ -191,6 +191,7 @@ pub async fn update_project_item(
                 repo,
                 &UpdateTeamItemContext {
                     teams: teams.clone(),
+                    projects: projects.clone(),
                     activity_log: activity_log.clone(),
                 },
                 requester_user_id,

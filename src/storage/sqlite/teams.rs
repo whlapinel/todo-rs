@@ -91,12 +91,27 @@ impl TeamRepo for SqliteTeamRepo {
         })
     }
 
+    /// `points` is sourced from the team's backing project's `project_members` row
+    /// (stage C1, docs/project-abstraction-plan.md — points authority moved off
+    /// `team_members.points`, which nothing writes to anymore), not
+    /// `team_members.points` itself. `role` stays `team_members.role` — team
+    /// management (invite/rename/set-role) is a separate authority C1 deliberately
+    /// left alone, see that stage's own implementation notes. `COALESCE(...,  0)`
+    /// covers a team with no backing project yet, or a member row not yet synced
+    /// into `project_members` (e.g. a still-`PENDING` invitee) — same "no balance
+    /// yet" default `team_members.points`'s own `NOT NULL DEFAULT 0` used to give
+    /// for free.
     async fn list_members(&self, team_id: &str) -> Result<Vec<TeamMemberInfo>, RepoError> {
         sqlx::query(
             "SELECT users.id, users.first_name, users.last_name, users.email, users.google_id,
-                    team_members.status, team_members.role, team_members.points
+                    team_members.status, team_members.role,
+                    COALESCE(project_members.points, 0) AS points
              FROM team_members
              JOIN users ON team_members.user_id = users.id
+             LEFT JOIN projects ON projects.team_id = team_members.team_id
+             LEFT JOIN project_members
+                 ON project_members.project_id = projects.id
+                AND project_members.user_id = team_members.user_id
              WHERE team_members.team_id = ?
              ORDER BY users.first_name ASC",
         )
@@ -523,5 +538,65 @@ mod tests {
 
         assert!(project_member_role(&pool, "p1", "member1").await.is_none());
         assert!(project_member_role(&pool, "p2", "member1").await.is_none());
+    }
+
+    /// Stage C1 (docs/project-abstraction-plan.md): points authority moved off
+    /// `team_members.points` onto the backing project's `project_members.points` —
+    /// `list_members` (and everything built on it: `member_points`, the legacy
+    /// `ListTeamMembers` JSON API operation, `prl teams members`, `teams.rs`'s own
+    /// member listing) must read the live, project-sourced balance, not the
+    /// frozen `team_members` one nothing writes to anymore.
+    #[tokio::test]
+    async fn list_members_sources_points_from_the_teams_backing_project() {
+        let pool = test_pool().await;
+        let repo = SqliteTeamRepo(pool.clone());
+        insert_user(&pool, "member1").await;
+        sqlx::query("INSERT INTO teams (id, name) VALUES ('team1', 'Family')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO team_members (team_id, user_id, status, role, points) \
+             VALUES ('team1', 'member1', 'ACTIVE', 'member', 999)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        insert_project(&pool, "p1", "member1", "team1").await;
+        sqlx::query(
+            "INSERT INTO project_members (project_id, user_id, role, points) \
+             VALUES ('p1', 'member1', 'member', 42)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let members = repo.list_members("team1").await.unwrap();
+        assert_eq!(members.len(), 1);
+        // The stale team_members.points value (999) must never surface here.
+        assert_eq!(members[0].points, 42);
+    }
+
+    #[tokio::test]
+    async fn list_members_defaults_points_to_zero_with_no_backing_project() {
+        let pool = test_pool().await;
+        let repo = SqliteTeamRepo(pool.clone());
+        insert_user(&pool, "member1").await;
+        sqlx::query("INSERT INTO teams (id, name) VALUES ('team1', 'Family')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO team_members (team_id, user_id, status, role, points) \
+             VALUES ('team1', 'member1', 'ACTIVE', 'member', 999)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        // No `projects` row backs this team at all.
+
+        let members = repo.list_members("team1").await.unwrap();
+        assert_eq!(members.len(), 1);
+        assert_eq!(members[0].points, 0);
     }
 }

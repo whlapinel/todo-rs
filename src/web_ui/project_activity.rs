@@ -142,15 +142,18 @@ pub async fn undo_project_activity_log_entry_form(
     Extension(activity_log): Extension<Arc<dyn ActivityLogRepo>>,
     TzOffset(tz): TzOffset,
 ) -> Result<Html<String>, ItemError> {
-    // `undo_activity_log_entry` (service::activity_log) is still team_id-keyed — points
-    // themselves stay `team_members`-keyed (see CLAUDE.md's Points section) — so this
-    // resolves the project's backing team first. A personal project has none and can
-    // never have an entry to undo in the first place (see `render_activity_page`'s own
-    // doc comment), so that case 404s rather than reaching the service layer.
+    // `undo_activity_log_entry` (service::activity_log) is still `team_id`-keyed for
+    // its own membership check, but points themselves moved to `project_members` as
+    // of stage C1 (docs/project-abstraction-plan.md). This still resolves the
+    // project's backing team first, since the JSON API's own `team_id`-scoped shape
+    // is unchanged. A personal project has none and can never have an entry to undo
+    // in the first place (see `render_activity_page`'s own doc comment), so that
+    // case 404s rather than reaching the service layer.
     let project = get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
     let team_id = project.team_id.ok_or(ItemError::NotFound)?;
     activity_log_service::undo_activity_log_entry(
         &teams,
+        &projects,
         &activity_log,
         &team_id,
         &entry_id,

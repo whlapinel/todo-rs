@@ -137,6 +137,7 @@ pub async fn update_team_item(
     input: input::UpdateTeamItemInput,
     server::Extension(repo): server::Extension<Arc<dyn ItemRepo>>,
     server::Extension(teams): server::Extension<Arc<dyn TeamRepo>>,
+    server::Extension(projects): server::Extension<Arc<dyn ProjectRepo>>,
     server::Extension(activity_log): server::Extension<Arc<dyn ActivityLogRepo>>,
     server::Extension(auth): server::Extension<AuthUser>,
 ) -> Result<output::UpdateTeamItemOutput, error::UpdateTeamItemError> {
@@ -154,7 +155,11 @@ pub async fn update_team_item(
         .map(|d| d.with_timezone(&chrono::Utc));
     team_item_service::update_team_item(
         &repo,
-        &UpdateTeamItemContext { teams, activity_log },
+        &UpdateTeamItemContext {
+            teams,
+            projects,
+            activity_log,
+        },
         &auth.user_id,
         UpdateTeamItemParams {
             team_id: input.team_id,

@@ -3,7 +3,7 @@ use crate::auth::AuthUser;
 use crate::service::activity_log as activity_log_service;
 use crate::service::items::ItemError;
 use crate::service::team_items::require_active_member;
-use crate::storage::sqlite::{ActivityLogRepo, TeamRepo};
+use crate::storage::sqlite::{ActivityLogRepo, ProjectRepo, TeamRepo};
 use std::sync::Arc;
 use todo_server_sdk::{error, input, model, output, server, types::DateTime as SmithyDateTime};
 
@@ -49,11 +49,13 @@ pub async fn list_team_activity_log(
 pub async fn undo_activity_log_entry(
     input: input::UndoActivityLogEntryInput,
     server::Extension(teams): server::Extension<Arc<dyn TeamRepo>>,
+    server::Extension(projects): server::Extension<Arc<dyn ProjectRepo>>,
     server::Extension(activity_log): server::Extension<Arc<dyn ActivityLogRepo>>,
     server::Extension(auth): server::Extension<AuthUser>,
 ) -> Result<output::UndoActivityLogEntryOutput, error::UndoActivityLogEntryError> {
     activity_log_service::undo_activity_log_entry(
         &teams,
+        &projects,
         &activity_log,
         &input.team_id,
         &input.entry_id,

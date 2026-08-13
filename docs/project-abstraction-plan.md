@@ -1958,8 +1958,311 @@ doc's own "Stage B/C are not planned in detail here" note from the top of the fi
 
 ---
 
-Stage C (already sketched earlier in this doc) then retires: legacy
-`Item`/`TeamItem` Smithy operations + dual-write, `items.user_id`/`team_id`
-columns, `activity_log.team_id`, old web_ui screens (whatever B5f's
-legacy-URL choice left behind), `team_members.role`/`points`, and the
-`TODO_BOOTSTRAP_ADMIN_TEAM_ID` bootstrap rework.
+## Stage C — Retire legacy surface, migrate role/points authority, cleanup
+
+**Decision confirmed with the user before drafting this stage** (the one real fork,
+asked directly since — per this doc's own "decisions confirmed before drafting" process
+established at B1/B5f — it's a genuine break in behavior, not a recommend-and-flag call):
+once the legacy `Item`/`TeamItem` Smithy operations are removed, `prl items`/the MCP
+item tools **hard-require** `--project`/`projectId` — omitting it becomes a client-side
+error, not a silent default-personal-project resolution. Every script or habit relying on
+the old no-`--project` form must update explicitly.
+
+**Scope correction found while drafting, not assumed from the plan's original sketch:**
+the plan's very first "Target shape" section (top of this file) describes `items.user_id`/
+`team_id` as replaced by "ONE foreign key" (`project_id`), and the end-of-B7 sketch above
+lists them as something Stage C "drops." Neither is accurate anymore now that Stage B is
+actually built. Per B4's own implementation notes, `service::project_items::{create,
+update,delete}_project_item` don't reimplement item business logic — they resolve
+`project_id` down to a plain `user_id`/`team_id` and **delegate straight into the existing
+`service::items`/`service::team_items` functions**, which is where recurrence, offset-child
+sync, completion-transition guards, and points-award all actually live, all keyed on
+`user_id`/`team_id`. Those columns are not dual-write leftovers to be dropped in a cleanup
+pass — they're the load-bearing primary key of the entire item service layer, `project_id`
+is the bolted-on secondary one. Actually dropping `items.user_id`/`team_id` would mean
+rewriting every one of those service functions to be `project_id`-primary instead — a
+rearchitecture on the scale of Stage B itself, not a Stage C cleanup item. Recommendation,
+applied below without a separate question since the alternative (a Stage D-sized rewrite)
+isn't a real cleanup-stage option: **leave `items.user_id`/`team_id` in the schema
+permanently**, unused only in the sense that no *external* API exposes them once C3 lands.
+This still matches CLAUDE.md's existing "(or leave unused if SQLite column-drop is
+impractical)" hedge on this exact point — just for an architectural reason, not a literal
+SQLite `DROP COLUMN` limitation (confirmed separately that SQLite 3.35+, which this
+project's bundled `libsqlite3-sys` satisfies, does support real `DROP COLUMN` — so the
+hedge in CLAUDE.md was itself imprecise, but the conclusion it reaches is still correct for
+different reasons). What Stage C *can* honestly retire are the columns that really are
+dual-write leftovers with no remaining reader once C1 lands: `activity_log.team_id` and
+`team_members.role`/`points` (see C1/C4 below) — `items.project_id` staying as a genuine
+second key, not a replacement.
+
+Five independently-landable sub-stages, same one-stage-per-session process as A/B:
+
+- **C1 — Points/role authority migration to `project_members`.** No schema or API
+  change, business-logic-only. `service::team_items.rs`'s points-award branch
+  (currently `require_team_admin` for the assign/points gate, `TeamRepo::
+  add_team_points` for the award, keyed off `params.team_id`) moves to
+  `require_project_admin`/`ProjectRepo::add_project_points` (already built and unit-
+  tested in A2/A4, unused by any caller since) keyed off the item's own
+  `project_id`. `service::activity_log.rs`'s automatic (checkbox un-complete) and
+  manual (`undo_activity_log_entry`) reversal paths both currently call
+  `TeamRepo::add_team_points(&entry.team_id, ...)` to reverse — switch both to
+  `ProjectRepo::add_project_points(&entry.project_id, ...)`, using the `project_id`
+  `ActivityLogEntry` has carried since B2a (falling back to resolving it via
+  `ProjectRepo::get_by_team(&entry.team_id)` for any pre-B2 row that still has
+  `project_id: NULL`, the same defensive-fallback shape `team_activity.rs`'s own
+  B2d read-path cutover already used). This is the piece that makes
+  `team_members.role`/`points` genuinely unread by the time C4 drops them — every
+  other Stage-C sub-stage depends on this one landing first.
+  **Verify:** existing `service::team_items`/`service::activity_log` unit tests
+  updated to mock `ProjectRepo` (`expect_add_project_points`) instead of `TeamRepo`
+  for the points calls; a new test confirms a *personal* project's items still
+  can't reach this path at all (points remain team-backed-project-only, matching
+  CLAUDE.md's existing "Points exist only on team items" invariant — `Project`
+  doesn't change that, it just changes which repo method records the balance).
+  Manual smoke test: award points via both the legacy `TeamItem` completion path
+  and the `ProjectItem` completion path (both still live at this point, C3 hasn't
+  run yet) and confirm both land in `project_members.points`, not
+  `team_members.points`; confirm `prl teams members`/`prl projects members` show
+  the same, moved balance; confirm undo (both automatic and manual) correctly
+  reverses it there too.
+
+  **Implementation notes:** Done, matching the plan closely, plus one scope
+  correction to this stage's own bullet text and one real bug found and fixed
+  mid-stage that the plan hadn't anticipated.
+
+  **Scope correction — "role" in this stage's title means item/points authority
+  only, not Team's own admin-management authority.** `service::team_items.rs`'s
+  points-admin gate (on both `create_team_item` and `update_team_item`) now calls
+  `require_project_admin` instead of `require_team_admin`, exactly as planned.
+  But `service::teams.rs`'s *own* admin-gated operations — inviting a member,
+  renaming a team, `set_team_member_role` itself — still call `require_team_admin`
+  and still read `team_members.role`, untouched by this stage. These are a
+  genuinely different authority question ("can you manage this team's
+  membership/identity" vs. "can you set points/assignment on this team's items"),
+  and CLAUDE.md's own "Per-team roles & admin bootstrap" section already
+  describes them as live, current behavior — C1 was never going to touch that
+  without also resolving Stage A's still-open "does Team drop role entirely"
+  call (A2/B1's implementation notes flagged this unresolved, on purpose). One
+  concrete consequence for C4 below: `team_members.role` is **not** fully dead
+  after C1 the way `team_members.points` is — see C4's own corrected bullet.
+  `is_team_admin` (`service::teams.rs`) was deleted (not left as unused
+  dead code) since its only caller was the now-repointed points-field
+  display gate in `web_ui/project_tasks/handlers.rs` (three call sites, all
+  switched to a new `service::projects::is_project_admin`, mirroring
+  `is_team_admin`'s own non-erroring shape); `require_team_admin` itself is
+  untouched and still very much alive for `service::teams.rs`'s own use.
+
+  **Real bug found via manual smoke test, not caught by unit tests, fixed
+  before this stage shipped:** `TeamRepo::list_members`'s SQL
+  (`src/storage/sqlite/teams.rs`) selected `team_members.points` directly —
+  since nothing writes that column anymore after this stage's own change, every
+  consumer built on `list_members` (`service::teams::member_points`, which
+  `project_tasks/handlers.rs`'s **current, actively-used** points badge calls;
+  the legacy `ListTeamMembers` JSON API operation; `prl teams members`;
+  `web_ui/teams.rs`'s own member-listing display) would have silently shown a
+  frozen, increasingly-wrong balance instead of the live one now sitting in
+  `project_members.points`. This is not a legacy-surface-only problem — the
+  project-scoped Tasks screen's own badge is squarely in scope, so it was fixed
+  as part of this stage rather than deferred: `list_members`'s query now `LEFT
+  JOIN`s through `projects`/`project_members` (keyed on the team's backing
+  project) and selects `COALESCE(project_members.points, 0)` instead, leaving
+  `role` sourced from `team_members.role` unchanged (see the scope correction
+  above — team-management role wasn't part of this migration). The `COALESCE`
+  covers a team with no backing project, or a member not yet synced into
+  `project_members` (e.g. still `PENDING`) — same "no balance yet" default
+  `team_members.points`'s own `NOT NULL DEFAULT 0` gave for free. Two new
+  `storage::sqlite::teams` tests cover both the project-sourced-not-frozen case
+  and the no-backing-project fallback.
+
+  `service::activity_log::reverse_entry` takes `&Arc<dyn ProjectRepo>` in place
+  of `&Arc<dyn TeamRepo>` (a new `resolve_reversal_project_id` helper covers the
+  same pre-B2-row `project_id: NULL` fallback `team_activity.rs`'s own B2d
+  cutover established, via `ProjectRepo::get_by_team`); `undo_activity_log_entry`
+  gained a `projects: &Arc<dyn ProjectRepo>` parameter alongside its existing
+  `teams` one (still needed for the membership check, which stays team-based —
+  another instance of the role-vs-points scope split above). `service::
+  team_items::UpdateTeamItemContext` gained a `projects: Arc<dyn ProjectRepo>`
+  field (`create_team_item`/`delete_team_item` still take a plain `&Arc<dyn
+  ProjectRepo>` positional parameter, unchanged, since `create_team_item`
+  already had one from stage B2). Every call site threading these through
+  (`json_api::team_items::update_team_item`, `json_api::activity_log::
+  undo_activity_log_entry`, `service::project_items::update_project_item`,
+  `web_ui::project_activity::undo_project_activity_log_entry_form`) already had
+  a `ProjectRepo` extension reachable, so no new `Extension`/route wiring was
+  needed anywhere — same "already wired since A5/B2" precedent every points-
+  adjacent change in this plan has hit.
+
+  `create_team_item`'s points-admin check now resolves `project_id` once, up
+  front (before the `team_assignment` block), shared by both the points gate
+  and the existing dual-write `item.project_id` assignment below it — a small
+  restructure from the plan's own description, not a second `ProjectRepo`
+  round-trip. `update_team_item`'s points-award/reversal paths resolve their
+  project id off `item.project_id`/`current.project_id` first, falling back to
+  `ProjectRepo::get_by_team` only for a pre-B2-shaped item that's never
+  round-tripped `project_id` — same accepted-gap shape B2c/B1 already
+  documented, not new here.
+
+  **Testing:** 3 new tests (205 total, up from B5d's 202 — the last stage that
+  changed this count; B5e/B5f/B6/B7 were all web_ui/CLI/MCP-only and added none):
+  2 in `storage::sqlite::teams` (the `list_members` fix above) and 1 in
+  `service::activity_log` (`reverse_entry`'s `get_by_team` fallback path). Every
+  existing `service::team_items`/`service::activity_log` unit test touching
+  points was updated in place to mock `ProjectRepo` instead of `TeamRepo` for
+  the points call (`expect_add_project_points` in place of
+  `expect_add_team_points`), plus new helper fns (`project_with_role`,
+  `ctx_with`) added alongside the existing `no_backing_project`/`ctx` ones
+  rather than replacing them, since most non-points-focused tests in that file
+  still construct items with no `project_id` at all (the points-admin gate is a
+  no-op in that case, so `no_backing_project()`/`ctx()` stay valid defaults for
+  them). `cargo test`: full suite passing, zero regressions to any prior
+  stage's tests. `cargo check`: clean — `TeamRepo::add_team_points` is now
+  flagged unused dead code (expected: this stage removed its only production
+  caller; the trait method itself stays for now, see C4's corrected note on
+  removing it alongside `team_members.points` itself).
+
+  **Manual smoke test** (built the binary, ran against a throwaway SQLite DB via
+  `TODO_AUTH_MODE=caddy` + `TODO_DEV_EMAIL`, migrations 10/11 applied cleanly):
+  created a team (`ensure_team_project` fired); created a team item via the
+  **legacy** `POST /api/teams/:id/items` with `points`/`assignedToUserId`,
+  completed it via legacy `PUT`, confirmed `project_members.points` (not
+  `team_members.points`) went to 50 via direct `sqlite3` inspection; undid it
+  via the legacy `PUT .../activity-log/:entryId/undo`, confirmed the balance
+  went back to 0 and `team_members.points` stayed 0 throughout; separately
+  created and completed an item via the **new** `POST /api/projects/:id/items`
+  path, confirmed the same `project_members.points` award; confirmed `GET
+  /web/projects/:id/activity` renders the award; confirmed the new-task form's
+  points input still renders (proving `is_project_admin`'s display gate works).
+  In a second run, confirmed (after the `list_members` fix above) that the
+  legacy `GET /api/users/:id/teams/:id/members` JSON API response, the
+  project-scoped Tasks page's points badge, and the legacy `teams.rs` team
+  detail page's own member listing all show the same, live, project-sourced
+  balance (75) after a completion — not three different numbers. Scratch DBs
+  and server processes cleaned up after verification. No Smithy/CLI/MCP
+  changes, per this stage's own scope — C2 is next.
+
+- **C2 — `TODO_BOOTSTRAP_ADMIN_TEAM_ID` → project-aware bootstrap.** Depends on C1
+  (the promotion this env var triggers is meaningless once role has moved off
+  `team_members`). `caddy_header_middleware` (`src/auth.rs`) currently promotes a
+  user to `team_members.role = 'admin'` on `TODO_BOOTSTRAP_ADMIN_TEAM_ID`, gated on
+  that team currently having zero active admins. Rework to resolve the team's
+  backing project via `ProjectRepo::get_by_team` and gate/promote on
+  `project_members.role` there instead — same "fires at most once, goes inert
+  after a deliberate in-app demotion" semantics, same env var name (it still
+  names a *team*, since that's what identifies the trusted group in
+  `x-token-user-roles`/caddy-security's own model — only the write target moves
+  to that team's project). If the team has no backing project yet (shouldn't
+  happen post-B2b's `ensure_team_project`, but the code shouldn't assume), skip
+  promotion the same way the current code implicitly can't act on a
+  nonexistent team.
+  **Verify:** unit test mirroring whatever coverage `caddy_header_middleware`
+  already has for this branch (check first — this logic may currently only be
+  covered by the doc comment's own described behavior, not a test); manual
+  verification against a throwaway DB with `TODO_BOOTSTRAP_ADMIN_TEAM_ID` set,
+  confirming a fresh admin-flagged login promotes `project_members.role`, not
+  `team_members.role`, and that a second login is a no-op.
+
+- **C3 — Remove legacy `Item`/`TeamItem` Smithy surface + dual-write; hard-require
+  `--project`/`projectId` client-side.** The user-facing break confirmed above.
+  Two halves, land together (splitting them would leave the CLI/MCP calling
+  operations that no longer exist):
+  - `todo-cli/src/items.rs`: the 5 repointed subcommands' `if let Some(project_id)
+    = project { ...; return; }` branch becomes the *only* branch — the
+    `--project`-omitted fallthrough is deleted and replaced with a client-side
+    error (`error: --project is required — the legacy personal Item API has been
+    retired`), mirroring the existing `--assign`/`--points`-require-`--project`
+    error's own wording style. `mcp-server/src/index.ts`: the `args.projectId ?
+    ... : ...` ternaries in the 5 repointed tools become `if (!args.projectId)
+    throw new Error(...)` the same way. `due`/`assigned` are unaffected (no
+    `ProjectItem` equivalent exists for either — see B4/B6/B7's own repeated
+    notes on this; they don't call the legacy `Item`/`TeamItem` CRUD operations
+    being removed here in the first place, only `list_due`/`list_assigned`,
+    which stay).
+  - `model/src/main/smithy/item.smithy`'s `Item` resource + its 5 operations, and
+    `model/src/main/smithy/team.smithy`'s `TeamItem` resource + its 4 operations
+    (create/get/update/delete — `TeamItem`'s templates operations
+    `CreateTeamTemplate`/`ListTeamTemplates` are a *different* resource concern,
+    unaffected, still needed by `project_templates`'s team branch per B5d), all
+    removed. `task codegen`. `src/json_api/items.rs`/`team_items.rs` deleted;
+    `src/main.rs`'s builder wiring for the removed operations deleted;
+    `src/service/items.rs`/`team_items.rs` **stay** (per the scope-correction
+    above — `service::project_items` still delegates into them), only their
+    `json_api`-facing callers go away. `ListTeamActivityLog`/
+    `UndoActivityLogEntry` (still legacy-`teamId`-keyed per B7's own note) are
+    untouched here — they're not part of the `Item`/`TeamItem` resource, and
+    `project_activity.rs`'s own undo route already resolves through them via
+    `project.team_id`, so removing them isn't implied by this sub-stage's scope
+    (revisit only if a `project_id`-native activity-log surface is ever built).
+  **Verify:** `task codegen` succeeds; `cargo check`/`cargo build` compile
+  clean; `cargo test` full pass (existing `service::items`/`team_items` unit
+  tests are untouched since those modules survive; only `json_api`-layer
+  wiring is removed, and neither of those two service modules has
+  `json_api`-layer tests to begin with, matching every prior stage's "web_ui/
+  json_api handler modules aren't unit-tested at this granularity" note); manual
+  smoke test confirming the removed endpoints now 404/reject at the HTTP layer,
+  and that `prl`/the MCP tools' hard-require errors fire correctly and their
+  `--project`/`projectId`-bearing calls still work end to end.
+
+- **C4 — Drop the genuinely dead columns.** Depends on C1 (frees
+  `team_members.points`, confirmed genuinely dead by C1's own implementation
+  notes — nothing reads or writes it anymore, `list_members` was repointed to
+  `project_members` as part of that stage) and C3 landing first is *not*
+  required (nothing in C3 touches these columns), but doing it last matches
+  the doc's own "verify against a live snapshot" caution for any migration
+  that mutates production schema — safer to have the rest of the retirement
+  already proven out first. New migration (next version after
+  `backfill_projects`): `ALTER TABLE activity_log DROP COLUMN team_id`
+  (superseded by `project_id` since B1/B2 backfilled and cut over every
+  read/write) and `ALTER TABLE team_members DROP COLUMN points` only — **not**
+  `role` too, despite this doc's own earlier text (both the top-of-file
+  "Target shape" section and the original end-of-B7 sketch) having assumed
+  both would go together. C1's implementation notes found that
+  `team_members.role` still gates `service::teams.rs`'s own team-management
+  operations (invite, rename, `set_team_member_role`, via `require_team_admin`)
+  — a genuinely different authority than item/points, which C1 deliberately
+  left alone (see Stage A's still-unresolved "does Team drop role entirely"
+  open call). Dropping `role` now would break team management outright; doing
+  so safely would mean actually resolving that open call first — either
+  migrating team-management gating onto `project_members.role` too (awkward:
+  team management, e.g. inviting the team's very first member, can happen
+  before any project is attached) or replacing it with the plan's original
+  "lightweight un-roled `owner_user_id`" recommendation — and that's a real
+  design decision needing the same explicit user confirmation this doc's
+  process has required for every other genuine fork, not something to fold
+  into a column-drop migration's scope. Left as an explicit **open call for a
+  future stage** (call it C4.5 or fold into a re-scoped C2 next time this file
+  is picked up) rather than silently deferred. `TeamRepo::add_team_points`/
+  `SqliteTeamRepo::add_team_points` (dead code since C1, per its own `cargo
+  check` note) are removed in this sub-stage alongside the column, once
+  nothing references `team_members.points` at all. **`items.user_id`/`team_id`
+  are explicitly out of scope for this sub-stage** — see the scope-correction
+  above; do not drop them.
+  **Verify:** same `task db copy`-snapshot-first process as B1 — run the
+  migration against a copy, confirm the app still starts and every
+  points/activity-log flow still works (proving nothing silently still reads
+  the dropped columns), *then* let it auto-run against production on next
+  restart per the established rollout convention. `cargo test
+  storage::migrations` idempotency test, matching every prior migration's
+  precedent.
+
+- **C5 — Doc/cleanup pass.** `CLAUDE.md`: remove the `@httpBearerAuth`-adjacent
+  and Auth-section prose that still describes `team_members.role`/`points` as
+  live (repoint to `project_members`); remove the Recurrence/Events/Points
+  sections' now-stale cross-references to the deleted `Item`/`TeamItem`
+  operations where they're used as the canonical example; update the CLI/MCP
+  sections' `--project`/`projectId` prose from "optional, falls through to
+  legacy" to "required." `docs/prl-user-guide.md`: same. Decide the fate of
+  the dead `share_active_team` repo method flagged back at the top of this
+  Stage-C sketch (found during original research — implemented, zero callers)
+  — likely just delete it now, since Stage B never ended up needing it and no
+  new UI feature in this plan calls for a "do these two users already share a
+  project" check; confirm no caller exists before deleting.
+  **Verify:** `cargo check`/`cargo build` clean; grep confirms no remaining
+  reference to the removed operations/columns anywhere in `src/`/`docs/`/
+  `CLAUDE.md`.
+
+This is the last stage this plan currently anticipates — once C1-C5 land, the
+Project abstraction work this whole document tracks is complete. No Stage D is
+implied by anything above (the `items.user_id`/`team_id`-to-`project_id`
+rearchitecture flagged in the scope correction is explicitly **not** proposed
+as future work here — it would need its own from-scratch planning pass and its
+own explicit ask, not an assumed continuation of this one).

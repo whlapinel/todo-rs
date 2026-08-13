@@ -91,7 +91,8 @@ pub async fn new_project_task_page(
     let (assignee_options, is_team_admin) = match &project.team_id {
         Some(team_id) => (
             active_member_options(&teams, team_id, &auth_user.user_id).await?,
-            team_service::is_team_admin(&teams, team_id, &auth_user.user_id).await,
+            project_service::is_project_admin(&projects, &teams, &project_id, &auth_user.user_id)
+                .await,
         ),
         None => (Vec::new(), false),
     };
@@ -233,7 +234,8 @@ pub async fn project_task_edit_page(
     let (assignee_options, is_team_admin) = match &project.team_id {
         Some(team_id) => (
             active_member_options(&teams, team_id, &auth_user.user_id).await?,
-            team_service::is_team_admin(&teams, team_id, &auth_user.user_id).await,
+            project_service::is_project_admin(&projects, &teams, &project_id, &auth_user.user_id)
+                .await,
         ),
         None => (Vec::new(), false),
     };
@@ -528,7 +530,8 @@ pub async fn update_project_task_form(
             let (assignee_options, is_team_admin) = match &project.team_id {
                 Some(team_id) => (
                     active_member_options(&teams, team_id, &auth_user.user_id).await?,
-                    team_service::is_team_admin(&teams, team_id, &auth_user.user_id).await,
+                    project_service::is_project_admin(&projects, &teams, &project_id, &auth_user.user_id)
+                .await,
                 ),
                 None => (Vec::new(), false),
             };
