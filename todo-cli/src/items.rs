@@ -1,5 +1,6 @@
 use crate::helpers::{fmt_date_opt, parse_date, require_user, unwrap_or_exit};
 use clap::Subcommand;
+use std::path::PathBuf;
 use todo_client::types::ItemType;
 use todo_client::Client;
 
@@ -105,6 +106,22 @@ pub enum ItemsCommand {
     },
     /// List items assigned to you by other team members
     Assigned,
+    /// Bulk-import items into a project from a local CSV file
+    Import {
+        file: PathBuf,
+        #[arg(long, help = "Project ID to import items into")]
+        project: String,
+        #[arg(
+            long,
+            help = "CSV format — only 'PRL' (default) is currently supported"
+        )]
+        format: Option<String>,
+    },
+    /// Download a CSV import template
+    Template {
+        #[arg(long, help = "Write to this file instead of stdout")]
+        output: Option<PathBuf>,
+    },
 }
 
 pub async fn cmd_items(client: &Client, cmd: ItemsCommand, user_id: Option<String>) {
@@ -458,6 +475,68 @@ pub async fn cmd_items(client: &Client, cmd: ItemsCommand, user_id: Option<Strin
                     parent,
                     i.name()
                 );
+            }
+        }
+        ItemsCommand::Import {
+            file,
+            project,
+            format,
+        } => {
+            if let Some(ref f) = format {
+                if f.to_uppercase() != "PRL" {
+                    eprintln!(
+                        "error: --format must be 'PRL' (or omitted) — 'PRL' is currently the only supported import format"
+                    );
+                    std::process::exit(1);
+                }
+            }
+            let csv_text = std::fs::read_to_string(&file).unwrap_or_else(|e| {
+                eprintln!("error: failed to read {}: {e}", file.display());
+                std::process::exit(1);
+            });
+            let mut req = client
+                .import_project_items()
+                .project_id(project)
+                .csv(csv_text);
+            if let Some(f) = format {
+                req = req.format(f.to_uppercase());
+            }
+            let out = unwrap_or_exit(req.send().await, "import items");
+            let (mut ok_count, mut fail_count) = (0, 0);
+            for r in out.results() {
+                if r.success() {
+                    ok_count += 1;
+                    println!(
+                        "row {}: ok — created {}",
+                        r.row_number(),
+                        r.item_id().unwrap_or("-")
+                    );
+                } else {
+                    fail_count += 1;
+                    println!(
+                        "row {}: FAILED — {}",
+                        r.row_number(),
+                        r.error().unwrap_or("unknown error")
+                    );
+                }
+            }
+            println!("---");
+            println!("{ok_count} succeeded, {fail_count} failed");
+        }
+        ItemsCommand::Template { output } => {
+            let out = unwrap_or_exit(
+                client.get_item_import_template().send().await,
+                "get import template",
+            );
+            match output {
+                Some(path) => {
+                    std::fs::write(&path, out.csv()).unwrap_or_else(|e| {
+                        eprintln!("error: failed to write {}: {e}", path.display());
+                        std::process::exit(1);
+                    });
+                    eprintln!("wrote template to {}", path.display());
+                }
+                None => print!("{}", out.csv()),
             }
         }
     }

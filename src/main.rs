@@ -21,6 +21,7 @@ use axum::{
 };
 use json_api::activity_log::{list_team_activity_log, undo_activity_log_entry};
 use json_api::invites::send_app_invite;
+use json_api::item_import::{get_item_import_template, import_project_items};
 use json_api::items::{list_assigned_items, list_items_due};
 use json_api::project_items::{
     create_project_item, delete_project_item, get_project_item, list_project_items,
@@ -289,6 +290,8 @@ async fn main() {
         .update_project_item(update_project_item)
         .delete_project_item(delete_project_item)
         .list_project_items(list_project_items)
+        .import_project_items(import_project_items)
+        .get_item_import_template(get_item_import_template)
         .build_unchecked();
 
     let api = ServiceBuilder::new()
@@ -316,6 +319,8 @@ async fn main() {
                 .route_service("/teams/*path", api.clone())
                 .route_service("/projects", api.clone())
                 .route_service("/projects/*path", api.clone())
+                .route_service("/items", api.clone())
+                .route_service("/items/*path", api.clone())
                 .layer(middleware::from_fn(auth::caddy_header_middleware));
             let auth_router = Router::new()
                 .route("/me", get(auth::caddy_auth_me))
@@ -383,6 +388,8 @@ async fn main() {
                 .route_service("/teams/*path", api.clone())
                 .route_service("/projects", api.clone())
                 .route_service("/projects/*path", api.clone())
+                .route_service("/items", api.clone())
+                .route_service("/items/*path", api.clone())
                 .layer(middleware::from_fn(auth::jwt_auth_middleware));
 
             let web_router = build_web_router()

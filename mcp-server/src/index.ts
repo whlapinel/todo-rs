@@ -200,6 +200,42 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: "import_project_items",
+      description:
+        "Bulk-import todo items into a project from CSV text. Parsing, validation, and creation all happen server-side, one row at a time, best-effort — invalid rows are reported individually with an error, valid rows are still created (nothing rolls back). " +
+        "Each row becomes a top-level item; a parentItemId column may reference an item that already exists, but not another row in the same CSV (no intra-file parent/child resolution in this version). " +
+        "Call get_item_import_template first for the expected column headers and example rows.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          projectId: { type: "string", description: "The project to import items into." },
+          csv: {
+            type: "string",
+            description: "Raw CSV text, including a header row matching get_item_import_template's output.",
+          },
+          format: {
+            type: "string",
+            description: "CSV column-mapping format. Only \"PRL\" (the default) is currently supported.",
+          },
+          timezoneOffsetMinutes: {
+            type: "number",
+            description: "Client timezone offset in minutes (e.g. -300 for EST), used for offset/recurrence date computation on rows that need it.",
+          },
+        },
+        required: ["projectId", "csv"],
+      },
+    },
+    {
+      name: "get_item_import_template",
+      description:
+        "Download a starter CSV template for import_project_items — a header row with every supported column plus 3 example rows (one Task, one Event, one Simple item).",
+      inputSchema: {
+        type: "object",
+        properties: {},
+        required: [],
+      },
+    },
+    {
       name: "update_item",
       description:
         "Update a todo item in a project. Marking a recurring item as complete will auto-create the next occurrence, carrying its child items over with deadlines recomputed from their dueOffsetDays.",
@@ -644,6 +680,21 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         result = await api("POST", `/projects/${args.projectId}/items`, body);
         break;
       }
+
+      case "import_project_items": {
+        if (!args.projectId) throw new Error("projectId is required");
+        if (!args.csv) throw new Error("csv is required");
+        const body: Record<string, unknown> = { csv: args.csv };
+        if (args.format) body.format = args.format;
+        if (args.timezoneOffsetMinutes !== undefined)
+          body.timezoneOffsetMinutes = args.timezoneOffsetMinutes;
+        result = await api("POST", `/projects/${args.projectId}/items/import`, body);
+        break;
+      }
+
+      case "get_item_import_template":
+        result = await api("GET", "/items/import-template");
+        break;
 
       case "update_item": {
         if (!args.projectId) {

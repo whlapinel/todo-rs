@@ -169,6 +169,34 @@ prl items add "Mow the lawn" --project <project-id> --assign <user-id> --points 
 > is what actually sets the item's due date whenever the top-level item
 > recurs or the linked event is rescheduled.
 
+### Download an import template
+
+```sh
+prl items template                    # prints CSV to stdout
+prl items template --output items.csv # writes to a file instead
+```
+
+Header row plus 3 example rows (one Task, one Event, one Simple item)
+covering every supported column.
+
+### Import items from CSV
+
+```sh
+prl items template --output items.csv
+# ... edit items.csv ...
+prl items import items.csv --project <project-id>
+```
+
+Every row is attempted independently — a bad row is reported with an error
+and skipped, valid rows are still created (nothing rolls back). Column order
+doesn't matter; unrecognized or missing optional columns are ignored/left
+blank. `parentItemId`, if given, must reference an item that already exists
+(not another row in the same file — there's no intra-file parent/child
+resolution yet). Dates use the same `YYYY-MM-DD`-or-Unix-timestamp
+convention as `--due`/`--scheduled` above. `--format` defaults to `PRL`
+(the only format currently supported); it's an extension point for future
+formats (e.g. importing a Todoist export).
+
 ### Mark complete
 
 ```sh

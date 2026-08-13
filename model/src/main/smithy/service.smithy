@@ -25,5 +25,7 @@ service PeoplesRepublicOfLists {
         UpdateProjectItem
         DeleteProjectItem
         ListProjectItems
+        ImportProjectItems
+        GetItemImportTemplate
     ]
 }
