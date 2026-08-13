@@ -20,7 +20,7 @@ use tracing::info;
 
 use crate::domain::team::TeamRole;
 use crate::service::projects::ensure_default_project;
-use crate::storage::sqlite::{ProjectRepo, RepoError, TeamRepo, UserRepo};
+use crate::storage::sqlite::{ProjectRepo, RepoError, UserRepo};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -572,52 +572,80 @@ pub async fn caddy_header_middleware(
     // path above; the Bearer-JWT/CLI path never carries it, so this is naturally a
     // no-op there.
     //
-    // Gated on the team currently having *zero* active admins, not on this user's own
-    // current role — solving the chicken-and-egg bootstrap problem once is the whole
-    // point, and re-checking "is this specific user still admin" on every request
-    // would silently re-promote them straight back after any deliberate in-app
-    // demotion. Once any admin exists (from this sync, `TeamRepo::create`'s
-    // creator-becomes-admin default, or an in-app promotion), the team is
-    // self-sufficient and this sync goes permanently inert for it.
+    // Writes `project_members.role` (not `team_members.role`) since stage C1 moved
+    // item/points authority off the team — see docs/project-abstraction-plan.md
+    // stage C2. `TODO_BOOTSTRAP_ADMIN_TEAM_ID` still names a *team*, matching
+    // `x-token-user-roles`/caddy-security's own model; this resolves it to that
+    // team's backing project before touching anything.
     if header_roles.iter().any(|r| r == "authp/admin") {
         if let Ok(bootstrap_team_id) = std::env::var("TODO_BOOTSTRAP_ADMIN_TEAM_ID") {
-            if let Some(teams) = req.extensions().get::<Arc<dyn TeamRepo>>().cloned() {
-                let status = teams
-                    .member_status(&bootstrap_team_id, &auth_user.user_id)
-                    .await
-                    .ok()
-                    .flatten();
-                let admin_count = teams
-                    .count_active_admins(&bootstrap_team_id)
-                    .await
-                    .unwrap_or(0);
-                if status.as_deref() == Some("ACTIVE") && admin_count == 0 {
-                    if let Err(e) = teams
-                        .set_member_role(&bootstrap_team_id, &auth_user.user_id, TeamRole::Admin)
-                        .await
-                    {
-                        tracing::error!(
-                            user_id = %auth_user.user_id,
-                            team_id = %bootstrap_team_id,
-                            "failed to promote bootstrap admin: {e:?}"
-                        );
-                    } else {
-                        tracing::info!(
-                            user_id = %auth_user.user_id,
-                            team_id = %bootstrap_team_id,
-                            "promoted to team admin via caddy-security role bootstrap"
-                        );
-                    }
-                }
-                // Not an active member, the team already has an admin, or a lookup
-                // failed — nothing to do. This sync never creates membership or errors
-                // the request; it only ever promotes once, for a team with no admin.
+            if let Some(projects) = req.extensions().get::<Arc<dyn ProjectRepo>>().cloned() {
+                sync_bootstrap_project_admin(&projects, &bootstrap_team_id, &auth_user.user_id)
+                    .await;
             }
         }
     }
 
     req.extensions_mut().insert(auth_user);
     next.run(req).await
+}
+
+/// Promotes `user_id` to admin of `bootstrap_team_id`'s backing project, gated on
+/// that project currently having *zero* active admins — not on this user's own
+/// current role, since re-checking "is this specific user still admin" on every
+/// request would silently re-promote them straight back after any deliberate
+/// in-app demotion. Once any admin exists (from this sync, `ProjectRepo::create`'s
+/// owner-becomes-admin default, or an in-app promotion), the project is
+/// self-sufficient and this sync goes permanently inert for it. A no-op (not an
+/// error) if the team has no backing project yet, or `user_id` isn't a member of
+/// it — `project_members` has no membership-request concept, so row presence
+/// itself is what "is a member" means here, unlike `TeamRepo`'s separate
+/// `member_status` check.
+async fn sync_bootstrap_project_admin(
+    projects: &Arc<dyn ProjectRepo>,
+    bootstrap_team_id: &str,
+    user_id: &str,
+) {
+    let Ok(Some(project)) = projects.get_by_team(bootstrap_team_id).await else {
+        return;
+    };
+    let is_member = projects
+        .member_role(&project.id, user_id)
+        .await
+        .ok()
+        .flatten()
+        .is_some();
+    let admin_count = projects
+        .count_active_admins(&project.id)
+        .await
+        .unwrap_or(0);
+    if !is_member || admin_count != 0 {
+        // Not a member of the backing project, or it already has an admin —
+        // nothing to do. This sync never creates membership or errors the
+        // request; it only ever promotes once, for a project with no admin.
+        return;
+    }
+    match projects
+        .set_member_role(&project.id, user_id, TeamRole::Admin)
+        .await
+    {
+        Ok(()) => {
+            tracing::info!(
+                user_id = %user_id,
+                team_id = %bootstrap_team_id,
+                project_id = %project.id,
+                "promoted to project admin via caddy-security role bootstrap"
+            );
+        }
+        Err(e) => {
+            tracing::error!(
+                user_id = %user_id,
+                team_id = %bootstrap_team_id,
+                project_id = %project.id,
+                "failed to promote bootstrap admin: {e:?}"
+            );
+        }
+    }
 }
 
 pub async fn jwt_auth_middleware(
@@ -721,5 +749,80 @@ pub async fn web_auth_middleware(
             tracing::info!(path = %req.uri().path(), "web_auth_middleware: no valid session, redirecting to login");
             Redirect::to("/auth/google").into_response()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::project::Project;
+    use crate::storage::sqlite::MockProjectRepo;
+
+    fn project(id: &str, team_id: &str) -> Project {
+        Project {
+            id: id.to_string(),
+            name: "Home".to_string(),
+            owner_user_id: "owner1".to_string(),
+            team_id: Some(team_id.to_string()),
+        }
+    }
+
+    #[tokio::test]
+    async fn promotes_active_member_when_project_has_no_admin() {
+        let mut mock = MockProjectRepo::new();
+        mock.expect_get_by_team()
+            .withf(|t| t == "t1")
+            .returning(|_| Ok(Some(project("p1", "t1"))));
+        mock.expect_member_role()
+            .withf(|p, u| p == "p1" && u == "u1")
+            .returning(|_, _| Ok(Some(TeamRole::Member)));
+        mock.expect_count_active_admins()
+            .withf(|p| p == "p1")
+            .returning(|_| Ok(0));
+        mock.expect_set_member_role()
+            .withf(|p, u, r| p == "p1" && u == "u1" && *r == TeamRole::Admin)
+            .returning(|_, _, _| Ok(()));
+
+        let projects: Arc<dyn ProjectRepo> = Arc::new(mock);
+        sync_bootstrap_project_admin(&projects, "t1", "u1").await;
+    }
+
+    #[tokio::test]
+    async fn does_not_promote_when_project_already_has_an_admin() {
+        let mut mock = MockProjectRepo::new();
+        mock.expect_get_by_team()
+            .returning(|_| Ok(Some(project("p1", "t1"))));
+        mock.expect_member_role()
+            .returning(|_, _| Ok(Some(TeamRole::Member)));
+        mock.expect_count_active_admins().returning(|_| Ok(1));
+        mock.expect_set_member_role().times(0);
+
+        let projects: Arc<dyn ProjectRepo> = Arc::new(mock);
+        sync_bootstrap_project_admin(&projects, "t1", "u1").await;
+    }
+
+    #[tokio::test]
+    async fn does_not_promote_a_non_member() {
+        let mut mock = MockProjectRepo::new();
+        mock.expect_get_by_team()
+            .returning(|_| Ok(Some(project("p1", "t1"))));
+        mock.expect_member_role().returning(|_, _| Ok(None));
+        mock.expect_count_active_admins().returning(|_| Ok(0));
+        mock.expect_set_member_role().times(0);
+
+        let projects: Arc<dyn ProjectRepo> = Arc::new(mock);
+        sync_bootstrap_project_admin(&projects, "t1", "u1").await;
+    }
+
+    #[tokio::test]
+    async fn is_a_no_op_when_the_team_has_no_backing_project() {
+        let mut mock = MockProjectRepo::new();
+        mock.expect_get_by_team().returning(|_| Ok(None));
+        mock.expect_member_role().times(0);
+        mock.expect_count_active_admins().times(0);
+        mock.expect_set_member_role().times(0);
+
+        let projects: Arc<dyn ProjectRepo> = Arc::new(mock);
+        sync_bootstrap_project_admin(&projects, "t1", "u1").await;
     }
 }

@@ -2161,6 +2161,69 @@ Five independently-landable sub-stages, same one-stage-per-session process as A/
   confirming a fresh admin-flagged login promotes `project_members.role`, not
   `team_members.role`, and that a second login is a no-op.
 
+  **Implementation notes:** Done, matching the plan closely, plus one gap
+  found and closed mid-stage (`ProjectRepo` had no `count_active_admins`
+  equivalent — `service::projects.rs`'s `set_project_member_role` doc comment
+  had flagged this exact gap back at A3/A5 and explicitly deferred it).
+  `ProjectRepo::count_active_admins(project_id) -> Result<i64, RepoError>`
+  added to the trait (`storage/sqlite/mod.rs`) and `SqliteProjectRepo`
+  (`storage/sqlite/projects.rs`) — no `status` filter, unlike
+  `TeamRepo::count_active_admins`'s `status = 'ACTIVE'` clause, since
+  `project_members` has no status column at all: row presence *is* active
+  membership (the invariant A4's `attach_team`/`accept`-sync already
+  established). `set_project_member_role`'s own missing last-admin guard is
+  **not** fixed by this stage — that doc comment is now only half-stale (the
+  method it said didn't exist, now does), left as a note for whoever picks
+  that up rather than expanded into this stage's scope.
+
+  The old inline bootstrap block in `caddy_header_middleware` was extracted
+  into a standalone `async fn sync_bootstrap_project_admin(projects:
+  &Arc<dyn ProjectRepo>, bootstrap_team_id: &str, user_id: &str)` (private to
+  `src/auth.rs`) purely so it could be unit-tested with `MockProjectRepo` —
+  no test scaffolding existed for anything in `auth.rs` before this (confirmed
+  per this stage's own "check first" note), so 4 new tests were added in a new
+  `#[cfg(test)] mod tests` at the bottom of the file: promotes when the
+  project has zero admins and the user is a member; does not promote when an
+  admin already exists; does not promote a non-member; is a no-op when the
+  team has no backing project. `TeamRepo` import dropped from `auth.rs`
+  entirely — this bootstrap block was its only remaining use in that file.
+  `member_status`'s team-side "PENDING vs ACTIVE" check has no
+  `ProjectRepo` equivalent to call (see the no-status-column note above); the
+  rework substitutes `member_role(..).is_some()` (row exists → active member)
+  for that check, which is the same substitution `require_project_member`
+  already made back in A3.
+
+  **Testing:** 6 new tests (211 total, up from C1's 205): 4 in `auth::tests`
+  (above) and 2 in `storage::sqlite::projects::tests`
+  (`count_active_admins_counts_only_admin_rows`,
+  `count_active_admins_returns_zero_for_project_with_no_admins`). `cargo
+  test`: full suite passing, zero regressions. `cargo check`: clean.
+
+  **Manual smoke test** (built the binary, ran against a throwaway SQLite DB
+  via `TODO_AUTH_MODE=caddy` + explicit `x-token-user-email` headers per
+  request rather than `TODO_DEV_EMAIL` — needed two distinct identities in
+  the same run — `TODO_JWT_SECRET` set, migrations 10/11 applied cleanly):
+  created a team
+  (`ensure_team_project` backed it with a project, creator auto-admin on
+  both); demoted the creator to project `member` via `PUT
+  /api/projects/:id/members/:userId/role` (exercising the still-open
+  no-last-admin-guard gap noted above — it allowed demoting the *only* admin,
+  same pre-existing gap, not a new one); invited and accepted a second user
+  onto the team (confirmed via `accept`'s existing project-member-row sync
+  that they landed in `project_members` as `member`), leaving the project
+  with zero admins; restarted the server with `TODO_BOOTSTRAP_ADMIN_TEAM_ID`
+  set to that team's id; had the second user hit any route with
+  `x-token-user-roles: authp/admin` and confirmed via direct `sqlite3`
+  inspection that `project_members.role` for that user flipped to `admin`
+  while `team_members.role` stayed untouched (`ACTIVE`/`admin` for the
+  original creator, `ACTIVE`/`member` for the promoted user — team-management
+  role is a separate axis, per C1's own scope note); confirmed the promotion
+  log line fired; had the same user hit another route with the same header
+  again and confirmed no change (already-admin no-op, matching the "goes
+  permanently inert" semantics). Scratch DB and server process cleaned up
+  after verification. No Smithy/CLI/MCP changes, per this stage's own scope —
+  C3 is next.
+
 - **C3 — Remove legacy `Item`/`TeamItem` Smithy surface + dual-write; hard-require
   `--project`/`projectId` client-side.** The user-facing break confirmed above.
   Two halves, land together (splitting them would leave the CLI/MCP calling

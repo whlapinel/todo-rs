@@ -219,6 +219,12 @@ pub trait ProjectRepo: Send + Sync {
         user_id: &str,
         role: TeamRole,
     ) -> Result<(), RepoError>;
+    /// Mirrors `TeamRepo::count_active_admins` — `project_members` has no `status`
+    /// column (row presence itself means active membership, see A4's sync/attach
+    /// design), so this counts `role = 'admin'` rows only, no status filter. Added in
+    /// stage C2 for the bootstrap-admin gate; see
+    /// docs/project-abstraction-plan.md.
+    async fn count_active_admins(&self, project_id: &str) -> Result<i64, RepoError>;
     /// Adds `delta` (negative to claw back) to `user_id`'s point balance on
     /// `project_id`, returning the resulting balance — mirrors `add_team_points`.
     async fn add_project_points(

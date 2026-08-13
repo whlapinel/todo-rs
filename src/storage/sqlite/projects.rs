@@ -267,6 +267,17 @@ impl ProjectRepo for SqliteProjectRepo {
         if rows == 0 { Err(not_found()) } else { Ok(()) }
     }
 
+    async fn count_active_admins(&self, project_id: &str) -> Result<i64, RepoError> {
+        sqlx::query(
+            "SELECT COUNT(*) AS n FROM project_members WHERE project_id = ? AND role = 'admin'",
+        )
+        .bind(project_id)
+        .fetch_one(&self.0)
+        .await
+        .map_err(db_err)
+        .map(|row| row.get("n"))
+    }
+
     async fn add_project_points(
         &self,
         project_id: &str,
@@ -651,6 +662,40 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, RepoError::NotFound));
+    }
+
+    #[tokio::test]
+    async fn count_active_admins_counts_only_admin_rows() {
+        let pool = test_pool().await;
+        let repo = SqliteProjectRepo(pool.clone());
+        insert_user(&pool, "u1", "Ann").await;
+        insert_user(&pool, "u2", "Bo").await;
+        insert_user(&pool, "u3", "Cy").await;
+        let id = repo.create("Home", "u1", None).await.unwrap();
+        // u2/u3 join as plain members via the attach-team seed path, then u3 gets
+        // promoted — exercises the same "row presence = active member" shape
+        // `attach_team` seeding relies on, no separate status column to set.
+        insert_team_member(&pool, "t1", "u2", "ACTIVE").await;
+        insert_team_member(&pool, "t1", "u3", "ACTIVE").await;
+        repo.attach_team(&id, "t1").await.unwrap();
+        repo.set_member_role(&id, "u3", TeamRole::Admin)
+            .await
+            .unwrap();
+
+        assert_eq!(repo.count_active_admins(&id).await.unwrap(), 2);
+    }
+
+    #[tokio::test]
+    async fn count_active_admins_returns_zero_for_project_with_no_admins() {
+        let pool = test_pool().await;
+        let repo = SqliteProjectRepo(pool.clone());
+        insert_user(&pool, "u1", "Ann").await;
+        let id = repo.create("Home", "u1", None).await.unwrap();
+        repo.set_member_role(&id, "u1", TeamRole::Member)
+            .await
+            .unwrap();
+
+        assert_eq!(repo.count_active_admins(&id).await.unwrap(), 0);
     }
 
     #[tokio::test]
