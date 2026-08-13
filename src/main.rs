@@ -47,6 +47,8 @@ use web_ui::assigned_items::assigned_items_page;
 use web_ui::dashboard::*;
 use web_ui::events::*;
 use web_ui::login::login_page;
+use web_ui::project_activity::*;
+use web_ui::project_dashboard::*;
 use web_ui::project_events::handlers::*;
 use web_ui::project_simple_lists::handlers::*;
 use web_ui::project_tasks::handlers::*;
@@ -335,6 +337,23 @@ fn build_web_router() -> Router {
         .route(
             "/projects/:project_id/templates/:template_id/use",
             post(use_project_template_form),
+        )
+        .route(
+            "/projects/:project_id/dashboard",
+            get(project_dashboard_page),
+        )
+        .route(
+            "/projects/:project_id/dashboard/calendar",
+            get(project_dashboard_calendar_page),
+        )
+        .route(
+            "/projects/:project_id/dashboard/items/:item_id",
+            put(toggle_project_dashboard_item_complete),
+        )
+        .route("/projects/:project_id/activity", get(project_activity_page))
+        .route(
+            "/projects/:project_id/activity/:entry_id/undo",
+            put(undo_project_activity_log_entry_form),
         )
         .route("/teams", get(teams_page).post(create_team_form))
         .route(

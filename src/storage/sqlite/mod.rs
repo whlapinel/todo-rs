@@ -113,6 +113,17 @@ pub trait ItemRepo: Send + Sync {
         deadline_after: Option<i64>,
         deadline_before: Option<i64>,
     ) -> Result<Vec<DueItem>, RepoError>;
+    /// Stage B5e's project-scoped counterpart to `list_due`/`list_due_team_items` —
+    /// same shape as `list_due_team_items`, keyed on `project_id` instead of
+    /// `team_id`, so `project_dashboard.rs` doesn't have to special-case personal
+    /// vs. team-backed projects the way `dashboard.rs`/`team_dashboard.rs` used to
+    /// be two separate screens.
+    async fn list_due_by_project(
+        &self,
+        project_id: &str,
+        deadline_after: Option<i64>,
+        deadline_before: Option<i64>,
+    ) -> Result<Vec<DueItem>, RepoError>;
     async fn list_templates(&self, user_id: &str) -> Result<Vec<Item>, RepoError>;
     async fn list_team_templates(&self, team_id: &str) -> Result<Vec<Item>, RepoError>;
     async fn list_assigned(&self, user_id: &str) -> Result<Vec<Item>, RepoError>;

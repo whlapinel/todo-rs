@@ -1506,6 +1506,104 @@ return HTTP 200 unaffected, proving old and new coexist per this stage's own sco
 and server process cleaned up after verification. No CLI or MCP server changes, per this stage's
 own scope — B5e (Dashboard, assigned-items, activity, teams admin) is next.
 
+**B5e implementation notes:** Done, matching the plan closely, with the two ambiguous plan
+bullets ("dashboard.rs + team_dashboard.rs merge into one project-aware dashboard" and
+"team_activity.rs repoints its display ... UI/URL cleanup only") both resolved toward *new*
+project-scoped screens (following B5a-d's own "old and new coexist until B5f" precedent)
+rather than editing the legacy modules in place — `dashboard.rs`, `team_dashboard.rs`, and
+`team_activity.rs` are all completely untouched and confirmed still returning HTTP 200 live.
+
+**New `src/web_ui/project_dashboard.rs`** (`/web/projects/:project_id/dashboard[...]`)
+literally merges `dashboard.rs` (combined Task/Event `dashboard_date` semantics, preset
+date-window filtering, calendar view) with `team_dashboard.rs` (assignee-name display) into
+one screen that handles both personal and team-backed projects — `is_team_project` (from
+`project.team_id.is_some()`) gates `can_delete` the same way the two legacy screens
+implicitly did (`dashboard.rs`'s rows were always the caller's own and always deletable;
+`team_dashboard/row.html` never had a delete affordance at all). Small per-screen helpers
+(`dashboard_date`/`dashboard_has_time`/`type_symbol`) were duplicated from `dashboard.rs`
+rather than shared — same "duplicated rather than widening a legacy module's visibility"
+precedent `project_tasks/mod.rs` already set for its own form-parsing helpers.
+`preset_range`/`PRESETS` *were* reused via `use super::dashboard::{preset_range, PRESETS}`
+(already `pub(crate)`, already reused by `team_dashboard.rs` itself) since they're pure
+date-window math with no personal/team coupling to duplicate.
+
+**One new storage-layer method was needed, unlike B5a-d (which needed zero):**
+`ItemRepo::list_due_by_project` (`src/storage/sqlite/mod.rs` trait +
+`src/storage/sqlite/items.rs` impl), the direct `project_id`-keyed analog of
+`list_due_team_items` — necessary because no existing method returns a due-date-annotated,
+`parent_name`/`has_children`-joined item set scoped to a project. Toggle-complete
+(`/web/projects/:project_id/dashboard/items/:item_id`, PUT) delegates to stage B4's
+`service::project_items::update_project_item` after building `UpdateProjectItemParams` from
+the current row — same merge-of-`dashboard.rs`'s-and-`team_dashboard.rs`'s-own
+`toggle_item_complete`/`toggle_team_item_complete` shape, including carrying forward the
+same (likely-dead per B5b's own finding) `Err(RepoError::NotFound) => empty` branch for
+consistency with every other screen in the codebase.
+
+**New `src/web_ui/project_activity.rs`** (`/web/projects/:project_id/activity[...]`) is a
+thin new screen on top of already-`project_id`-keyed data — `list_activity_for_project` and
+`team_activity.rs`'s own `project_id` resolution were both already built in stage B2d; this
+stage only adds the project-scoped URL/screen calling that same query directly (no
+team_id-then-project fallback needed, since the query has been correct on `project_id`
+alone since B2). A personal project simply renders "No activity yet." (points only exist on
+team items, per CLAUDE.md) rather than being hidden or special-cased. The undo route
+(`PUT .../activity/:entry_id/undo`) still calls the existing, still team_id-keyed
+`service::activity_log::undo_activity_log_entry` (points stay `team_members`-keyed, not
+`project_members`-keyed, unchanged by this stage) by resolving `project.team_id` first and
+404ing if the project has none — defensively unreachable in practice since a personal
+project can never have an entry to undo.
+
+**`assigned_items.rs` updated in place** ("becomes a cross-project query" — it already was
+one at the data-fetch level, via `repo.list_assigned(user_id)` querying across every team;
+what changed is `detail_url` now builds `/web/projects/:project_id/...` links when
+`item.project_id` is set, falling back to the legacy `/web/team-tasks/:team_id/...`-style
+URL otherwise — same accepted, bounded gap (items created between B1 and B2, or never
+touched since) B2c's own implementation notes already flagged, not new here). Verified live:
+an assigned team task's row (checkbox PUT and detail link both) now points at
+`/web/projects/{project_id}/tasks/{item_id}`.
+
+**`teams.rs`/`templates/teams/detail_page.html`'s "View items" link retargeted**, exactly as
+scoped by the plan (Dashboard/View activity links were deliberately left pointing at the
+legacy `/web/team-dashboard`/`/web/team-activity` screens — the plan named only "View items"
+for this stage, and those two legacy screens still fully work, so retargeting them isn't
+required to avoid a broken page, just left for a future pass). `render_team_detail` gained a
+`&Arc<dyn ProjectRepo>` parameter (all four call sites already had one reachable via
+`Extension`, no new route wiring needed) and resolves `projects.get_by_team(team_id)`,
+building `/web/projects/{project_id}/tasks` when found or falling back to the legacy
+`/web/team-tasks/{team_id}` URL — same defensive-fallback style `team_activity.rs`'s own
+project resolution already established.
+
+**Testing:** `cargo check`/`cargo build`/`task web-styles` all clean (only the same
+pre-existing dead-code warnings every prior stage has produced — the new
+`list_due_by_project` trait method is flagged unused only until this stage's own handler
+wires it up, same as every other storage-layer addition in this plan). `cargo test`:
+202/202 passing, zero regressions — no new automated tests were added (this stage is
+`web_ui`-layer plus one new storage method with no branching logic of its own to unit-test,
+matching every prior B5 sub-stage's "web_ui layer only" precedent).
+
+**Manual smoke test** (built the binary, ran against a throwaway SQLite DB via
+`TODO_AUTH_MODE=caddy` + `TODO_DEV_EMAIL`, migrations 10/11 applied cleanly, exercised via
+curl with a minted bearer token): personal project — created a due-today Task and a
+scheduled-today Event via `CreateProjectItem`; `GET /web/projects/:id/dashboard` rendered
+both rows (confirming the merged Task/Event `dashboard_date` semantics) with delete buttons
+present; `.../dashboard/calendar` returned HTTP 200; `?preset=All` still showed both;
+toggling the task complete via `PUT .../dashboard/items/:id` correctly struck it through;
+`GET /web/projects/:id/activity` correctly rendered "No activity yet." for a project with no
+team. Team-backed project — created a team (confirmed `ensure_team_project` fired, its
+project appeared in `ListProjects` immediately); confirmed `GET /web/teams/:id`'s "View
+items" link now reads `/web/projects/{project_id}/tasks` instead of the legacy
+`/web/team-tasks/{team_id}`; created a task with `points=50` assigned to self; the project
+dashboard showed the assignee name and **no** delete button (matching
+`team_dashboard/row.html`'s own precedent); completing it via the dashboard's toggle route
+awarded the points, confirmed via `GET /web/projects/:id/activity` showing a `+50 pts` row
+with an Undo button; undid it via `PUT .../activity/:entry_id/undo` and confirmed the row
+flipped to "reversed". Cross-project — `GET /web/assigned-items` showed the same team task's
+checkbox and detail link both pointing at `/web/projects/{project_id}/tasks/{item_id}`
+rather than the legacy team URL. Confirmed the legacy `/web/team-tasks/:team_id`,
+`/web/team-dashboard/:team_id`, and `/web/dashboard` screens all still return HTTP 200
+unaffected, proving old and new coexist per this stage's own scope. Scratch DB and server
+process cleaned up after verification. No CLI or MCP server changes, per this stage's own
+scope — B5f (Nav + legacy retirement) is next.
+
 ### B6 — CLI (`todo-cli/`)
 
 - Add `prl projects` (list/create/attach-team/detach-team/members/set-role);

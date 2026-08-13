@@ -154,12 +154,19 @@ struct TeamDetailPageTemplate {
     invite_candidates: Vec<(String, String)>,
     is_active_member: bool,
     is_admin: bool,
+    /// Stage B5e: retargets at the team's backing project's Tasks screen
+    /// (`/web/projects/:project_id/tasks`) rather than the legacy `/web/team-tasks/:team_id`
+    /// — every team has had one since `ensure_team_project`/stage B1's backfill, but this
+    /// falls back to the legacy URL defensively if somehow none exists yet, same precedent
+    /// `team_activity.rs`'s own project resolution already set.
+    view_items_href: String,
     nav_html: String,
 }
 
 async fn render_team_detail(
     teams: &Arc<dyn TeamRepo>,
     users: &Arc<dyn UserRepo>,
+    projects: &Arc<dyn ProjectRepo>,
     team_id: &str,
     requester_user_id: &str,
 ) -> Result<Html<String>, ItemError> {
@@ -201,6 +208,11 @@ async fn render_team_detail(
         .map(|u| (u.id, format!("{} {}", u.first_name, u.last_name)))
         .collect();
 
+    let view_items_href = match projects.get_by_team(team_id).await.map_err(ItemError::from)? {
+        Some(project) => format!("/web/projects/{}/tasks", project.id),
+        None => format!("/web/team-tasks/{team_id}"),
+    };
+
     let nav_html = nav::build_nav_html(
         teams,
         requester_user_id,
@@ -216,6 +228,7 @@ async fn render_team_detail(
         invite_candidates,
         is_active_member,
         is_admin: viewer_is_admin,
+        view_items_href,
         nav_html,
     })
 }
@@ -225,8 +238,9 @@ pub async fn team_detail_page(
     Extension(auth_user): Extension<AuthUser>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(users): Extension<Arc<dyn UserRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
 ) -> Result<Html<String>, ItemError> {
-    render_team_detail(&teams, &users, &team_id, &auth_user.user_id).await
+    render_team_detail(&teams, &users, &projects, &team_id, &auth_user.user_id).await
 }
 
 #[derive(serde::Deserialize)]
@@ -239,6 +253,7 @@ pub async fn set_team_member_role_form(
     Extension(auth_user): Extension<AuthUser>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(users): Extension<Arc<dyn UserRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Form(form): Form<SetMemberRoleForm>,
 ) -> Result<Html<String>, ItemError> {
     let new_role = TeamRole::from_str(&form.role)
@@ -251,7 +266,7 @@ pub async fn set_team_member_role_form(
         new_role,
     )
     .await?;
-    render_team_detail(&teams, &users, &team_id, &auth_user.user_id).await
+    render_team_detail(&teams, &users, &projects, &team_id, &auth_user.user_id).await
 }
 
 #[derive(serde::Deserialize)]
@@ -264,10 +279,11 @@ pub async fn update_team_form(
     Extension(auth_user): Extension<AuthUser>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(users): Extension<Arc<dyn UserRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Form(form): Form<UpdateTeamForm>,
 ) -> Result<Html<String>, ItemError> {
     team_service::update_team(&teams, &team_id, &auth_user.user_id, &form.name).await?;
-    render_team_detail(&teams, &users, &team_id, &auth_user.user_id).await
+    render_team_detail(&teams, &users, &projects, &team_id, &auth_user.user_id).await
 }
 
 #[derive(serde::Deserialize)]
@@ -281,6 +297,7 @@ pub async fn invite_team_member_form(
     Extension(auth_user): Extension<AuthUser>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(users): Extension<Arc<dyn UserRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Form(form): Form<InviteForm>,
 ) -> Result<Html<String>, ItemError> {
     team_service::invite_team_member(
@@ -294,5 +311,5 @@ pub async fn invite_team_member_form(
     // The member list and the invite-candidate dropdown both change together (the invitee
     // moves from one to the other), so — same reasoning as create_team_form above — this
     // re-renders the whole detail page rather than a narrower fragment.
-    render_team_detail(&teams, &users, &team_id, &auth_user.user_id).await
+    render_team_detail(&teams, &users, &projects, &team_id, &auth_user.user_id).await
 }

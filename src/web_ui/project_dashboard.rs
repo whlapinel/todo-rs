@@ -1,0 +1,461 @@
+use crate::auth::AuthUser;
+use crate::domain::item::{Item, ItemKind};
+use super::dashboard::{preset_range, PRESETS};
+use super::nav::{self, ActiveContext, SidebarSection};
+use super::{to_local, TzOffset};
+use crate::service::project_items::{self as project_item_service, UpdateProjectItemParams};
+use crate::service::projects::{self as project_service, require_project_member};
+use crate::service::teams as team_service;
+use crate::service::error::ItemError;
+use crate::storage::sqlite::{ActivityLogRepo, DueItem, ItemRepo, ProjectRepo, RepoError, TeamRepo};
+use askama::Template;
+use axum::extract::{Extension, Form, Path, Query};
+use axum::response::Html;
+use chrono::{DateTime, Datelike, Duration, NaiveDate, Utc};
+use std::collections::HashMap;
+use std::sync::Arc;
+
+fn render<T: Template>(t: T) -> Result<Html<String>, ItemError> {
+    Ok(Html(t.render()?))
+}
+
+fn active_context(team_id: &Option<String>) -> ActiveContext {
+    match team_id {
+        Some(team_id) => ActiveContext::Team(team_id.clone()),
+        None => ActiveContext::Personal,
+    }
+}
+
+/// Duplicated from `dashboard.rs` rather than shared (that module's own equivalents are
+/// private, and every other B5 sub-stage has duplicated its per-screen helpers rather than
+/// widening a legacy module's visibility just to reuse a handful of small functions — see
+/// e.g. `project_tasks/mod.rs`'s identical rationale). Merges `dashboard.rs`'s combined
+/// Task/Event date semantics with `team_dashboard.rs`'s assignee display — see CLAUDE.md's
+/// Scheduled start/end section for why Events are `scheduled_date`-primary here.
+fn dashboard_date(item: &Item) -> Option<DateTime<Utc>> {
+    match item.kind() {
+        ItemKind::Event => item.scheduled_date().or(item.due_date()),
+        _ => item.due_date(),
+    }
+}
+
+fn dashboard_has_time(item: &Item) -> bool {
+    match item.kind() {
+        ItemKind::Event if item.scheduled_date().is_some() => item.has_scheduled_time(),
+        ItemKind::Event => item.has_due_time(),
+        _ => item.has_due_time(),
+    }
+}
+
+fn type_symbol(kind: ItemKind) -> &'static str {
+    match kind {
+        ItemKind::Task => "T",
+        ItemKind::Event => "E",
+        ItemKind::Simple => "S",
+        ItemKind::Template => "Tmpl",
+    }
+}
+
+/// Project-scoped counterpart to `dashboard::detail_url` — every item here already carries
+/// the one `project_id` this whole page is scoped to, so there's no personal-vs-team branch
+/// to dispatch on at all, unlike the legacy function it replaces.
+fn detail_url(item: &Item, project_id: &str) -> String {
+    match item.kind() {
+        ItemKind::Task => format!("/web/projects/{project_id}/tasks/{}", item.id),
+        ItemKind::Event => format!("/web/projects/{project_id}/events/{}", item.id),
+        ItemKind::Simple => format!("/web/projects/{project_id}/simple-lists/{}", item.id),
+        ItemKind::Template => format!("/web/projects/{project_id}/templates/{}", item.id),
+    }
+}
+
+async fn names_for(
+    teams: &Arc<dyn TeamRepo>,
+    team_id: &str,
+    requester_user_id: &str,
+) -> Result<HashMap<String, String>, ItemError> {
+    let members = team_service::list_team_members(teams, team_id, requester_user_id).await?;
+    Ok(members
+        .into_iter()
+        .map(|m| (m.user.id.clone(), format!("{} {}", m.user.first_name, m.user.last_name)))
+        .collect())
+}
+
+#[derive(Template)]
+#[template(path = "project_dashboard/row.html")]
+struct ProjectDashboardRow {
+    item_id: String,
+    name: String,
+    complete: bool,
+    date_label: Option<String>,
+    date_kind_label: &'static str,
+    overdue: bool,
+    type_symbol: &'static str,
+    parent_name: Option<String>,
+    assignee_name: Option<String>,
+    /// Mirrors `dashboard::DashboardRow`'s own `can_delete` — true only on a personal
+    /// project (matching the legacy personal dashboard, whose items were always the
+    /// caller's own); `team_dashboard/row.html` never had a delete affordance at all, so a
+    /// team-backed project's rows don't get one here either.
+    can_delete: bool,
+    toggle_target: String,
+    detail_link: String,
+    toggle_complete_json: String,
+}
+
+impl ProjectDashboardRow {
+    fn from_due_item(
+        di: &DueItem,
+        project_id: &str,
+        names: &HashMap<String, String>,
+        is_team_project: bool,
+        tz: i32,
+    ) -> Self {
+        let item = &di.item;
+        let date_label = dashboard_date(item).map(|d| {
+            let local = to_local(d, tz);
+            if dashboard_has_time(item) {
+                local.format("%Y-%m-%d %H:%M").to_string()
+            } else {
+                local.format("%Y-%m-%d").to_string()
+            }
+        });
+        let date_kind_label = if item.kind() == ItemKind::Event && item.scheduled_date().is_some()
+        {
+            "Scheduled"
+        } else {
+            "Due"
+        };
+        Self {
+            item_id: item.id.clone(),
+            name: item.name.clone(),
+            complete: item.complete,
+            date_label,
+            date_kind_label,
+            overdue: item.is_overdue(Utc::now()),
+            type_symbol: type_symbol(item.kind()),
+            parent_name: if di.parent_name.is_empty() { None } else { Some(di.parent_name.clone()) },
+            assignee_name: item.assigned_to_user_id().and_then(|id| names.get(&id).cloned()),
+            can_delete: !is_team_project,
+            toggle_target: format!("/web/projects/{project_id}/dashboard/items/{}", item.id),
+            detail_link: detail_url(item, project_id),
+            toggle_complete_json: (!item.complete).to_string(),
+        }
+    }
+}
+
+#[derive(Template)]
+#[template(path = "project_dashboard/page.html")]
+struct ProjectDashboardPageTemplate {
+    project_id: String,
+    rows: Vec<String>,
+    show_complete: bool,
+    presets: Vec<(&'static str, bool)>,
+    nav_html: String,
+}
+
+#[derive(serde::Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct DashboardQuery {
+    preset: Option<String>,
+    show_complete: Option<String>,
+}
+
+/// Same Rust-side filtering rationale as `dashboard::render_rows` — an unfiltered SQL fetch
+/// (both `after`/`before` `None`) followed by filtering against `dashboard_date` here, so an
+/// Event showing up by `scheduled_date` isn't excluded for lacking a `due_date`.
+#[allow(clippy::too_many_arguments)]
+fn render_rows(
+    items: &[DueItem],
+    project_id: &str,
+    names: &HashMap<String, String>,
+    is_team_project: bool,
+    preset: &str,
+    show_complete: bool,
+    after: Option<DateTime<Utc>>,
+    before: Option<DateTime<Utc>>,
+    tz: i32,
+) -> Result<Vec<String>, ItemError> {
+    let mut items: Vec<&DueItem> = items
+        .iter()
+        .filter(|di| show_complete || !di.item.complete)
+        .filter(|di| preset != "All with due date" || dashboard_date(&di.item).is_some())
+        .filter(|di| match dashboard_date(&di.item) {
+            Some(d) => after.is_none_or(|a| d >= a) && before.is_none_or(|b| d <= b),
+            None => after.is_none() && before.is_none(),
+        })
+        .collect();
+    items.sort_by_key(|di| dashboard_date(&di.item).map(|d| d.timestamp()).unwrap_or(i64::MAX));
+    items
+        .iter()
+        .map(|di| ProjectDashboardRow::from_due_item(di, project_id, names, is_team_project, tz).render())
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(ItemError::from)
+}
+
+pub async fn project_dashboard_page(
+    Path(project_id): Path<String>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    TzOffset(tz_offset): TzOffset,
+    Query(q): Query<DashboardQuery>,
+) -> Result<Html<String>, ItemError> {
+    let project = project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
+    let preset = q.preset.unwrap_or_else(|| "Today".to_string());
+    let show_complete = q.show_complete.is_some();
+    let (after, before) = preset_range(&preset, Utc::now(), tz_offset);
+
+    let due_items = repo
+        .list_due_by_project(&project_id, None, None)
+        .await
+        .map_err(ItemError::from)?;
+    let names = match &project.team_id {
+        Some(team_id) => names_for(&teams, team_id, &auth_user.user_id).await?,
+        None => HashMap::new(),
+    };
+    let rows = render_rows(
+        &due_items,
+        &project_id,
+        &names,
+        project.team_id.is_some(),
+        &preset,
+        show_complete,
+        after,
+        before,
+        tz_offset,
+    )?;
+
+    let presets = PRESETS.iter().map(|&p| (p, p == preset)).collect();
+    let nav_html = nav::build_nav_html(
+        &teams,
+        &auth_user.user_id,
+        active_context(&project.team_id),
+        SidebarSection::None,
+    )
+    .await?;
+    render(ProjectDashboardPageTemplate {
+        project_id,
+        rows,
+        show_complete,
+        presets,
+        nav_html,
+    })
+}
+
+struct ProjectDashboardCalendarEntry {
+    detail_link: String,
+    name: String,
+    time_label: Option<String>,
+    type_symbol: &'static str,
+}
+
+struct ProjectDashboardCalendarDay {
+    date: String,
+    day_number: u32,
+    is_current_month: bool,
+    is_today: bool,
+    entries: Vec<ProjectDashboardCalendarEntry>,
+}
+
+#[derive(Template)]
+#[template(path = "project_dashboard/calendar_page.html")]
+struct ProjectDashboardCalendarPageTemplate {
+    project_id: String,
+    month_label: String,
+    month_iso: String,
+    prev_year: i32,
+    prev_month: u32,
+    next_year: i32,
+    next_month: u32,
+    days: Vec<ProjectDashboardCalendarDay>,
+    nav_html: String,
+}
+
+fn prev_month(year: i32, month: u32) -> (i32, u32) {
+    if month == 1 { (year - 1, 12) } else { (year, month - 1) }
+}
+
+fn next_month(year: i32, month: u32) -> (i32, u32) {
+    if month == 12 { (year + 1, 1) } else { (year, month + 1) }
+}
+
+/// Mirrors `dashboard::build_calendar_days` exactly, project-scoped — same fixed 6-row
+/// Monday-start grid, same no-completion-filter precedent. A calendar view is a genuinely
+/// new capability for team-backed projects here (`team_dashboard.rs` never had one), same
+/// framing as every prior B5 sub-stage's own calendar view.
+fn build_calendar_days(
+    year: i32,
+    month: u32,
+    project_id: &str,
+    due_items: &[DueItem],
+    tz: i32,
+    today: NaiveDate,
+) -> Vec<ProjectDashboardCalendarDay> {
+    let first_of_month = NaiveDate::from_ymd_opt(year, month, 1).unwrap();
+    let leading = first_of_month.weekday().num_days_from_monday();
+    let grid_start = first_of_month - Duration::days(leading as i64);
+
+    let mut by_date: std::collections::HashMap<NaiveDate, Vec<ProjectDashboardCalendarEntry>> =
+        std::collections::HashMap::new();
+    for di in due_items {
+        let item = &di.item;
+        if let Some(dt) = dashboard_date(item) {
+            let local = to_local(dt, tz);
+            let time_label = dashboard_has_time(item).then(|| local.format("%H:%M").to_string());
+            by_date
+                .entry(local.date_naive())
+                .or_default()
+                .push(ProjectDashboardCalendarEntry {
+                    detail_link: detail_url(item, project_id),
+                    name: item.name.clone(),
+                    time_label,
+                    type_symbol: type_symbol(item.kind()),
+                });
+        }
+    }
+
+    let mut days = Vec::with_capacity(42);
+    for i in 0..42i64 {
+        let date = grid_start + Duration::days(i);
+        let mut entries = by_date.remove(&date).unwrap_or_default();
+        entries.sort_by(|a, b| a.time_label.cmp(&b.time_label));
+        days.push(ProjectDashboardCalendarDay {
+            date: date.format("%Y-%m-%d").to_string(),
+            day_number: date.day(),
+            is_current_month: date.month() == month && date.year() == year,
+            is_today: date == today,
+            entries,
+        });
+    }
+    days
+}
+
+#[derive(serde::Deserialize)]
+pub struct CalendarQuery {
+    year: Option<i32>,
+    month: Option<u32>,
+}
+
+pub async fn project_dashboard_calendar_page(
+    Path(project_id): Path<String>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    TzOffset(tz): TzOffset,
+    Query(q): Query<CalendarQuery>,
+) -> Result<Html<String>, ItemError> {
+    let project = project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
+    let today = to_local(Utc::now(), tz).date_naive();
+    let year = q.year.unwrap_or_else(|| today.year());
+    let month = q
+        .month
+        .filter(|m| (1..=12).contains(m))
+        .unwrap_or_else(|| today.month());
+
+    let due_items = repo
+        .list_due_by_project(&project_id, None, None)
+        .await
+        .map_err(ItemError::from)?;
+    let days = build_calendar_days(year, month, &project_id, &due_items, tz, today);
+    let (prev_year, prev_month) = prev_month(year, month);
+    let (next_year, next_month) = next_month(year, month);
+    let nav_html = nav::build_nav_html(
+        &teams,
+        &auth_user.user_id,
+        active_context(&project.team_id),
+        SidebarSection::None,
+    )
+    .await?;
+
+    render(ProjectDashboardCalendarPageTemplate {
+        project_id,
+        month_label: NaiveDate::from_ymd_opt(year, month, 1)
+            .unwrap()
+            .format("%B %Y")
+            .to_string(),
+        month_iso: format!("{year:04}-{month:02}"),
+        prev_year,
+        prev_month,
+        next_year,
+        next_month,
+        days,
+        nav_html,
+    })
+}
+
+#[derive(serde::Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ToggleForm {
+    complete: Option<String>,
+}
+
+pub async fn toggle_project_dashboard_item_complete(
+    Path((project_id, item_id)): Path<(String, String)>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(activity_log): Extension<Arc<dyn ActivityLogRepo>>,
+    TzOffset(tz): TzOffset,
+    Form(form): Form<ToggleForm>,
+) -> Result<Html<String>, ItemError> {
+    require_project_member(&projects, &teams, &project_id, &auth_user.user_id).await?;
+    let current = repo.get_by_project(&project_id, &item_id).await.map_err(ItemError::from)?;
+    let params = UpdateProjectItemParams {
+        project_id: project_id.clone(),
+        item_id: item_id.clone(),
+        name: current.name.clone(),
+        description: current.description.clone(),
+        due_date: current.due_date(),
+        scheduled_date: current.scheduled_date(),
+        scheduled_end_date: current.scheduled_end_date(),
+        complete: form.complete.as_deref() == Some("true"),
+        recurrence: current.recurrence_pattern(),
+        recurrence_basis: current.recurrence_basis(),
+        has_due_time: Some(current.has_due_time()),
+        has_scheduled_time: Some(current.has_scheduled_time()),
+        has_end_time: Some(current.has_end_time()),
+        parent_item_id: current.parent_item_id.clone(),
+        item_type: Some(current.kind()),
+        event_type: current.event_type(),
+        due_offset_days: current.due_offset_days(),
+        assigned_to_user_id: current.assigned_to_user_id(),
+        source_event_id: current.source_event_id(),
+        timezone_offset_minutes: Some(tz),
+        points: current.points(),
+    };
+    project_item_service::update_project_item(
+        &repo,
+        &projects,
+        &teams,
+        &activity_log,
+        &auth_user.user_id,
+        params,
+    )
+    .await?;
+
+    let project = projects.get(&project_id).await.map_err(ItemError::from)?;
+    let names = match &project.team_id {
+        Some(team_id) => names_for(&teams, team_id, &auth_user.user_id).await?,
+        None => HashMap::new(),
+    };
+    match repo.get_by_project(&project_id, &item_id).await {
+        Ok(updated) => render(ProjectDashboardRow::from_due_item(
+            &DueItem { parent_name: String::new(), item: updated },
+            &project_id,
+            &names,
+            project.team_id.is_some(),
+            tz,
+        )),
+        // Recurring item just completed and got replaced under a new id (see
+        // service::items::update_item/team_items::update_team_item) — nothing to render
+        // back for the old id. See CLAUDE.md/B5b's implementation notes: current
+        // service-layer behavior actually keeps the original row and this branch may be
+        // dead in practice, but every other screen in this codebase still carries it
+        // verbatim, so this one does too rather than diverging unilaterally.
+        Err(RepoError::NotFound) => Ok(Html(String::new())),
+        Err(e) => Err(ItemError::from(e)),
+    }
+}

@@ -28,15 +28,26 @@ struct AssignedItemRow {
     toggle_complete_json: String,
 }
 
-/// Team-scoped dedicated-screen URL for `item`, dispatched by its actual type — every row
-/// on this page always has a `team_id` (assignment is a team-item-only concept), so this
-/// only needs the team-owned half of `dashboard.rs`'s equivalent `detail_url`.
+/// Stage B5e: "cross-project query" — every row on this page always has a `team_id`
+/// (assignment is a team-item-only concept), but now prefers the project-scoped URL
+/// once the item actually carries a `project_id` (set at creation since stage B2c;
+/// see docs/project-abstraction-plan.md). Falls back to the legacy team-owned URL for
+/// an item that predates B2 and has never been touched since — same accepted,
+/// bounded gap B2c's own implementation notes flagged, not new here.
 fn detail_url(item: &Item, team_id: &str) -> String {
-    match item.kind() {
-        ItemKind::Task => format!("/web/team-tasks/{team_id}/{}", item.id),
-        ItemKind::Event => format!("/web/team-events/{team_id}/{}", item.id),
-        ItemKind::Simple => format!("/web/team-simple-lists/{team_id}/{}", item.id),
-        ItemKind::Template => format!("/web/team-templates/{team_id}/{}", item.id),
+    match &item.project_id {
+        Some(project_id) => match item.kind() {
+            ItemKind::Task => format!("/web/projects/{project_id}/tasks/{}", item.id),
+            ItemKind::Event => format!("/web/projects/{project_id}/events/{}", item.id),
+            ItemKind::Simple => format!("/web/projects/{project_id}/simple-lists/{}", item.id),
+            ItemKind::Template => format!("/web/projects/{project_id}/templates/{}", item.id),
+        },
+        None => match item.kind() {
+            ItemKind::Task => format!("/web/team-tasks/{team_id}/{}", item.id),
+            ItemKind::Event => format!("/web/team-events/{team_id}/{}", item.id),
+            ItemKind::Simple => format!("/web/team-simple-lists/{team_id}/{}", item.id),
+            ItemKind::Template => format!("/web/team-templates/{team_id}/{}", item.id),
+        },
     }
 }
 
