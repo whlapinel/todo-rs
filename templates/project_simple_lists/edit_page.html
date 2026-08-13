@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Edit {{ name }} · Todo{% endblock %}
+{% block content %}
+<div class="space-y-6">
+  <div class="md:flex md:items-center md:justify-between">
+    <div class="min-w-0 flex-1">
+      <h2 class="text-2xl/7 font-bold text-gray-900 sm:truncate sm:text-3xl sm:tracking-tight dark:text-white">Edit {{ name }}</h2>
+    </div>
+    <div class="mt-4 flex items-center gap-x-3 md:mt-0 md:ml-4">
+      <a href="/web/projects/{{ project_id }}/simple-lists/{{ id }}" hx-target="#page" hx-select="#page" hx-swap="innerHTML"
+         class="inline-flex items-center justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-xs inset-ring inset-ring-gray-300 hover:bg-gray-50 dark:bg-white/10 dark:text-white dark:shadow-none dark:inset-ring-white/5 dark:hover:bg-white/20">Back to details</a>
+    </div>
+  </div>
+
+  {{ fields|safe }}
+</div>
+{% endblock %}

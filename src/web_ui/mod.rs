@@ -5,6 +5,7 @@ pub mod events;
 pub mod login;
 pub mod nav;
 pub mod project_events;
+pub mod project_simple_lists;
 pub mod project_tasks;
 pub mod projects;
 pub mod simple_lists;

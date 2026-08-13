@@ -48,6 +48,7 @@ use web_ui::dashboard::*;
 use web_ui::events::*;
 use web_ui::login::login_page;
 use web_ui::project_events::handlers::*;
+use web_ui::project_simple_lists::handlers::*;
 use web_ui::project_tasks::handlers::*;
 use web_ui::projects::projects_page;
 use web_ui::simple_lists::*;
@@ -201,6 +202,40 @@ fn build_web_router() -> Router {
         .route(
             "/projects/:project_id/events/:item_id/save-as-template",
             post(save_project_event_as_template),
+        )
+        .route(
+            "/projects/:project_id/simple-lists",
+            get(project_simple_lists_page).post(create_project_simple_item_form),
+        )
+        .route(
+            "/projects/:project_id/simple-lists/new",
+            get(new_project_simple_item_page),
+        )
+        .route(
+            "/projects/:project_id/simple-lists/batch",
+            post(create_project_simple_items_batch),
+        )
+        .route(
+            "/projects/:project_id/simple-lists/:item_id",
+            get(project_simple_item_detail_page)
+                .put(update_project_simple_item_form)
+                .delete(delete_project_simple_item_form),
+        )
+        .route(
+            "/projects/:project_id/simple-lists/:item_id/edit",
+            get(project_simple_item_edit_page),
+        )
+        .route(
+            "/projects/:project_id/simple-lists/:item_id/children",
+            get(project_simple_item_children_fragment),
+        )
+        .route(
+            "/projects/:project_id/simple-lists/:item_id/promote",
+            post(promote_project_simple_item_form),
+        )
+        .route(
+            "/projects/:project_id/simple-lists/:item_id/subordinate",
+            post(subordinate_project_simple_item_form),
         )
         .route(
             "/simple-lists",

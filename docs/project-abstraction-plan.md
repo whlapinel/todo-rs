@@ -1311,6 +1311,87 @@ all, since none was ever written); created and deleted a team event via the new 
 loaded its calendar view. Scratch DB and server process cleaned up after verification. No
 CLI or MCP server changes, per this stage's own scope — B5c (Simple lists) is next.
 
+**B5c implementation notes:** Done, matching the plan closely and following B5a/B5b's structure
+precedent exactly. New module `src/web_ui/project_simple_lists/{mod.rs, handlers.rs,
+templates.rs}` plus 6 new templates under `templates/project_simple_lists/`. `src/web_ui/
+simple_lists.rs`, `team_simple_lists.rs`, and their templates are completely untouched, per the
+plan's "old and new coexist until B5f" rule (confirmed live — `GET /web/team-simple-lists/:id`
+still renders correctly after the new screen shipped). No new service-layer code was needed —
+same as B5a/B5b, `service::project_items`/`service::projects` already provided a fully unified,
+membership-gated CRUD surface; every handler is "resolve the project via
+`service::projects::get_project`, then delegate."
+
+**Simplest of the three B5 sub-stages so far, confirmed by re-reading
+`team_simple_lists.rs`'s own doc comments before writing this stage's equivalent**: Simple
+items carry *no* optional `Row` fields at all — no dates, no recurrence, no offset, no
+`sourceEventId`, and (unlike Tasks) no assignment/points even on a team-backed project
+(`team_simple_lists.rs`'s own comment: "Simple items never carry assignment/points either
+(Task-only...)"). `ProjectSimpleItemRow::from_item` (`project_simple_lists/templates.rs`) is
+`Row`'s third real caller (after `ProjectTaskRow`/`ProjectEventRow`) and is the simplest of the
+three: `expanded_row: false` unconditionally (no metadata line ever has anything to show,
+matching legacy `simple_lists/row.html`'s single-line-only markup) and every other optional
+field is `None`/`false`. No `is_team_project` gating was needed anywhere in this stage's forms
+or templates — unlike `ProjectTaskForm`/`ProjectTaskDetailFields`, there is no
+assign-to/points markup to conditionally hide in the first place, so `NewProjectSimpleItemPageTemplate`/
+`ProjectSimpleItemDetailFields` carry no such field at all. Confirmed live: the new-item form on
+a team-backed project has zero `assignedToUserId`/`points` inputs, same as the legacy
+`team_simple_lists.rs` screen.
+
+**No `detail_view.html`/three-fragment split, matching the legacy module's own shape rather
+than `ProjectTaskDetailView`/`ProjectEventDetailView`'s pattern**: Simple items have no
+`complete` concept at all (`Item::validate` rejects `complete: true` for `ItemType::Simple`),
+so — exactly like `simple_lists.rs`/`team_simple_lists.rs` before this stage —
+`project_simple_lists/detail_page.html` **is** the read-only view directly (no separate
+`detail_view.html` fragment, no complete-toggle checkbox to put in one), and
+`update_project_simple_item_form`'s non-close response is the two-fragment `{row}{fields}`
+shape, not three. This isn't a simplification introduced by this stage; it's the same
+"template children are the one variant without the toggle" exception CLAUDE.md's Web UI
+section already documents for the row-editing convention, just naturally recurring here for a
+different reason (no completion concept vs. no completion concept).
+
+**`points_label` included on the list page, diverging from B5b's precedent, not B5a's**: `project_tasks_page`
+computes and shows `points_label` (the viewer's own running team-points balance, not
+task-specific); `project_events_page` does not (checked — `ProjectEventsListPageTemplate` has
+no such field, and `project_events/list_page.html` has no badge markup at all, even though
+`team_events/list_page.html` — the screen it replaces — does show one). Since
+`team_simple_lists.rs`'s existing list page *does* show this badge (viewer's own balance,
+independent of whether Simple items themselves ever carry points), `project_simple_lists_page`
+was written to match B5a's precedent and `team_simple_lists.rs`'s own current behavior rather
+than B5b's — computing `points_label` via `team_service::member_points` the same way
+`project_tasks_page` does. This is flagged as a possible pre-existing gap in B5b (dropping a
+badge every other team-backed list screen had) rather than a deliberate B5c divergence to copy
+forward; not fixed here since B5b is already shipped and out of this stage's scope, but worth a
+follow-up pass whenever `project_events` is next touched.
+
+**Testing:** `cargo check`/`cargo build` clean (only the same pre-existing dead-code warnings
+every prior stage has produced — nothing new introduced by this stage's files). `cargo test`:
+195/195 passing, zero regressions (no service/storage/domain code touched at all this stage —
+purely additive `web_ui` + templates, matching B5a/B5b's "web_ui layer only, no automated tests
+added" precedent, verified instead by the manual smoke test below).
+
+**Manual smoke test** (built the binary, ran against a throwaway SQLite DB via
+`TODO_AUTH_MODE=caddy` + `TODO_DEV_EMAIL`, migrations 10/11 applied cleanly): personal
+project — confirmed `GET /web/projects/:id/simple-lists` renders the empty list; created a
+top-level item ("Buy milk") via the standalone new-item form (`redirect=1` →
+`hx-redirect` back to the list) — row rendered with the correct
+`/web/projects/{id}/simple-lists/{id}` URL; detail page showed Edit/Back links and the
+sub-item form; edit page pre-filled the name; added a sub-item ("Whole milk") via the
+detail page's inline form — appeared in both the live children fragment and a direct
+`GET .../children` call; renamed the parent via the edit form's non-close save — confirmed
+the response was the two-fragment `{row}{fields}` shape with **no** `type="checkbox"`
+anywhere in it (no complete concept, as expected); list page showed the `▶` child-indicator
+arrow next to the renamed parent; promoted the child to top-level via its "Promote to sibling
+of parent" button — `hx-redirect`ed to the list as expected (no grandparent); deleted both
+items, confirmed the list returned to "No items yet." Then created a team (confirmed
+`ensure_team_project` fired — the new team's project appeared in `ListProjects` immediately)
+and walked its Simple Lists screen: list page showed a "0 pts" badge (per the `points_label`
+note above); new-item form confirmed to have zero assign-to/points fields; created and listed
+a team item, confirming the badge and row both rendered correctly. Finally, loaded the
+**legacy** `GET /web/team-simple-lists/:team_id` screen for the same team and confirmed it
+still renders HTTP 200 unaffected, proving the old and new screens genuinely coexist per this
+stage's own scope. Scratch DB and server process cleaned up after verification. No CLI or MCP
+server changes, per this stage's own scope — B5d (Templates) is next.
+
 ### B6 — CLI (`todo-cli/`)
 
 - Add `prl projects` (list/create/attach-team/detach-team/members/set-role);
