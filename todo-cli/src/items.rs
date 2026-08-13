@@ -494,10 +494,17 @@ pub async fn cmd_items(client: &Client, cmd: ItemsCommand, user_id: Option<Strin
                 eprintln!("error: failed to read {}: {e}", file.display());
                 std::process::exit(1);
             });
+            // Bare dates in the CSV (e.g. `dueDate=2026-09-30`) have no time component, so the
+            // server needs to know this machine's local timezone to interpret them correctly —
+            // otherwise it defaults to literal UTC, which can land a date on the wrong calendar
+            // day once viewed back in local time. Same minutes-to-add-to-local-to-reach-UTC
+            // convention the web UI's `X-Tz-Offset-Minutes` header already uses.
+            let tz_offset_minutes = -chrono::Local::now().offset().local_minus_utc() / 60;
             let mut req = client
                 .import_project_items()
                 .project_id(project)
-                .csv(csv_text);
+                .csv(csv_text)
+                .timezone_offset_minutes(tz_offset_minutes);
             if let Some(f) = format {
                 req = req.format(f.to_uppercase());
             }

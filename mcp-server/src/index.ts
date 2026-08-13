@@ -219,7 +219,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           },
           timezoneOffsetMinutes: {
             type: "number",
-            description: "Client timezone offset in minutes (e.g. -300 for EST), used for offset/recurrence date computation on rows that need it.",
+            description: "Client timezone offset in minutes (JS getTimezoneOffset() convention — positive for zones behind UTC, e.g. 300 for EST), used to interpret bare dueDate/scheduledDate/scheduledEndDate dates and for offset/recurrence computation on rows that need it. Defaults to this machine's own local offset if omitted.",
           },
         },
         required: ["projectId", "csv"],
@@ -686,8 +686,16 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         if (!args.csv) throw new Error("csv is required");
         const body: Record<string, unknown> = { csv: args.csv };
         if (args.format) body.format = args.format;
-        if (args.timezoneOffsetMinutes !== undefined)
-          body.timezoneOffsetMinutes = args.timezoneOffsetMinutes;
+        // Bare dates in the CSV (e.g. dueDate=2026-09-30) have no time component, so the server
+        // needs a timezone to interpret them correctly — otherwise it defaults to literal UTC,
+        // which can land a date on the wrong calendar day once viewed back in local time.
+        // Default to this machine's own offset (same minutes-to-add-to-local-to-reach-UTC
+        // convention the web UI's X-Tz-Offset-Minutes header already uses) if the caller didn't
+        // supply one.
+        body.timezoneOffsetMinutes =
+          args.timezoneOffsetMinutes !== undefined
+            ? args.timezoneOffsetMinutes
+            : new Date().getTimezoneOffset();
         result = await api("POST", `/projects/${args.projectId}/items/import`, body);
         break;
       }

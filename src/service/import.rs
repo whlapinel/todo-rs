@@ -3,7 +3,7 @@ use crate::service::error::ItemError;
 use crate::service::project_items::{self, CreateProjectItemParams};
 use crate::service::projects::require_project_member;
 use crate::storage::sqlite::{ItemRepo, ProjectRepo, TeamRepo};
-use chrono::{DateTime, NaiveDate, TimeZone, Utc};
+use chrono::{DateTime, Duration, NaiveDate, NaiveTime, Utc};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -33,17 +33,22 @@ fn err_result(row_number: i32, error: String) -> ImportItemResult {
 }
 
 /// `YYYY-MM-DD` or a Unix timestamp — the same convention `--due`/`--scheduled` already use
-/// (`todo-cli/src/helpers.rs::parse_date`), reimplemented here since that helper works in
-/// terms of the generated client's `DateTime` primitive, not a raw string to `chrono::DateTime<Utc>`
-/// (there's no existing server-side string-to-date parser; the JSON API boundary only ever
-/// converts an already-typed Smithy `Timestamp`).
-fn parse_csv_date(s: &str) -> Result<DateTime<Utc>, String> {
+/// (`todo-cli/src/helpers.rs::parse_date`). A Unix timestamp is already a precise instant, no
+/// timezone involved. A bare `YYYY-MM-DD` has no time component, so — mirroring the web UI's
+/// own `combine_local_to_utc` (e.g. `src/web_ui/project_tasks/mod.rs`) — it's interpreted as
+/// `default_time` in the *caller's* local time (per `tz_offset_minutes`, the same
+/// `X-Tz-Offset-Minutes`/JS-`getTimezoneOffset()` convention used everywhere else: minutes to
+/// *add* to local time to get UTC), not literal UTC midnight — otherwise a date near a
+/// timezone's midnight boundary lands on the wrong calendar day once displayed locally again.
+fn parse_csv_date(s: &str, tz_offset_minutes: i32, default_time: NaiveTime) -> Result<DateTime<Utc>, String> {
     if let Ok(secs) = s.parse::<i64>() {
         return DateTime::from_timestamp(secs, 0).ok_or_else(|| format!("invalid timestamp '{s}'"));
     }
-    NaiveDate::parse_from_str(s, "%Y-%m-%d")
-        .map(|d| Utc.from_utc_datetime(&d.and_hms_opt(0, 0, 0).unwrap()))
-        .map_err(|_| format!("invalid date '{s}' — use YYYY-MM-DD or a Unix timestamp"))
+    let naive_date = NaiveDate::parse_from_str(s, "%Y-%m-%d")
+        .map_err(|_| format!("invalid date '{s}' — use YYYY-MM-DD or a Unix timestamp"))?;
+    let naive = naive_date.and_time(default_time);
+    let as_utc = DateTime::<Utc>::from_naive_utc_and_offset(naive, Utc);
+    Ok(as_utc + Duration::minutes(tz_offset_minutes as i64))
 }
 
 /// No existing server-side bool-from-string convention to copy — this set
@@ -66,21 +71,36 @@ fn cell<'a>(record: &'a csv::StringRecord, headers: &HashMap<String, usize>, nam
         .filter(|s| !s.is_empty())
 }
 
+/// 23:59:59 — matches `src/web_ui/project_tasks/mod.rs::end_of_day` etc., the default a bare
+/// date implies for a *deadline*-shaped field (`dueDate`/`scheduledEndDate`).
+fn end_of_day() -> NaiveTime {
+    NaiveTime::from_hms_opt(23, 59, 59).unwrap()
+}
+
+/// 00:00:00 — the default a bare date implies for a *window-start*-shaped field
+/// (`scheduledDate`); a start defaulting to end-of-day would be backwards.
+fn start_of_day() -> NaiveTime {
+    NaiveTime::from_hms_opt(0, 0, 0).unwrap()
+}
+
 fn build_row_params(
     record: &csv::StringRecord,
     headers: &HashMap<String, usize>,
     project_id: &str,
+    tz_offset_minutes: i32,
 ) -> Result<CreateProjectItemParams, String> {
     let name = cell(record, headers, "name")
         .ok_or_else(|| "missing required column 'name' or empty value".to_string())?
         .to_string();
 
-    let due_date = cell(record, headers, "dueDate").map(parse_csv_date).transpose()?;
+    let due_date = cell(record, headers, "dueDate")
+        .map(|s| parse_csv_date(s, tz_offset_minutes, end_of_day()))
+        .transpose()?;
     let scheduled_date = cell(record, headers, "scheduledDate")
-        .map(parse_csv_date)
+        .map(|s| parse_csv_date(s, tz_offset_minutes, start_of_day()))
         .transpose()?;
     let scheduled_end_date = cell(record, headers, "scheduledEndDate")
-        .map(parse_csv_date)
+        .map(|s| parse_csv_date(s, tz_offset_minutes, end_of_day()))
         .transpose()?;
 
     let complete = cell(record, headers, "complete").map(parse_csv_bool).transpose()?;
@@ -184,7 +204,12 @@ pub async fn import_project_items(
             }
         };
 
-        let mut params = match build_row_params(&record, &headers, project_id) {
+        let mut params = match build_row_params(
+            &record,
+            &headers,
+            project_id,
+            timezone_offset_minutes.unwrap_or(0),
+        ) {
             Ok(p) => p,
             Err(msg) => {
                 results.push(err_result(row_number, msg));
@@ -378,6 +403,56 @@ mod tests {
         assert_eq!(results.len(), 2);
         assert!(results[0].success);
         assert!(results[1].success);
+    }
+
+    /// Regression test for a real bug report: importing `dueDate=2026-09-30` with no timezone
+    /// awareness landed on `2026-09-30T00:00:00Z`, which a US-EDT (UTC-4) viewer sees as
+    /// `2026-09-29T20:00:00-04:00` — the wrong calendar day. `tz_offset_minutes` (JS
+    /// `getTimezoneOffset()` convention: minutes to *add* to local time to reach UTC, so EDT is
+    /// `+240`) must shift a bare date's default end-of-day time into the correct UTC instant, the
+    /// same way `src/web_ui/project_tasks/mod.rs::combine_local_to_utc` already does for the
+    /// browser-submitted case.
+    #[tokio::test]
+    async fn import_project_items_interprets_bare_dates_in_the_callers_timezone() {
+        let mut projects = MockProjectRepo::new();
+        projects
+            .expect_get()
+            .returning(|id| Ok(test_project(id, "u1")));
+        projects
+            .expect_find_personal_project()
+            .returning(|_| Ok(None));
+
+        let mut repo = MockItemRepo::new();
+        repo.expect_create()
+            .withf(|item: &Item| {
+                item.due_date()
+                    == Some(
+                        chrono::DateTime::parse_from_rfc3339("2026-10-01T03:59:59Z")
+                            .unwrap()
+                            .with_timezone(&Utc),
+                    )
+            })
+            .times(1)
+            .returning(|item: &Item| Ok(item.id.clone()));
+
+        let teams = MockTeamRepo::new();
+
+        let csv_text = "name,dueDate\nEat donuts,2026-09-30\n";
+        let results = import_project_items(
+            &(Arc::new(repo) as Arc<dyn ItemRepo>),
+            &(Arc::new(projects) as Arc<dyn ProjectRepo>),
+            &(Arc::new(teams) as Arc<dyn TeamRepo>),
+            "u1",
+            "p1",
+            csv_text,
+            None,
+            Some(240), // US-EDT
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert!(results[0].success);
     }
 
     #[tokio::test]
