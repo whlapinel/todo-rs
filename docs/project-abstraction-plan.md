@@ -2265,6 +2265,121 @@ Five independently-landable sub-stages, same one-stage-per-session process as A/
   and that `prl`/the MCP tools' hard-require errors fire correctly and their
   `--project`/`projectId`-bearing calls still work end to end.
 
+  **Implementation notes:** Done, matching the plan closely. One correction to
+  this doc's own file-path references: the json_api handler modules actually
+  live at `src/json_api/` (`src/json_api/items.rs`, `src/json_api/team_items.rs`),
+  not `src/handlers/json_api/` as the top-of-file Touch-Point Checklist and
+  earlier stage text imply — likewise `src/web_ui/`, not `src/handlers/web_ui/`.
+  Neither `src/handlers/` directory exists in this repo; left for C5's doc pass
+  to correct throughout rather than fixed piecemeal here.
+
+  **Smithy side:** `item.smithy`'s `Item` resource and its `CreateItem`/
+  `GetItem`/`UpdateItem`/`DeleteItem`/`ListItems` operations (plus
+  `ListItemsInput`/`ListItemsOutput`) removed; `User`'s `resources: [Item]`
+  removed from `user.smithy`. `team.smithy`'s `TeamItem` resource and its
+  `CreateTeamItem`/`GetTeamItem`/`UpdateTeamItem`/`DeleteTeamItem`/
+  `ListTeamItems` operations (plus `ListTeamItemsInput`/`ListTeamItemsOutput`/
+  `TeamItems`/`TeamItemSummary`) removed; the same five names dropped from
+  `service.smithy`'s top-level `operations: [...]` list. `CreateTeamTemplate`/
+  `ListTeamTemplates` (a different resource concern, per this stage's own
+  scope note) are untouched and still registered.
+
+  One thing the plan didn't anticipate: `item.smithy`'s `Items`/`ItemSummary`
+  (the list/member shape) and `CreateTemplate`/`ListTemplates` — which the plan
+  never proposed removing — can't be deleted, because `ItemSummary` was
+  declared `structure ItemSummary for Item { ... }`, a mixin against the now-
+  gone `Item` resource. Converted `ItemSummary` to a plain structure with the
+  same fields spelled out explicitly (no `for Item`, no `$member` shorthand);
+  `Items`/`CreateTemplate`/`ListTemplates` themselves are otherwise untouched,
+  and `team.smithy`'s `CreateTeamTemplate`/`ListTeamTemplates` (which also
+  return `items: Items`) keep working unmodified since they never referenced
+  `TeamItemSummary`. All fields on the new plain `ItemSummary` are optional
+  (no `@required`), matching what the mixin already produced for every field
+  except `itemId`/`name`, which is an intentional, harmless widening — a `?`
+  producer for those two).
+
+  **Rust side:** `src/json_api/items.rs` kept — `list_items_due`/
+  `list_assigned_items` (the due/assigned queries, explicitly out of scope per
+  this stage's own bullet) still live there — but `create_item`/`update_item`/
+  `delete_item`/`get_item`/`list_items` and their `to_*_error` helpers were
+  deleted from it. `src/json_api/team_items.rs` was deleted outright (every
+  function in it was one of the five removed operations) and its `pub mod
+  team_items;` line dropped from `src/json_api/mod.rs`. `src/main.rs`: the
+  corresponding `use` imports and the five-line `.create_item(...)`/
+  `.create_team_item(...)` builder-chain blocks removed; `service::items.rs`/
+  `service::team_items.rs` themselves untouched, exactly as planned —
+  `service::project_items` still delegates into both.
+
+  **Dead code discovered, not fixed here (deferred, mirroring C1's own
+  `add_team_points` precedent):** removing the `json_api` callers left four
+  `ItemRepo` trait methods with zero remaining production call sites —
+  `list` (personal `list_items`' backing call), `list_team_items`,
+  `update_by_project`, and `list_due_team_items` (`update_by_project` still has
+  test-only callers in `storage/sqlite/items.rs`'s own test module, which
+  doesn't count as a production caller). None of these were in this stage's
+  planned scope — removing them would mean touching the `ItemRepo` trait
+  itself plus all three implementations (`sqlite.rs`/`memory.rs`/`dynamo.rs`),
+  a bigger and separately-reviewable change. Left as `cargo check`-flagged
+  dead code for a future cleanup pass to pick up (could fold into C4 or a note
+  for whoever revisits this).
+
+  **One fix beyond the plan's literal text, done because leaving it would
+  have shipped a broken script:** `scripts/smoke-test.sh` (the
+  `TODO_API_URL`/`TODO_API_TOKEN` live-server smoke test CLAUDE.md's own
+  Commands section documents) exercised the legacy `/api/teams/{teamId}/items`
+  endpoints exclusively — every request in it would have 404'd once this stage
+  landed. Repointed it to create a team, resolve its auto-created backing
+  project via `GET /api/users/{userId}/projects` (matching on `teamId`, since
+  there's no dedicated "project by team id" HTTP operation), and exercise
+  `/api/projects/{projectId}/items` instead — same create/get/list/update/
+  delete/verify-404-after-delete shape as before, just against the new
+  surface. Re-verified end to end against a throwaway server (see below).
+
+  **MCP tool schemas, beyond the plan's literal "ternary → throw" text:**
+  the plan's own wording only called for `args.projectId ? ... : ...` becoming
+  `if (!args.projectId) throw ...` in the five tool implementations. While
+  doing that, found `userId` had gone completely unused in all five case
+  bodies (it only ever fed the now-deleted personal-item branch) while the
+  tool schemas still listed it as `required`. Removed `userId` from all five
+  tools' (`list_items`/`get_item`/`create_item`/`update_item`/`delete_item`)
+  `inputSchema.properties`/`required`, added `projectId` to each `required`
+  array, and trimmed the now-inapplicable "works for both personal and
+  team-backed projects... userId is still required but ignored" phrasing from
+  each description — leaving a caller-facing required parameter that does
+  nothing would have been actively misleading. `list_items_due`/
+  `list_assigned_items` (no `--project`/`projectId` equivalent, per this
+  stage's own scope note) are untouched and still take `userId`.
+
+  **Testing:** `cargo test`: full suite still 211 passed, 0 failed — unchanged
+  from C2, confirming no service-layer test coverage was lost (none of it
+  lived in the deleted `json_api` files). `cargo check`/`cargo build`: clean
+  (only the pre-existing warning set plus the four newly-dead `ItemRepo`
+  methods noted above). `cd todo-cli && cargo check`: clean. `cd mcp-server &&
+  npm run build`: clean.
+
+  **Manual smoke test** (built the binary, ran against a throwaway SQLite DB,
+  migrations 10/11 applied cleanly): in `caddy` mode with `TODO_DEV_EMAIL` set,
+  confirmed `GET`/`POST /api/users/{id}/items` and `POST /api/teams/{id}/items`
+  all 404 (operations no longer exist at the routing layer), then confirmed
+  `POST`/`GET /api/projects/{id}/items` still work end to end against the
+  auto-created personal project. Built `prl` and confirmed, for each of
+  `list`/`add`/`done`/`delete`/`get`: omitting `--project` prints `error:
+  --project is required — the legacy personal Item API has been retired` and
+  exits non-zero, while passing `--project <personal-project-id>` succeeds
+  (created, listed, fetched, completed, and deleted the same item across the
+  five subcommands). Built the MCP server (`npm run build`) and drove it as a
+  real client over its actual stdio transport (`@modelcontextprotocol/sdk`'s
+  `Client`/`StdioClientTransport`, not a hand-rolled JSON-RPC shim) against
+  the same running server: `list_items`/`create_item` called with no
+  `projectId` both returned `isError: true` with the same client-side message
+  as `prl`'s; called with `projectId` set, both succeeded and the created item
+  round-tripped through a follow-up `list_items` call. Separately re-ran the
+  newly-repointed `scripts/smoke-test.sh` against a fresh throwaway server in
+  `caddy` mode (Bearer-token path, no `TODO_DEV_EMAIL`) — all seven assertions
+  (create team, resolve backing project, create/get/list/update/delete project
+  item, confirm 404 after delete) passed. Scratch DBs and server processes
+  cleaned up after verification. C4 is next.
+
 - **C4 — Drop the genuinely dead columns.** Depends on C1 (frees
   `team_members.points`, confirmed genuinely dead by C1's own implementation
   notes — nothing reads or writes it anymore, `list_members` was repointed to

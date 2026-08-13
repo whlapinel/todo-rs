@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Smoke test for team item API endpoints.
+# Smoke test for team-backed project item API endpoints.
 # Requires: curl, jq
 #
 # Usage:
@@ -15,7 +15,9 @@
 # Get a token from a running internal-mode server:
 #   Sign in via browser → visit /auth/token → copy the token value.
 #
-# The script creates a team, creates/gets/updates/deletes a team item, then
+# The script creates a team (which auto-creates its backing project — see
+# ensure_team_project in docs/project-abstraction-plan.md), creates/gets/
+# updates/deletes an item via the ProjectItem API scoped to that project, then
 # cleans up. It exits non-zero if any assertion fails.
 
 set -euo pipefail
@@ -51,7 +53,7 @@ api() {
     "$@"
 }
 
-echo "=== Team item smoke test against $API_URL (user: $USER_ID) ==="
+echo "=== Project item smoke test against $API_URL (user: $USER_ID) ==="
 echo
 
 # ── Create a team ─────────────────────────────────────────────────────────────
@@ -60,55 +62,61 @@ TEAM_ID=$(echo "$TEAM" | jq -r '.teamId')
 [[ -n "$TEAM_ID" && "$TEAM_ID" != "null" ]] || fail "create team — no teamId in response"
 pass "create team ($TEAM_ID)"
 
+# ── Resolve the team's auto-created backing project ─────────────────────────────
+PROJECTS=$(api GET "$API_URL/api/users/$USER_ID/projects")
+PROJECT_ID=$(echo "$PROJECTS" | jq -r --arg tid "$TEAM_ID" '.projects[] | select(.teamId == $tid) | .projectId')
+[[ -n "$PROJECT_ID" && "$PROJECT_ID" != "null" ]] || fail "resolve backing project — no project found for team $TEAM_ID"
+pass "resolve backing project ($PROJECT_ID)"
+
 cleanup() {
   # Best-effort: delete the item if it still exists, then leave the team.
   if [[ -n "${ITEM_ID:-}" ]]; then
-    api DELETE "$API_URL/api/teams/$TEAM_ID/items/$ITEM_ID" > /dev/null 2>&1 || true
+    api DELETE "$API_URL/api/projects/$PROJECT_ID/items/$ITEM_ID" > /dev/null 2>&1 || true
   fi
   api DELETE "$API_URL/api/users/$USER_ID/teams/$TEAM_ID/membership" > /dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
-# ── Create a team item ────────────────────────────────────────────────────────
-CREATE=$(api POST "$API_URL/api/teams/$TEAM_ID/items" \
+# ── Create a project item ────────────────────────────────────────────────────
+CREATE=$(api POST "$API_URL/api/projects/$PROJECT_ID/items" \
   -d '{"name":"smoke-test item","complete":false}')
 ITEM_ID=$(echo "$CREATE" | jq -r '.itemId')
-[[ -n "$ITEM_ID" && "$ITEM_ID" != "null" ]] || fail "create team item — no itemId in response"
-pass "create team item ($ITEM_ID)"
+[[ -n "$ITEM_ID" && "$ITEM_ID" != "null" ]] || fail "create project item — no itemId in response"
+pass "create project item ($ITEM_ID)"
 
-# ── Get the team item ─────────────────────────────────────────────────────────
-GET=$(api GET "$API_URL/api/teams/$TEAM_ID/items/$ITEM_ID")
+# ── Get the project item ─────────────────────────────────────────────────────
+GET=$(api GET "$API_URL/api/projects/$PROJECT_ID/items/$ITEM_ID")
 GOT_NAME=$(echo "$GET" | jq -r '.name')
-[[ "$GOT_NAME" == "smoke-test item" ]] || fail "get team item — expected name 'smoke-test item', got '$GOT_NAME'"
+[[ "$GOT_NAME" == "smoke-test item" ]] || fail "get project item — expected name 'smoke-test item', got '$GOT_NAME'"
 GOT_COMPLETE=$(echo "$GET" | jq -r '.complete')
-[[ "$GOT_COMPLETE" == "false" ]] || fail "get team item — expected complete=false, got '$GOT_COMPLETE'"
-pass "get team item"
+[[ "$GOT_COMPLETE" == "false" ]] || fail "get project item — expected complete=false, got '$GOT_COMPLETE'"
+pass "get project item"
 
-# ── List team items ───────────────────────────────────────────────────────────
-LIST=$(api GET "$API_URL/api/teams/$TEAM_ID/items")
+# ── List project items ───────────────────────────────────────────────────────
+LIST=$(api GET "$API_URL/api/projects/$PROJECT_ID/items")
 COUNT=$(echo "$LIST" | jq '.items | length')
-[[ "$COUNT" -ge 1 ]] || fail "list team items — expected ≥1 item, got $COUNT"
+[[ "$COUNT" -ge 1 ]] || fail "list project items — expected ≥1 item, got $COUNT"
 FOUND=$(echo "$LIST" | jq -r --arg id "$ITEM_ID" '.items[] | select(.itemId == $id) | .itemId')
-[[ "$FOUND" == "$ITEM_ID" ]] || fail "list team items — created item not in list"
-pass "list team items ($COUNT item(s))"
+[[ "$FOUND" == "$ITEM_ID" ]] || fail "list project items — created item not in list"
+pass "list project items ($COUNT item(s))"
 
-# ── Update the team item ──────────────────────────────────────────────────────
-api PUT "$API_URL/api/teams/$TEAM_ID/items/$ITEM_ID" \
+# ── Update the project item ──────────────────────────────────────────────────
+api PUT "$API_URL/api/projects/$PROJECT_ID/items/$ITEM_ID" \
   -d '{"name":"smoke-test item (updated)","complete":false}' > /dev/null
-UPDATED=$(api GET "$API_URL/api/teams/$TEAM_ID/items/$ITEM_ID")
+UPDATED=$(api GET "$API_URL/api/projects/$PROJECT_ID/items/$ITEM_ID")
 UPDATED_NAME=$(echo "$UPDATED" | jq -r '.name')
 [[ "$UPDATED_NAME" == "smoke-test item (updated)" ]] || \
-  fail "update team item — expected updated name, got '$UPDATED_NAME'"
-pass "update team item"
+  fail "update project item — expected updated name, got '$UPDATED_NAME'"
+pass "update project item"
 
-# ── Delete the team item ──────────────────────────────────────────────────────
-api DELETE "$API_URL/api/teams/$TEAM_ID/items/$ITEM_ID" > /dev/null
+# ── Delete the project item ──────────────────────────────────────────────────
+api DELETE "$API_URL/api/projects/$PROJECT_ID/items/$ITEM_ID" > /dev/null
 # Verify it's gone — expect a non-2xx response
 HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
   -H "Authorization: Bearer $TOKEN" \
-  "$API_URL/api/teams/$TEAM_ID/items/$ITEM_ID")
-[[ "$HTTP_STATUS" != "200" ]] || fail "delete team item — item still reachable after delete (HTTP 200)"
-pass "delete team item (confirmed gone, HTTP $HTTP_STATUS)"
+  "$API_URL/api/projects/$PROJECT_ID/items/$ITEM_ID")
+[[ "$HTTP_STATUS" != "200" ]] || fail "delete project item — item still reachable after delete (HTTP 200)"
+pass "delete project item (confirmed gone, HTTP $HTTP_STATUS)"
 ITEM_ID=""  # prevent cleanup from trying to delete again
 
 echo

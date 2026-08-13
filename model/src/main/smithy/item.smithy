@@ -9,277 +9,30 @@ enum ItemType {
     SIMPLE
 }
 
-resource Item {
-    identifiers: {
-        itemId: String
-        userId: String
-    }
-    properties: {
-        name: String
-        description: String
-        dueDate: Timestamp
-        scheduledDate: Timestamp
-        scheduledEndDate: Timestamp
-        complete: Boolean
-        recurrence: String
-        recurrenceBasis: String
-        hasDueTime: Boolean
-        hasScheduledTime: Boolean
-        hasEndTime: Boolean
-        parentItemId: String
-        hasChildren: Boolean
-        itemType: ItemType
-        eventType: String
-        dueOffsetDays: Integer
-        assignedToUserId: String
-        sourceEventId: String
-    }
-    read: GetItem
-    list: ListItems
-    create: CreateItem
-    update: UpdateItem
-    delete: DeleteItem
-}
-
-@http(method: "POST", uri: "/users/{userId}/items")
-operation CreateItem {
-    input := for Item {
-        @required
-        @httpLabel
-        $userId
-
-        @required
-        $name
-
-        $description
-
-        $dueDate
-
-        $scheduledDate
-
-        $scheduledEndDate
-
-        $complete
-
-        $recurrence
-
-        $recurrenceBasis
-
-        $hasDueTime
-
-        $hasScheduledTime
-
-        $hasEndTime
-
-        $parentItemId
-
-        $itemType
-
-        $eventType
-
-        $dueOffsetDays
-
-        $sourceEventId
-
-        @notProperty
-        timezoneOffsetMinutes: Integer
-    }
-
-    output := for Item {
-        @required
-        $itemId
-    }
-
-    errors: [
-        PeoplesRepublicOfListsError
-    ]
-}
-
-@readonly
-@http(method: "GET", uri: "/users/{userId}/items/{itemId}")
-operation GetItem {
-    input := for Item {
-        @required
-        @httpLabel
-        $itemId
-
-        @required
-        @httpLabel
-        $userId
-    }
-
-    output := for Item {
-        @required
-        $name
-
-        $description
-
-        $dueDate
-
-        $scheduledDate
-
-        $scheduledEndDate
-
-        @required
-        $complete
-
-        $recurrence
-
-        $recurrenceBasis
-
-        $hasDueTime
-
-        $hasScheduledTime
-
-        $hasEndTime
-
-        $parentItemId
-
-        $hasChildren
-
-        $itemType
-
-        $eventType
-
-        $dueOffsetDays
-
-        $assignedToUserId
-
-        $sourceEventId
-    }
-
-    errors: [
-        PeoplesRepublicOfListsError
-    ]
-}
-
-@idempotent
-@http(method: "PUT", uri: "/users/{userId}/items/{itemId}")
-operation UpdateItem {
-    input := for Item {
-        @required
-        @httpLabel
-        $userId
-
-        @required
-        @httpLabel
-        $itemId
-
-        @required
-        $name
-
-        $description
-
-        $dueDate
-
-        $scheduledDate
-
-        $scheduledEndDate
-
-        @required
-        $complete
-
-        $recurrence
-
-        $recurrenceBasis
-
-        $hasDueTime
-
-        $hasScheduledTime
-
-        $hasEndTime
-
-        $parentItemId
-
-        $itemType
-
-        $eventType
-
-        $dueOffsetDays
-
-        $sourceEventId
-
-        @notProperty
-        timezoneOffsetMinutes: Integer
-    }
-
-    output := {}
-
-    errors: [
-        PeoplesRepublicOfListsError
-    ]
-}
-
-@idempotent
-@http(method: "DELETE", uri: "/users/{userId}/items/{itemId}")
-operation DeleteItem {
-    input := for Item {
-        @required
-        @httpLabel
-        $userId
-
-        @required
-        @httpLabel
-        $itemId
-    }
-
-    output := {}
-
-    errors: [
-        PeoplesRepublicOfListsError
-    ]
-}
-
 list Items {
     member: ItemSummary
 }
 
-structure ItemSummary for Item {
-    $itemId
-    $name
-    $description
-    $dueDate
-    $scheduledDate
-    $scheduledEndDate
-    $complete
-    $recurrence
-    $recurrenceBasis
-    $hasDueTime
-    $hasScheduledTime
-    $hasEndTime
-    $parentItemId
-    $hasChildren
-    $itemType
-    $eventType
-    $dueOffsetDays
-    $assignedToUserId
-    $sourceEventId
-}
-
-@input
-structure ListItemsInput {
-    @required
-    @httpLabel
-    userId: String
-
-    @httpQuery("parentItemId")
+structure ItemSummary {
+    itemId: String
+    name: String
+    description: String
+    dueDate: Timestamp
+    scheduledDate: Timestamp
+    scheduledEndDate: Timestamp
+    complete: Boolean
+    recurrence: String
+    recurrenceBasis: String
+    hasDueTime: Boolean
+    hasScheduledTime: Boolean
+    hasEndTime: Boolean
     parentItemId: String
-}
-
-@output
-structure ListItemsOutput {
-    @required
-    items: Items
-}
-
-@readonly
-@http(method: "GET", uri: "/users/{userId}/items")
-operation ListItems {
-    input: ListItemsInput
-    output: ListItemsOutput
-    errors: [
-        PeoplesRepublicOfListsError
-    ]
+    hasChildren: Boolean
+    itemType: ItemType
+    eventType: String
+    dueOffsetDays: Integer
+    assignedToUserId: String
+    sourceEventId: String
 }
 
 @http(method: "POST", uri: "/users/{userId}/templates")

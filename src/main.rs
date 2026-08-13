@@ -21,10 +21,7 @@ use axum::{
 };
 use json_api::activity_log::{list_team_activity_log, undo_activity_log_entry};
 use json_api::invites::send_app_invite;
-use json_api::items::{
-    create_item, delete_item, get_item, list_assigned_items, list_items, list_items_due,
-    update_item,
-};
+use json_api::items::{list_assigned_items, list_items_due};
 use json_api::project_items::{
     create_project_item, delete_project_item, get_project_item, list_project_items,
     update_project_item,
@@ -32,9 +29,6 @@ use json_api::project_items::{
 use json_api::projects::{
     attach_team_to_project, create_project, delete_project, detach_team_from_project,
     get_project, list_project_members, list_projects, set_project_member_role, update_project,
-};
-use json_api::team_items::{
-    create_team_item, delete_team_item, get_team_item, list_team_items, update_team_item,
 };
 use json_api::team_templates::{create_team_template, list_team_templates};
 use json_api::teams::{
@@ -263,11 +257,6 @@ async fn main() {
         .get_user(get_user)
         .update_user(update_user)
         .list_users(list_users)
-        .create_item(create_item)
-        .get_item(get_item)
-        .update_item(update_item)
-        .delete_item(delete_item)
-        .list_items(list_items)
         .list_items_due(list_items_due)
         .list_assigned_items(list_assigned_items)
         .create_template(create_template)
@@ -282,11 +271,6 @@ async fn main() {
         .leave_team(leave_team)
         .set_team_member_role(set_team_member_role)
         .send_app_invite(send_app_invite)
-        .create_team_item(create_team_item)
-        .get_team_item(get_team_item)
-        .update_team_item(update_team_item)
-        .delete_team_item(delete_team_item)
-        .list_team_items(list_team_items)
         .create_team_template(create_team_template)
         .list_team_templates(list_team_templates)
         .list_team_activity_log(list_team_activity_log)

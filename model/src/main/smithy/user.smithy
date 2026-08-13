@@ -13,9 +13,6 @@ resource User {
     read: GetUser
     list: ListUsers
     update: UpdateUser
-    resources: [
-        Item
-    ]
     operations: [
         ListItemsDue
         ListAssignedItems

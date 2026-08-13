@@ -3,7 +3,6 @@ pub mod invites;
 pub mod items;
 pub mod project_items;
 pub mod projects;
-pub mod team_items;
 pub mod team_templates;
 pub mod teams;
 pub mod templates;

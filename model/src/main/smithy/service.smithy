@@ -12,11 +12,6 @@ service PeoplesRepublicOfLists {
         User
     ]
     operations: [
-        CreateTeamItem
-        GetTeamItem
-        UpdateTeamItem
-        DeleteTeamItem
-        ListTeamItems
         CreateTeamTemplate
         ListTeamTemplates
         ListTeamActivityLog

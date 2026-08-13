@@ -74,54 +74,49 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "list_items",
       description:
-        "List todo items for a user. Optionally filter by parent item to get sub-tasks. " +
-        "If projectId is given, lists that project's items instead (works for both personal and team-backed projects) — userId is still required but ignored in that case.",
+        "List a project's items. Optionally filter by parent item to get sub-tasks.",
       inputSchema: {
         type: "object",
         properties: {
-          userId: { type: "string", description: "The user's ID" },
+          projectId: {
+            type: "string",
+            description: "The project whose items to list.",
+          },
           parentItemId: {
             type: "string",
             description: "If provided, returns only children of this item",
           },
-          projectId: {
-            type: "string",
-            description: "If provided, list this project's items instead of the user's personal items.",
-          },
         },
-        required: ["userId"],
+        required: ["projectId"],
       },
     },
     {
       name: "get_item",
-      description:
-        "Get a single todo item by ID. If projectId is given, fetches from that project instead (works for both personal and team-backed projects) — userId is still required but ignored in that case.",
+      description: "Get a single todo item by ID from a project.",
       inputSchema: {
         type: "object",
         properties: {
-          userId: { type: "string" },
           itemId: { type: "string" },
           projectId: {
             type: "string",
-            description: "If provided, fetch from this project instead of the user's personal items.",
+            description: "The project the item belongs to.",
           },
         },
-        required: ["userId", "itemId"],
+        required: ["projectId", "itemId"],
       },
     },
     {
       name: "create_item",
       description:
-        "Create a new todo item. Supports due dates, recurrence rules (e.g. 'every Monday', 'every 2 weeks'), and nesting under a parent item. " +
+        "Create a new todo item in a project. Supports due dates, recurrence rules (e.g. 'every Monday', 'every 2 weeks'), and nesting under a parent item. " +
         "Recurrence is only valid on top-level items with no parentItemId/sourceEventId — a child item or an event-linked item (sourceEventId) uses dueOffsetDays instead, and setting recurrence alongside either is rejected. " +
-        "If projectId is given, creates in that project instead of the user's personal items — required in order to use assignedToUserId/points (only meaningful on a team-backed project).",
+        "assignedToUserId/points are only meaningful on a team-backed project.",
       inputSchema: {
         type: "object",
         properties: {
-          userId: { type: "string" },
           projectId: {
             type: "string",
-            description: "If provided, create in this project instead of the user's personal items. Required for assignedToUserId/points.",
+            description: "The project to create the item in.",
           },
           name: { type: "string", description: "Title of the todo item" },
           description: { type: "string", description: "Free-form notes, longer than name" },
@@ -194,29 +189,27 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           },
           assignedToUserId: {
             type: "string",
-            description: "Active member to assign this item to. Requires projectId on a team-backed project — rejected otherwise.",
+            description: "Active member to assign this item to. Only meaningful on a team-backed project.",
           },
           points: {
             type: "number",
-            description: "Points awarded on completion. Requires projectId on a team-backed project — rejected otherwise. Project admin only (silently dropped if the caller isn't an admin).",
+            description: "Points awarded on completion. Only meaningful on a team-backed project. Project admin only (silently dropped if the caller isn't an admin).",
           },
         },
-        required: ["userId", "name"],
+        required: ["projectId", "name"],
       },
     },
     {
       name: "update_item",
       description:
-        "Update a todo item. Marking a recurring item as complete will auto-create the next occurrence, carrying its child items over with deadlines recomputed from their dueOffsetDays. " +
-        "If projectId is given, updates within that project instead of the user's personal items — required in order to use assignedToUserId/points.",
+        "Update a todo item in a project. Marking a recurring item as complete will auto-create the next occurrence, carrying its child items over with deadlines recomputed from their dueOffsetDays.",
       inputSchema: {
         type: "object",
         properties: {
-          userId: { type: "string" },
           itemId: { type: "string" },
           projectId: {
             type: "string",
-            description: "If provided, update within this project instead of the user's personal items. Required for assignedToUserId/points.",
+            description: "The project the item belongs to.",
           },
           name: { type: "string" },
           description: {
@@ -254,31 +247,29 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           timezoneOffsetMinutes: { type: "number" },
           assignedToUserId: {
             type: "string",
-            description: "Active member to assign this item to. Requires projectId on a team-backed project — rejected otherwise.",
+            description: "Active member to assign this item to. Only meaningful on a team-backed project.",
           },
           points: {
             type: "number",
-            description: "Points awarded on completion. Requires projectId on a team-backed project — rejected otherwise. Project admin only (the server preserves the existing value if the caller isn't an admin).",
+            description: "Points awarded on completion. Only meaningful on a team-backed project. Project admin only (the server preserves the existing value if the caller isn't an admin).",
           },
         },
-        required: ["userId", "itemId", "name", "complete"],
+        required: ["projectId", "itemId", "name", "complete"],
       },
     },
     {
       name: "delete_item",
-      description:
-        "Delete a todo item and all its sub-tasks. If projectId is given, deletes from that project instead of the user's personal items — userId is still required but ignored in that case.",
+      description: "Delete a todo item and all its sub-tasks from a project.",
       inputSchema: {
         type: "object",
         properties: {
-          userId: { type: "string" },
           itemId: { type: "string" },
           projectId: {
             type: "string",
-            description: "If provided, delete from this project instead of the user's personal items.",
+            description: "The project the item belongs to.",
           },
         },
-        required: ["userId", "itemId"],
+        required: ["projectId", "itemId"],
       },
     },
     {
@@ -743,25 +734,31 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         break;
 
       case "list_items": {
+        if (!args.projectId) {
+          throw new Error(
+            "projectId is required — the legacy personal Item API has been retired"
+          );
+        }
         const qs = args.parentItemId
           ? `?parentItemId=${encodeURIComponent(args.parentItemId as string)}`
           : "";
-        result = args.projectId
-          ? await api("GET", `/projects/${args.projectId}/items${qs}`)
-          : await api("GET", `/users/${args.userId}/items${qs}`);
+        result = await api("GET", `/projects/${args.projectId}/items${qs}`);
         break;
       }
 
       case "get_item":
-        result = args.projectId
-          ? await api("GET", `/projects/${args.projectId}/items/${args.itemId}`)
-          : await api("GET", `/users/${args.userId}/items/${args.itemId}`);
+        if (!args.projectId) {
+          throw new Error(
+            "projectId is required — the legacy personal Item API has been retired"
+          );
+        }
+        result = await api("GET", `/projects/${args.projectId}/items/${args.itemId}`);
         break;
 
       case "create_item": {
-        if ((args.assignedToUserId !== undefined || args.points !== undefined) && !args.projectId) {
+        if (!args.projectId) {
           throw new Error(
-            "assignedToUserId/points require projectId — assignment and points only exist on team-backed projects"
+            "projectId is required — the legacy personal Item API has been retired"
           );
         }
         const body: Record<string, unknown> = { name: args.name };
@@ -782,20 +779,16 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         if (args.sourceEventId) body.sourceEventId = args.sourceEventId;
         if (args.timezoneOffsetMinutes !== undefined)
           body.timezoneOffsetMinutes = args.timezoneOffsetMinutes;
-        if (args.projectId) {
-          if (args.assignedToUserId) body.assignedToUserId = args.assignedToUserId;
-          if (args.points !== undefined) body.points = args.points;
-          result = await api("POST", `/projects/${args.projectId}/items`, body);
-        } else {
-          result = await api("POST", `/users/${args.userId}/items`, body);
-        }
+        if (args.assignedToUserId) body.assignedToUserId = args.assignedToUserId;
+        if (args.points !== undefined) body.points = args.points;
+        result = await api("POST", `/projects/${args.projectId}/items`, body);
         break;
       }
 
       case "update_item": {
-        if ((args.assignedToUserId !== undefined || args.points !== undefined) && !args.projectId) {
+        if (!args.projectId) {
           throw new Error(
-            "assignedToUserId/points require projectId — assignment and points only exist on team-backed projects"
+            "projectId is required — the legacy personal Item API has been retired"
           );
         }
         const body: Record<string, unknown> = {
@@ -818,20 +811,19 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         if (args.sourceEventId !== undefined) body.sourceEventId = args.sourceEventId;
         if (args.timezoneOffsetMinutes !== undefined)
           body.timezoneOffsetMinutes = args.timezoneOffsetMinutes;
-        if (args.projectId) {
-          if (args.assignedToUserId) body.assignedToUserId = args.assignedToUserId;
-          if (args.points !== undefined) body.points = args.points;
-          result = await api("PUT", `/projects/${args.projectId}/items/${args.itemId}`, body);
-        } else {
-          result = await api("PUT", `/users/${args.userId}/items/${args.itemId}`, body);
-        }
+        if (args.assignedToUserId) body.assignedToUserId = args.assignedToUserId;
+        if (args.points !== undefined) body.points = args.points;
+        result = await api("PUT", `/projects/${args.projectId}/items/${args.itemId}`, body);
         break;
       }
 
       case "delete_item":
-        result = args.projectId
-          ? await api("DELETE", `/projects/${args.projectId}/items/${args.itemId}`)
-          : await api("DELETE", `/users/${args.userId}/items/${args.itemId}`);
+        if (!args.projectId) {
+          throw new Error(
+            "projectId is required — the legacy personal Item API has been retired"
+          );
+        }
+        result = await api("DELETE", `/projects/${args.projectId}/items/${args.itemId}`);
         break;
 
       case "list_items_due": {
