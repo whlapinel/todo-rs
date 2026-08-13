@@ -1840,6 +1840,122 @@ stage's own scope — B7 is next.
 
 **Verify:** manual tool-call smoke test via this repo's own `.mcp.json`.
 
+**Implementation notes:** Done, matching the plan closely and following B6's own
+additive-parameter precedent rather than replacing anything. `mcp-server/src/index.ts`
+(the only source file — this server has no service/storage layer of its own, it's a
+thin fetch wrapper over `/api`) gained nine new tools mirroring `prl projects`' exact
+six-subcommand surface plus the three CRUD operations `prl projects` deliberately
+didn't expose (`get`/`update`/`delete` — the plan's "list/create/attach-team/
+detach-team/members/set-role" enumeration was CLI-specific per B6's own notes, not a
+ceiling on what the MCP surface should offer, so all nine `project.smithy` operations
+got a tool): `list_projects`/`create_project`/`get_project`/`update_project`/
+`delete_project`/`list_project_members`/`set_project_member_role`/
+`attach_team_to_project`/`detach_team_from_project`. Each is a direct one-call `api()`
+wrapper, no client-side logic beyond URL construction — same shape as every existing
+tool in this file.
+
+**Item tools repointed via an additive `projectId` parameter, not new parallel
+tools** — deliberately mirroring B6's `--project` flag choice (additive per-variant
+parameter, existing behavior unchanged when omitted) rather than the plan bullet's
+literal "repoint" wording, which would have meant either a breaking change to five
+existing tool schemas' semantics or a second parallel set of `project_*` tools.
+`list_items`/`get_item`/`create_item`/`update_item`/`delete_item` (the same five `prl
+items` subcommands B6 repointed, not the seven-command full list) each gained an
+optional `projectId: string` property; the `switch` case for each now does
+`args.projectId ? api(..., /projects/${projectId}/items...) : api(..., /users/${userId}/items...)`
+— `userId` stays `required` on every schema (unchanged) even though it's ignored on
+the `projectId` branch, since removing it would be a breaking schema change for the
+personal-item call shape these tools already support. `list_items_due`/
+`list_assigned_items` got no `projectId` variant, matching `prl items due`/`assigned`'s
+own precedent exactly (both are inherently cross-project queries with no
+`ProjectItem`-surface equivalent — see B4's own scope notes).
+
+**`create_item`/`update_item` gained `assignedToUserId`/`points`, rejected client-side
+without `projectId`** — same guard shape as B6's `--assign`/`--points`-require-
+`--project` check, thrown as a plain `Error` (caught by the existing top-level
+`try`/`catch` in the `CallToolRequestSchema` handler, which every tool call already
+routes through, so no new error-handling path was needed): `"assignedToUserId/points
+require projectId — assignment and points only exist on team-backed projects"`. Both
+fields are only added to the request body when `args.projectId` is truthy — omitted
+entirely on the personal-item branch, matching `CreateItemInput`/`UpdateItemInput`
+having no such fields at all (same reasoning B6 gave for why this is what actually
+resolves the "no team item support" gap on this side too).
+
+**Manual smoke test performed as direct `/api` HTTP calls (curl with a minted bearer
+token), not through an actual MCP client** — sufficient because `mcp-server/src/
+index.ts` has zero logic beyond URL/body construction per tool (confirmed by reading
+the diff before deciding this was adequate: every new `case` is a one-line `api(...)`
+call or a straight ternary between two, so exercising the exact HTTP calls each tool
+issues verifies the tool's behavior completely; an actual stdio MCP round-trip would
+only additionally exercise the SDK's request/response framing, which every existing
+tool in this file already relies on unchanged). Built the server binary (already
+current — B7 touches no Rust/Smithy code, `task codegen` not re-run), ran it against a
+scratch copy of the repo-root `todo.db` (`TODO_AUTH_MODE=caddy` + `TODO_DEV_EMAIL`,
+migrations 10/11 applied cleanly), minted a token, and exercised: `GET
+/users/:id/projects` (`list_projects`'s call) confirmed the pre-existing "Personal"
+project; `create_project` → new personal project; `create_item`/`create_item`-with-
+`points` on it via `POST /projects/:id/items` — confirmed `points` is silently dropped
+on a personal-project item (no `points` field in the `GetProjectItem` response),
+matching `service::project_items`' documented personal-branch behavior; **found that
+`list_project_items`/`get_project_item` came back "not found" for these items** —
+tracked down to the already-documented, pre-existing gap in B2c/B1's own implementation
+notes ("`find_personal_project` — arbitrary pick if a user has more than one personal
+project"): `create_project_item`'s delegation into `service::items::create_item`
+resolves `project_id` via `find_personal_project(user_id)`, which doesn't know or care
+which of a user's *several* personal projects the caller actually asked for on the
+`ProjectItem` surface — it silently landed the item on the user's original
+auto-created "Personal" project instead of the newly-created one. Confirmed this is
+not a B7-introduced bug (re-read `service::project_items::create_project_item` and
+`service::items::create_item` — neither has changed since B2c/B4) by re-running the
+same create/list/get sequence scoped to the *original* "Personal" project id instead,
+where everything worked correctly (items appeared in `ListProjectItems`, `GetProjectItem`
+succeeded). Not fixed here — same accepted-gap class as every prior stage's own
+"which personal project" notes, out of scope for an MCP-wrapper stage; flagged here
+since this is the first time it was actually hit through a real multi-personal-project
+scenario rather than reasoned about in the abstract.
+
+Continued smoke test on the original "Personal" project: `update_item` (rename +
+complete) and `delete_item` via `projectId` both round-tripped correctly. Team-backed
+path: `create_team` (confirmed `ensure_team_project` fired — its project appeared in
+`list_projects` immediately); `create_item` with `assignedToUserId`+`points=25` on the
+team project → `get_item` confirmed both landed; `update_item` completing it → checked
+the legacy `GET /teams/:id/activity-log` (this MCP server has no `project_id`-scoped
+activity endpoint of its own — `list_team_activity_log`/`undo_activity_log_entry` are
+still legacy-`teamId`-keyed tools, unchanged by this stage and out of its scope) and
+confirmed a `pointsDelta: 25, reversed: false` entry, proving the award path works
+identically through the new `projectId` branch. `list_project_members` correctly
+showed `points: 0` for the same user — expected, not a bug: B5a's own implementation
+notes already established that points are tracked via the legacy `team_members`/
+`activity_log` system, not `project_members.points`, so this MCP tool faithfully
+reflects a column that's real but not currently written to by anything.
+`set_project_member_role`/`attach_team_to_project`/`detach_team_from_project` were
+each verified on a **freshly created** project+team pair (not the one already exercised
+above) after an initial false-positive: a first attempt against the already-used
+project hit `"you are not an active member of this project's team"` on `attach`, traced
+to a shell-scripting mistake in the smoke test itself (`$teamId` was unset in that
+particular script invocation, so the PUT silently hit `/projects/:id/team/` with an
+empty path segment, writing `team_id = ''` instead of a real id or `NULL` —
+confirmed by direct `sqlite3` inspection showing `typeof(team_id) = 'text', length = 0`
+on the corrupted row) — not a server-side bug; re-run with correctly-scoped shell
+variables on a clean project round-tripped attach → get (teamId present) → detach →
+get (teamId absent, real `NULL` per `typeof`) → re-attach → get (teamId present again)
+with zero errors, confirming `AttachTeamToProject`/`DetachTeamFromProject` work
+correctly end-to-end via the exact HTTP calls these two new tools issue. Scratch DB and
+server process cleaned up after verification.
+
+`cargo test`/`cargo check`: not run — this stage touched no Rust code. `npm run build`
+(`mcp-server/`): clean, `tsc` reported zero errors. `CLAUDE.md` updated: the MCP Server
+section gained a paragraph on the nine new project tools and the repointed item tools
+(mirroring the CLI section's own `prl projects`/`--project` paragraph), and the "MCP
+server has no Project support" Known Issues bullet — the last entry in that section —
+was removed along with the now-empty "## Known Issues" heading itself, since this was
+its only remaining item.
+
+This closes out Stage B (B1-B7) in full. Stage C (retiring the legacy `Item`/`TeamItem`
+surface and dual-write, dropping now-superseded columns, reworking the
+`TODO_BOOTSTRAP_ADMIN_TEAM_ID` bootstrap) is next, not yet planned in detail per this
+doc's own "Stage B/C are not planned in detail here" note from the top of the file.
+
 ---
 
 Stage C (already sketched earlier in this doc) then retires: legacy
