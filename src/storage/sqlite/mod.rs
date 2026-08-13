@@ -1,12 +1,15 @@
 pub mod activity_log;
+pub mod event_series;
 pub mod projects;
 pub mod teams;
 pub mod users;
 pub mod items;
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use sqlx::{Row, SqlitePool};
 use crate::domain::{
     activity_log::ActivityLogEntry,
+    event_series::{EventOccurrence, EventSeries},
     item::{Item, ItemKind, ItemType, Recurrence, Schedule, TeamAssignment},
     project::Project,
     team::{Team, TeamRole},
@@ -270,6 +273,53 @@ pub trait ActivityLogRepo: Send + Sync {
     async fn mark_reversed(&self, entry_id: &str) -> Result<(), RepoError>;
 }
 
+/// See docs/recurring-events-virtual-occurrences-rough-plan.md's staged breakdown,
+/// stage 2. Not yet called from anywhere in the running app — no service layer, no
+/// HTTP surface (that starts at stage 3/4).
+#[cfg_attr(test, mockall::automock)]
+#[async_trait]
+pub trait EventSeriesRepo: Send + Sync {
+    /// Ignores `series.id` and generates a fresh one server-side, same convention
+    /// as `ItemRepo::create`/`ProjectRepo::create`.
+    async fn create_series(&self, series: &EventSeries) -> Result<String, RepoError>;
+    async fn get_series(&self, series_id: &str) -> Result<EventSeries, RepoError>;
+    async fn list_series_for_project(&self, project_id: &str) -> Result<Vec<EventSeries>, RepoError>;
+    async fn get_occurrence(
+        &self,
+        series_id: &str,
+        occurrence_date: DateTime<Utc>,
+    ) -> Result<Option<EventOccurrence>, RepoError>;
+    /// Upserts the `(series_id, occurrence_date)` row with a materialized
+    /// `item_id`, clearing any prior `is_exdate` — the write
+    /// `get_or_materialize_occurrence` (stage 3) calls the first time a virtual
+    /// occurrence is touched.
+    async fn record_materialized_occurrence(
+        &self,
+        series_id: &str,
+        occurrence_date: DateTime<Utc>,
+        item_id: &str,
+    ) -> Result<(), RepoError>;
+    /// Upserts the `(series_id, occurrence_date)` row with `is_exdate = true` — the
+    /// EXDATE-equivalent "skip this date" marker. Leaves any existing `item_id`
+    /// untouched; whether an already-materialized occurrence's `items` row should be
+    /// deleted when skipped is an open call deferred to stage 6, not decided here.
+    async fn mark_exdate(
+        &self,
+        series_id: &str,
+        occurrence_date: DateTime<Utc>,
+    ) -> Result<(), RepoError>;
+    /// Only returns rows that exist in `event_occurrences` (materialized or
+    /// exdate) — purely virtual dates within the range have no row and aren't
+    /// included here; callers combine this with `recurrence::occurrences_between`
+    /// to get the full picture.
+    async fn list_occurrences_between(
+        &self,
+        series_id: &str,
+        range_start: DateTime<Utc>,
+        range_end: DateTime<Utc>,
+    ) -> Result<Vec<EventOccurrence>, RepoError>;
+}
+
 fn db_err(e: sqlx::Error) -> RepoError {
     RepoError::Internal(e.to_string())
 }
@@ -517,6 +567,34 @@ pub async fn create_pool(url: &str) -> Result<SqlitePool, sqlx::Error> {
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_project_members_user_id ON project_members (user_id)")
         .execute(&pool)
         .await?;
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS event_series (
+            id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            description TEXT,
+            event_type TEXT,
+            recurrence TEXT NOT NULL,
+            anchor_date INTEGER NOT NULL
+        )",
+    )
+    .execute(&pool)
+    .await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_event_series_project_id ON event_series (project_id)")
+        .execute(&pool)
+        .await?;
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS event_occurrences (
+            series_id TEXT NOT NULL,
+            occurrence_date INTEGER NOT NULL,
+            item_id TEXT,
+            is_exdate INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (series_id, occurrence_date)
+        )",
+    )
+    .execute(&pool)
+    .await?;
     // idx_items_project_id is deliberately NOT created here — see add_projects.rs's
     // doc comment: an index on a column added to an *existing* table via a migration
     // must live inside that migration, not the baseline, since baseline indexes run

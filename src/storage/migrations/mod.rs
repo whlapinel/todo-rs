@@ -1,4 +1,5 @@
 mod activity_log;
+mod add_event_series;
 mod add_item_description;
 mod add_item_points;
 mod add_item_source_event_id;
@@ -12,6 +13,7 @@ mod scheduled_end_date;
 mod team_member_points;
 
 use activity_log::ActivityLog;
+use add_event_series::AddEventSeries;
 use add_item_description::AddItemDescription;
 use add_item_points::AddItemPoints;
 use add_item_source_event_id::AddItemSourceEventId;
@@ -71,6 +73,7 @@ fn all_migrations() -> Vec<Box<dyn Migration>> {
         Box::new(AddProjects),
         Box::new(BackfillProjects),
         Box::new(DropTeamMemberPoints),
+        Box::new(AddEventSeries),
     ]
 }
 
@@ -259,6 +262,32 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
+        sqlx::query(
+            "CREATE TABLE event_series (
+                id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                description TEXT,
+                event_type TEXT,
+                recurrence TEXT NOT NULL,
+                anchor_date INTEGER NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE event_occurrences (
+                series_id TEXT NOT NULL,
+                occurrence_date INTEGER NOT NULL,
+                item_id TEXT,
+                is_exdate INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (series_id, occurrence_date)
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         pool
     }
 
@@ -407,7 +436,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 12);
+        assert_eq!(applied_count, 13);
     }
 
     #[tokio::test]
@@ -420,7 +449,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 12);
+        assert_eq!(applied_count, 13);
     }
 
     #[tokio::test]
@@ -434,6 +463,6 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 12);
+        assert_eq!(applied_count, 13);
     }
 }
