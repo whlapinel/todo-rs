@@ -156,17 +156,6 @@ pub trait TeamRepo: Send + Sync {
         user_id: &str,
         role: TeamRole,
     ) -> Result<(), RepoError>;
-    /// Adds `delta` (negative to claw back) to `user_id`'s point balance on `team_id`,
-    /// returning the resulting balance. See CLAUDE.md's Points plan, Stage 6 —
-    /// completion awards a positive delta, reversal (automatic on un-complete, or via
-    /// the manual undo endpoint for recurring items) applies the negation of whatever
-    /// the originating `activity_log` entry recorded.
-    async fn add_team_points(
-        &self,
-        team_id: &str,
-        user_id: &str,
-        delta: i32,
-    ) -> Result<i64, RepoError>;
     async fn invite(
         &self,
         team_id: &str,
@@ -226,7 +215,8 @@ pub trait ProjectRepo: Send + Sync {
     /// docs/project-abstraction-plan.md.
     async fn count_active_admins(&self, project_id: &str) -> Result<i64, RepoError>;
     /// Adds `delta` (negative to claw back) to `user_id`'s point balance on
-    /// `project_id`, returning the resulting balance — mirrors `add_team_points`.
+    /// `project_id`, returning the resulting balance — the sole point-balance write
+    /// path since stage C4 removed `TeamRepo::add_team_points`/`team_members.points`.
     async fn add_project_points(
         &self,
         project_id: &str,
@@ -466,7 +456,6 @@ pub async fn create_pool(url: &str) -> Result<SqlitePool, sqlx::Error> {
             status TEXT NOT NULL DEFAULT 'PENDING',
             invited_by TEXT,
             role TEXT NOT NULL DEFAULT 'member',
-            points INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (team_id, user_id)
         )",
     )

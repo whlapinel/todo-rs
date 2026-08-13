@@ -198,26 +198,6 @@ impl TeamRepo for SqliteTeamRepo {
         if rows == 0 { Err(not_found()) } else { Ok(()) }
     }
 
-    async fn add_team_points(
-        &self,
-        team_id: &str,
-        user_id: &str,
-        delta: i32,
-    ) -> Result<i64, RepoError> {
-        sqlx::query(
-            "UPDATE team_members SET points = points + ? WHERE team_id = ? AND user_id = ? \
-             RETURNING points",
-        )
-        .bind(delta)
-        .bind(team_id)
-        .bind(user_id)
-        .fetch_optional(&self.0)
-        .await
-        .map_err(db_err)?
-        .map(|row| row.get("points"))
-        .ok_or_else(not_found)
-    }
-
     async fn invite(
         &self,
         team_id: &str,
@@ -366,7 +346,6 @@ mod tests {
                 status TEXT NOT NULL DEFAULT 'PENDING',
                 invited_by TEXT,
                 role TEXT NOT NULL DEFAULT 'member',
-                points INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (team_id, user_id)
             )",
         )
@@ -541,11 +520,11 @@ mod tests {
     }
 
     /// Stage C1 (docs/project-abstraction-plan.md): points authority moved off
-    /// `team_members.points` onto the backing project's `project_members.points` —
-    /// `list_members` (and everything built on it: `member_points`, the legacy
-    /// `ListTeamMembers` JSON API operation, `prl teams members`, `teams.rs`'s own
-    /// member listing) must read the live, project-sourced balance, not the
-    /// frozen `team_members` one nothing writes to anymore.
+    /// `team_members.points` (dropped entirely in stage C4 — the column no longer
+    /// exists) onto the backing project's `project_members.points` — `list_members`
+    /// (and everything built on it: `member_points`, the legacy `ListTeamMembers`
+    /// JSON API operation, `prl teams members`, `teams.rs`'s own member listing) must
+    /// read the live, project-sourced balance.
     #[tokio::test]
     async fn list_members_sources_points_from_the_teams_backing_project() {
         let pool = test_pool().await;
@@ -556,8 +535,8 @@ mod tests {
             .await
             .unwrap();
         sqlx::query(
-            "INSERT INTO team_members (team_id, user_id, status, role, points) \
-             VALUES ('team1', 'member1', 'ACTIVE', 'member', 999)",
+            "INSERT INTO team_members (team_id, user_id, status, role) \
+             VALUES ('team1', 'member1', 'ACTIVE', 'member')",
         )
         .execute(&pool)
         .await
@@ -573,7 +552,6 @@ mod tests {
 
         let members = repo.list_members("team1").await.unwrap();
         assert_eq!(members.len(), 1);
-        // The stale team_members.points value (999) must never surface here.
         assert_eq!(members[0].points, 42);
     }
 
@@ -587,8 +565,8 @@ mod tests {
             .await
             .unwrap();
         sqlx::query(
-            "INSERT INTO team_members (team_id, user_id, status, role, points) \
-             VALUES ('team1', 'member1', 'ACTIVE', 'member', 999)",
+            "INSERT INTO team_members (team_id, user_id, status, role) \
+             VALUES ('team1', 'member1', 'ACTIVE', 'member')",
         )
         .execute(&pool)
         .await

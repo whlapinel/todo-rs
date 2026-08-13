@@ -2422,6 +2422,83 @@ Five independently-landable sub-stages, same one-stage-per-session process as A/
   storage::migrations` idempotency test, matching every prior migration's
   precedent.
 
+  **Implementation notes:** Done, with a real scope correction to this bullet's
+  own text, confirmed with the user before writing the migration (a genuine
+  fork, not a recommend-and-flag call, since it affects a live production
+  schema/API). The plan's premise that `activity_log.team_id` is "superseded by
+  `project_id` since B1/B2 backfilled and cut over every read/write" turned out
+  to be wrong: `list_activity_for_team` still reads `team_id`, and it backs the
+  legacy `ListTeamActivityLog`/`UndoActivityLogEntry` JSON API operations — which
+  C3 explicitly, deliberately left untouched ("not part of the `Item`/`TeamItem`
+  resource... revisit only if a `project_id`-native activity-log surface is ever
+  built") — still called today by `prl teams activity`/`prl teams undo-activity`
+  and the MCP `list_team_activity_log`/`undo_activity_log_entry` tools.
+  `log_activity` also still writes `team_id` on every insert (`NOT NULL`).
+  Dropping the column now would have broken all of that outright, not just left
+  stale data around (SQLite errors on a query referencing a dropped column,
+  unlike the "frozen but harmless" `team_members.points` case C1 already
+  handled). Presented three options to the user (drop only `team_members.points`
+  now / repoint `list_activity_for_team` onto `project_id` internally then drop
+  both / retire `ListTeamActivityLog`/`UndoActivityLogEntry` now then drop both)
+  — user chose the first, smallest option. **This sub-stage therefore only drops
+  `team_members.points`.** `activity_log.team_id` stays, fully live, until a
+  future stage repoints or retires the legacy team-keyed activity-log surface —
+  not scheduled here, no stage number assigned.
+
+  New migration `src/storage/migrations/drop_team_member_points.rs`
+  (`DropTeamMemberPoints`, version `12`), registered in `all_migrations()`.
+  Guards the `ALTER TABLE team_members DROP COLUMN points` with a
+  `column_exists` check first — the inverse of every prior migration's
+  ADD-COLUMN guard, needed for the same reason (SQLite has no `DROP COLUMN IF
+  EXISTS`) and to stay a no-op against a fresh DB, whose baseline `CREATE TABLE
+  IF NOT EXISTS team_members` (`src/storage/sqlite/mod.rs`) no longer declares
+  the column at all. `TeamRepo::add_team_points`/`SqliteTeamRepo::add_team_points`
+  removed from the trait and its sole impl, per the plan — the doc comment on
+  `ProjectRepo::add_project_points` that referenced it by name was reworded
+  rather than left dangling.
+
+  **Test fallout:** `teams.rs`'s own `test_pool()` (sqlite-level tests) and the
+  two `list_members_*` tests that inserted an explicit stale `999` into
+  `team_members.points` to prove it doesn't leak (C1's own regression test) both
+  had `points` removed from their `CREATE TABLE`/`INSERT` statements — there's no
+  longer a column for a stale value to leak *from*, so the test now just asserts
+  the balance is project-sourced, without the "stale value must not surface"
+  framing. `storage/migrations/mod.rs`'s `current_schema_pool()` (the "already on
+  the current/fresh-baseline schema" fixture) had `points` dropped from its
+  synthetic `team_members` table to keep matching the real baseline; all three
+  `applied_count` assertions across that file's migration-pipeline tests bumped
+  from 11 to 12. 2 new tests in `drop_team_member_points.rs` itself (drops when
+  present; idempotent against a table already missing it).
+
+  `cargo test`: 213/213 passing (211 prior + 2 new), zero regressions. `cargo
+  check`: clean — only the same pre-existing dead-code warnings as C3 (plus
+  `add_team_points` itself no longer flagged, since it's gone rather than
+  unused).
+
+  **Verified against real prod-shaped data**, mirroring B1's own process: copied
+  the repo-root `todo.db` snapshot (still on migration version 9, per B1's own
+  notes — untouched since) to a scratch path, ran the actual server binary
+  against the copy. Versions 10, 11, and 12 all applied cleanly in sequence;
+  confirmed via direct `sqlite3` inspection that `team_members` lost its `points`
+  column while all 4 existing rows kept their `role`/`status` intact, and that
+  `activity_log` kept `team_id` (schema and index both untouched). Ran the binary
+  a second time against the same migrated copy — no "applied migration" log
+  lines, confirming idempotency against real data. Separately, against a
+  fresh-from-scratch DB (all 12 migrations from empty), ran a full functional
+  round trip over HTTP (`caddy` mode, `TODO_DEV_EMAIL`): created a team
+  (`ensure_team_project` backed it with a project), created a points-bearing
+  item via the `ProjectItem` API (`POST /api/projects/{id}/items`, `points: 50`,
+  self-assigned), completed it and confirmed `project_members.points` went to 50
+  via direct `sqlite3` inspection; called the legacy, deliberately-untouched
+  `GET /api/teams/{teamId}/activity-log` and confirmed it still returns the
+  entry correctly (proving `activity_log.team_id` staying live was the right
+  call); called `PUT /api/teams/{teamId}/activity-log/{entryId}/undo` and
+  confirmed the balance reversed back to 0. Scratch DBs and server processes
+  cleaned up after verification; the original `todo.db` in the repo root was
+  never written to. No Smithy/CLI/MCP/web-UI changes, per this stage's own
+  scope. C4.5 (the still-open `team_members.role` question) and C5 remain —
+  C5 is next; C4.5 has no assigned stage number, per the still-open call above.
+
 - **C5 — Doc/cleanup pass.** `CLAUDE.md`: remove the `@httpBearerAuth`-adjacent
   and Auth-section prose that still describes `team_members.role`/`points` as
   live (repoint to `project_members`); remove the Recurrence/Events/Points

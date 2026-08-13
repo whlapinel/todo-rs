@@ -1195,7 +1195,7 @@ mod tests {
         // true — no false->true transition happens, so `just_completed` never
         // fires. The bare `ctx(teams)` helper's activity_log has no expectations
         // set at all, so this test doubles as an assertion that log_activity/
-        // add_team_points are never called on this path.
+        // add_project_points are never called on this path.
         let mut items = MockItemRepo::new();
         items.expect_get_team_item().returning(|_, _| {
             Ok(Item {
