@@ -1,4 +1,4 @@
-# Auth Troubleshooting
+# Auth Troubleshooting (Complete - saved for posterity)
 
 ## Issue 1 — "Missing state cookie" during internal-mode OAuth callback
 
