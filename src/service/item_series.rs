@@ -140,6 +140,22 @@ fn validate_series_item_type(item_type: ItemKind) -> Result<(), ItemError> {
     Ok(())
 }
 
+/// Stage 7c: `event_type` only means anything on an `Event`-typed series — a Task series has
+/// no `event_type` slot on the `Item` it materializes (`ItemType::Task` carries no such
+/// field, see `domain::item::build_item_type`/`ItemType`), so `get_or_materialize_occurrence`
+/// would silently drop it forever rather than erroring. `ItemSeries` is a flat struct rather
+/// than `Item`'s data-carrying `ItemType` enum, so this has to be an explicit runtime check
+/// here instead of the structural impossibility that already rules this out on `Item` itself
+/// — same rejection pattern as `validate_series_item_type` above.
+fn validate_series_event_type(item_type: ItemKind, event_type: &Option<String>) -> Result<(), ItemError> {
+    if event_type.is_some() && item_type != ItemKind::Event {
+        return Err(ItemError::Invalid(
+            "event_type is only valid on an EVENT series".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 pub async fn create_series(
     projects: &Arc<dyn ProjectRepo>,
     teams: &Arc<dyn TeamRepo>,
@@ -149,6 +165,7 @@ pub async fn create_series(
 ) -> Result<String, ItemError> {
     require_project_member(projects, teams, &params.project_id, requester_user_id).await?;
     validate_series_item_type(params.item_type)?;
+    validate_series_event_type(params.item_type, &params.event_type)?;
     Ok(event_series
         .create_series(&ItemSeries {
             id: String::new(),
@@ -196,6 +213,7 @@ pub async fn update_series(
     let current = event_series.get_series(series_id).await?;
     require_project_member(projects, teams, &current.project_id, requester_user_id).await?;
     validate_series_item_type(params.item_type)?;
+    validate_series_event_type(params.item_type, &params.event_type)?;
     event_series
         .update_series(
             series_id,
@@ -761,6 +779,63 @@ mod tests {
         let mut params = create_params("p1");
         params.item_type = ItemKind::Simple;
         let result = create_series(&projects, &teams, &event_series, "owner1", params).await;
+        assert!(matches!(result, Err(ItemError::Invalid(_))));
+    }
+
+    #[tokio::test]
+    async fn create_series_rejects_event_type_on_task_series() {
+        let mut projects_mock = MockProjectRepo::new();
+        projects_mock.expect_get().returning(|_| Ok(personal_project()));
+        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock.expect_create_series().times(0);
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        let mut params = create_params("p1");
+        params.item_type = ItemKind::Task;
+        params.event_type = Some("rain".to_string());
+        let result = create_series(&projects, &teams, &event_series, "owner1", params).await;
+        assert!(matches!(result, Err(ItemError::Invalid(_))));
+    }
+
+    #[tokio::test]
+    async fn create_series_allows_task_series_without_event_type() {
+        let mut projects_mock = MockProjectRepo::new();
+        projects_mock.expect_get().returning(|_| Ok(personal_project()));
+        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock
+            .expect_create_series()
+            .times(1)
+            .returning(|_| Ok("new-series-id".to_string()));
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        let mut params = create_params("p1");
+        params.item_type = ItemKind::Task;
+        params.event_type = None;
+        let result = create_series(&projects, &teams, &event_series, "owner1", params).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn update_series_rejects_event_type_on_task_series() {
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock.expect_get_series().returning(|_| Ok(series("p1")));
+        series_mock.expect_update_series().times(0);
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        let mut projects_mock = MockProjectRepo::new();
+        projects_mock.expect_get().returning(|_| Ok(personal_project()));
+        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+
+        let mut params = update_params();
+        params.item_type = ItemKind::Task;
+        // update_params() defaults event_type to Some("meeting") — left as-is here
+        // deliberately, since that's exactly the combination being rejected.
+        let result = update_series(&projects, &teams, &event_series, "owner1", "s1", params).await;
         assert!(matches!(result, Err(ItemError::Invalid(_))));
     }
 

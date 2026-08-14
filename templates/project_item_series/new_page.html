@@ -23,13 +23,46 @@
       </div>
     </label>
     {% call macros::description_field("") %}{% endcall %}
+    <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Kind <span class="text-red-500" aria-hidden="true">*</span>
+      <span class="mt-2 flex gap-4">
+        <label class="inline-flex items-center gap-1.5 text-sm font-normal text-gray-900 dark:text-white">
+          <input type="radio" name="itemType" value="TASK" checked
+                 class="size-4 border-gray-300 text-indigo-600 focus:ring-indigo-600 dark:border-white/20 dark:bg-white/5" /> Task
+        </label>
+        <label class="inline-flex items-center gap-1.5 text-sm font-normal text-gray-900 dark:text-white">
+          <input type="radio" name="itemType" value="EVENT"
+                 class="size-4 border-gray-300 text-indigo-600 focus:ring-indigo-600 dark:border-white/20 dark:bg-white/5" /> Event
+        </label>
+      </span>
+    </label>
     <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Repeat <span class="text-red-500" aria-hidden="true">*</span>
       <div class="mt-2">
         <input type="text" name="recurrence" placeholder="e.g. every monday" required
                class="block w-full rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 placeholder:text-gray-400 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:placeholder:text-gray-500 dark:focus:outline-indigo-500" />
       </div>
     </label>
-    {% call macros::event_type_field("") %}{% endcall %}
+    <div class="event-type-field">
+      {% call macros::event_type_field("") %}{% endcall %}
+    </div>
+    <script>
+    (function() {
+      var form = document.currentScript.closest("form");
+      if (!form) return;
+      function toggle() {
+        var isTask = form.querySelector('input[name="itemType"][value="TASK"]').checked;
+        form.querySelectorAll(".event-type-field").forEach(function (el) {
+          el.hidden = isTask;
+          el.querySelectorAll("input").forEach(function (field) {
+            field.disabled = isTask;
+          });
+        });
+      }
+      form.querySelectorAll('input[name="itemType"]').forEach(function (radio) {
+        radio.addEventListener("change", toggle);
+      });
+      toggle();
+    })();
+    </script>
     <div class="border-t border-gray-100 pt-3 dark:border-white/5">
       <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Anchor date <span class="text-red-500" aria-hidden="true">*</span>
         <div class="mt-2 flex items-end gap-x-2">

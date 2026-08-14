@@ -1,12 +1,12 @@
 use crate::auth::AuthUser;
 use crate::domain::item::ItemKind;
 use crate::service::error::ItemError;
-use crate::service::item_series::{self as event_series_service, CreateItemSeriesParams};
+use crate::service::item_series::{self as item_series_service, CreateItemSeriesParams};
 use crate::service::projects::{self as project_service};
 use crate::storage::sqlite::{ItemRepo, ItemSeriesRepo, ProjectRepo, TeamRepo};
 use crate::web_ui::nav::{self, ActiveContext, SidebarSection};
-use crate::web_ui::project_event_series::templates::*;
-use crate::web_ui::project_event_series::{combine_local_to_utc, non_empty, render, start_of_day};
+use crate::web_ui::project_item_series::templates::*;
+use crate::web_ui::project_item_series::{combine_local_to_utc, non_empty, render, start_of_day};
 use crate::web_ui::TzOffset;
 use askama::Template;
 use axum::extract::{Extension, Form, Path};
@@ -19,42 +19,42 @@ fn active_context(project_id: &str) -> ActiveContext {
     ActiveContext::Project(project_id.to_string())
 }
 
-pub async fn project_event_series_page(
+pub async fn project_item_series_page(
     Path(project_id): Path<String>,
     Extension(auth_user): Extension<AuthUser>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
-    Extension(event_series): Extension<Arc<dyn ItemSeriesRepo>>,
+    Extension(item_series): Extension<Arc<dyn ItemSeriesRepo>>,
     TzOffset(tz): TzOffset,
 ) -> Result<Html<String>, ItemError> {
-    let series = event_series_service::list_series_for_project(
+    let series = item_series_service::list_series_for_project(
         &projects,
         &teams,
-        &event_series,
+        &item_series,
         &auth_user.user_id,
         &project_id,
     )
     .await?;
     let rows = series
         .iter()
-        .map(|s| ProjectEventSeriesRow::from_series(s, tz).render())
+        .map(|s| ProjectItemSeriesRow::from_series(s, tz).render())
         .collect::<Result<Vec<_>, _>>()
         .map_err(ItemError::from)?;
     let nav_html = nav::build_nav_html(
         &projects,
         &auth_user.user_id,
         active_context(&project_id),
-        SidebarSection::EventSeries,
+        SidebarSection::ItemSeries,
     )
     .await?;
-    render(ProjectEventSeriesListPageTemplate {
+    render(ProjectItemSeriesListPageTemplate {
         project_id,
         rows,
         nav_html,
     })
 }
 
-pub async fn new_project_event_series_page(
+pub async fn new_project_item_series_page(
     Path(project_id): Path<String>,
     Extension(auth_user): Extension<AuthUser>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
@@ -65,10 +65,10 @@ pub async fn new_project_event_series_page(
         &projects,
         &auth_user.user_id,
         active_context(&project_id),
-        SidebarSection::EventSeries,
+        SidebarSection::ItemSeries,
     )
     .await?;
-    render(NewProjectEventSeriesPageTemplate {
+    render(NewProjectItemSeriesPageTemplate {
         project_id,
         nav_html,
     })
@@ -76,23 +76,32 @@ pub async fn new_project_event_series_page(
 
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CreateEventSeriesForm {
+pub struct CreateItemSeriesForm {
     name: String,
     description: Option<String>,
+    item_type: String,
     event_type: Option<String>,
     recurrence: String,
     anchor_date: String,
     anchor_time: Option<String>,
 }
 
-pub async fn create_project_event_series_form(
+fn parse_item_type(raw: &str) -> Result<ItemKind, ItemError> {
+    match raw {
+        "TASK" => Ok(ItemKind::Task),
+        "EVENT" => Ok(ItemKind::Event),
+        _ => Err(ItemError::Invalid("itemType must be TASK or EVENT".to_string())),
+    }
+}
+
+pub async fn create_project_item_series_form(
     Path(project_id): Path<String>,
     Extension(auth_user): Extension<AuthUser>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
-    Extension(event_series): Extension<Arc<dyn ItemSeriesRepo>>,
+    Extension(item_series): Extension<Arc<dyn ItemSeriesRepo>>,
     TzOffset(tz): TzOffset,
-    Form(form): Form<CreateEventSeriesForm>,
+    Form(form): Form<CreateItemSeriesForm>,
 ) -> Result<Response, ItemError> {
     let anchor_date = combine_local_to_utc(
         form.anchor_date.trim(),
@@ -101,11 +110,12 @@ pub async fn create_project_event_series_form(
         start_of_day(),
     )
     .ok_or_else(|| ItemError::Invalid("anchor date is required".to_string()))?;
+    let item_type = parse_item_type(&form.item_type)?;
 
-    event_series_service::create_series(
+    item_series_service::create_series(
         &projects,
         &teams,
-        &event_series,
+        &item_series,
         &auth_user.user_id,
         CreateItemSeriesParams {
             project_id: project_id.clone(),
@@ -114,9 +124,7 @@ pub async fn create_project_event_series_form(
             event_type: non_empty(&form.event_type),
             recurrence: form.recurrence.trim().to_string(),
             anchor_date,
-            // Hardcoded until Stage 7c adds a real item-type selector to this form —
-            // the web UI only creates Event-typed series today.
-            item_type: ItemKind::Event,
+            item_type,
         },
     )
     .await?;
@@ -135,23 +143,28 @@ pub async fn create_project_event_series_form(
 /// occurrence" affordance. Materializes `(series_id, occurrence_ts)` into a real item (or
 /// returns the existing one if already materialized) and redirects to its detail page.
 ///
+/// The redirect target depends on the materialized item's own kind, via
+/// `project_dashboard::detail_url` — Stage 7c added Task-typed series, so this route is no
+/// longer Event-only, and reusing the dashboard's existing kind-to-URL mapping keeps this in
+/// sync with every other screen's own routing rather than hand-rolling a narrower one here.
+///
 /// The `get_series` + project_id match check below is defense-in-depth for predictability,
 /// not strictly required for security: `get_or_materialize_occurrence` already resolves
 /// everything off `series.project_id` internally regardless of what's in the URL. But every
 /// sibling project-scoped detail route 404s on a project_id/resource mismatch rather than
 /// silently acting on a different project, and this route should behave the same way.
-pub async fn materialize_project_event_series_occurrence_form(
+pub async fn materialize_project_item_series_occurrence_form(
     Path((project_id, series_id, occurrence_ts)): Path<(String, String, i64)>,
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
-    Extension(event_series): Extension<Arc<dyn ItemSeriesRepo>>,
+    Extension(item_series): Extension<Arc<dyn ItemSeriesRepo>>,
 ) -> Result<Response, ItemError> {
-    let series = event_series_service::get_series(
+    let series = item_series_service::get_series(
         &projects,
         &teams,
-        &event_series,
+        &item_series,
         &auth_user.user_id,
         &series_id,
     )
@@ -163,11 +176,11 @@ pub async fn materialize_project_event_series_occurrence_form(
     let occurrence_date = DateTime::<Utc>::from_timestamp(occurrence_ts, 0)
         .ok_or_else(|| ItemError::Invalid("invalid occurrence timestamp".to_string()))?;
 
-    let item = event_series_service::get_or_materialize_occurrence(
+    let item = item_series_service::get_or_materialize_occurrence(
         &repo,
         &projects,
         &teams,
-        &event_series,
+        &item_series,
         &auth_user.user_id,
         &series_id,
         occurrence_date,
@@ -177,7 +190,7 @@ pub async fn materialize_project_event_series_occurrence_form(
     Ok((
         [(
             HeaderName::from_static("hx-redirect"),
-            format!("/web/projects/{project_id}/events/{}", item.id),
+            crate::web_ui::project_dashboard::detail_url(&item, &project_id),
         )],
         Html(String::new()),
     )
@@ -191,17 +204,17 @@ pub async fn materialize_project_event_series_occurrence_form(
 /// and an empty response removes it in place, since there's no detail page to send anyone to.
 ///
 /// Same defense-in-depth project_id/series match check as materialize, for the same reason.
-pub async fn skip_project_event_series_occurrence_form(
+pub async fn skip_project_item_series_occurrence_form(
     Path((project_id, series_id, occurrence_ts)): Path<(String, String, i64)>,
     Extension(auth_user): Extension<AuthUser>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
-    Extension(event_series): Extension<Arc<dyn ItemSeriesRepo>>,
+    Extension(item_series): Extension<Arc<dyn ItemSeriesRepo>>,
 ) -> Result<Response, ItemError> {
-    let series = event_series_service::get_series(
+    let series = item_series_service::get_series(
         &projects,
         &teams,
-        &event_series,
+        &item_series,
         &auth_user.user_id,
         &series_id,
     )
@@ -213,7 +226,7 @@ pub async fn skip_project_event_series_occurrence_form(
     let occurrence_date = DateTime::<Utc>::from_timestamp(occurrence_ts, 0)
         .ok_or_else(|| ItemError::Invalid("invalid occurrence timestamp".to_string()))?;
 
-    event_series_service::skip_occurrence(&event_series, &series_id, occurrence_date).await?;
+    item_series_service::skip_occurrence(&item_series, &series_id, occurrence_date).await?;
 
     Ok(Html(String::new()).into_response())
 }

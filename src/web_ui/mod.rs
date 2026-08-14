@@ -4,7 +4,7 @@ pub mod login;
 pub mod nav;
 pub mod project_activity;
 pub mod project_dashboard;
-pub mod project_event_series;
+pub mod project_item_series;
 pub mod project_events;
 pub mod project_simple_lists;
 pub mod project_tasks;

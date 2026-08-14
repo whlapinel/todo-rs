@@ -46,7 +46,7 @@ use web_ui::assigned_items::assigned_items_page;
 use web_ui::login::login_page;
 use web_ui::project_activity::*;
 use web_ui::project_dashboard::*;
-use web_ui::project_event_series::handlers::*;
+use web_ui::project_item_series::handlers::*;
 use web_ui::project_events::handlers::*;
 use web_ui::project_simple_lists::handlers::*;
 use web_ui::project_tasks::handlers::*;
@@ -200,19 +200,19 @@ fn build_web_router() -> Router {
         )
         .route(
             "/projects/:project_id/series",
-            get(project_event_series_page).post(create_project_event_series_form),
+            get(project_item_series_page).post(create_project_item_series_form),
         )
         .route(
             "/projects/:project_id/series/new",
-            get(new_project_event_series_page),
+            get(new_project_item_series_page),
         )
         .route(
             "/projects/:project_id/series/:series_id/occurrences/:occurrence_ts",
-            post(materialize_project_event_series_occurrence_form),
+            post(materialize_project_item_series_occurrence_form),
         )
         .route(
             "/projects/:project_id/series/:series_id/occurrences/:occurrence_ts/skip",
-            post(skip_project_event_series_occurrence_form),
+            post(skip_project_item_series_occurrence_form),
         )
         .route(
             "/projects/:project_id/dashboard",

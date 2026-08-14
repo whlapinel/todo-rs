@@ -1,6 +1,10 @@
+{% import "macros.html" as macros %}
 <li class="py-3 space-y-1">
   <div class="flex items-center justify-between gap-x-3">
-    <span class="min-w-0 flex-1 truncate text-gray-900 dark:text-white">{{ name }}</span>
+    <span class="min-w-0 flex-1 flex items-center gap-x-2">
+      {% call macros::badge(item_type_label, item_type_badge_color) %}{% endcall %}
+      <span class="truncate text-gray-900 dark:text-white">{{ name }}</span>
+    </span>
     <span class="shrink-0 text-xs text-gray-400 dark:text-gray-500" title="repeats">&#8635; {{ recurrence }}</span>
   </div>
   <div class="flex items-center gap-x-3 text-xs text-gray-500 dark:text-gray-400">

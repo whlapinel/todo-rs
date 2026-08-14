@@ -77,8 +77,10 @@ fn type_symbol(kind: ItemKind) -> &'static str {
 
 /// Project-scoped counterpart to `dashboard::detail_url` — every item here already carries
 /// the one `project_id` this whole page is scoped to, so there's no personal-vs-team branch
-/// to dispatch on at all, unlike the legacy function it replaces.
-fn detail_url(item: &Item, project_id: &str) -> String {
+/// to dispatch on at all, unlike the legacy function it replaces. `pub(crate)` so
+/// `project_item_series::handlers`' materialize route can reuse the same kind-to-URL mapping
+/// rather than duplicating it.
+pub(crate) fn detail_url(item: &Item, project_id: &str) -> String {
     match item.kind() {
         ItemKind::Task => format!("/web/projects/{project_id}/tasks/{}", item.id),
         ItemKind::Event => format!("/web/projects/{project_id}/events/{}", item.id),
@@ -89,14 +91,14 @@ fn detail_url(item: &Item, project_id: &str) -> String {
 
 /// Shared by the list and calendar views below — the POST target that materializes a virtual
 /// occurrence and redirects to its (now real) detail page. See
-/// `web_ui::project_event_series::handlers::materialize_project_event_series_occurrence_form`.
+/// `web_ui::project_item_series::handlers::materialize_project_item_series_occurrence_form`.
 fn materialize_url(project_id: &str, series_id: &str, occurrence_date: DateTime<Utc>) -> String {
     format!("/web/projects/{project_id}/series/{series_id}/occurrences/{}", occurrence_date.timestamp())
 }
 
 /// Stage 6 of docs/recurring-events-virtual-occurrences-rough-plan.md — the "Skip" button's
 /// POST target, a sibling route to `materialize_url` above. See
-/// `web_ui::project_event_series::handlers::skip_project_event_series_occurrence_form`.
+/// `web_ui::project_item_series::handlers::skip_project_item_series_occurrence_form`.
 fn skip_url(project_id: &str, series_id: &str, occurrence_date: DateTime<Utc>) -> String {
     format!(
         "/web/projects/{project_id}/series/{series_id}/occurrences/{}/skip",
