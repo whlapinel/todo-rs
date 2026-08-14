@@ -76,6 +76,7 @@ Each stage is scoped to be independently committable and testable; "clear contex
 - `skip_occurrence(series_id, date) -> Result<(), ItemError>` — sets `is_exdate`; exact behavior toward an already-materialized row deferred to stage 6.
 - Still no web_ui/json_api wiring — unit-testable in isolation against mocked repos, same style as existing `service/` tests.
 - Commit: "Add occurrence materialization service".
+- **Committed** (`4e57677`), per the refined plan at `~/.claude/plans/can-you-tell-me-jiggly-spring.md`: `get_or_materialize_occurrence`/`skip_occurrence` delegate item creation to `project_items::create_project_item` rather than a hand-rolled dispatch of its own — that delegation choice (raised as an open question in an earlier, since-superseded refined-planning pass) is settled and not up for reconsideration. Implemented as specified above, no deviations. 7 new unit tests, full suite (262 tests) and `cargo check` clean.
 
 **Stage 4 — Series CRUD surface** (Smithy + json_api + minimal web UI)
 - New Smithy operations for creating/reading/updating a series (rule, anchor, static Event fields) — run `task codegen` and follow CLAUDE.md's "Adding or removing an operation" touch-point checklist in full (handler wiring, MCP tool, CLI subcommand, docs).
