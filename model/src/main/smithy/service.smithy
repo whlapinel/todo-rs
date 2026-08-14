@@ -20,10 +20,10 @@ service PeoplesRepublicOfLists {
         SetProjectMemberRole
         AttachTeamToProject
         DetachTeamFromProject
-        CreateEventSeries
-        GetEventSeries
-        UpdateEventSeries
-        ListEventSeriesForProject
+        CreateItemSeries
+        GetItemSeries
+        UpdateItemSeries
+        ListItemSeriesForProject
         CreateProjectItem
         GetProjectItem
         UpdateProjectItem

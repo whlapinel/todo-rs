@@ -297,7 +297,7 @@ pub trait ItemSeriesRepo: Send + Sync {
     /// docs/recurring-events-virtual-occurrences-rough-plan.md resolved the "what
     /// happens to an already-materialized occurrence" question deferred here at
     /// stage 3: skipping a materialized occurrence deletes its `items` row first
-    /// (see `service::event_series::unlink_deleted_item_occurrence`), so by the time
+    /// (see `service::item_series::unlink_deleted_item_occurrence`), so by the time
     /// this runs there is never a live item behind the row it's clearing — clearing
     /// `item_id` unconditionally is therefore always correct, not just for the
     /// purely-virtual case.

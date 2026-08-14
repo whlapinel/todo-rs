@@ -21,11 +21,11 @@ use axum::{
     routing::{get, post, put},
 };
 use json_api::activity_log::{list_team_activity_log, undo_activity_log_entry};
-use json_api::event_series::{
-    create_event_series, get_event_series, list_event_series_for_project, update_event_series,
-};
 use json_api::invites::send_app_invite;
 use json_api::item_import::{get_item_import_template, import_project_items};
+use json_api::item_series::{
+    create_item_series, get_item_series, list_item_series_for_project, update_item_series,
+};
 use json_api::items::{list_assigned_items, list_items_due};
 use json_api::project_items::{
     create_project_item, delete_project_item, get_project_item, list_project_items,
@@ -307,10 +307,10 @@ async fn main() {
         .set_project_member_role(set_project_member_role)
         .attach_team_to_project(attach_team_to_project)
         .detach_team_from_project(detach_team_from_project)
-        .create_event_series(create_event_series)
-        .get_event_series(get_event_series)
-        .update_event_series(update_event_series)
-        .list_event_series_for_project(list_event_series_for_project)
+        .create_item_series(create_item_series)
+        .get_item_series(get_item_series)
+        .update_item_series(update_item_series)
+        .list_item_series_for_project(list_item_series_for_project)
         .create_project_item(create_project_item)
         .get_project_item(get_project_item)
         .update_project_item(update_project_item)

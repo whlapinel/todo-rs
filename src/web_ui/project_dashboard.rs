@@ -2,7 +2,7 @@ use crate::auth::AuthUser;
 use crate::domain::item::{Item, ItemKind};
 use super::nav::{self, ActiveContext, SidebarSection};
 use super::{to_local, TzOffset};
-use crate::service::event_series::{self as event_series_service, VirtualOccurrence};
+use crate::service::item_series::{self as event_series_service, VirtualOccurrence};
 use crate::service::project_items::{self as project_item_service, UpdateProjectItemParams};
 use crate::service::projects::{self as project_service};
 use crate::service::teams as team_service;

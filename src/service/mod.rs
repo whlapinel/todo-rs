@@ -1,7 +1,7 @@
 pub mod activity_log;
 pub mod error;
-pub mod event_series;
 pub mod import;
+pub mod item_series;
 pub mod items;
 pub mod project_items;
 pub mod projects;

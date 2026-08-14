@@ -354,7 +354,7 @@ pub(crate) fn build_calendar_days(
     month: u32,
     project_id: &str,
     items: &[Item],
-    virtual_occurrences: &[crate::service::event_series::VirtualOccurrence],
+    virtual_occurrences: &[crate::service::item_series::VirtualOccurrence],
     tz: i32,
     today: NaiveDate,
 ) -> Vec<CalendarDay> {

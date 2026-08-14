@@ -47,7 +47,7 @@ pub enum Command {
         #[command(subcommand)]
         command: ProjectsCommand,
     },
-    /// Manage recurring event series
+    /// Manage recurring item series (Task or Event)
     Series {
         #[command(subcommand)]
         command: SeriesCommand,

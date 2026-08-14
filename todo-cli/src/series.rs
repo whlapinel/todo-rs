@@ -1,12 +1,24 @@
 use crate::helpers::{parse_date, unwrap_or_exit};
 use clap::Subcommand;
+use todo_client::types::ItemType;
 use todo_client::Client;
+
+fn parse_series_item_type_flag(s: &str) -> ItemType {
+    match s.to_lowercase().as_str() {
+        "task" => ItemType::Task,
+        "event" => ItemType::Event,
+        _ => {
+            eprintln!("error: --item-type must be 'task' or 'event'");
+            std::process::exit(1);
+        }
+    }
+}
 
 #[derive(Subcommand)]
 pub enum SeriesCommand {
-    /// List a project's recurring event series
+    /// List a project's recurring item series
     List { project_id: String },
-    /// Create a new recurring event series
+    /// Create a new recurring item series
     Create {
         project_id: String,
         name: String,
@@ -18,13 +30,16 @@ pub enum SeriesCommand {
         description: Option<String>,
         #[arg(long)]
         event_type: Option<String>,
+        /// Required: 'task' or 'event' — the kind of item this series materializes
+        #[arg(long)]
+        item_type: Option<String>,
     },
-    /// Show one event series
+    /// Show one item series
     Get {
         project_id: String,
         series_id: String,
     },
-    /// Update an event series (full replace — round-trip description/event-type to keep them)
+    /// Update an item series (full replace — round-trip description/event-type to keep them)
     Update {
         project_id: String,
         series_id: String,
@@ -35,6 +50,9 @@ pub enum SeriesCommand {
         description: Option<String>,
         #[arg(long)]
         event_type: Option<String>,
+        /// Required: 'task' or 'event' — the kind of item this series materializes
+        #[arg(long)]
+        item_type: Option<String>,
     },
 }
 
@@ -43,19 +61,25 @@ pub async fn cmd_series(client: &Client, cmd: SeriesCommand, _user_id: Option<St
         SeriesCommand::List { project_id } => {
             let out = unwrap_or_exit(
                 client
-                    .list_event_series_for_project()
+                    .list_item_series_for_project()
                     .project_id(&project_id)
                     .send()
                     .await,
-                "list event series",
+                "list item series",
             );
             if out.series().is_empty() {
-                println!("(no event series)");
+                println!("(no item series)");
                 return;
             }
-            println!("{:<36}  {:<24}  {}", "ID", "RECURRENCE", "NAME");
+            println!("{:<36}  {:<24}  {:<6}  {}", "ID", "RECURRENCE", "TYPE", "NAME");
             for s in out.series() {
-                println!("{:<36}  {:<24}  {}", s.series_id(), s.recurrence(), s.name());
+                println!(
+                    "{:<36}  {:<24}  {:<6}  {}",
+                    s.series_id(),
+                    s.recurrence(),
+                    s.item_type(),
+                    s.name()
+                );
             }
         }
         SeriesCommand::Create {
@@ -65,25 +89,31 @@ pub async fn cmd_series(client: &Client, cmd: SeriesCommand, _user_id: Option<St
             anchor,
             description,
             event_type,
+            item_type,
         } => {
             let anchor_date = parse_date(&anchor).unwrap_or_else(|e| {
                 eprintln!("{e}");
                 std::process::exit(1);
             });
+            let Some(item_type) = item_type else {
+                eprintln!("error: --item-type is required (task or event)");
+                std::process::exit(1);
+            };
             let mut req = client
-                .create_event_series()
+                .create_item_series()
                 .project_id(&project_id)
                 .name(name)
                 .recurrence(recurrence)
-                .anchor_date(anchor_date);
+                .anchor_date(anchor_date)
+                .item_type(parse_series_item_type_flag(&item_type));
             if let Some(description) = description {
                 req = req.description(description);
             }
             if let Some(event_type) = event_type {
                 req = req.event_type(event_type);
             }
-            let out = unwrap_or_exit(req.send().await, "create event series");
-            println!("created event series {}", out.series_id());
+            let out = unwrap_or_exit(req.send().await, "create item series");
+            println!("created item series {}", out.series_id());
         }
         SeriesCommand::Get {
             project_id,
@@ -91,12 +121,12 @@ pub async fn cmd_series(client: &Client, cmd: SeriesCommand, _user_id: Option<St
         } => {
             let out = unwrap_or_exit(
                 client
-                    .get_event_series()
+                    .get_item_series()
                     .project_id(&project_id)
                     .series_id(&series_id)
                     .send()
                     .await,
-                "get event series",
+                "get item series",
             );
             println!("id:          {}", out.series_id());
             println!("project:     {}", out.project_id());
@@ -105,6 +135,7 @@ pub async fn cmd_series(client: &Client, cmd: SeriesCommand, _user_id: Option<St
             println!("event type:  {}", out.event_type().unwrap_or("-"));
             println!("recurrence:  {}", out.recurrence());
             println!("anchor:      {}", crate::helpers::fmt_date(out.anchor_date()));
+            println!("item type:   {}", out.item_type());
         }
         SeriesCommand::Update {
             project_id,
@@ -114,26 +145,32 @@ pub async fn cmd_series(client: &Client, cmd: SeriesCommand, _user_id: Option<St
             anchor,
             description,
             event_type,
+            item_type,
         } => {
             let anchor_date = parse_date(&anchor).unwrap_or_else(|e| {
                 eprintln!("{e}");
                 std::process::exit(1);
             });
+            let Some(item_type) = item_type else {
+                eprintln!("error: --item-type is required (task or event)");
+                std::process::exit(1);
+            };
             let mut req = client
-                .update_event_series()
+                .update_item_series()
                 .project_id(&project_id)
                 .series_id(&series_id)
                 .name(name)
                 .recurrence(recurrence)
-                .anchor_date(anchor_date);
+                .anchor_date(anchor_date)
+                .item_type(parse_series_item_type_flag(&item_type));
             if let Some(description) = description {
                 req = req.description(description);
             }
             if let Some(event_type) = event_type {
                 req = req.event_type(event_type);
             }
-            unwrap_or_exit(req.send().await, "update event series");
-            println!("updated event series {series_id}");
+            unwrap_or_exit(req.send().await, "update item series");
+            println!("updated item series {series_id}");
         }
     }
 }

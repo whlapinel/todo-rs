@@ -1,7 +1,7 @@
 use crate::domain::item::{Item, ItemKind};
 use crate::domain::project::Project;
 use crate::service::error::ItemError;
-use crate::service::event_series;
+use crate::service::item_series;
 use crate::service::items::{self, item_anchor, CreateItemParams, UpdateItemParams};
 use crate::service::projects::require_project_member;
 use crate::service::team_items::{
@@ -433,7 +433,7 @@ pub async fn update_project_item(
 
 /// Stage B4's unified delete path — same delegation shape as `create_project_item`.
 /// Stage 6 of docs/recurring-events-virtual-occurrences-rough-plan.md added the
-/// trailing `event_series::unlink_deleted_item_occurrence` call: every delete of an
+/// trailing `item_series::unlink_deleted_item_occurrence` call: every delete of an
 /// item goes through here regardless of caller (web UI, CLI, MCP), so this is the one
 /// place that can catch "this item was a materialized series occurrence" for all of
 /// them, rather than duplicating that check into each per-screen delete handler.
@@ -455,7 +455,7 @@ pub async fn delete_project_item(
         }
         None => items::delete_item(repo, &project.owner_user_id, item_id).await?,
     }
-    event_series::unlink_deleted_item_occurrence(event_series, item_id).await
+    item_series::unlink_deleted_item_occurrence(event_series, item_id).await
 }
 
 #[cfg(test)]

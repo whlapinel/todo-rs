@@ -1,6 +1,7 @@
 use crate::auth::AuthUser;
+use crate::domain::item::ItemKind;
 use crate::service::error::ItemError;
-use crate::service::event_series::{self as event_series_service, CreateEventSeriesParams};
+use crate::service::item_series::{self as event_series_service, CreateItemSeriesParams};
 use crate::service::projects::{self as project_service};
 use crate::storage::sqlite::{ItemRepo, ItemSeriesRepo, ProjectRepo, TeamRepo};
 use crate::web_ui::nav::{self, ActiveContext, SidebarSection};
@@ -106,13 +107,16 @@ pub async fn create_project_event_series_form(
         &teams,
         &event_series,
         &auth_user.user_id,
-        CreateEventSeriesParams {
+        CreateItemSeriesParams {
             project_id: project_id.clone(),
             name: form.name.trim().to_string(),
             description: non_empty(&form.description),
             event_type: non_empty(&form.event_type),
             recurrence: form.recurrence.trim().to_string(),
             anchor_date,
+            // Hardcoded until Stage 7c adds a real item-type selector to this form —
+            // the web UI only creates Event-typed series today.
+            item_type: ItemKind::Event,
         },
     )
     .await?;

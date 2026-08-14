@@ -475,50 +475,54 @@ Recurrence only applies to top-level items with no `--source-event-id` — a chi
 
 ---
 
-## Event Series
+## Item Series
 
-An **event series** is a different way of modeling a recurring Event: instead
-of one item row that gets replaced on each completion (see
+An **item series** is a different way of modeling a recurring Task or Event:
+instead of one item row that gets replaced on each completion (see
 [Recurrence patterns](#recurrence-patterns) above), a series is just a
 recurrence rule plus an anchor date and a set of static fields (name,
-description, event type). Individual occurrence dates aren't items at all
-until something actually materializes one — browsing/materializing
-occurrences isn't wired up yet (`prl series` only covers the series itself:
-create, read, update, list). A series's `recurrence` field uses the exact
-same English-phrase syntax as an item's own `--recurrence`.
+description, event type, item type). Individual occurrence dates aren't
+items at all until something actually materializes one — browsing/
+materializing occurrences isn't wired up yet (`prl series` only covers the
+series itself: create, read, update, list). A series's `recurrence` field
+uses the exact same English-phrase syntax as an item's own `--recurrence`.
+Every series has an `--item-type` of either `task` or `event`, controlling
+whether it materializes Task or Event occurrences — there's no default, so
+it must always be given explicitly on `create`/`update`.
 
-### List a project's event series
+### List a project's item series
 
 ```sh
 prl series list <project-id>
 ```
 
-### Create an event series
+### Create an item series
 
 `<anchor>` accepts the same `YYYY-MM-DD`-or-Unix-timestamp format as
 `--due`/`--scheduled` elsewhere.
 
 ```sh
-prl series create <project-id> "Standup" "every weekday" 2026-08-17
+prl series create <project-id> "Standup" "every weekday" 2026-08-17 --item-type event
 prl series create <project-id> "Standup" "every weekday" 2026-08-17 \
-  --description "Daily sync" --event-type meeting
+  --item-type event --description "Daily sync" --event-type meeting
 ```
 
-### Show one event series
+### Show one item series
 
 ```sh
 prl series get <project-id> <series-id>
 ```
 
-### Update an event series
+### Update an item series
 
 Update is a full replace of `name`/`recurrence`/`anchor`/`description`/
-`event-type` — pass `--description`/`--event-type` again to keep them, or
-omit to clear them.
+`event-type`/`item-type` — pass `--description`/`--event-type` again to keep
+them, or omit to clear them. `--item-type` is required on every update, the
+same as on create.
 
 ```sh
 prl series update <project-id> <series-id> "Standup" "every weekday" 2026-08-17 \
-  --description "Daily sync" --event-type meeting
+  --item-type event --description "Daily sync" --event-type meeting
 ```
 
 ---

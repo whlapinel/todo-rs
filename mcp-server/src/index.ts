@@ -452,9 +452,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
-      name: "list_event_series",
+      name: "list_item_series",
       description:
-        "List a project's recurring event series (a series is a recurrence rule + anchor date + static Event fields — distinct from a plain recurring item). The caller must be a project member.",
+        "List a project's recurring item series (a series is a recurrence rule + anchor date + static fields, materializing either Task or Event occurrences — distinct from a plain recurring item). The caller must be a project member.",
       inputSchema: {
         type: "object",
         properties: {
@@ -464,9 +464,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
-      name: "create_event_series",
+      name: "create_item_series",
       description:
-        "Create a new recurring event series on a project. The caller must be a project member.",
+        "Create a new recurring item series on a project. The caller must be a project member.",
       inputSchema: {
         type: "object",
         properties: {
@@ -476,13 +476,18 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           eventType: { type: "string", description: "Matched against templates' own eventType to auto-copy children when an occurrence is materialized" },
           recurrence: { type: "string", description: "English recurrence pattern, e.g. 'every monday' — same syntax as an item's own recurrence field" },
           anchorDate: { type: "string", description: "ISO 8601 date/time string" },
+          itemType: {
+            type: "string",
+            enum: ["TASK", "EVENT"],
+            description: "The kind of item this series materializes occurrences as. No default — must be explicit.",
+          },
         },
-        required: ["projectId", "name", "recurrence", "anchorDate"],
+        required: ["projectId", "name", "recurrence", "anchorDate", "itemType"],
       },
     },
     {
-      name: "get_event_series",
-      description: "Get one event series by ID. The caller must be a project member.",
+      name: "get_item_series",
+      description: "Get one item series by ID. The caller must be a project member.",
       inputSchema: {
         type: "object",
         properties: {
@@ -493,9 +498,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
-      name: "update_event_series",
+      name: "update_item_series",
       description:
-        "Update an event series (full replace of name/recurrence/anchorDate/description/eventType — round-trip description/eventType to keep them, omitting clears them). The caller must be a project member.",
+        "Update an item series (full replace of name/recurrence/anchorDate/description/eventType/itemType — round-trip description/eventType to keep them, omitting clears them). The caller must be a project member.",
       inputSchema: {
         type: "object",
         properties: {
@@ -506,8 +511,13 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           eventType: { type: "string" },
           recurrence: { type: "string" },
           anchorDate: { type: "string", description: "ISO 8601 date/time string" },
+          itemType: {
+            type: "string",
+            enum: ["TASK", "EVENT"],
+            description: "The kind of item this series materializes occurrences as. No default — must be explicit.",
+          },
         },
-        required: ["projectId", "seriesId", "name", "recurrence", "anchorDate"],
+        required: ["projectId", "seriesId", "name", "recurrence", "anchorDate", "itemType"],
       },
     },
     {
@@ -865,15 +875,16 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         result = await api("DELETE", `/projects/${args.projectId}/team`, {});
         break;
 
-      case "list_event_series":
+      case "list_item_series":
         result = await api("GET", `/projects/${args.projectId}/series`);
         break;
 
-      case "create_event_series": {
+      case "create_item_series": {
         const body: Record<string, unknown> = {
           name: args.name,
           recurrence: args.recurrence,
           anchorDate: toEpochSecs(args.anchorDate as string),
+          itemType: args.itemType,
         };
         if (args.description !== undefined) body.description = args.description;
         if (args.eventType !== undefined) body.eventType = args.eventType;
@@ -881,18 +892,19 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         break;
       }
 
-      case "get_event_series":
+      case "get_item_series":
         result = await api(
           "GET",
           `/projects/${args.projectId}/series/${args.seriesId}`
         );
         break;
 
-      case "update_event_series": {
+      case "update_item_series": {
         const body: Record<string, unknown> = {
           name: args.name,
           recurrence: args.recurrence,
           anchorDate: toEpochSecs(args.anchorDate as string),
+          itemType: args.itemType,
         };
         if (args.description !== undefined) body.description = args.description;
         if (args.eventType !== undefined) body.eventType = args.eventType;
