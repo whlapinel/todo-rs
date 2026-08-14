@@ -1,6 +1,7 @@
 use crate::auth::AuthUser;
 use crate::domain::item::{Item, ItemKind};
 use crate::service::error::ItemError;
+use crate::service::item_series::{self as item_series_service};
 use crate::service::project_items::{self as project_item_service, UpdateProjectItemParams};
 use crate::service::projects::{self as project_service};
 use crate::service::teams as team_service;
@@ -8,16 +9,16 @@ use crate::service::templates::{self as template_service, CreateProjectTemplateP
 use crate::storage::sqlite::{ActivityLogRepo, ItemRepo, ItemSeriesRepo, ProjectRepo, TeamRepo};
 use crate::web_ui::nav::{self, ActiveContext, SidebarSection};
 use crate::web_ui::project_tasks::{
-    active_member_options, build_calendar_days, create_params_from_form, list_project_tasks,
-    names_for, next_month, non_empty, prev_month, render, render_scope_fragment, require_task,
-    sibling_group, update_params_from_form, ProjectTaskForm,
+    active_member_options, build_calendar_days, create_params_from_form, grid_start_for,
+    list_project_tasks, local_date_to_utc, names_for, next_month, non_empty, prev_month, render,
+    render_scope_fragment, require_task, sibling_group, update_params_from_form, ProjectTaskForm,
 };
 use crate::web_ui::project_tasks::templates::*;
 use crate::web_ui::TzOffset;
 use askama::Template;
 use axum::extract::{Extension, Form, Path, Query};
 use axum::response::{Html, IntoResponse, Response};
-use chrono::{DateTime, Datelike, NaiveDate, Utc};
+use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveTime, Utc};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -133,6 +134,7 @@ pub async fn project_tasks_calendar_page(
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(event_series): Extension<Arc<dyn ItemSeriesRepo>>,
     TzOffset(tz): TzOffset,
     Query(q): Query<CalendarQuery>,
 ) -> Result<Html<String>, ItemError> {
@@ -145,7 +147,29 @@ pub async fn project_tasks_calendar_page(
         .unwrap_or_else(|| today.month());
 
     let items = list_project_tasks(&repo, &project_id).await?;
-    let days = build_calendar_days(year, month, &items, tz, today);
+    let grid_start = grid_start_for(year, month);
+    let range_start = local_date_to_utc(grid_start, NaiveTime::from_hms_opt(0, 0, 0).unwrap(), tz);
+    let range_end = local_date_to_utc(
+        grid_start + Duration::days(41),
+        NaiveTime::from_hms_opt(23, 59, 59).unwrap(),
+        tz,
+    );
+    // Filtered to Task-typed series only (Event-typed have their own home on the Events
+    // calendar) and clamped to `occurrence_date >= now` (Stage 8's past-date clamp — see
+    // `project_dashboard::render_rows` for the rationale).
+    let now = Utc::now();
+    let virtual_occurrences: Vec<_> = item_series_service::list_virtual_occurrences_for_project_unchecked(
+        &event_series,
+        &project_id,
+        range_start,
+        range_end,
+        tz,
+    )
+    .await?
+    .into_iter()
+    .filter(|occ| occ.item_type == ItemKind::Task && occ.occurrence_date >= now)
+    .collect();
+    let days = build_calendar_days(year, month, &project_id, &items, &virtual_occurrences, tz, today);
     let (prev_year, prev_month) = prev_month(year, month);
     let (next_year, next_month) = next_month(year, month);
     let nav_html = nav::build_nav_html(

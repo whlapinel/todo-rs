@@ -394,12 +394,26 @@ pub enum DateType {
     ScheduledEnd,
 }
 
+/// A Task-series (Stage 8) virtual occurrence rendered on the Tasks calendar. Kept separate
+/// from `CalendarTaskEntry`/`DateType` — those mean "which real date field of this real task
+/// is this," a distinction a virtual occurrence (one bare `occurrence_date`, no materialized
+/// row yet) doesn't have, and they carry no materialize/skip affordance since a real task
+/// never needs one.
+pub struct CalendarVirtualTaskEntry {
+    pub entry_id: String,
+    pub name: String,
+    pub time_label: Option<String>,
+    pub materialize_url: String,
+    pub skip_url: String,
+}
+
 pub struct CalendarDay {
     pub date: String,
     pub day_number: u32,
     pub is_current_month: bool,
     pub is_today: bool,
     pub tasks: Vec<CalendarTaskEntry>,
+    pub virtual_tasks: Vec<CalendarVirtualTaskEntry>,
 }
 
 #[derive(Template)]

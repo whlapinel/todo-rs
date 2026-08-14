@@ -188,6 +188,9 @@ struct ProjectDashboardVirtualRow {
     occurrence_ts: i64,
     name: String,
     date_label: String,
+    date_kind_label: &'static str,
+    type_symbol: &'static str,
+    title: String,
     materialize_url: String,
     skip_url: String,
 }
@@ -195,11 +198,15 @@ struct ProjectDashboardVirtualRow {
 impl ProjectDashboardVirtualRow {
     fn from_occurrence(occ: &VirtualOccurrence, project_id: &str, tz: i32) -> Self {
         let local = to_local(occ.occurrence_date, tz);
+        let kind_name = if occ.item_type == ItemKind::Event { "Event" } else { "Task" };
         Self {
             series_id: occ.series_id.clone(),
             occurrence_ts: occ.occurrence_date.timestamp(),
             name: occ.series_name.clone(),
             date_label: local.format("%Y-%m-%d %H:%M").to_string(),
+            date_kind_label: if occ.item_type == ItemKind::Event { "Scheduled" } else { "Due" },
+            type_symbol: type_symbol(occ.item_type),
+            title: format!("{kind_name} (not yet created)"),
             materialize_url: materialize_url(project_id, &occ.series_id, occ.occurrence_date),
             skip_url: skip_url(project_id, &occ.series_id, occ.occurrence_date),
         }
@@ -263,7 +270,17 @@ fn render_rows(
     // Virtual occurrences have no `complete`/due-date-presence concept, so
     // `show_complete`/"All with due date" are no-ops for them by construction — every entry
     // here is always dated and always incomplete in effect.
+    //
+    // Task-typed occurrences are additionally clamped to `occurrence_date >= now` (Stage 8) —
+    // unlike an Event, a past-dated unmaterialized Task represents a real missed obligation,
+    // and deciding what that means (backlog, catch-up, ...) is deferred to Stage 9's own
+    // cursor-based design (see docs/recurring-events-virtual-occurrences-rough-plan.md). Until
+    // then this view simply doesn't surface one rather than half-answering the question.
+    let now = Utc::now();
     for occ in virtual_occurrences {
+        if occ.item_type == ItemKind::Task && occ.occurrence_date < now {
+            continue;
+        }
         entries.push((
             occ.occurrence_date.timestamp(),
             ProjectDashboardVirtualRow::from_occurrence(occ, project_id, tz).render()?,
@@ -474,7 +491,13 @@ fn build_calendar_days(
                 });
         }
     }
+    // Task-typed occurrences are clamped to `occurrence_date >= now` — see the matching
+    // comment in `render_rows` above.
+    let now = Utc::now();
     for occ in virtual_occurrences {
+        if occ.item_type == ItemKind::Task && occ.occurrence_date < now {
+            continue;
+        }
         let local = to_local(occ.occurrence_date, tz);
         by_date
             .entry(local.date_naive())
@@ -484,7 +507,7 @@ fn build_calendar_days(
                 detail_link: "#".to_string(),
                 name: occ.series_name.clone(),
                 time_label: Some(local.format("%H:%M").to_string()),
-                type_symbol: "E",
+                type_symbol: type_symbol(occ.item_type),
                 materialize_url: Some(materialize_url(project_id, &occ.series_id, occ.occurrence_date)),
                 skip_url: Some(skip_url(project_id, &occ.series_id, occ.occurrence_date)),
                 is_virtual: true,

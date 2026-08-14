@@ -250,10 +250,17 @@ pub async fn list_series_for_project(
 /// Never overlaps with what the normal item queries (`list_due_by_project`,
 /// `list_project_events`, ...) return: a materialized date always has a row (excluded here),
 /// and a real `items` row is what those queries read from directly.
+///
+/// `item_type` (added Stage 8) is the series' own kind, carried through so callers can
+/// filter/label by it — before this field existed, every caller of
+/// `list_virtual_occurrences_for_project_unchecked` implicitly assumed Event, so a
+/// `TASK`-typed series (possible since Stage 7b) silently leaked its occurrences into
+/// every Stage 5 surface unfiltered and unlabeled. Stage 8 is what fixes that.
 #[derive(Debug, Clone, PartialEq)]
 pub struct VirtualOccurrence {
     pub series_id: String,
     pub series_name: String,
+    pub item_type: ItemKind,
     pub event_type: Option<String>,
     pub occurrence_date: DateTime<Utc>,
 }
@@ -305,6 +312,7 @@ pub async fn list_virtual_occurrences_for_project_unchecked(
                 result.push(VirtualOccurrence {
                     series_id: series.id.clone(),
                     series_name: series.name.clone(),
+                    item_type: series.item_type,
                     event_type: series.event_type.clone(),
                     occurrence_date: date,
                 });
@@ -1008,6 +1016,34 @@ mod tests {
         // anchor, +3d, +6d, +9d
         assert_eq!(result.len(), 4);
         assert!(result.iter().all(|o| o.series_id == "s1" && o.series_name == "Standup"));
+        assert!(result.iter().all(|o| o.item_type == ItemKind::Event));
+    }
+
+    #[tokio::test]
+    async fn list_virtual_occurrences_carries_item_type_from_a_task_typed_series() {
+        let mut task_series = series_ex("s1", "p1", "Take out trash", "every 3 days", anchor());
+        task_series.item_type = ItemKind::Task;
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock
+            .expect_list_series_for_project()
+            .returning(move |_| Ok(vec![task_series.clone()]));
+        series_mock
+            .expect_list_occurrences_between()
+            .returning(|_, _, _| Ok(vec![]));
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        let result = list_virtual_occurrences_for_project_unchecked(
+            &event_series,
+            "p1",
+            anchor(),
+            anchor() + chrono::Duration::days(10),
+            0,
+        )
+        .await
+        .expect("should succeed");
+
+        assert!(!result.is_empty());
+        assert!(result.iter().all(|o| o.item_type == ItemKind::Task));
     }
 
     #[tokio::test]

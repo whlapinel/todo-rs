@@ -3,11 +3,13 @@ pub mod handlers;
 
 use crate::domain::item::{Item, ItemKind};
 use crate::service::error::ItemError;
+use crate::service::item_series::VirtualOccurrence;
 use crate::service::project_items::list_project_items_unchecked;
 use crate::service::teams as team_service;
 use crate::storage::sqlite::{ItemRepo, TeamRepo};
 use crate::web_ui::project_tasks::templates::{
-    CalendarDay, CalendarTaskEntry, DateType, ProjectTaskRow, ProjectTaskRowsFragmentTemplate,
+    CalendarDay, CalendarTaskEntry, CalendarVirtualTaskEntry, DateType, ProjectTaskRow,
+    ProjectTaskRowsFragmentTemplate,
 };
 use askama::Template;
 use axum::response::Html;
@@ -428,20 +430,43 @@ pub(crate) fn next_month(year: i32, month: u32) -> (i32, u32) {
     }
 }
 
+/// The first (Monday-start) cell of the 6-row grid for `year`/`month` — hoisted out of
+/// `build_calendar_days` so the handler can compute the same grid's UTC date range before
+/// calling it (to bound the virtual-occurrence lookup), mirroring
+/// `project_events::grid_start_for`/`project_dashboard::grid_start_for`.
+pub(crate) fn grid_start_for(year: i32, month: u32) -> NaiveDate {
+    let first_of_month = NaiveDate::from_ymd_opt(year, month, 1).unwrap();
+    let leading = first_of_month.weekday().num_days_from_monday();
+    first_of_month - chrono::Duration::days(leading as i64)
+}
+
+/// Converts a local calendar date + time-of-day into the UTC instant it represents, given
+/// `tz_offset_minutes` — same convention as `project_events::local_date_to_utc`.
+pub(crate) fn local_date_to_utc(date: NaiveDate, time: chrono::NaiveTime, tz_offset_minutes: i32) -> DateTime<Utc> {
+    DateTime::<Utc>::from_naive_utc_and_offset(date.and_time(time), Utc)
+        + chrono::Duration::minutes(tz_offset_minutes as i64)
+}
+
 /// Builds the 42-cell (6-week, Monday-start) grid for `year`/`month`, bucketing `items` by
 /// local calendar day off `due_date` — mirrors `tasks::build_calendar_days` exactly (Tasks are
 /// due-date-primary); team-backed projects never had a calendar view before this stage, so
-/// this is a new capability for them, not a port of an existing one.
+/// this is a new capability for them, not a port of an existing one. `virtual_occurrences`
+/// (Stage 8 of docs/recurring-events-virtual-occurrences-rough-plan.md) are bucketed into a
+/// second, parallel per-day list (`CalendarDay::virtual_tasks`) rather than folded into
+/// `CalendarTaskEntry` — see `CalendarVirtualTaskEntry`'s own doc comment for why. Callers are
+/// expected to have already filtered `virtual_occurrences` to `item_type == Task` and to
+/// `occurrence_date >= now` (the Stage 8 past-date clamp — see `project_dashboard::render_rows`
+/// for the identical rationale).
 pub(crate) fn build_calendar_days(
     year: i32,
     month: u32,
+    project_id: &str,
     items: &[Item],
+    virtual_occurrences: &[VirtualOccurrence],
     tz: i32,
     today: NaiveDate,
 ) -> Vec<CalendarDay> {
-    let first_of_month = NaiveDate::from_ymd_opt(year, month, 1).unwrap();
-    let leading = first_of_month.weekday().num_days_from_monday();
-    let grid_start = first_of_month - chrono::Duration::days(leading as i64);
+    let grid_start = grid_start_for(year, month);
 
     let mut by_date: std::collections::HashMap<NaiveDate, Vec<CalendarTaskEntry>> =
         std::collections::HashMap::new();
@@ -496,17 +521,44 @@ pub(crate) fn build_calendar_days(
         }
     }
 
+    let mut virtual_by_date: std::collections::HashMap<NaiveDate, Vec<CalendarVirtualTaskEntry>> =
+        std::collections::HashMap::new();
+    for occ in virtual_occurrences {
+        let local = crate::web_ui::to_local(occ.occurrence_date, tz);
+        virtual_by_date
+            .entry(local.date_naive())
+            .or_default()
+            .push(CalendarVirtualTaskEntry {
+                entry_id: format!("cal-virtual-{}-{}", occ.series_id, occ.occurrence_date.timestamp()),
+                name: occ.series_name.clone(),
+                time_label: Some(local.format("%H:%M").to_string()),
+                materialize_url: format!(
+                    "/web/projects/{project_id}/series/{}/occurrences/{}",
+                    occ.series_id,
+                    occ.occurrence_date.timestamp(),
+                ),
+                skip_url: format!(
+                    "/web/projects/{project_id}/series/{}/occurrences/{}/skip",
+                    occ.series_id,
+                    occ.occurrence_date.timestamp(),
+                ),
+            });
+    }
+
     let mut days = Vec::with_capacity(42);
     for i in 0..42i64 {
         let date = grid_start + chrono::Duration::days(i);
         let mut tasks = by_date.remove(&date).unwrap_or_default();
         tasks.sort_by(|a, b| a.time_label.cmp(&b.time_label));
+        let mut virtual_tasks = virtual_by_date.remove(&date).unwrap_or_default();
+        virtual_tasks.sort_by(|a, b| a.time_label.cmp(&b.time_label));
         days.push(CalendarDay {
             date: date.format("%Y-%m-%d").to_string(),
             day_number: date.day(),
             is_current_month: date.month() == month && date.year() == year,
             is_today: date == today,
             tasks,
+            virtual_tasks,
         });
     }
     days

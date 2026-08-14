@@ -120,14 +120,19 @@ pub async fn project_events_calendar_page(
         NaiveTime::from_hms_opt(23, 59, 59).unwrap(),
         tz,
     );
-    let virtual_occurrences = event_series_service::list_virtual_occurrences_for_project_unchecked(
+    // Filtered to Event-typed series only (Stage 8) — Task-typed series get their own
+    // equivalent surface on the Tasks calendar instead of doubling up here.
+    let virtual_occurrences: Vec<_> = event_series_service::list_virtual_occurrences_for_project_unchecked(
         &event_series,
         &project_id,
         range_start,
         range_end,
         tz,
     )
-    .await?;
+    .await?
+    .into_iter()
+    .filter(|occ| occ.item_type == ItemKind::Event)
+    .collect();
     let days = build_calendar_days(year, month, &project_id, &items, &virtual_occurrences, tz, today);
     let (prev_year, prev_month) = prev_month(year, month);
     let (next_year, next_month) = next_month(year, month);
