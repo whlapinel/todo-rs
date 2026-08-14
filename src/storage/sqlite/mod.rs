@@ -325,6 +325,18 @@ pub trait ItemSeriesRepo: Send + Sync {
         &self,
         item_id: &str,
     ) -> Result<Option<ItemOccurrence>, RepoError>;
+    /// Stage 9: forward-only cursor advance for a Task-typed series — sets
+    /// `cursor_date = MAX(cursor_date, occurrence_date)` atomically (a `NULL` cursor
+    /// counts as `occurrence_date` itself), so completing/skipping occurrences out of
+    /// order can never move the cursor backward. Called from both the completion hook
+    /// (`service::item_series::record_task_completion`) and `skip_occurrence` — the two
+    /// actions that "settle" an occurrence, per docs/recurring-events-virtual-occurrences-rough-plan.md's
+    /// Stage 9 cursor design.
+    async fn advance_cursor(
+        &self,
+        series_id: &str,
+        occurrence_date: DateTime<Utc>,
+    ) -> Result<(), RepoError>;
 }
 
 fn db_err(e: sqlx::Error) -> RepoError {
@@ -617,7 +629,8 @@ pub async fn create_pool(url: &str) -> Result<SqlitePool, sqlx::Error> {
             event_type TEXT,
             recurrence TEXT NOT NULL,
             anchor_date INTEGER NOT NULL,
-            item_type TEXT NOT NULL DEFAULT 'EVENT'
+            item_type TEXT NOT NULL DEFAULT 'EVENT',
+            cursor_date INTEGER
         )",
     )
     .execute(&pool)

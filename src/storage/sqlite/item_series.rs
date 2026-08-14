@@ -21,6 +21,7 @@ fn from_secs(secs: i64) -> DateTime<Utc> {
 fn row_to_series(row: &sqlx::sqlite::SqliteRow) -> ItemSeries {
     let anchor_secs: i64 = row.get("anchor_date");
     let item_type: String = row.get("item_type");
+    let cursor_secs: Option<i64> = row.get("cursor_date");
     ItemSeries {
         id: row.get("id"),
         project_id: row.get("project_id"),
@@ -30,6 +31,7 @@ fn row_to_series(row: &sqlx::sqlite::SqliteRow) -> ItemSeries {
         recurrence: row.get("recurrence"),
         anchor_date: from_secs(anchor_secs),
         item_type: item_type.parse().unwrap_or(ItemKind::Event),
+        cursor_date: cursor_secs.map(from_secs),
     }
 }
 
@@ -89,7 +91,7 @@ impl ItemSeriesRepo for SqliteItemSeriesRepo {
 
     async fn get_series(&self, series_id: &str) -> Result<ItemSeries, RepoError> {
         sqlx::query(
-            "SELECT id, project_id, name, description, event_type, recurrence, anchor_date, item_type \
+            "SELECT id, project_id, name, description, event_type, recurrence, anchor_date, item_type, cursor_date \
              FROM item_series WHERE id = ?",
         )
         .bind(series_id)
@@ -102,7 +104,7 @@ impl ItemSeriesRepo for SqliteItemSeriesRepo {
 
     async fn list_series_for_project(&self, project_id: &str) -> Result<Vec<ItemSeries>, RepoError> {
         sqlx::query(
-            "SELECT id, project_id, name, description, event_type, recurrence, anchor_date, item_type \
+            "SELECT id, project_id, name, description, event_type, recurrence, anchor_date, item_type, cursor_date \
              FROM item_series WHERE project_id = ? ORDER BY name ASC",
         )
         .bind(project_id)
@@ -203,6 +205,31 @@ impl ItemSeriesRepo for SqliteItemSeriesRepo {
         .map_err(db_err)
         .map(|row| row.map(|row| row_to_occurrence(&row)))
     }
+
+    async fn advance_cursor(
+        &self,
+        series_id: &str,
+        occurrence_date: DateTime<Utc>,
+    ) -> Result<(), RepoError> {
+        let secs = to_secs(occurrence_date);
+        // SQLite's multi-arg max() is the scalar "largest of these values" form, not the
+        // single-arg aggregate — `COALESCE(cursor_date, ?)` makes a NULL cursor compare as
+        // `secs` itself, so a first-ever advance sets cursor_date = secs in the same
+        // statement as a forward move, with no separate read-then-write race.
+        let result = sqlx::query(
+            "UPDATE item_series SET cursor_date = MAX(COALESCE(cursor_date, ?), ?) WHERE id = ?",
+        )
+        .bind(secs)
+        .bind(secs)
+        .bind(series_id)
+        .execute(&self.0)
+        .await
+        .map_err(db_err)?;
+        if result.rows_affected() == 0 {
+            return Err(not_found());
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -225,7 +252,8 @@ mod tests {
                 event_type TEXT,
                 recurrence TEXT NOT NULL,
                 anchor_date INTEGER NOT NULL,
-                item_type TEXT NOT NULL DEFAULT 'EVENT'
+                item_type TEXT NOT NULL DEFAULT 'EVENT',
+                cursor_date INTEGER
             )",
         )
         .execute(&pool)
@@ -260,6 +288,7 @@ mod tests {
             recurrence: "every weekday".to_string(),
             anchor_date: dt(1_000_000),
             item_type: ItemKind::Event,
+            cursor_date: None,
         }
     }
 
@@ -487,5 +516,50 @@ mod tests {
 
         let occurrence = repo.find_occurrence_by_item_id("some-unrelated-item").await.unwrap();
         assert!(occurrence.is_none());
+    }
+
+    #[tokio::test]
+    async fn advance_cursor_sets_cursor_from_a_null_starting_point() {
+        let pool = test_pool().await;
+        let repo = SqliteItemSeriesRepo(pool);
+        let id = repo.create_series(&sample_series("p1")).await.unwrap();
+        assert_eq!(repo.get_series(&id).await.unwrap().cursor_date, None);
+
+        repo.advance_cursor(&id, dt(2_000_000)).await.unwrap();
+
+        assert_eq!(repo.get_series(&id).await.unwrap().cursor_date, Some(dt(2_000_000)));
+    }
+
+    #[tokio::test]
+    async fn advance_cursor_moves_forward() {
+        let pool = test_pool().await;
+        let repo = SqliteItemSeriesRepo(pool);
+        let id = repo.create_series(&sample_series("p1")).await.unwrap();
+        repo.advance_cursor(&id, dt(2_000_000)).await.unwrap();
+
+        repo.advance_cursor(&id, dt(3_000_000)).await.unwrap();
+
+        assert_eq!(repo.get_series(&id).await.unwrap().cursor_date, Some(dt(3_000_000)));
+    }
+
+    #[tokio::test]
+    async fn advance_cursor_never_moves_backward() {
+        let pool = test_pool().await;
+        let repo = SqliteItemSeriesRepo(pool);
+        let id = repo.create_series(&sample_series("p1")).await.unwrap();
+        repo.advance_cursor(&id, dt(3_000_000)).await.unwrap();
+
+        repo.advance_cursor(&id, dt(2_000_000)).await.unwrap();
+
+        assert_eq!(repo.get_series(&id).await.unwrap().cursor_date, Some(dt(3_000_000)));
+    }
+
+    #[tokio::test]
+    async fn advance_cursor_missing_series_returns_not_found() {
+        let pool = test_pool().await;
+        let repo = SqliteItemSeriesRepo(pool);
+
+        let err = repo.advance_cursor("missing", dt(2_000_000)).await.unwrap_err();
+        assert!(matches!(err, RepoError::NotFound));
     }
 }

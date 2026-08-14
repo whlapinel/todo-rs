@@ -354,17 +354,30 @@ pub struct UpdateProjectItemParams {
 /// `activity_log` is only ever touched on the team-backed branch (points award/
 /// reversal, see `team_items::update_team_item`); the personal branch's
 /// `items::update_item` has no use for it at all.
+///
+/// `event_series` (Stage 9 of docs/recurring-events-virtual-occurrences-rough-plan.md)
+/// is the completion-side counterpart to `delete_project_item`'s own `event_series`
+/// parameter: after a successful update that requests `complete: true`, this calls
+/// `item_series::record_task_completion` — a cheap no-op for the overwhelmingly common
+/// case (`item_id` never came from a series). Gated on `params.complete` rather than
+/// on detecting an actual incomplete→complete *transition*, since `record_task_completion`'s
+/// own cursor advance is already idempotent (`advance_cursor`'s forward-only max) — no
+/// extra pre-read of the item's prior state is needed to make this safe to call on a
+/// no-op re-completion.
 pub async fn update_project_item(
     repo: &Arc<dyn ItemRepo>,
     projects: &Arc<dyn ProjectRepo>,
     teams: &Arc<dyn TeamRepo>,
     activity_log: &Arc<dyn ActivityLogRepo>,
+    event_series: &Arc<dyn ItemSeriesRepo>,
     requester_user_id: &str,
     params: UpdateProjectItemParams,
 ) -> Result<(), ItemError> {
     require_project_member(projects, teams, &params.project_id, requester_user_id).await?;
     let project = projects.get(&params.project_id).await?;
-    match project.team_id {
+    let complete = params.complete;
+    let item_id = params.item_id.clone();
+    let result = match project.team_id {
         Some(team_id) => {
             team_items::update_team_item(
                 repo,
@@ -428,7 +441,12 @@ pub async fn update_project_item(
             )
             .await
         }
+    };
+    result?;
+    if complete {
+        item_series::record_task_completion(event_series, &item_id).await?;
     }
+    Ok(())
 }
 
 /// Stage B4's unified delete path — same delegation shape as `create_project_item`.
@@ -715,12 +733,14 @@ mod tests {
 
         let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
         let activity_log: Arc<dyn ActivityLogRepo> = Arc::new(MockActivityLogRepo::new());
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(MockItemSeriesRepo::new());
 
         update_project_item(
             &repo,
             &projects,
             &teams,
             &activity_log,
+            &event_series,
             "owner1",
             UpdateProjectItemParams {
                 project_id: "p1".to_string(),
@@ -732,6 +752,50 @@ mod tests {
         )
         .await
         .expect("should update personal project item");
+    }
+
+    #[tokio::test]
+    async fn update_project_item_triggers_series_completion_hook_when_completing() {
+        let mut projects_mock = MockProjectRepo::new();
+        projects_mock.expect_get().returning(|_| Ok(personal_project()));
+        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
+
+        let mut items_mock = MockItemRepo::new();
+        items_mock
+            .expect_get()
+            .returning(|_, _| Ok(Item::new_user_item("owner1", "Old name")));
+        items_mock.expect_list_children().returning(|_| Ok(vec![]));
+        items_mock.expect_update().times(1).returning(|_| Ok(()));
+        let repo: Arc<dyn ItemRepo> = Arc::new(items_mock);
+
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+        let activity_log: Arc<dyn ActivityLogRepo> = Arc::new(MockActivityLogRepo::new());
+
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock
+            .expect_find_occurrence_by_item_id()
+            .withf(|item_id: &str| item_id == "i1")
+            .times(1)
+            .returning(|_| Ok(None));
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        update_project_item(
+            &repo,
+            &projects,
+            &teams,
+            &activity_log,
+            &event_series,
+            "owner1",
+            UpdateProjectItemParams {
+                project_id: "p1".to_string(),
+                item_id: "i1".to_string(),
+                name: "Old name".to_string(),
+                complete: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("should update and check for a linked series occurrence");
     }
 
     #[tokio::test]
@@ -756,12 +820,14 @@ mod tests {
         let repo: Arc<dyn ItemRepo> = Arc::new(items_mock);
 
         let activity_log: Arc<dyn ActivityLogRepo> = Arc::new(MockActivityLogRepo::new());
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(MockItemSeriesRepo::new());
 
         update_project_item(
             &repo,
             &projects,
             &teams,
             &activity_log,
+            &event_series,
             "member1",
             UpdateProjectItemParams {
                 project_id: "p1".to_string(),
@@ -869,12 +935,14 @@ mod tests {
         let repo: Arc<dyn ItemRepo> = Arc::new(items_mock);
 
         let activity_log: Arc<dyn ActivityLogRepo> = Arc::new(MockActivityLogRepo::new());
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(MockItemSeriesRepo::new());
 
         update_project_item(
             &repo,
             &projects,
             &teams,
             &activity_log,
+            &event_series,
             "member1",
             UpdateProjectItemParams {
                 project_id: "p1".to_string(),

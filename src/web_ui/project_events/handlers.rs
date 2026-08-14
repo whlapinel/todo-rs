@@ -361,6 +361,7 @@ pub async fn update_project_event_form(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(activity_log): Extension<Arc<dyn crate::storage::sqlite::ActivityLogRepo>>,
+    Extension(event_series): Extension<Arc<dyn ItemSeriesRepo>>,
     TzOffset(tz): TzOffset,
     Form(form): Form<ProjectEventForm>,
 ) -> Result<Response, ItemError> {
@@ -381,6 +382,7 @@ pub async fn update_project_event_form(
         &projects,
         &teams,
         &activity_log,
+        &event_series,
         &auth_user.user_id,
         params,
     )

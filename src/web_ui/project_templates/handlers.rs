@@ -440,6 +440,7 @@ pub async fn update_project_template_child_form(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(activity_log): Extension<Arc<dyn crate::storage::sqlite::ActivityLogRepo>>,
+    Extension(event_series): Extension<Arc<dyn ItemSeriesRepo>>,
     Form(form): Form<ProjectTemplateChildForm>,
 ) -> Result<Response, ItemError> {
     let close = form.redirect.is_some();
@@ -474,6 +475,7 @@ pub async fn update_project_template_child_form(
         &projects,
         &teams,
         &activity_log,
+        &event_series,
         &auth_user.user_id,
         params,
     )

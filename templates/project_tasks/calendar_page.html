@@ -92,7 +92,11 @@
               <p class="flex-auto truncate font-medium italic text-gray-500 dark:text-gray-400">{{ v.name }}</p>
               {% if let Some(tl) = v.time_label %}<span
                 class="ml-2 hidden flex-none text-gray-500 xl:block dark:text-gray-400">{{ tl }}</span>{% endif %}
+              {% if v.is_current %}
+              <span class="shrink-0 text-[10px] uppercase tracking-wide font-semibold text-indigo-600 dark:text-indigo-400">Current</span>
+              {% else %}
               <span class="shrink-0 text-[10px] uppercase tracking-wide text-gray-400 dark:text-gray-500">Planned</span>
+              {% endif %}
             </a>
             <button type="button" hx-post="{{ v.skip_url }}" hx-confirm="Skip this occurrence?"
               hx-target="#{{ v.entry_id }}" hx-select="unset" hx-swap="outerHTML swap:200ms"

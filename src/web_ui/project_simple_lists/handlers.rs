@@ -255,6 +255,7 @@ pub async fn update_project_simple_item_form(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(activity_log): Extension<Arc<dyn crate::storage::sqlite::ActivityLogRepo>>,
+    Extension(event_series): Extension<Arc<dyn ItemSeriesRepo>>,
     Form(form): Form<ProjectSimpleItemForm>,
 ) -> Result<Response, ItemError> {
     let current = project_item_service::get_project_item(
@@ -274,6 +275,7 @@ pub async fn update_project_simple_item_form(
         &projects,
         &teams,
         &activity_log,
+        &event_series,
         &auth_user.user_id,
         params,
     )
@@ -387,6 +389,7 @@ pub async fn promote_project_simple_item_form(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(activity_log): Extension<Arc<dyn crate::storage::sqlite::ActivityLogRepo>>,
+    Extension(event_series): Extension<Arc<dyn ItemSeriesRepo>>,
 ) -> Result<Response, ItemError> {
     let target = project_item_service::resolve_promotion_target(
         &repo,
@@ -410,6 +413,7 @@ pub async fn promote_project_simple_item_form(
         &projects,
         &teams,
         &activity_log,
+        &event_series,
         &auth_user.user_id,
         params,
     )
@@ -436,6 +440,7 @@ pub async fn subordinate_project_simple_item_form(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(activity_log): Extension<Arc<dyn crate::storage::sqlite::ActivityLogRepo>>,
+    Extension(event_series): Extension<Arc<dyn ItemSeriesRepo>>,
     Form(form): Form<SubordinateForm>,
 ) -> Result<Response, ItemError> {
     let target = project_item_service::resolve_subordination_target(
@@ -456,6 +461,7 @@ pub async fn subordinate_project_simple_item_form(
         &projects,
         &teams,
         &activity_log,
+        &event_series,
         &auth_user.user_id,
         params,
     )

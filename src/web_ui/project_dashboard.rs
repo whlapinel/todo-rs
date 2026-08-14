@@ -193,6 +193,9 @@ struct ProjectDashboardVirtualRow {
     title: String,
     materialize_url: String,
     skip_url: String,
+    /// Stage 9: whether this is the series' `current_occurrence_date` — see
+    /// `service::item_series::current_occurrence_date`'s doc comment.
+    is_current: bool,
 }
 
 impl ProjectDashboardVirtualRow {
@@ -209,6 +212,7 @@ impl ProjectDashboardVirtualRow {
             title: format!("{kind_name} (not yet created)"),
             materialize_url: materialize_url(project_id, &occ.series_id, occ.occurrence_date),
             skip_url: skip_url(project_id, &occ.series_id, occ.occurrence_date),
+            is_current: occ.is_current,
         }
     }
 }
@@ -271,16 +275,11 @@ fn render_rows(
     // `show_complete`/"All with due date" are no-ops for them by construction — every entry
     // here is always dated and always incomplete in effect.
     //
-    // Task-typed occurrences are additionally clamped to `occurrence_date >= now` (Stage 8) —
-    // unlike an Event, a past-dated unmaterialized Task represents a real missed obligation,
-    // and deciding what that means (backlog, catch-up, ...) is deferred to Stage 9's own
-    // cursor-based design (see docs/recurring-events-virtual-occurrences-rough-plan.md). Until
-    // then this view simply doesn't surface one rather than half-answering the question.
-    let now = Utc::now();
+    // The Task-typed past-date clamp (Stage 8) and `is_current` computation (Stage 9) now
+    // live inside `item_series::list_virtual_occurrences_for_project_unchecked` itself — a
+    // backlogged Task series' one settleable occurrence surfaces here like any other entry,
+    // just marked `is_current` for the template to badge.
     for occ in virtual_occurrences {
-        if occ.item_type == ItemKind::Task && occ.occurrence_date < now {
-            continue;
-        }
         entries.push((
             occ.occurrence_date.timestamp(),
             ProjectDashboardVirtualRow::from_occurrence(occ, project_id, tz).render()?,
@@ -393,6 +392,10 @@ struct ProjectDashboardCalendarEntry {
     /// page, per docs/recurring-events-virtual-occurrences-rough-plan.md's stage 6 write-up.
     skip_url: Option<String>,
     is_virtual: bool,
+    /// Stage 9: `false` for a materialized entry (no visible "current" marker — see
+    /// Stage 6's write-up on why materialized occurrences stay unmarked); for a virtual
+    /// one, whether it's the series' `current_occurrence_date`.
+    is_current: bool,
 }
 
 struct ProjectDashboardCalendarDay {
@@ -488,16 +491,13 @@ fn build_calendar_days(
                     materialize_url: None,
                     skip_url: None,
                     is_virtual: false,
+                    is_current: false,
                 });
         }
     }
-    // Task-typed occurrences are clamped to `occurrence_date >= now` — see the matching
-    // comment in `render_rows` above.
-    let now = Utc::now();
+    // The Task-typed past-date clamp (Stage 8) and `is_current` computation (Stage 9) now
+    // live inside `item_series::list_virtual_occurrences_for_project_unchecked` itself.
     for occ in virtual_occurrences {
-        if occ.item_type == ItemKind::Task && occ.occurrence_date < now {
-            continue;
-        }
         let local = to_local(occ.occurrence_date, tz);
         by_date
             .entry(local.date_naive())
@@ -511,6 +511,7 @@ fn build_calendar_days(
                 materialize_url: Some(materialize_url(project_id, &occ.series_id, occ.occurrence_date)),
                 skip_url: Some(skip_url(project_id, &occ.series_id, occ.occurrence_date)),
                 is_virtual: true,
+                is_current: occ.is_current,
             });
     }
 
@@ -614,6 +615,7 @@ pub async fn toggle_project_dashboard_item_complete(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(activity_log): Extension<Arc<dyn ActivityLogRepo>>,
+    Extension(event_series): Extension<Arc<dyn ItemSeriesRepo>>,
     TzOffset(tz): TzOffset,
     Form(form): Form<ToggleForm>,
 ) -> Result<Html<String>, ItemError> {
@@ -654,6 +656,7 @@ pub async fn toggle_project_dashboard_item_complete(
         &projects,
         &teams,
         &activity_log,
+        &event_series,
         &auth_user.user_id,
         params,
     )

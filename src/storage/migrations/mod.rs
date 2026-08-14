@@ -4,6 +4,7 @@ mod add_event_series;
 mod add_item_description;
 mod add_item_points;
 mod add_item_series;
+mod add_item_series_cursor_date;
 mod add_item_source_event_id;
 mod add_projects;
 mod add_team_member_role;
@@ -20,6 +21,7 @@ use add_event_occurrences_item_id_index::AddEventOccurrencesItemIdIndex;
 use add_event_series::AddEventSeries;
 use add_item_description::AddItemDescription;
 use add_item_series::AddItemSeries;
+use add_item_series_cursor_date::AddItemSeriesCursorDate;
 use add_item_points::AddItemPoints;
 use add_item_source_event_id::AddItemSourceEventId;
 use add_projects::AddProjects;
@@ -83,6 +85,7 @@ fn all_migrations() -> Vec<Box<dyn Migration>> {
         Box::new(DropItemsTeamId),
         Box::new(AddEventOccurrencesItemIdIndex),
         Box::new(AddItemSeries),
+        Box::new(AddItemSeriesCursorDate),
     ]
 }
 
@@ -305,7 +308,8 @@ mod tests {
                 event_type TEXT,
                 recurrence TEXT NOT NULL,
                 anchor_date INTEGER NOT NULL,
-                item_type TEXT NOT NULL DEFAULT 'EVENT'
+                item_type TEXT NOT NULL DEFAULT 'EVENT',
+                cursor_date INTEGER
             )",
         )
         .execute(&pool)
@@ -471,7 +475,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 16);
+        assert_eq!(applied_count, 17);
     }
 
     #[tokio::test]
@@ -484,7 +488,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 16);
+        assert_eq!(applied_count, 17);
     }
 
     #[tokio::test]
@@ -498,6 +502,6 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 16);
+        assert_eq!(applied_count, 17);
     }
 }

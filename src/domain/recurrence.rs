@@ -145,6 +145,17 @@ pub fn next_date(rule: &RecurrenceRule, reference: DateTime<Utc>, tz_offset_minu
     next
 }
 
+/// One step forward from `reference`, per `rule` — unlike `next_date`, this never clamps
+/// to be after `Utc::now()`, so it can legitimately return a date in the past. This is
+/// the primitive a Task-typed `item_series`' "current occurrence" is derived from (see
+/// docs/recurring-events-virtual-occurrences-rough-plan.md's Stage 9): a backlogged
+/// series needs its next unsettled occurrence to actually surface as "current," not be
+/// silently skipped past the way the legacy single-row recurrence mechanism's
+/// `next_date` would skip it.
+pub fn advance_once(rule: &RecurrenceRule, reference: DateTime<Utc>, tz_offset_minutes: i32) -> DateTime<Utc> {
+    advance(rule, reference, tz_offset_minutes)
+}
+
 fn advance(rule: &RecurrenceRule, from: DateTime<Utc>, tz_offset_minutes: i32) -> DateTime<Utc> {
     use chrono::Timelike;
     let next = match &rule.unit {

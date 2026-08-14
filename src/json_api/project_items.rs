@@ -137,6 +137,7 @@ pub async fn update_project_item(
     server::Extension(projects): server::Extension<Arc<dyn ProjectRepo>>,
     server::Extension(teams): server::Extension<Arc<dyn TeamRepo>>,
     server::Extension(activity_log): server::Extension<Arc<dyn ActivityLogRepo>>,
+    server::Extension(event_series): server::Extension<Arc<dyn ItemSeriesRepo>>,
     server::Extension(auth): server::Extension<AuthUser>,
 ) -> Result<output::UpdateProjectItemOutput, error::UpdateProjectItemError> {
     let due_date = input
@@ -156,6 +157,7 @@ pub async fn update_project_item(
         &projects,
         &teams,
         &activity_log,
+        &event_series,
         &auth.user_id,
         UpdateProjectItemParams {
             project_id: input.project_id,

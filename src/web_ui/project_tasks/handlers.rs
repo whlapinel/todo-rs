@@ -155,9 +155,8 @@ pub async fn project_tasks_calendar_page(
         tz,
     );
     // Filtered to Task-typed series only (Event-typed have their own home on the Events
-    // calendar) and clamped to `occurrence_date >= now` (Stage 8's past-date clamp — see
-    // `project_dashboard::render_rows` for the rationale).
-    let now = Utc::now();
+    // calendar) — the past-date clamp (Stage 8) and `is_current` computation (Stage 9) now
+    // live inside `list_virtual_occurrences_for_project_unchecked` itself.
     let virtual_occurrences: Vec<_> = item_series_service::list_virtual_occurrences_for_project_unchecked(
         &event_series,
         &project_id,
@@ -167,7 +166,7 @@ pub async fn project_tasks_calendar_page(
     )
     .await?
     .into_iter()
-    .filter(|occ| occ.item_type == ItemKind::Task && occ.occurrence_date >= now)
+    .filter(|occ| occ.item_type == ItemKind::Task)
     .collect();
     let days = build_calendar_days(year, month, &project_id, &items, &virtual_occurrences, tz, today);
     let (prev_year, prev_month) = prev_month(year, month);
@@ -479,6 +478,7 @@ pub async fn update_project_task_form(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(activity_log): Extension<Arc<dyn ActivityLogRepo>>,
+    Extension(event_series): Extension<Arc<dyn ItemSeriesRepo>>,
     TzOffset(tz): TzOffset,
     Form(form): Form<ProjectTaskForm>,
 ) -> Result<Response, ItemError> {
@@ -492,6 +492,7 @@ pub async fn update_project_task_form(
         &projects,
         &teams,
         &activity_log,
+        &event_series,
         &auth_user.user_id,
         params,
     )
@@ -683,6 +684,7 @@ pub async fn promote_project_task_form(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(activity_log): Extension<Arc<dyn ActivityLogRepo>>,
+    Extension(event_series): Extension<Arc<dyn ItemSeriesRepo>>,
     TzOffset(tz): TzOffset,
 ) -> Result<Response, ItemError> {
     let target = project_item_service::resolve_promotion_target(
@@ -709,6 +711,7 @@ pub async fn promote_project_task_form(
         &projects,
         &teams,
         &activity_log,
+        &event_series,
         &auth_user.user_id,
         params,
     )
@@ -735,6 +738,7 @@ pub async fn subordinate_project_task_form(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(activity_log): Extension<Arc<dyn ActivityLogRepo>>,
+    Extension(event_series): Extension<Arc<dyn ItemSeriesRepo>>,
     TzOffset(tz): TzOffset,
     Form(form): Form<SubordinateForm>,
 ) -> Result<Response, ItemError> {
@@ -763,6 +767,7 @@ pub async fn subordinate_project_task_form(
         &projects,
         &teams,
         &activity_log,
+        &event_series,
         &auth_user.user_id,
         params,
     )

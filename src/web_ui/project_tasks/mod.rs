@@ -454,9 +454,10 @@ pub(crate) fn local_date_to_utc(date: NaiveDate, time: chrono::NaiveTime, tz_off
 /// (Stage 8 of docs/recurring-events-virtual-occurrences-rough-plan.md) are bucketed into a
 /// second, parallel per-day list (`CalendarDay::virtual_tasks`) rather than folded into
 /// `CalendarTaskEntry` — see `CalendarVirtualTaskEntry`'s own doc comment for why. Callers are
-/// expected to have already filtered `virtual_occurrences` to `item_type == Task` and to
-/// `occurrence_date >= now` (the Stage 8 past-date clamp — see `project_dashboard::render_rows`
-/// for the identical rationale).
+/// expected to have already filtered `virtual_occurrences` to `item_type == Task` — the
+/// past-date clamp itself (Stage 8) now lives inside
+/// `item_series::list_virtual_occurrences_for_project_unchecked` (Stage 9), which also computes
+/// `is_current` per occurrence, so this function no longer needs to re-derive either.
 pub(crate) fn build_calendar_days(
     year: i32,
     month: u32,
@@ -542,6 +543,7 @@ pub(crate) fn build_calendar_days(
                     occ.series_id,
                     occ.occurrence_date.timestamp(),
                 ),
+                is_current: occ.is_current,
             });
     }
 

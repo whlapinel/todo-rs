@@ -405,6 +405,10 @@ pub struct CalendarVirtualTaskEntry {
     pub time_label: Option<String>,
     pub materialize_url: String,
     pub skip_url: String,
+    /// Stage 9: whether this is the series' `current_occurrence_date` — the one
+    /// settleable occurrence a Task-typed series exposes, possibly backlogged into
+    /// the past (see `service::item_series::current_occurrence_date`).
+    pub is_current: bool,
 }
 
 pub struct CalendarDay {

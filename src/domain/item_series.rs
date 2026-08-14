@@ -28,6 +28,13 @@ pub struct ItemSeries {
     /// (when this field didn't exist) carries `Event`, via the migration's
     /// `DEFAULT 'EVENT'`/copy-with-'EVENT' — the only kind that existed then.
     pub item_type: ItemKind,
+    /// Stage 9: the most recent occurrence date a Task-typed series has settled
+    /// (completed or skipped) — not user-settable, only ever advanced via
+    /// `ItemSeriesRepo::advance_cursor` (a forward-only max, never regresses). `None`
+    /// means nothing has been settled yet, in which case the series' "current"
+    /// occurrence is its own `anchor_date`. Meaningless for `Event`-typed series, which
+    /// have no completion concept and so never advance it — always `None` for those.
+    pub cursor_date: Option<DateTime<Utc>>,
 }
 
 /// One occurrence date's materialization state within a series. A date with no row
