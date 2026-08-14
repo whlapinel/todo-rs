@@ -255,9 +255,14 @@ pub struct ProjectEventEditPageTemplate {
 }
 
 pub struct CalendarEventEntry {
-    pub id: String,
+    pub href: String,
     pub name: String,
     pub time_label: Option<String>,
+    /// `Some(...)` only for a virtual (unmaterialized) series occurrence (Stage 5 of
+    /// docs/recurring-events-virtual-occurrences-rough-plan.md) — the template POSTs here
+    /// instead of following `href` (which is `"#"` in that case).
+    pub materialize_url: Option<String>,
+    pub is_virtual: bool,
 }
 
 pub struct CalendarDay {

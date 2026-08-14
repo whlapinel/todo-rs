@@ -1,14 +1,16 @@
 use crate::auth::AuthUser;
 use crate::domain::item::ItemKind;
 use crate::service::error::ItemError;
+use crate::service::event_series::{self as event_series_service};
 use crate::service::project_items::{self as project_item_service};
 use crate::service::projects::{self as project_service};
 use crate::service::templates::{self as template_service, CreateProjectTemplateParams};
-use crate::storage::sqlite::{ItemRepo, ProjectRepo, TeamRepo};
+use crate::storage::sqlite::{EventSeriesRepo, ItemRepo, ProjectRepo, TeamRepo};
 use crate::web_ui::nav::{self, ActiveContext, SidebarSection};
 use crate::web_ui::project_events::{
-    build_calendar_days, create_params_from_form, list_project_events, next_month, prev_month,
-    render, require_event, update_params_from_form, ProjectEventForm,
+    build_calendar_days, create_params_from_form, grid_start_for, list_project_events,
+    local_date_to_utc, next_month, prev_month, render, require_event, update_params_from_form,
+    ProjectEventForm,
 };
 use crate::web_ui::project_events::templates::*;
 use crate::web_ui::project_tasks::handlers::render_source_event_fragment;
@@ -16,7 +18,7 @@ use crate::web_ui::TzOffset;
 use askama::Template;
 use axum::extract::{Extension, Form, Path, Query};
 use axum::response::{Html, IntoResponse, Response};
-use chrono::{Datelike, NaiveDate, Utc};
+use chrono::{Datelike, Duration, NaiveDate, NaiveTime, Utc};
 use std::sync::Arc;
 
 fn active_context(project_id: &str) -> ActiveContext {
@@ -98,6 +100,7 @@ pub async fn project_events_calendar_page(
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(event_series): Extension<Arc<dyn EventSeriesRepo>>,
     TzOffset(tz): TzOffset,
     Query(q): Query<CalendarQuery>,
 ) -> Result<Html<String>, ItemError> {
@@ -110,7 +113,22 @@ pub async fn project_events_calendar_page(
         .unwrap_or_else(|| today.month());
 
     let items = list_project_events(&repo, &project_id).await?;
-    let days = build_calendar_days(year, month, &items, tz, today);
+    let grid_start = grid_start_for(year, month);
+    let range_start = local_date_to_utc(grid_start, NaiveTime::from_hms_opt(0, 0, 0).unwrap(), tz);
+    let range_end = local_date_to_utc(
+        grid_start + Duration::days(41),
+        NaiveTime::from_hms_opt(23, 59, 59).unwrap(),
+        tz,
+    );
+    let virtual_occurrences = event_series_service::list_virtual_occurrences_for_project_unchecked(
+        &event_series,
+        &project_id,
+        range_start,
+        range_end,
+        tz,
+    )
+    .await?;
+    let days = build_calendar_days(year, month, &project_id, &items, &virtual_occurrences, tz, today);
     let (prev_year, prev_month) = prev_month(year, month);
     let (next_year, next_month) = next_month(year, month);
     let nav_html = nav::build_nav_html(

@@ -1,0 +1,14 @@
+<li id="proj-dash-virtual-{{ series_id }}-{{ occurrence_ts }}" class="py-2">
+  <div class="flex items-center gap-x-3">
+    <span class="shrink-0 size-4"></span>
+    <span
+      class="shrink-0 inline-flex size-4 items-center justify-center rounded-full bg-gray-200 text-[10px] font-semibold text-gray-600 dark:bg-white/10 dark:text-gray-300"
+      title="Event (not yet created)">E</span>
+    <a href="#" hx-post="{{ materialize_url }}" hx-target="#page" hx-select="#page" hx-swap="innerHTML"
+      class="min-w-0 flex-1 truncate italic text-gray-500 dark:text-gray-400">{{ name }}</a>
+    <span class="shrink-0 text-[10px] uppercase tracking-wide text-gray-400 dark:text-gray-500">Planned</span>
+  </div>
+  <div class="mt-1 flex items-center gap-x-3 pl-7 text-xs text-gray-500 dark:text-gray-400">
+    <span>Scheduled: {{ date_label }}</span>
+  </div>
+</li>

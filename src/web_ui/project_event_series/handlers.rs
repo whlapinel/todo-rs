@@ -2,7 +2,7 @@ use crate::auth::AuthUser;
 use crate::service::error::ItemError;
 use crate::service::event_series::{self as event_series_service, CreateEventSeriesParams};
 use crate::service::projects::{self as project_service};
-use crate::storage::sqlite::{EventSeriesRepo, ProjectRepo, TeamRepo};
+use crate::storage::sqlite::{EventSeriesRepo, ItemRepo, ProjectRepo, TeamRepo};
 use crate::web_ui::nav::{self, ActiveContext, SidebarSection};
 use crate::web_ui::project_event_series::templates::*;
 use crate::web_ui::project_event_series::{combine_local_to_utc, non_empty, render, start_of_day};
@@ -11,6 +11,7 @@ use askama::Template;
 use axum::extract::{Extension, Form, Path};
 use axum::http::header::HeaderName;
 use axum::response::{Html, IntoResponse, Response};
+use chrono::{DateTime, Utc};
 use std::sync::Arc;
 
 fn active_context(project_id: &str) -> ActiveContext {
@@ -120,6 +121,59 @@ pub async fn create_project_event_series_form(
         [(
             HeaderName::from_static("hx-redirect"),
             format!("/web/projects/{project_id}/series"),
+        )],
+        Html(String::new()),
+    )
+        .into_response())
+}
+
+/// Stage 5 of docs/recurring-events-virtual-occurrences-rough-plan.md — the "click a virtual
+/// occurrence" affordance. Materializes `(series_id, occurrence_ts)` into a real item (or
+/// returns the existing one if already materialized) and redirects to its detail page.
+///
+/// The `get_series` + project_id match check below is defense-in-depth for predictability,
+/// not strictly required for security: `get_or_materialize_occurrence` already resolves
+/// everything off `series.project_id` internally regardless of what's in the URL. But every
+/// sibling project-scoped detail route 404s on a project_id/resource mismatch rather than
+/// silently acting on a different project, and this route should behave the same way.
+pub async fn materialize_project_event_series_occurrence_form(
+    Path((project_id, series_id, occurrence_ts)): Path<(String, String, i64)>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(event_series): Extension<Arc<dyn EventSeriesRepo>>,
+) -> Result<Response, ItemError> {
+    let series = event_series_service::get_series(
+        &projects,
+        &teams,
+        &event_series,
+        &auth_user.user_id,
+        &series_id,
+    )
+    .await?;
+    if series.project_id != project_id {
+        return Err(ItemError::NotFound);
+    }
+
+    let occurrence_date = DateTime::<Utc>::from_timestamp(occurrence_ts, 0)
+        .ok_or_else(|| ItemError::Invalid("invalid occurrence timestamp".to_string()))?;
+
+    let item = event_series_service::get_or_materialize_occurrence(
+        &repo,
+        &projects,
+        &teams,
+        &event_series,
+        &auth_user.user_id,
+        &series_id,
+        occurrence_date,
+    )
+    .await?;
+
+    Ok((
+        [(
+            HeaderName::from_static("hx-redirect"),
+            format!("/web/projects/{project_id}/events/{}", item.id),
         )],
         Html(String::new()),
     )

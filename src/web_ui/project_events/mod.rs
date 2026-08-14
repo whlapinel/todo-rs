@@ -112,6 +112,14 @@ fn start_of_day() -> chrono::NaiveTime {
     chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap()
 }
 
+/// Converts a local calendar date + time-of-day into the UTC instant it represents, given
+/// `tz_offset_minutes` — same `local + offset = utc` convention as `combine_local_to_utc`
+/// above, just taking a `NaiveDate` directly instead of parsing one from a form string.
+pub(crate) fn local_date_to_utc(date: NaiveDate, time: chrono::NaiveTime, tz_offset_minutes: i32) -> DateTime<Utc> {
+    DateTime::<Utc>::from_naive_utc_and_offset(date.and_time(time), Utc)
+        + chrono::Duration::minutes(tz_offset_minutes as i64)
+}
+
 fn overlay_due_date(
     form_date: &Option<String>,
     form_time: &Option<String>,
@@ -326,19 +334,31 @@ fn calendar_has_time(item: &Item) -> bool {
     }
 }
 
+/// The first (Monday-start) cell of the 6-row grid for `year`/`month` — hoisted out of
+/// `build_calendar_days` so the handler can compute the same grid's UTC date range before
+/// calling it (to bound the virtual-occurrence lookup).
+pub(crate) fn grid_start_for(year: i32, month: u32) -> NaiveDate {
+    let first_of_month = NaiveDate::from_ymd_opt(year, month, 1).unwrap();
+    let leading = first_of_month.weekday().num_days_from_monday();
+    first_of_month - chrono::Duration::days(leading as i64)
+}
+
 /// Builds the 42-cell (6-week, Monday-start) grid for `year`/`month`, bucketing `items` by
 /// local calendar day via `calendar_date` — mirrors `events::build_calendar_days`/
-/// `team_events::build_calendar_days` exactly.
+/// `team_events::build_calendar_days` exactly. `virtual_occurrences` (Stage 5 of
+/// docs/recurring-events-virtual-occurrences-rough-plan.md) are bucketed the same way; a
+/// materialized occurrence never appears here since it's already a real `items` row covered
+/// by `items` above (see `event_series::list_virtual_occurrences_for_project_unchecked`).
 pub(crate) fn build_calendar_days(
     year: i32,
     month: u32,
+    project_id: &str,
     items: &[Item],
+    virtual_occurrences: &[crate::service::event_series::VirtualOccurrence],
     tz: i32,
     today: NaiveDate,
 ) -> Vec<CalendarDay> {
-    let first_of_month = NaiveDate::from_ymd_opt(year, month, 1).unwrap();
-    let leading = first_of_month.weekday().num_days_from_monday();
-    let grid_start = first_of_month - chrono::Duration::days(leading as i64);
+    let grid_start = grid_start_for(year, month);
 
     let mut by_date: std::collections::HashMap<NaiveDate, Vec<CalendarEventEntry>> =
         std::collections::HashMap::new();
@@ -350,11 +370,30 @@ pub(crate) fn build_calendar_days(
                 .entry(local.date_naive())
                 .or_default()
                 .push(CalendarEventEntry {
-                    id: item.id.clone(),
+                    href: format!("/web/projects/{project_id}/events/{}", item.id),
                     name: item.name.clone(),
                     time_label,
+                    materialize_url: None,
+                    is_virtual: false,
                 });
         }
+    }
+    for occ in virtual_occurrences {
+        let local = crate::web_ui::to_local(occ.occurrence_date, tz);
+        by_date
+            .entry(local.date_naive())
+            .or_default()
+            .push(CalendarEventEntry {
+                href: "#".to_string(),
+                name: occ.series_name.clone(),
+                time_label: Some(local.format("%H:%M").to_string()),
+                materialize_url: Some(format!(
+                    "/web/projects/{project_id}/series/{}/occurrences/{}",
+                    occ.series_id,
+                    occ.occurrence_date.timestamp(),
+                )),
+                is_virtual: true,
+            });
     }
 
     let mut days = Vec::with_capacity(42);
