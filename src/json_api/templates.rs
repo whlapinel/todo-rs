@@ -17,6 +17,7 @@ pub async fn create_template(
             description: input.description,
             source_item_id: input.source_item_id,
             event_type: input.event_type,
+            project_id: None,
         },
     )
     .await

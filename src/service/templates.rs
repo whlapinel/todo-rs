@@ -1,7 +1,6 @@
 use crate::domain::item::{Item, ItemType, Recurrence, Schedule};
 use crate::service::items::{copy_children_as_template, ItemError};
 use crate::service::projects::require_project_member;
-use crate::service::team_items::require_active_member;
 use crate::storage::sqlite::{ItemRepo, ProjectRepo, TeamRepo};
 use std::sync::Arc;
 
@@ -12,6 +11,11 @@ pub struct CreateTemplateParams {
     pub description: Option<String>,
     pub source_item_id: Option<String>,
     pub event_type: Option<String>,
+    /// Set by `create_project_template`'s personal-project branch (Stage 5 of
+    /// docs/team-id-removal-plan.md) so the new row is project-scoped from creation —
+    /// left `None` by the legacy `json_api::templates::create_template` handler,
+    /// matching that path's pre-Stage-5 behavior of never populating `project_id`.
+    pub project_id: Option<String>,
 }
 
 /// Moved from `json_api::templates::create_template`.
@@ -20,6 +24,7 @@ pub async fn create_template(
     params: CreateTemplateParams,
 ) -> Result<String, ItemError> {
     let mut item = Item::new_user_item(&params.user_id, &params.name);
+    item.project_id = params.project_id.clone();
     let mut schedule = Schedule::default();
     let mut recurrence = Recurrence::default();
     let mut event_type = None;
@@ -100,7 +105,7 @@ pub async fn update_template(
 
 #[derive(Debug, Default)]
 pub struct CreateTeamTemplateParams {
-    pub team_id: String,
+    pub project_id: String,
     pub requester_user_id: String,
     pub name: String,
     pub description: Option<String>,
@@ -110,15 +115,32 @@ pub struct CreateTeamTemplateParams {
 
 /// Team-scoped twin of `create_template` above. Reuses `copy_children_as_template`
 /// unchanged — it already just `child.clone()`s before overwriting template-specific
-/// fields, so it carries over whichever of `user_id`/`team_id` the source subtree had.
+/// fields, so it carries over whichever of `user_id`/`team_id`/`project_id` the source
+/// subtree had.
+///
+/// Rewritten in Stage 5 of docs/team-id-removal-plan.md to be `project_id`-primary,
+/// mirroring `team_items::create_team_item`'s own Stage 4 rewrite: `team_id` is
+/// threaded in as a plain parameter (not a `CreateTeamTemplateParams` field) purely to
+/// dual-write `items.team_id` on the created row. `ItemRepo::list_team_templates` (the
+/// repo method backing the still-live legacy `ListTeamTemplates` json_api operation)
+/// queries by that column directly and isn't migrated off it until Stage 6 — without
+/// this dual-write, a template created via this function between Stage 5 and Stage 6
+/// shipping would silently vanish from that endpoint. Both callers — this file's own
+/// `create_project_template` and the legacy `json_api::team_templates::
+/// create_team_template` handler (which resolves it via `projects.get_by_team`) —
+/// already have this value before calling in, so nothing extra is fetched here.
 pub async fn create_team_template(
     repo: &Arc<dyn ItemRepo>,
     teams: &Arc<dyn TeamRepo>,
+    projects: &Arc<dyn ProjectRepo>,
+    team_id: &str,
     params: CreateTeamTemplateParams,
 ) -> Result<String, ItemError> {
-    require_active_member(teams, &params.team_id, &params.requester_user_id).await?;
+    require_project_member(projects, teams, &params.project_id, &params.requester_user_id).await?;
 
-    let mut item = Item::new_team_item(&params.team_id, &params.name);
+    let mut item = Item::new_project_item(&params.project_id, &params.name);
+    // Dual-write — see this function's own doc comment above.
+    item.team_id = Some(team_id.to_string());
     let mut schedule = Schedule::default();
     let mut recurrence = Recurrence::default();
     let mut event_type = None;
@@ -126,8 +148,8 @@ pub async fn create_team_template(
 
     let source_id = params.source_item_id;
     if let Some(source_id) = &source_id {
-        // get_team_item (not get) confirms the source item actually belongs to this team.
-        let source = repo.get_team_item(&params.team_id, source_id).await?;
+        // get_by_project (not get) confirms the source item actually belongs to this project.
+        let source = repo.get_by_project(&params.project_id, source_id).await?;
         if matches!(source.item_type, ItemType::Simple) {
             return Err(ItemError::Invalid(
                 "Simple list items cannot be saved as templates".to_string(),
@@ -167,7 +189,7 @@ pub async fn create_team_template(
 
 #[derive(Debug, Default)]
 pub struct UpdateTeamTemplateParams {
-    pub team_id: String,
+    pub project_id: String,
     pub requester_user_id: String,
     pub template_id: String,
     pub name: String,
@@ -175,15 +197,20 @@ pub struct UpdateTeamTemplateParams {
     pub event_type: Option<String>,
 }
 
-/// Team-scoped twin of `update_template` above.
+/// Team-scoped twin of `update_template` above. Rewritten in Stage 5 of
+/// docs/team-id-removal-plan.md to be `project_id`-primary — unlike
+/// `create_team_template` above, no `team_id` dual-write is needed here:
+/// `update_by_project`'s `UPDATE` statement never touches the `team_id` column at all,
+/// the same finding `team_items::update_team_item`'s own Stage 4 rewrite made.
 pub async fn update_team_template(
     repo: &Arc<dyn ItemRepo>,
     teams: &Arc<dyn TeamRepo>,
+    projects: &Arc<dyn ProjectRepo>,
     params: UpdateTeamTemplateParams,
 ) -> Result<(), ItemError> {
-    require_active_member(teams, &params.team_id, &params.requester_user_id).await?;
+    require_project_member(projects, teams, &params.project_id, &params.requester_user_id).await?;
 
-    let current = repo.get_team_item(&params.team_id, &params.template_id).await?;
+    let current = repo.get_by_project(&params.project_id, &params.template_id).await?;
     if !matches!(current.item_type, ItemType::Template { .. }) {
         return Err(ItemError::Invalid("item is not a template".to_string()));
     }
@@ -195,20 +222,21 @@ pub async fn update_team_template(
         *event_type = params.event_type;
     }
 
-    repo.update_team_item(&item).await?;
+    repo.update_by_project(&item).await?;
     Ok(())
 }
 
-/// Stage B5d's project-scoped read path. `list_templates`/`list_team_templates` are keyed
-/// on `user_id`/`team_id`, not `project_id` — templates created through `create_template`/
-/// `create_team_template` (including the legacy `templates.rs`/`team_templates.rs` screens,
-/// and stage B5a/B5b's own "Save as template" buttons) never populate `Item::project_id` at
-/// all, since neither function routes through `items::create_item`/`team_items::
-/// create_team_item` (see docs/project-abstraction-plan.md's stage B5d notes). Rather than
-/// backfilling that column, this resolves `project_id` down to the owning `user_id`/`team_id`
-/// (exactly like `service::project_items`'s own create/update/delete already do) and delegates
-/// to the existing user_id/team_id-keyed list functions — always correct regardless of
-/// whether any given template row happens to carry a `project_id`.
+/// Stage B5d's project-scoped read path. Rewritten in Stage 5 of
+/// docs/team-id-removal-plan.md to call the `project_id`-scoped, `TEMPLATE`-filtered
+/// `list_templates_by_project` (added in Stage 1) directly. Before this stage,
+/// `create_template`/`create_team_template` never populated `Item::project_id` at all
+/// (neither routed through `items::create_item`/`team_items::create_team_item` — see
+/// docs/project-abstraction-plan.md's stage B5d notes), so this function had to resolve
+/// `project_id` down to the owning `user_id`/`team_id` and delegate to the legacy
+/// user_id/team_id-keyed list methods instead. As of this stage, both creation paths
+/// set `project_id` directly on the row at creation time (see `create_template`'s own
+/// optional `project_id` param and `create_team_template`'s `Item::new_project_item`),
+/// so a direct project-scoped list is always correct.
 pub async fn list_project_templates(
     repo: &Arc<dyn ItemRepo>,
     projects: &Arc<dyn ProjectRepo>,
@@ -217,11 +245,7 @@ pub async fn list_project_templates(
     requester_user_id: &str,
 ) -> Result<Vec<Item>, ItemError> {
     require_project_member(projects, teams, project_id, requester_user_id).await?;
-    let project = projects.get(project_id).await?;
-    match project.team_id {
-        Some(team_id) => Ok(repo.list_team_templates(&team_id).await?),
-        None => Ok(repo.list_templates(&project.owner_user_id).await?),
-    }
+    Ok(repo.list_templates_by_project(project_id).await?)
 }
 
 #[derive(Debug, Default)]
@@ -235,14 +259,11 @@ pub struct CreateProjectTemplateParams {
 
 /// Stage B5d's project-scoped create path — same "resolve project_id down to user_id/
 /// team_id, delegate to the existing function" shape `service::project_items::
-/// create_project_item` already established for real items. One extra step beyond that
-/// precedent: `create_template`/`create_team_template` call `repo.create` directly rather
-/// than routing through `items::create_item`/`team_items::create_team_item`, so — unlike a
-/// real item created via `project_items::create_project_item` — the new template row never
-/// gets `project_id` set as part of that call. This backfills it with a second write
-/// immediately after, so every `get_by_project`/`list_by_project`-based lookup elsewhere in
-/// this screen (children fragment, detail/edit redisplay) can find the template by its
-/// project scope like any other project-owned row.
+/// create_project_item` already established for real items. As of Stage 5 of
+/// docs/team-id-removal-plan.md, both branches set `project_id` on the new row as part
+/// of the single `repo.create` call inside `create_template`/`create_team_template` —
+/// the second write this function used to need, purely to backfill `project_id` onto a
+/// row that had none, is gone.
 pub async fn create_project_template(
     repo: &Arc<dyn ItemRepo>,
     projects: &Arc<dyn ProjectRepo>,
@@ -257,8 +278,10 @@ pub async fn create_project_template(
             create_team_template(
                 repo,
                 teams,
+                projects,
+                team_id,
                 CreateTeamTemplateParams {
-                    team_id: team_id.clone(),
+                    project_id: params.project_id.clone(),
                     requester_user_id: requester_user_id.to_string(),
                     name: params.name,
                     description: params.description,
@@ -277,23 +300,12 @@ pub async fn create_project_template(
                     description: params.description,
                     source_item_id: params.source_item_id,
                     event_type: params.event_type,
+                    project_id: Some(params.project_id.clone()),
                 },
             )
             .await?
         }
     };
-    match &project.team_id {
-        Some(team_id) => {
-            let mut item = repo.get_team_item(team_id, &template_id).await?;
-            item.project_id = Some(params.project_id.clone());
-            repo.update_team_item(&item).await?;
-        }
-        None => {
-            let mut item = repo.get(&project.owner_user_id, &template_id).await?;
-            item.project_id = Some(params.project_id.clone());
-            repo.update(&item).await?;
-        }
-    }
     Ok(template_id)
 }
 
@@ -318,12 +330,13 @@ pub async fn update_project_template(
     require_project_member(projects, teams, &params.project_id, requester_user_id).await?;
     let project = projects.get(&params.project_id).await?;
     match project.team_id {
-        Some(team_id) => {
+        Some(_) => {
             update_team_template(
                 repo,
                 teams,
+                projects,
                 UpdateTeamTemplateParams {
-                    team_id,
+                    project_id: params.project_id,
                     requester_user_id: requester_user_id.to_string(),
                     template_id: params.template_id,
                     name: params.name,
@@ -423,6 +436,7 @@ mod tests {
                 description: None,
                 source_item_id: Some("src".to_string()),
                 event_type: None,
+                project_id: None,
             },
         )
         .await
@@ -458,6 +472,7 @@ mod tests {
                 description: None,
                 source_item_id: Some("src".to_string()),
                 event_type: None,
+                project_id: None,
             },
         )
         .await;
@@ -467,37 +482,37 @@ mod tests {
 
     #[tokio::test]
     async fn create_team_template_rejects_simple_source() {
-        use crate::storage::sqlite::MockTeamRepo;
-
         let mut mock = MockItemRepo::new();
-        mock.expect_get_team_item()
-            .withf(|team_id: &str, item_id: &str| team_id == "team1" && item_id == "src")
+        mock.expect_get_by_project()
+            .withf(|project_id: &str, item_id: &str| project_id == "p1" && item_id == "src")
             .times(1)
             .returning(|_, _| {
                 Ok(Item {
                     id: "src".to_string(),
-                    team_id: Some("team1".to_string()),
+                    project_id: Some("p1".to_string()),
                     name: "Groceries".to_string(),
                     item_type: ItemType::Simple,
                     ..Item::default()
                 })
             });
 
-        let mut teams = MockTeamRepo::new();
-        teams
-            .expect_member_status()
-            .withf(|team_id: &str, user_id: &str| team_id == "team1" && user_id == "u1")
-            .times(1)
-            .returning(|_, _| Ok(Some("ACTIVE".to_string())));
+        let mut projects = MockProjectRepo::new();
+        projects.expect_get().returning(|_| Ok(shared_project()));
+        projects
+            .expect_member_role()
+            .returning(|_, _| Ok(Some(TeamRole::Member)));
 
         let repo: Arc<dyn ItemRepo> = Arc::new(mock);
-        let teams: Arc<dyn TeamRepo> = Arc::new(teams);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+        let projects: Arc<dyn ProjectRepo> = Arc::new(projects);
 
         let result = create_team_template(
             &repo,
             &teams,
+            &projects,
+            "team1",
             CreateTeamTemplateParams {
-                team_id: "team1".to_string(),
+                project_id: "p1".to_string(),
                 requester_user_id: "u1".to_string(),
                 name: "Groceries".to_string(),
                 description: None,
@@ -597,16 +612,15 @@ mod tests {
 
     #[tokio::test]
     async fn update_team_template_changes_name_and_event_type() {
-        use crate::storage::sqlite::MockTeamRepo;
-
         let mut mock = MockItemRepo::new();
 
-        mock.expect_get_team_item()
-            .withf(|team_id: &str, item_id: &str| team_id == "team1" && item_id == "tpl1")
+        mock.expect_get_by_project()
+            .withf(|project_id: &str, item_id: &str| project_id == "p1" && item_id == "tpl1")
             .times(1)
             .returning(|_, _| {
                 Ok(Item {
                     id: "tpl1".to_string(),
+                    project_id: Some("p1".to_string()),
                     team_id: Some("team1".to_string()),
                     name: "Old name".to_string(),
                     item_type: ItemType::Template {
@@ -618,7 +632,7 @@ mod tests {
                 })
             });
 
-        mock.expect_update_team_item()
+        mock.expect_update_by_project()
             .withf(|item: &Item| {
                 item.id == "tpl1"
                     && item.name == "New name"
@@ -627,21 +641,22 @@ mod tests {
             .times(1)
             .returning(|_| Ok(()));
 
-        let mut teams = MockTeamRepo::new();
-        teams
-            .expect_member_status()
-            .withf(|team_id: &str, user_id: &str| team_id == "team1" && user_id == "u1")
-            .times(1)
-            .returning(|_, _| Ok(Some("ACTIVE".to_string())));
+        let mut projects = MockProjectRepo::new();
+        projects.expect_get().returning(|_| Ok(shared_project()));
+        projects
+            .expect_member_role()
+            .returning(|_, _| Ok(Some(TeamRole::Member)));
 
         let repo: Arc<dyn ItemRepo> = Arc::new(mock);
-        let teams: Arc<dyn TeamRepo> = Arc::new(teams);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+        let projects: Arc<dyn ProjectRepo> = Arc::new(projects);
 
         update_team_template(
             &repo,
             &teams,
+            &projects,
             UpdateTeamTemplateParams {
-                team_id: "team1".to_string(),
+                project_id: "p1".to_string(),
                 requester_user_id: "u1".to_string(),
                 template_id: "tpl1".to_string(),
                 name: "New name".to_string(),
@@ -675,13 +690,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn list_project_templates_delegates_to_list_templates_on_personal_project() {
+    async fn list_project_templates_calls_list_templates_by_project_on_personal_project() {
         let mut projects_mock = MockProjectRepo::new();
         projects_mock.expect_get().returning(|_| Ok(personal_project()));
         let mut items_mock = MockItemRepo::new();
         items_mock
-            .expect_list_templates()
-            .withf(|user_id: &str| user_id == "owner1")
+            .expect_list_templates_by_project()
+            .withf(|project_id: &str| project_id == "p1")
             .times(1)
             .returning(|_| Ok(vec![]));
 
@@ -695,26 +710,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn list_project_templates_delegates_to_list_team_templates_on_shared_project() {
+    async fn list_project_templates_calls_list_templates_by_project_on_shared_project() {
         let mut projects_mock = MockProjectRepo::new();
         projects_mock.expect_get().returning(|_| Ok(shared_project()));
         projects_mock
             .expect_member_role()
             .returning(|_, _| Ok(Some(TeamRole::Member)));
-        let mut teams_mock = MockTeamRepo::new();
-        teams_mock
-            .expect_member_status()
-            .returning(|_, _| Ok(Some("ACTIVE".to_string())));
         let mut items_mock = MockItemRepo::new();
         items_mock
-            .expect_list_team_templates()
-            .withf(|team_id: &str| team_id == "team1")
+            .expect_list_templates_by_project()
+            .withf(|project_id: &str| project_id == "p1")
             .times(1)
             .returning(|_| Ok(vec![]));
 
         let repo: Arc<dyn ItemRepo> = Arc::new(items_mock);
         let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
-        let teams: Arc<dyn TeamRepo> = Arc::new(teams_mock);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
 
         list_project_templates(&repo, &projects, &teams, "p1", "member1")
             .await
@@ -742,32 +753,11 @@ mod tests {
             .expect_create()
             .withf(|item: &Item| {
                 item.user_id.as_deref() == Some("owner1")
+                    && item.project_id.as_deref() == Some("p1")
                     && matches!(item.item_type, ItemType::Template { .. })
             })
             .times(1)
             .returning(|_| Ok("tpl1".to_string()));
-        items_mock
-            .expect_get()
-            .withf(|user_id: &str, item_id: &str| user_id == "owner1" && item_id == "tpl1")
-            .times(1)
-            .returning(|_, _| {
-                Ok(Item {
-                    id: "tpl1".to_string(),
-                    user_id: Some("owner1".to_string()),
-                    name: "Move house".to_string(),
-                    item_type: ItemType::Template {
-                        schedule: Schedule::default(),
-                        recurrence: Recurrence::default(),
-                        event_type: None,
-                    },
-                    ..Item::default()
-                })
-            });
-        items_mock
-            .expect_update()
-            .withf(|item: &Item| item.id == "tpl1" && item.project_id.as_deref() == Some("p1"))
-            .times(1)
-            .returning(|_| Ok(()));
 
         let repo: Arc<dyn ItemRepo> = Arc::new(items_mock);
         let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
@@ -797,45 +787,20 @@ mod tests {
         projects_mock
             .expect_member_role()
             .returning(|_, _| Ok(Some(TeamRole::Member)));
-        let mut teams_mock = MockTeamRepo::new();
-        teams_mock
-            .expect_member_status()
-            .returning(|_, _| Ok(Some("ACTIVE".to_string())));
         let mut items_mock = MockItemRepo::new();
         items_mock
             .expect_create()
             .withf(|item: &Item| {
-                item.team_id.as_deref() == Some("team1")
+                item.project_id.as_deref() == Some("p1")
+                    && item.team_id.as_deref() == Some("team1")
                     && matches!(item.item_type, ItemType::Template { .. })
             })
             .times(1)
             .returning(|_| Ok("tpl1".to_string()));
-        items_mock
-            .expect_get_team_item()
-            .withf(|team_id: &str, item_id: &str| team_id == "team1" && item_id == "tpl1")
-            .times(1)
-            .returning(|_, _| {
-                Ok(Item {
-                    id: "tpl1".to_string(),
-                    team_id: Some("team1".to_string()),
-                    name: "Onboard hire".to_string(),
-                    item_type: ItemType::Template {
-                        schedule: Schedule::default(),
-                        recurrence: Recurrence::default(),
-                        event_type: None,
-                    },
-                    ..Item::default()
-                })
-            });
-        items_mock
-            .expect_update_team_item()
-            .withf(|item: &Item| item.id == "tpl1" && item.project_id.as_deref() == Some("p1"))
-            .times(1)
-            .returning(|_| Ok(()));
 
         let repo: Arc<dyn ItemRepo> = Arc::new(items_mock);
         let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
-        let teams: Arc<dyn TeamRepo> = Arc::new(teams_mock);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
 
         let template_id = create_project_template(
             &repo,
@@ -901,15 +866,12 @@ mod tests {
         projects_mock
             .expect_member_role()
             .returning(|_, _| Ok(Some(TeamRole::Member)));
-        let mut teams_mock = MockTeamRepo::new();
-        teams_mock
-            .expect_member_status()
-            .returning(|_, _| Ok(Some("ACTIVE".to_string())));
         let mut items_mock = MockItemRepo::new();
-        items_mock.expect_get_team_item().returning(|_, _| {
+        items_mock.expect_get_by_project().returning(|_, _| {
             Ok(Item {
                 id: "tpl1".to_string(),
                 team_id: Some("team1".to_string()),
+                project_id: Some("p1".to_string()),
                 name: "Old name".to_string(),
                 item_type: ItemType::Template {
                     schedule: Schedule::default(),
@@ -919,11 +881,11 @@ mod tests {
                 ..Item::default()
             })
         });
-        items_mock.expect_update_team_item().times(1).returning(|_| Ok(()));
+        items_mock.expect_update_by_project().times(1).returning(|_| Ok(()));
 
         let repo: Arc<dyn ItemRepo> = Arc::new(items_mock);
         let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
-        let teams: Arc<dyn TeamRepo> = Arc::new(teams_mock);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
 
         update_project_template(
             &repo,

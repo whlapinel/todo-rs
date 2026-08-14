@@ -3,21 +3,37 @@ use crate::auth::AuthUser;
 use crate::service::error::ItemError;
 use crate::service::team_items::require_active_member;
 use crate::service::templates::{self as template_service, CreateTeamTemplateParams};
-use crate::storage::sqlite::{ItemRepo, TeamRepo};
+use crate::storage::sqlite::{ItemRepo, ProjectRepo, TeamRepo};
 use std::sync::Arc;
 use todo_server_sdk::{error, input, output, server};
 
+/// This legacy `CreateTeamTemplate` operation only carries `teamId`, not a
+/// `projectId` (see `model/src/main/smithy/team.smithy`), but Stage 5 of
+/// docs/team-id-removal-plan.md made `service::templates::create_team_template`
+/// `project_id`-primary. Resolves the team's backing project via
+/// `ProjectRepo::get_by_team` before delegating in — every team has had a backing
+/// project since the Project abstraction shipped (see CLAUDE.md's Per-team roles
+/// section), so `None` here would mean `input.team_id` doesn't actually name a real
+/// team.
 pub async fn create_team_template(
     input: input::CreateTeamTemplateInput,
     server::Extension(repo): server::Extension<Arc<dyn ItemRepo>>,
     server::Extension(teams): server::Extension<Arc<dyn TeamRepo>>,
+    server::Extension(projects): server::Extension<Arc<dyn ProjectRepo>>,
     server::Extension(auth_user): server::Extension<AuthUser>,
 ) -> Result<output::CreateTeamTemplateOutput, error::CreateTeamTemplateError> {
+    let project = projects
+        .get_by_team(&input.team_id)
+        .await
+        .map_err(|e| internal(format!("{e:?}")))?
+        .ok_or_else(|| error::CreateTeamTemplateError::from(not_found()))?;
     let template_id = template_service::create_team_template(
         &repo,
         &teams,
+        &projects,
+        &input.team_id,
         CreateTeamTemplateParams {
-            team_id: input.team_id,
+            project_id: project.id,
             requester_user_id: auth_user.user_id,
             name: input.name,
             description: input.description,

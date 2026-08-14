@@ -324,12 +324,14 @@ pub async fn delete_team_item(
 /// Moved from `json_api::team_items::require_active_member`. No longer called by
 /// this file's own `create_team_item`/`update_team_item`/`delete_team_item` as of
 /// Stage 4 of docs/team-id-removal-plan.md (they use `require_project_member`
-/// instead) — kept because it's still the right check for the genuinely
-/// `team_id`-keyed legacy surfaces that stay out of this plan's scope:
-/// `service::templates.rs`'s team-template functions (Stage 5 rewrites those),
+/// instead), nor by `service::templates.rs`'s team-template functions as of that
+/// plan's Stage 5 (same repointing) — kept because it's still the right check for the
+/// genuinely `team_id`-keyed legacy surfaces that stay out of this plan's scope:
 /// `service::activity_log::undo_activity_log_entry` (the legacy
-/// `UndoActivityLogEntry` operation, permanently `team_id`-keyed — see Stage 6),
-/// and the legacy `json_api::team_templates`/`json_api::activity_log` handlers.
+/// `UndoActivityLogEntry` operation, permanently `team_id`-keyed — see Stage 6), and
+/// the legacy `json_api::team_templates::list_team_templates`/`json_api::activity_log`
+/// handlers (`json_api::team_templates::create_team_template` moved off it in Stage 5,
+/// resolving its project via `ProjectRepo::get_by_team` instead).
 pub(crate) async fn require_active_member(
     teams: &Arc<dyn TeamRepo>,
     team_id: &str,
