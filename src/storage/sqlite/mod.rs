@@ -129,6 +129,9 @@ pub trait ItemRepo: Send + Sync {
     ) -> Result<Vec<DueItem>, RepoError>;
     async fn list_templates(&self, user_id: &str) -> Result<Vec<Item>, RepoError>;
     async fn list_team_templates(&self, team_id: &str) -> Result<Vec<Item>, RepoError>;
+    /// Project-scoped counterpart to `list_team_templates` — see
+    /// docs/team-id-removal-plan.md's Stage 1.
+    async fn list_templates_by_project(&self, project_id: &str) -> Result<Vec<Item>, RepoError>;
     async fn list_assigned(&self, user_id: &str) -> Result<Vec<Item>, RepoError>;
 }
 

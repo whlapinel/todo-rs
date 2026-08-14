@@ -461,6 +461,19 @@ impl ItemRepo for SqliteItemRepo {
             .map(|rows| rows.iter().map(row_to_item).collect())
     }
 
+    async fn list_templates_by_project(&self, project_id: &str) -> Result<Vec<Item>, RepoError> {
+        let q = format!(
+            "{ITEM_SELECT} FROM items WHERE project_id = ? AND item_type = 'TEMPLATE' AND parent_item_id IS NULL \
+             ORDER BY name ASC"
+        );
+        sqlx::query(&q)
+            .bind(project_id)
+            .fetch_all(&self.0)
+            .await
+            .map_err(db_err)
+            .map(|rows| rows.iter().map(row_to_item).collect())
+    }
+
     async fn list_assigned(&self, user_id: &str) -> Result<Vec<Item>, RepoError> {
         let q = format!(
             "{ITEM_SELECT} FROM items WHERE assigned_to_user_id = ? \
@@ -581,6 +594,34 @@ mod tests {
             .unwrap();
         assert_eq!(children.len(), 1);
         assert_eq!(children[0].name, "Child");
+    }
+
+    #[tokio::test]
+    async fn list_templates_by_project_returns_only_templates_in_that_project() {
+        let pool = test_pool().await;
+        let repo = SqliteItemRepo(pool);
+
+        let mut template = item_in_project("p1", "Template 1");
+        template.item_type = ItemType::Template {
+            schedule: Schedule::default(),
+            recurrence: Recurrence::default(),
+            event_type: None,
+        };
+        repo.create(&template).await.unwrap();
+
+        repo.create(&item_in_project("p1", "Not a template")).await.unwrap();
+
+        let mut other_project_template = item_in_project("p2", "Other project template");
+        other_project_template.item_type = ItemType::Template {
+            schedule: Schedule::default(),
+            recurrence: Recurrence::default(),
+            event_type: None,
+        };
+        repo.create(&other_project_template).await.unwrap();
+
+        let templates = repo.list_templates_by_project("p1").await.unwrap();
+        assert_eq!(templates.len(), 1);
+        assert_eq!(templates[0].name, "Template 1");
     }
 
     #[tokio::test]
