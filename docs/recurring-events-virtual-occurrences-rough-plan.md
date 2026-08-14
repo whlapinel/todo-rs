@@ -108,6 +108,76 @@ Each stage is scoped to be independently committable and testable; "clear contex
 
   Threading the new `EventSeriesRepo` parameter through `delete_project_item` touched all six of its callers (`json_api::project_items::delete_project_item`, and the web UI's task/event/simple-list/template/template-child delete handlers) — mechanical signature changes, no behavior change for any of them beyond the new reverse-lookup no-op. New Skip button targets a sibling route, `POST .../series/:series_id/occurrences/:occurrence_ts/skip` (`skip_project_event_series_occurrence_form`, alongside the existing materialize route), calling `service::event_series::skip_occurrence` — unchanged from Stage 5 aside from its doc comment, since the UI only ever invokes it against genuinely virtual dates. Unlike materialize's `HX-Redirect`, skip's handler returns an empty 200 body; each surface's Skip button targets its own row/entry element (`hx-target` + `hx-swap="outerHTML"`) so the occurrence is removed from view in place, mirroring `project_dashboard/row.html`'s existing item-delete-button convention exactly. 14 new unit tests (storage-layer `find_occurrence_by_item_id` + `mark_exdate`'s clearing behavior, service-layer `unlink_deleted_item_occurrence`, a `delete_project_item` wiring test) and a new migration idempotency test; full suite (285 tests) and `cargo build` clean.
 
+## Scope change (2026-08-14): generalizing series to Tasks, not just Events
+
+Raised at the start of Stage 7 planning: rather than implementing Stage 7 narrowly as originally scoped (`sourceEventId` → series resolution only), the user asked whether Tasks should get their own series concept too — Tasks still recur via the old single-row `Item::next_recurrence`/`clone_children`/`sync_offset_children` mechanism (CLAUDE.md's Recurrence section) while Events have `event_series` (Stages 1–6, committed). Confirmed via `AskUserQuestion` before drafting anything below, this **replaces** the original Stage 7/8 sketches (kept just below, unmodified, for history — treat them as superseded, not current).
+
+Three decisions, resolved before staging:
+
+1. **Materialization trigger is per-series, both kinds available.** A series carries `item_type` (`TASK` | `EVENT`). Event-typed series keep today's range-browse/click-to-materialize UX (Stage 5/6) unchanged. Task-typed series get *both*: the same range-browse display (an upcoming task series shows future dates in a list, like Events do today), *and* a new completion-driven auto-advance — completing the current materialized occurrence materializes the next one automatically. Events never had completion-driven advance under the series model (only under the old single-row mechanism); this is genuinely new behavior, built in Stage 9 below.
+2. **The old single-row recurrence mechanism is retired for both Task and Event**, once series covers it — supersedes the original Stage 8's "Tasks keep the old mechanism regardless" call, which predates this scope change. Retirement itself is Stage 10, last, after everything it depends on exists and is proven.
+3. **Rename, not reuse.** `event_series`/`event_occurrences` tables, `EventSeriesRepo`, the `*EventSeries` Smithy operations, `src/service/event_series.rs`, `src/web_ui/project_event_series/`, and the MCP `*_event_series` tools all get renamed to the generic `item_series`/`ItemSeriesRepo`/`*ItemSeries`/etc. — chosen over bolting an `item_type` column onto the Event-named surface, since the entire point is that a Task-typed row would otherwise live in something called "event_series," the same class of stale-name confusion CLAUDE.md flags elsewhere (e.g. `TeamItem`'s retired Smithy surface vs. its still-live service functions). `prl series` (the CLI command) and `prl-user-guide.md`'s "Event Series" section (→ "Item Series") don't need a command-name rename — `series` was already generic; only its flags/help text change.
+
+### Additional working assumptions for this redesign
+
+- **Existing `event_series`/`event_occurrences` rows are live production data** (Stages 1–6 are committed and deployed) — the rename must carry data forward via a copy, not just a schema change. Old tables are left in place afterward, unread, rather than dropped — matches this codebase's existing precedent of not force-dropping superseded columns (`items.user_id` survived the Project abstraction; see Storage Layer section of CLAUDE.md).
+- **`get_or_materialize_occurrence` creates a bare item today** — verified in `src/service/event_series.rs`: no child/`parent_item_id` handling exists at all, unlike the old mechanism's `clone_children`, which recomputes and re-parents an entire subtree via `due_offset_days` on every recurrence. Whether Task series need their own "template children" concept (mirroring `copy_template_children`) to replace that is an **open question**, deliberately not resolved here — it's Stage 9's own refined-planning pass to make, flagged explicitly so it isn't silently dropped.
+- **`ItemType` has four variants**, not three — `TASK`/`EVENT`/`TEMPLATE`/`SIMPLE` (verified directly against `model/src/main/smithy/item.smithy`; CLAUDE.md's own prose describing it as three variants is stale and should be corrected separately). A series' `item_type` is restricted to `TASK`/`EVENT` only, mirroring how `event_type` is already restricted to those same two types in `Item::validate()`.
+
+### Stages (supersede original Stage 7/8 below)
+
+**Stage 7a — Rename schema + repo, migrate data**
+- New migration: `CREATE TABLE item_series` / `item_occurrences`, with `item_type TEXT NOT NULL DEFAULT 'EVENT'` present from the start (the original `event_series` migration had no such column) — then `INSERT INTO item_series SELECT ..., 'EVENT' FROM event_series` and the equivalent for occurrences, column-for-column.
+- Rename `EventSeriesRepo` → `ItemSeriesRepo` (all methods); update `create_pool()`'s baseline `CREATE TABLE IF NOT EXISTS` to the new names+column so a fresh DB never touches the migration.
+- Repo-level tests only — no handler wiring changes yet.
+- Commit: "Rename event_series to item_series, add item_type column, migrate data".
+
+**Stage 7b — Smithy + json_api + service + MCP + CLI rename**
+- Every `EventSeries` Smithy shape/operation → `ItemSeries`, following CLAUDE.md's "Renaming an error type" touch-point table as the closest precedent; add `itemType` to Create/Update/Get/List shapes. `task codegen`.
+- `src/json_api/event_series.rs` → `item_series.rs`, `src/service/event_series.rs` → `item_series.rs` (rename file + every fn/type), `main.rs` wiring updated.
+- `get_or_materialize_occurrence` stops hardcoding `item_type: Some(ItemKind::Event)`, uses `series.item_type` instead. `create_item_series` rejects `item_type` outside `TASK`/`EVENT` via `ItemError::Invalid` — same rejection pattern as the recurrence+`parentItemId` check.
+- MCP tools `*_event_series` → `*_item_series`, `itemType` added as a required create/update parameter (no default — forces every caller to be explicit, since this is a behavior change, not a cosmetic one).
+- `prl series create`/`update` get a required `--item-type <task|event>` flag, client-side-rejected if missing (same posture as `--project`, Stage C3).
+- Commit: "Rename EventSeries API surface to ItemSeries, add itemType".
+
+**Stage 7c — Web UI rename**
+- `src/web_ui/project_event_series/` → `project_item_series/`; list page gets an item-type badge/column, the standalone `/new` create page gets an item-type selector.
+- `SidebarSection::EventSeries` → `SidebarSection::ItemSeries` (or split into two sidebar entries — decide during this stage's own refined pass).
+- `docs/prl-user-guide.md`'s "Event Series" section renamed "Item Series", documents `--item-type`.
+- Commit: "Rename Event Series web UI to Item Series".
+
+**Stage 8 — Task-series range-browse display**
+- Mirror Stage 5's wiring for the Tasks screens (`project_tasks/`) and dashboard: for each `TASK`-typed series overlapping the visible range, render virtual occurrences the same way Event virtual occurrences render today, materializing via the same (now type-agnostic) `POST .../series/:series_id/occurrences/:occurrence_ts` route.
+- Commit: "Wire Task-series occurrences into task list/dashboard views".
+
+**Stage 9 — Task-series completion-driven auto-advance**
+- Resolve the deferred template-children question from the working assumptions above first, via this stage's own refined-planning pass — not decided in this doc.
+- Completing a materialized `TASK`-typed occurrence calls `recurrence::next_date` (already exists — a single-next-date lookup, no need for `occurrences_between` here) to find the next date, then `get_or_materialize_occurrence` to create it, taking over `Item::next_recurrence`'s role for series-backed tasks specifically (non-series tasks untouched until Stage 10).
+- Skip (EXDATE) UI from Stage 6 already works unchanged for Task-typed series — verified `skip_occurrence` and the Skip button are item-type-agnostic today.
+- Commit: "Add completion-driven auto-advance for Task-typed series".
+
+**Stage 10 — Migrate existing single-row recurring items onto item_series, retire the old mechanism**
+- Highest-risk stage in this redesign — touches live production data (recurring Tasks/Events created before this redesign existed) and retires code (`Item::next_recurrence`, `clone_children`, `sync_offset_children`, the `recurrence`/`recurrence_basis`/`due_offset_days` special-casing in `update_item`/`update_team_item`) that CLAUDE.md's Recurrence/Events/Completion-transition-guards sections describe as load-bearing across CSV import, the CLI, and MCP.
+- One-time data migration: for every existing top-level `Item` with `recurrence` set that isn't already series-backed, create an `item_series` row from its `recurrence`/`recurrence_basis`/anchor fields plus an `item_occurrences` row linking its current `item_id` as the materialized occurrence for its current date, so it keeps working under the new mechanism.
+- Own refined-planning pass to decide: whether existing recurring items' child subtrees migrate cleanly given Stage 9's template-children design, and whether the CSV import format's `recurrence`/`recurrenceBasis` columns need to change, or can keep writing the old fields with a lazy per-item migration on next completion instead of one big-bang pass.
+- Only after this lands and is verified stable in production: delete the old mechanism's code paths.
+- Commit: "Migrate legacy recurring items onto item_series; retire single-row recurrence mechanism".
+
+**Stage 11 — `sourceEventId` → series support** (unchanged in substance from the original Stage 7, renumbered)
+- Let a Task's `sourceEventId` point at a series, resolved to "whichever occurrence is current" at read time (materializing on demand if needed) — now trivially the `EVENT`-typed case of the already-generalized `item_series`, rather than needing bespoke resolution logic of its own.
+- Commit: "Support sourceEventId pointing at a recurring series".
+
+### Notes on this redesign's staging
+
+- 7a/7b/7c mechanically replay Stage 4's own a/b split, one level bigger — a rename touches more files than net-new addition did, per the touch-point checklist.
+- Stage 9 is where this redesign's real novelty lives (task series never existed before) — budget the most planning time there, the same caution the original doc gave the old Stage 7.
+- Stage 10 is deliberately last: everything through Stage 9 is purely additive (a new `item_type` option, nothing existing forced to change), matching this doc's own "Stages 1–3 have no user-visible effect" precedent. Only Stage 10 touches data/behavior that already exists in production.
+- As with the rest of this doc: not scheduled or approved for implementation beyond this planning pass. Each stage still needs its own refined-planning pass before code, per the doc's closing convention below.
+
+---
+
+## Superseded: original Stage 7/8 sketch (kept for history, see scope change above)
+
 **Stage 7 — `sourceEventId` → series support** (covers change #5 above)
 - Let a Task's `sourceEventId` point at a series, resolved to "whichever occurrence is current" at read time (materializing on demand if needed).
 - Highest-risk stage: touches the template-trigger matching and `copy_template_children` logic described in CLAUDE.md's Events section, which today assume a concrete Event item id. Budget extra time for this one; don't bundle it with anything else.
@@ -118,6 +188,13 @@ Each stage is scoped to be independently committable and testable; "clear contex
 - Update `src/service/import.rs`/the PRL CSV format if series should be importable/exportable.
 - Commit: "Retire single-row recurrence path for Events now superseded by series".
 
+### Notes on staging itself (original sketch — see "Notes on this redesign's staging" above for the current plan)
+
+- Stages 1–3 have no user-visible effect and are safe to land well ahead of the rest — they're pure addition with no existing call site touched.
+- Stage 4 is the first point where the touch-point checklist (Smithy/codegen/CLI/MCP/docs) applies in full; everything before it is Rust-only.
+- Stage 7 is deliberately last-but-one, not folded into stage 4 or 5, because it's the one place this feature reaches into *existing* behavior (event-trigger matching) rather than only adding new surface — isolating it makes it easier to revert on its own if it goes sideways.
+- As in the rest of this doc: none of this is scheduled or approved for implementation. This breakdown exists so that *if* it's picked up, the work doesn't have to be re-planned from scratch first.
+
 ### Notes on staging itself
 
 - Stages 1–3 have no user-visible effect and are safe to land well ahead of the rest — they're pure addition with no existing call site touched.
@@ -125,4 +202,4 @@ Each stage is scoped to be independently committable and testable; "clear contex
 - Stage 7 is deliberately last-but-one, not folded into stage 4 or 5, because it's the one place this feature reaches into *existing* behavior (event-trigger matching) rather than only adding new surface — isolating it makes it easier to revert on its own if it goes sideways.
 - As in the rest of this doc: none of this is scheduled or approved for implementation. This breakdown exists so that *if* it's picked up, the work doesn't have to be re-planned from scratch first.
 
-**Each stage below should get its own refined-planning pass before implementation, not just be executed off this doc's one-paragraph sketch.** Stage 1 got this treatment (a dedicated plan-mode session, resolving specific open questions like whether to hand-roll occurrence generation or adopt the `rrule` crate, and the exact `MonthlyDay`-clamp-vs-skip semantics, via `AskUserQuestion` before any code was written — see the git history around `40eca9d`). Stage 2 did not: it was implemented directly off this doc's method-name list and table sketch, with several unstated design calls (upsert semantics via `ON CONFLICT`, storing `recurrence` as a raw string rather than a structured column, `mark_exdate` preserving an existing `item_id` rather than clearing it, index shape) made ad hoc during implementation rather than surfaced and confirmed first — acceptable there mainly because every call mirrored an existing, already-reviewed precedent (`ProjectRepo`, `ItemRepo`, `ActivityLogRepo`). Later stages (especially 4, 5, and 7 — see the sizing/risk notes above) have design surface this doc doesn't resolve at all (exact Smithy shape, how virtual-vs-materialized renders in the calendar grid, the `sourceEventId`-to-series resolution semantics) and should not be implemented directly from their one-paragraph descriptions here.
+**Each stage below should get its own refined-planning pass before implementation, not just be executed off this doc's one-paragraph sketch.** Stage 1 got this treatment (a dedicated plan-mode session, resolving specific open questions like whether to hand-roll occurrence generation or adopt the `rrule` crate, and the exact `MonthlyDay`-clamp-vs-skip semantics, via `AskUserQuestion` before any code was written — see the git history around `40eca9d`). Stage 2 did not: it was implemented directly off this doc's method-name list and table sketch, with several unstated design calls (upsert semantics via `ON CONFLICT`, storing `recurrence` as a raw string rather than a structured column, `mark_exdate` preserving an existing `item_id` rather than clearing it, index shape) made ad hoc during implementation rather than surfaced and confirmed first — acceptable there mainly because every call mirrored an existing, already-reviewed precedent (`ProjectRepo`, `ItemRepo`, `ActivityLogRepo`). Later stages (especially 4, 5, and the original 7 — see the sizing/risk notes above) have design surface this doc doesn't resolve at all (exact Smithy shape, how virtual-vs-materialized renders in the calendar grid, the `sourceEventId`-to-series resolution semantics) and should not be implemented directly from their one-paragraph descriptions here. The same holds for the redesign's own Stages 7a–11 above: this planning pass resolved the three cross-cutting forks (trigger model, retirement, naming) but explicitly left per-stage questions open (Stage 9's template-children design, Stage 10's data-migration approach) — resolve those with their own `AskUserQuestion` pass before writing code, the same discipline Stage 1 got and Stage 2 skipped.
