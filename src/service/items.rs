@@ -408,11 +408,7 @@ pub(crate) async fn unlink_source_event_tasks(
         {
             *source_event_id = None;
         }
-        if task.team_id.is_some() {
-            repo.update_team_item(&task).await?;
-        } else {
-            repo.update(&task).await?;
-        }
+        repo.update_by_project(&task).await?;
     }
     Ok(())
 }
@@ -587,11 +583,7 @@ pub(crate) fn sync_offset_children<'a>(
                 if let Some(schedule) = child.item_type.schedule_mut() {
                     schedule.due_date = new_due_date;
                 }
-                if child.team_id.is_some() {
-                    repo.update_team_item(&child).await?;
-                } else {
-                    repo.update(&child).await?;
-                }
+                repo.update_by_project(&child).await?;
             }
             sync_offset_children(repo, &child.id, new_anchor, tz_offset_minutes).await?;
         }
@@ -617,11 +609,7 @@ pub(crate) async fn sync_source_event_tasks(
         if let Some(schedule) = task.item_type.schedule_mut() {
             schedule.due_date = new_due_date;
         }
-        if task.team_id.is_some() {
-            repo.update_team_item(&task).await?;
-        } else {
-            repo.update(&task).await?;
-        }
+        repo.update_by_project(&task).await?;
         if let Some(anchor) = item_anchor(&task) {
             sync_offset_children(repo, &task.id, anchor, tz_offset_minutes).await?;
         }
@@ -654,11 +642,7 @@ pub(crate) async fn repoint_source_event_tasks(
         if let Some(schedule) = task.item_type.schedule_mut() {
             schedule.due_date = new_due_date;
         }
-        if task.team_id.is_some() {
-            repo.update_team_item(&task).await?;
-        } else {
-            repo.update(&task).await?;
-        }
+        repo.update_by_project(&task).await?;
     }
     Ok(())
 }
@@ -1092,7 +1076,7 @@ mod tests {
             .times(1)
             .returning(move |_| Ok(vec![returned_task.clone()]));
 
-        mock.expect_update()
+        mock.expect_update_by_project()
             .withf(|item: &Item| item.id == "task1" && item.source_event_id().is_none())
             .times(1)
             .returning(|_| Ok(()));
@@ -1310,7 +1294,7 @@ mod tests {
 
         let expected_offset_child_due =
             recurrence::apply_end_of_day(new_due + chrono::Duration::days(3), 0);
-        mock.expect_update()
+        mock.expect_update_by_project()
             .withf(move |item: &Item| {
                 item.id == "offset-child" && item.due_date() == Some(expected_offset_child_due)
             })
