@@ -115,32 +115,23 @@ pub struct CreateTeamTemplateParams {
 
 /// Team-scoped twin of `create_template` above. Reuses `copy_children_as_template`
 /// unchanged — it already just `child.clone()`s before overwriting template-specific
-/// fields, so it carries over whichever of `user_id`/`team_id`/`project_id` the source
-/// subtree had.
+/// fields, so it carries over whichever of `user_id`/`project_id` the source subtree
+/// had.
 ///
 /// Rewritten in Stage 5 of docs/team-id-removal-plan.md to be `project_id`-primary,
-/// mirroring `team_items::create_team_item`'s own Stage 4 rewrite: `team_id` is
-/// threaded in as a plain parameter (not a `CreateTeamTemplateParams` field) purely to
-/// dual-write `items.team_id` on the created row. `ItemRepo::list_team_templates` (the
-/// repo method backing the still-live legacy `ListTeamTemplates` json_api operation)
-/// queries by that column directly and isn't migrated off it until Stage 6 — without
-/// this dual-write, a template created via this function between Stage 5 and Stage 6
-/// shipping would silently vanish from that endpoint. Both callers — this file's own
-/// `create_project_template` and the legacy `json_api::team_templates::
-/// create_team_template` handler (which resolves it via `projects.get_by_team`) —
-/// already have this value before calling in, so nothing extra is fetched here.
+/// mirroring `team_items::create_team_item`'s own Stage 4 rewrite. Stage 6 dropped the
+/// `items.team_id` dual-write this function used to need (`ItemRepo::list_team_templates`,
+/// the only reader of that column, was removed once `json_api::team_templates::
+/// list_team_templates` was repointed at `list_templates_by_project`).
 pub async fn create_team_template(
     repo: &Arc<dyn ItemRepo>,
     teams: &Arc<dyn TeamRepo>,
     projects: &Arc<dyn ProjectRepo>,
-    team_id: &str,
     params: CreateTeamTemplateParams,
 ) -> Result<String, ItemError> {
     require_project_member(projects, teams, &params.project_id, &params.requester_user_id).await?;
 
     let mut item = Item::new_project_item(&params.project_id, &params.name);
-    // Dual-write — see this function's own doc comment above.
-    item.team_id = Some(team_id.to_string());
     let mut schedule = Schedule::default();
     let mut recurrence = Recurrence::default();
     let mut event_type = None;
@@ -274,12 +265,11 @@ pub async fn create_project_template(
     require_project_member(projects, teams, &params.project_id, requester_user_id).await?;
     let project = projects.get(&params.project_id).await?;
     let template_id = match &project.team_id {
-        Some(team_id) => {
+        Some(_) => {
             create_team_template(
                 repo,
                 teams,
                 projects,
-                team_id,
                 CreateTeamTemplateParams {
                     project_id: params.project_id.clone(),
                     requester_user_id: requester_user_id.to_string(),
@@ -510,7 +500,6 @@ mod tests {
             &repo,
             &teams,
             &projects,
-            "team1",
             CreateTeamTemplateParams {
                 project_id: "p1".to_string(),
                 requester_user_id: "u1".to_string(),
@@ -621,7 +610,6 @@ mod tests {
                 Ok(Item {
                     id: "tpl1".to_string(),
                     project_id: Some("p1".to_string()),
-                    team_id: Some("team1".to_string()),
                     name: "Old name".to_string(),
                     item_type: ItemType::Template {
                         schedule: Schedule::default(),
@@ -792,7 +780,6 @@ mod tests {
             .expect_create()
             .withf(|item: &Item| {
                 item.project_id.as_deref() == Some("p1")
-                    && item.team_id.as_deref() == Some("team1")
                     && matches!(item.item_type, ItemType::Template { .. })
             })
             .times(1)
@@ -870,7 +857,6 @@ mod tests {
         items_mock.expect_get_by_project().returning(|_, _| {
             Ok(Item {
                 id: "tpl1".to_string(),
-                team_id: Some("team1".to_string()),
                 project_id: Some("p1".to_string()),
                 name: "Old name".to_string(),
                 item_type: ItemType::Template {

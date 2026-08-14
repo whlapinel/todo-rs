@@ -255,12 +255,13 @@ pub const MAX_DESCRIPTION_LENGTH: usize = 5000;
 pub struct Item {
     pub id: String,
     pub user_id: Option<String>,
-    pub team_id: Option<String>,
-    /// Dual-written alongside `user_id`/`team_id` (see docs/project-abstraction-plan.md
+    /// Dual-written alongside `user_id` (see docs/project-abstraction-plan.md
     /// stage B2) — the project this item belongs to under the new Project abstraction.
     /// Populated on create; on update it's carried forward from the fetched `current`
     /// row rather than re-resolved, since an item's owner (and thus its project) never
-    /// changes after creation.
+    /// changes after creation. (`team_id` was a third dual-write alongside this one
+    /// until Stage 6 of docs/team-id-removal-plan.md dropped both the field and its
+    /// backing `items.team_id` column.)
     pub project_id: Option<String>,
     pub parent_item_id: Option<String>,
     pub name: String,
@@ -279,19 +280,9 @@ impl Item {
         }
     }
 
-    pub fn new_team_item(team_id: &str, name: &str) -> Self {
-        Self {
-            team_id: Some(team_id.to_string()),
-            name: name.to_string(),
-            ..Self::default()
-        }
-    }
-
     /// `project_id`-primary constructor, added in Stage 4 of
-    /// `docs/team-id-removal-plan.md` for `service::team_items.rs`, which no longer
-    /// treats `team_id` as a scoping key at all. Leaves `user_id`/`team_id` unset —
-    /// callers that still need `team_id` dual-written (see
-    /// `team_items::create_team_item`'s own doc comment) set it explicitly afterward.
+    /// `docs/team-id-removal-plan.md` for `service::team_items.rs`, which treats
+    /// `project_id` as its sole scoping key. Leaves `user_id` unset.
     pub fn new_project_item(project_id: &str, name: &str) -> Self {
         Self {
             project_id: Some(project_id.to_string()),
@@ -300,10 +291,10 @@ impl Item {
         }
     }
 
-    /// Thin `item_type`-setting sugar over `new_user_item`/`new_team_item` — kept
-    /// separate from the owner constructors above since "who owns this" and "what kind
-    /// is this" are independent axes. Note these only control an item's *initial*
-    /// defaults: `create_item`/`update_item` overlay every field from caller params
+    /// Thin `item_type`-setting sugar over `new_user_item` — kept separate from the
+    /// owner constructors above since "who owns this" and "what kind is this" are
+    /// independent axes. Note these only control an item's *initial* defaults:
+    /// `create_item`/`update_item` overlay every field from caller params
     /// unconditionally afterward.
     pub fn new_task(user_id: &str, name: &str) -> Self {
         Self::new_user_item(user_id, name)
@@ -600,16 +591,6 @@ mod tests {
         let item = Item::new_user_item("u1", "Buy milk");
         assert_eq!(item.user_id, Some("u1".to_string()));
         assert_eq!(item.name, "Buy milk");
-        assert!(item.team_id.is_none());
-        assert_eq!(item.kind(), ItemKind::Task);
-    }
-
-    #[test]
-    fn new_team_item_sets_team_id_and_name() {
-        let item = Item::new_team_item("t1", "Deploy server");
-        assert_eq!(item.team_id, Some("t1".to_string()));
-        assert_eq!(item.name, "Deploy server");
-        assert!(item.user_id.is_none());
         assert_eq!(item.kind(), ItemKind::Task);
     }
 
@@ -665,7 +646,7 @@ mod tests {
 
     #[test]
     fn validate_rejects_points_on_child() {
-        let mut item = Item::new_team_item("t1", "Subtask");
+        let mut item = Item::new_user_item("u1", "Subtask");
         item.parent_item_id = Some("parent1".to_string());
         set_points(&mut item, 10);
         assert!(item.validate().is_err());
@@ -673,7 +654,7 @@ mod tests {
 
     #[test]
     fn validate_allows_points_on_top_level_item() {
-        let mut item = Item::new_team_item("t1", "Task");
+        let mut item = Item::new_user_item("u1", "Task");
         set_points(&mut item, 10);
         assert!(item.validate().is_ok());
     }
@@ -791,9 +772,9 @@ mod tests {
     #[test]
     fn new_items_are_not_complete() {
         let user_item = Item::new_user_item("u1", "task");
-        let team_item = Item::new_team_item("t1", "task");
+        let project_item = Item::new_project_item("p1", "task");
         assert!(!user_item.complete);
-        assert!(!team_item.complete);
+        assert!(!project_item.complete);
     }
 
     #[test]

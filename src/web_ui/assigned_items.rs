@@ -28,8 +28,7 @@ struct AssignedItemRow {
     toggle_complete_json: String,
 }
 
-/// Stage B5e/B5f: "cross-project query" — every row on this page always has a `team_id`
-/// (assignment is a team-item-only concept), and links to the project-scoped URL for the
+/// Stage B5e/B5f: "cross-project query" — links to the project-scoped URL for the
 /// item's own `project_id` (set at creation since stage B2c; see
 /// docs/project-abstraction-plan.md). Stage B5f removed the legacy per-type/team-scoped
 /// screens this used to fall back to for an item that predated B2c and never got a
@@ -47,7 +46,6 @@ fn detail_url(item: &Item, project_id: &str) -> String {
 
 impl AssignedItemRow {
     fn from_item(item: &Item, tz: i32) -> Option<Self> {
-        item.team_id.as_ref()?;
         let project_id = item.project_id.clone()?;
         Some(Self {
             id: item.id.clone(),
@@ -82,9 +80,8 @@ pub async fn assigned_items_page(
         .map_err(ItemError::from)?;
     let rows = items
         .iter()
-        // Assignment is a team-item-only concept (see CLAUDE.md's Recurrence/domain notes) —
-        // every row here has a team_id; the filter_map also skips a row lacking project_id
-        // (see detail_url's doc comment above).
+        // Assignment is a team-item-only concept (see CLAUDE.md's Recurrence/domain notes);
+        // the filter_map skips a row lacking project_id (see detail_url's doc comment above).
         .filter_map(|i| AssignedItemRow::from_item(i, tz))
         .map(|row| row.render())
         .collect::<Result<Vec<_>, _>>()?;

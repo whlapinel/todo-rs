@@ -1,5 +1,7 @@
 # Remove `team_id` as the scoping key for items — finish the ProjectItem migration
 
+**Status: Complete.** All six stages shipped (see Stage status below); `items.team_id` no longer exists. Kept here as historical context, the same way this plan's own predecessor (`docs/project-abstraction-plan.md`) is — see CLAUDE.md's Smithy/Storage Layer sections for the resulting architecture.
+
 ## Context
 
 The app migrated from separate personal `Item` (`user_id`-keyed) and `TeamItem` (`team_id`-keyed) Smithy resources to one unified `ProjectItem` resource (`project_id`-keyed). The *Smithy/HTTP* surface for the old resources was retired, but the underlying storage/service layer never finished the cutover: `team_id` is still the real scoping key used internally for team-backed items (`src/service/team_items.rs`), with `project_id` bolted on as a secondary, dual-written field.
@@ -34,7 +36,7 @@ This plan document is the source of truth (it originated in a Claude Code plan-m
 - [x] Stage 3 — project-native membership/assignee checks
 - [x] Stage 4 — rewrite `service::team_items.rs`
 - [x] Stage 5 — rewrite `service::templates.rs`'s team-template twin
-- [ ] Stage 6 — external-API read-site fixes + final cleanup (drop field/column)
+- [x] Stage 6 — external-API read-site fixes + final cleanup (drop field/column)
 
 ## Staged plan
 
@@ -122,11 +124,18 @@ Combine the remaining read-site fixes with the final cleanup, since by this poin
 - New migration `src/storage/migrations/drop_items_team_id.rs`: `ALTER TABLE items DROP COLUMN team_id`, guarded with `column_exists` (follow `drop_team_member_points.rs`'s precedent exactly). Update the baseline `CREATE TABLE IF NOT EXISTS items` in `src/storage/sqlite/mod.rs` in the same change so a fresh DB matches. No index to drop (`team_id` has none).
 - **Verify:** migration idempotency test (run `up` twice); full `cargo test` clean; real-snapshot check — copy the actual `todo.db`, run the migration against the copy, start the server against it, manually round-trip a team-backed project's tasks/events/templates over HTTP, confirm `activity_log`/`ListTeamActivityLog`/`UndoActivityLogEntry` still work (untouched, separate column), confirm `prl`/MCP item tools work end to end.
 
+### Stage 6 as implemented — two corrections to the plan above
+
+1. **The read-site-fixes bullet list above missed one live caller of `ItemRepo::list_team_templates`.** `json_api::team_templates::list_team_templates` (the handler backing the still-live legacy `ListTeamTemplates` Smithy operation — see Stage 5's own correction #1 about its sibling `create_team_template`) called `repo.list_team_templates(&input.team_id)` directly. Removing that repo method per the "Final cleanup" bullet without first repointing this handler would have broken it. Fixed the same way Stage 5 fixed `create_team_template`: added a `ProjectRepo` extension to the handler, resolved `input.team_id` → its backing project via `ProjectRepo::get_by_team`, and called `repo.list_templates_by_project(&project.id)` instead. `list_team_templates` (the repo method) only became genuinely dead — and safe to delete — once this call site was gone.
+2. **Removing the `items.team_id` baseline column exposed a real, unrelated latent bug in `backfill_projects.rs` (migration version 11) that would have crashed every fresh install.** That migration's `items.project_id` backfill step unconditionally ran `UPDATE items SET project_id = (...) WHERE team_id IS NOT NULL AND project_id IS NULL` — safe as long as `items.team_id` was guaranteed to exist whenever this migration executed, true for any *upgrading* DB (version 11 always runs before version 14 in sequence) but false for a **fresh** DB: `create_pool()`'s baseline schema (no `team_id`, per this stage's own change) plus an empty `_migrations` table means `run_migrations` runs every migration from scratch on first boot, including this one. Caught by the plan's own "real-snapshot check" verification step below — specifically by `storage::migrations::tests::is_a_noop_against_a_db_already_on_the_current_schema`, whose fixture models exactly this "fresh baseline, no migration history" case. Fixed by guarding that one `UPDATE` with `column_exists(conn, "items", "team_id")` — on a DB where the column is already gone, there's nothing to backfill from anyway. This is the same category of gap this whole plan exists to close (an assumption about column presence that stopped being true), just one commit later than expected.
+
+Both fixes are covered by existing/new automated tests (`json_api::items::tests`, `storage::migrations::tests`, `storage::migrations::backfill_projects::tests`) plus a manual real-`todo.db`-copy round-trip: migrated cleanly (versions 13→14 applied, `items.team_id` column gone, all 60 rows kept a non-null `project_id`), then a live server against the copy correctly served `GET /users/{userId}/due-items`, `GET /users/{userId}/assigned-items` (both resolving `teamId`/`ownerUserId` via the item's `project_id`), `GET /teams/{teamId}/templates` (the migrated `ListTeamTemplates` handler), and `GET /web/assigned-items`.
+
 ---
 
-## Open, non-blocking question
+## Open, non-blocking question — resolved
 
-Once Stage 4 lands, `team_items.rs` has nothing team-specific left in its *storage keying* — only in its *business rules* (points, assignment, team-completion guard). Worth considering a rename (file and/or function names) to reflect that, or folding it into `items.rs` entirely. Not required for correctness — flagging as optional follow-up cleanup, to raise with the user after the core stages land rather than deciding now.
+Once Stage 4 landed, `team_items.rs` had nothing team-specific left in its *storage keying* — only in its *business rules* (points, assignment, team-completion guard). Raised with the user after Stage 6 shipped, as a choice between renaming the file, merging it into `items.rs`, or leaving it as-is. **Decided: leave as-is.** The file still owns genuinely distinct business rules that only apply to team-backed projects, so a merge would blur two still-different rule sets into one ~3,000-line file (both files are already large, mostly tests); a rename was judged not worth the ~12-file/26-reference mechanical churn for a naming-only change. No further action expected here.
 
 ## Critical files
 

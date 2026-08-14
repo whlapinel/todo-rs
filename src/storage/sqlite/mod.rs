@@ -75,19 +75,12 @@ pub trait UserRepo: Send + Sync {
 #[async_trait]
 pub trait ItemRepo: Send + Sync {
     async fn get(&self, user_id: &str, item_id: &str) -> Result<Item, RepoError>;
-    async fn get_team_item(&self, team_id: &str, item_id: &str) -> Result<Item, RepoError>;
     /// Stage B3's unified read: an item scoped to `project_id` regardless of whether
     /// the underlying row is personal- or team-owned — see
     /// docs/project-abstraction-plan.md.
     async fn get_by_project(&self, project_id: &str, item_id: &str) -> Result<Item, RepoError>;
     async fn list(&self, user_id: &str) -> Result<Vec<Item>, RepoError>;
-    async fn list_team_items(
-        &self,
-        team_id: &str,
-        parent_item_id: Option<String>,
-    ) -> Result<Vec<Item>, RepoError>;
-    /// Stage B3's unified list: same `parent_item_id`-optional shape as
-    /// `list_team_items`, keyed on `project_id` instead of `team_id`/`user_id`.
+    /// Stage B3's unified list, keyed on `project_id` instead of `team_id`/`user_id`.
     async fn list_by_project(
         &self,
         project_id: &str,
@@ -97,11 +90,9 @@ pub trait ItemRepo: Send + Sync {
     async fn list_by_source_event(&self, source_event_id: &str) -> Result<Vec<Item>, RepoError>;
     async fn create(&self, item: &Item) -> Result<String, RepoError>;
     async fn update(&self, item: &Item) -> Result<(), RepoError>;
-    async fn update_team_item(&self, item: &Item) -> Result<(), RepoError>;
     /// Stage B3's unified write primitive, keyed on `project_id` — carries the full
-    /// `update_team_item` column set (including `points`) so it's usable for both
-    /// personal- and team-backed projects once stage B4 wires a caller. Not yet
-    /// called from anywhere in the running app (see that stage's own scope note).
+    /// column set (including `points`) so it's usable for both personal- and
+    /// team-backed projects.
     async fn update_by_project(&self, item: &Item) -> Result<(), RepoError>;
     async fn delete(&self, item_id: &str) -> Result<(), RepoError>;
     async fn list_due(
@@ -110,17 +101,10 @@ pub trait ItemRepo: Send + Sync {
         deadline_after: Option<i64>,
         deadline_before: Option<i64>,
     ) -> Result<Vec<DueItem>, RepoError>;
-    async fn list_due_team_items(
-        &self,
-        team_id: &str,
-        deadline_after: Option<i64>,
-        deadline_before: Option<i64>,
-    ) -> Result<Vec<DueItem>, RepoError>;
-    /// Stage B5e's project-scoped counterpart to `list_due`/`list_due_team_items` —
-    /// same shape as `list_due_team_items`, keyed on `project_id` instead of
-    /// `team_id`, so `project_dashboard.rs` doesn't have to special-case personal
-    /// vs. team-backed projects the way `dashboard.rs`/`team_dashboard.rs` used to
-    /// be two separate screens.
+    /// Stage B5e's project-scoped counterpart to `list_due` — keyed on `project_id`
+    /// instead of `team_id`, so `project_dashboard.rs` doesn't have to special-case
+    /// personal vs. team-backed projects the way `dashboard.rs`/`team_dashboard.rs`
+    /// used to be two separate screens.
     async fn list_due_by_project(
         &self,
         project_id: &str,
@@ -128,8 +112,7 @@ pub trait ItemRepo: Send + Sync {
         deadline_before: Option<i64>,
     ) -> Result<Vec<DueItem>, RepoError>;
     async fn list_templates(&self, user_id: &str) -> Result<Vec<Item>, RepoError>;
-    async fn list_team_templates(&self, team_id: &str) -> Result<Vec<Item>, RepoError>;
-    /// Project-scoped counterpart to `list_team_templates` — see
+    /// Project-scoped counterpart to `list_templates` — see
     /// docs/team-id-removal-plan.md's Stage 1.
     async fn list_templates_by_project(&self, project_id: &str) -> Result<Vec<Item>, RepoError>;
     async fn list_assigned(&self, user_id: &str) -> Result<Vec<Item>, RepoError>;
@@ -412,7 +395,6 @@ fn row_to_item(row: &sqlx::sqlite::SqliteRow) -> Item {
     Item {
         id: row.get("id"),
         user_id: row.get("user_id"),
-        team_id: row.get("team_id"),
         project_id: row.get("project_id"),
         parent_item_id: row.get("parent_item_id"),
         name: row.get("name"),
@@ -459,7 +441,6 @@ pub async fn create_pool(url: &str) -> Result<SqlitePool, sqlx::Error> {
         "CREATE TABLE IF NOT EXISTS items (
             id TEXT PRIMARY KEY,
             user_id TEXT,
-            team_id TEXT,
             parent_item_id TEXT,
             name TEXT NOT NULL,
             description TEXT,

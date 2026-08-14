@@ -6,6 +6,7 @@ mod add_item_source_event_id;
 mod add_projects;
 mod add_team_member_role;
 mod backfill_projects;
+mod drop_items_team_id;
 mod drop_team_member_points;
 mod has_tasks_to_simple;
 mod item_type_event_type;
@@ -21,6 +22,7 @@ use add_projects::AddProjects;
 use add_team_member_role::AddTeamMemberRole;
 use async_trait::async_trait;
 use backfill_projects::BackfillProjects;
+use drop_items_team_id::DropItemsTeamId;
 use drop_team_member_points::DropTeamMemberPoints;
 use has_tasks_to_simple::HasTasksToSimple;
 use item_type_event_type::ItemTypeEventType;
@@ -74,6 +76,7 @@ fn all_migrations() -> Vec<Box<dyn Migration>> {
         Box::new(BackfillProjects),
         Box::new(DropTeamMemberPoints),
         Box::new(AddEventSeries),
+        Box::new(DropItemsTeamId),
     ]
 }
 
@@ -193,7 +196,6 @@ mod tests {
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
                 user_id TEXT,
-                team_id TEXT,
                 description TEXT,
                 due_date INTEGER,
                 scheduled_date INTEGER,
@@ -436,7 +438,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 13);
+        assert_eq!(applied_count, 14);
     }
 
     #[tokio::test]
@@ -449,7 +451,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 13);
+        assert_eq!(applied_count, 14);
     }
 
     #[tokio::test]
@@ -463,6 +465,6 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 13);
+        assert_eq!(applied_count, 14);
     }
 }

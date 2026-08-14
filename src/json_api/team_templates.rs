@@ -31,7 +31,6 @@ pub async fn create_team_template(
         &repo,
         &teams,
         &projects,
-        &input.team_id,
         CreateTeamTemplateParams {
             project_id: project.id,
             requester_user_id: auth_user.user_id,
@@ -51,10 +50,17 @@ pub async fn create_team_template(
     Ok(output::CreateTeamTemplateOutput { template_id })
 }
 
+/// Resolves `input.team_id` to its backing project via `ProjectRepo::get_by_team`
+/// and calls the `project_id`-scoped `list_templates_by_project` — this legacy
+/// `ListTeamTemplates` operation only carries `teamId` (see
+/// `create_team_template`'s own doc comment above for why), and Stage 6 of
+/// docs/team-id-removal-plan.md dropped `ItemRepo::list_team_templates`
+/// (and the `items.team_id` column it queried) entirely.
 pub async fn list_team_templates(
     input: input::ListTeamTemplatesInput,
     server::Extension(repo): server::Extension<Arc<dyn ItemRepo>>,
     server::Extension(teams): server::Extension<Arc<dyn TeamRepo>>,
+    server::Extension(projects): server::Extension<Arc<dyn ProjectRepo>>,
     server::Extension(auth_user): server::Extension<AuthUser>,
 ) -> Result<output::ListTeamTemplatesOutput, error::ListTeamTemplatesError> {
     require_active_member(&teams, &input.team_id, &auth_user.user_id)
@@ -65,8 +71,13 @@ pub async fn list_team_templates(
                 error::ListTeamTemplatesError::from(internal(msg))
             }
         })?;
+    let project = projects
+        .get_by_team(&input.team_id)
+        .await
+        .map_err(|e| internal(format!("{e:?}")))?
+        .ok_or_else(|| error::ListTeamTemplatesError::from(not_found()))?;
     let items = repo
-        .list_team_templates(&input.team_id)
+        .list_templates_by_project(&project.id)
         .await
         .map_err(|e| internal(format!("{e:?}")))?;
     let items = items

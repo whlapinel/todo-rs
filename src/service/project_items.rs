@@ -244,14 +244,15 @@ pub struct CreateProjectItemParams {
 
 /// Stage B4's unified create path. Rather than reimplementing the recurrence/
 /// offset/event-trigger/points machinery a third time, this resolves `project_id`
-/// down to a plain `user_id` (personal project) or `team_id` (team-backed project)
-/// and delegates straight to `items::create_item`/`team_items::create_team_item` —
-/// the same functions the legacy `Item`/`TeamItem` operations already call, so
-/// project-created items dual-write `user_id`/`team_id` exactly like those do,
-/// keeping the legacy read APIs consistent (see docs/project-abstraction-plan.md's
-/// stage B4 dual-write-bridge verification). `assigned_to_user_id`/`points` are
-/// simply dropped for a personal project — `CreateItemParams` has no slot for
-/// either, matching personal items never having carried a `TeamAssignment` at all.
+/// down to a plain `user_id` (personal project) or delegates straight to
+/// `items::create_item`/`team_items::create_team_item` — the same functions the
+/// legacy `Item`/`TeamItem` operations already call, so personal project-created
+/// items still dual-write `user_id` exactly like those do, keeping the legacy read
+/// APIs consistent (see docs/project-abstraction-plan.md's stage B4 dual-write-bridge
+/// verification). Team-backed items no longer dual-write `items.team_id` — that
+/// column was dropped in Stage 6 of docs/team-id-removal-plan.md. `assigned_to_user_id`/
+/// `points` are simply dropped for a personal project — `CreateItemParams` has no slot
+/// for either, matching personal items never having carried a `TeamAssignment` at all.
 pub async fn create_project_item(
     repo: &Arc<dyn ItemRepo>,
     projects: &Arc<dyn ProjectRepo>,
@@ -262,13 +263,12 @@ pub async fn create_project_item(
     require_project_member(projects, teams, &params.project_id, requester_user_id).await?;
     let project = projects.get(&params.project_id).await?;
     match project.team_id {
-        Some(team_id) => {
+        Some(_) => {
             team_items::create_team_item(
                 repo,
                 teams,
                 projects,
                 requester_user_id,
-                &team_id,
                 CreateTeamItemParams {
                     project_id: params.project_id,
                     name: params.name,
@@ -520,7 +520,7 @@ mod tests {
         let mut items_mock = MockItemRepo::new();
         items_mock
             .expect_get_by_project()
-            .returning(|_, _| Ok(Item::new_team_item("team1", "Task")));
+            .returning(|_, _| Ok(Item::new_project_item("p1", "Task")));
 
         let repo: Arc<dyn ItemRepo> = Arc::new(items_mock);
         let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
@@ -599,7 +599,7 @@ mod tests {
         let mut items_mock = MockItemRepo::new();
         items_mock
             .expect_create()
-            .withf(|item: &Item| item.user_id.as_deref() == Some("owner1") && item.team_id.is_none())
+            .withf(|item: &Item| item.user_id.as_deref() == Some("owner1"))
             .times(1)
             .returning(|_| Ok("new-item-id".to_string()));
         let repo: Arc<dyn ItemRepo> = Arc::new(items_mock);
@@ -637,7 +637,7 @@ mod tests {
         let mut items_mock = MockItemRepo::new();
         items_mock
             .expect_create()
-            .withf(|item: &Item| item.team_id.as_deref() == Some("team1") && item.user_id.is_none())
+            .withf(|item: &Item| item.project_id.as_deref() == Some("p1") && item.user_id.is_none())
             .times(1)
             .returning(|_| Ok("new-item-id".to_string()));
         let repo: Arc<dyn ItemRepo> = Arc::new(items_mock);
@@ -730,7 +730,7 @@ mod tests {
         let mut items_mock = MockItemRepo::new();
         items_mock
             .expect_get_by_project()
-            .returning(|_, _| Ok(Item::new_team_item("team1", "Old name")));
+            .returning(|_, _| Ok(Item::new_project_item("p1", "Old name")));
         items_mock
             .expect_update_by_project()
             .times(1)
@@ -793,7 +793,7 @@ mod tests {
         let mut items_mock = MockItemRepo::new();
         items_mock
             .expect_get_by_project()
-            .returning(|_, _| Ok(Item::new_team_item("team1", "Task")));
+            .returning(|_, _| Ok(Item::new_project_item("p1", "Task")));
         items_mock.expect_list_children().returning(|_| Ok(vec![]));
         items_mock.expect_list_by_source_event().returning(|_| Ok(vec![]));
         items_mock.expect_delete().times(1).returning(|_| Ok(()));
@@ -808,12 +808,13 @@ mod tests {
     /// before Stage 4, `team_items::update_team_item` scoped its fetch/update via
     /// `repo.get_team_item(&project.team_id, item_id)`/`update_team_item` — the
     /// *project's current* team, not the item's own (frozen-at-creation) `team_id`
-    /// column, which `ProjectRepo::attach_team`/`detach_team` never touch. An item
-    /// created while the project was attached to `team1`, read again after the
-    /// project was re-attached to `team2`, would 404 forever even though the item
-    /// itself never moved. Post-Stage4, `update_team_item` scopes via
-    /// `repo.get_by_project`/`update_by_project` instead — `project_id` never
-    /// changes when a project's attached team is swapped, so this now succeeds.
+    /// column (removed entirely in Stage 6), which `ProjectRepo::attach_team`/
+    /// `detach_team` never touched. An item created while the project was attached
+    /// to `team1`, read again after the project was re-attached to `team2`, would
+    /// 404 forever even though the item itself never moved. Post-Stage4,
+    /// `update_team_item` scopes via `repo.get_by_project`/`update_by_project`
+    /// instead — `project_id` never changes when a project's attached team is
+    /// swapped, so this now succeeds.
     #[tokio::test]
     async fn update_project_item_succeeds_after_project_reattaches_a_different_team() {
         let mut projects_mock = MockProjectRepo::new();
@@ -836,8 +837,6 @@ mod tests {
         items_mock.expect_get_by_project().returning(|_, _| {
             Ok(Item {
                 id: "i1".to_string(),
-                // Frozen at creation under team1 — never updated by attach/detach.
-                team_id: Some("team1".to_string()),
                 project_id: Some("p1".to_string()),
                 name: "Old name".to_string(),
                 ..Item::default()
@@ -894,7 +893,6 @@ mod tests {
         items_mock.expect_get_by_project().returning(|_, _| {
             Ok(Item {
                 id: "i1".to_string(),
-                team_id: Some("team1".to_string()),
                 project_id: Some("p1".to_string()),
                 name: "Task".to_string(),
                 ..Item::default()

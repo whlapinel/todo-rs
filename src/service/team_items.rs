@@ -117,22 +117,16 @@ pub(crate) async fn resolve_offset_anchor_project(
 
 /// Moved from `json_api::team_items::create_team_item`; rewritten in Stage 4 of
 /// docs/team-id-removal-plan.md to be `project_id`-primary — every repo/membership
-/// lookup below goes through `params.project_id`, not a `team_id`.
-///
-/// `team_id` is threaded in as a plain parameter (not a `CreateTeamItemParams`
-/// field) purely to dual-write `items.team_id` on the created row: that column is
-/// still read directly by a handful of not-yet-migrated call sites (see Stage 6 of
-/// docs/team-id-removal-plan.md's "external-API read sites" — this dual-write gap
-/// surfaced during Stage 4's implementation and was folded in here rather than left
-/// as a silent regression window between Stage 4 and Stage 6). The caller
-/// (`project_items::create_project_item`) already has this value from its own
-/// `project.team_id` match before delegating here, so nothing extra is fetched.
+/// lookup below goes through `params.project_id`, not a `team_id`. Stage 6 dropped
+/// the `items.team_id` dual-write this function used to need (the read sites that
+/// justified it — `list_items_due`'s/`list_assigned_items`' `teamId` fields, and
+/// `ItemRepo::list_team_templates` — are all migrated off that column now, and the
+/// column itself is gone).
 pub async fn create_team_item(
     repo: &Arc<dyn ItemRepo>,
     teams: &Arc<dyn TeamRepo>,
     projects: &Arc<dyn ProjectRepo>,
     requester_user_id: &str,
-    team_id: &str,
     params: CreateTeamItemParams,
 ) -> Result<String, ItemError> {
     require_project_member(projects, teams, &params.project_id, requester_user_id).await?;
@@ -215,8 +209,6 @@ pub async fn create_team_item(
     };
 
     let mut item = Item::new_project_item(&params.project_id, &params.name);
-    // Dual-write — see this function's own doc comment above.
-    item.team_id = Some(team_id.to_string());
     item.item_type = build_item_type(
         kind,
         schedule,
@@ -380,15 +372,13 @@ pub struct UpdateTeamItemParams {
 /// lookup below goes through `params.project_id`, not a `team_id`.
 ///
 /// `team_id` is threaded in as a plain parameter (not an `UpdateTeamItemParams`
-/// field) for two narrow reasons, neither of which is repo scoping: (1)
-/// `activity_log.log_activity`'s `team_id` column is still `NOT NULL` and out of
-/// this plan's scope (see Stage 6 of docs/team-id-removal-plan.md); (2) unlike
-/// `update_by_project`, `create`'s `INSERT` still writes `items.team_id`, but
-/// `update_by_project` itself never touches that column at all — so, unlike
-/// `create_team_item`, there is nothing here for `team_id` to dual-write into. The
-/// caller (`project_items::update_project_item`) already has this value from its
-/// own `projects.get(project_id)` call before delegating here, so nothing extra is
-/// fetched.
+/// field) for one narrow reason, unrelated to repo scoping: `activity_log.log_activity`'s
+/// `team_id` column is `NOT NULL` and permanently out of this plan's scope (see Stage 6
+/// of docs/team-id-removal-plan.md — `activity_log.team_id` is a separate column from
+/// the now-removed `items.team_id`, still read by the legacy `ListTeamActivityLog`/
+/// `UndoActivityLogEntry` operations). The caller (`project_items::update_project_item`)
+/// already has this value from its own `projects.get(project_id)` call before
+/// delegating here, so nothing extra is fetched.
 pub async fn update_team_item(
     repo: &Arc<dyn ItemRepo>,
     ctx: &UpdateTeamItemContext,
@@ -674,7 +664,6 @@ mod tests {
             &teams,
             &projects,
             "member1",
-            "t1",
             CreateTeamItemParams {
                 project_id: "p1".to_string(),
                 name: "Mow the lawn".to_string(),
@@ -705,7 +694,6 @@ mod tests {
             &teams,
             &projects,
             "admin1",
-            "t1",
             CreateTeamItemParams {
                 project_id: "p1".to_string(),
                 name: "Mow the lawn".to_string(),
@@ -717,19 +705,17 @@ mod tests {
         .expect("should create item");
     }
 
-    fn team_item_with_points(id: &str, team_id: &str, points: Option<i32>) -> Item {
-        team_item_with_points_and_assignee(id, team_id, points, None)
+    fn team_item_with_points(id: &str, points: Option<i32>) -> Item {
+        team_item_with_points_and_assignee(id, points, None)
     }
 
     fn team_item_with_points_and_assignee(
         id: &str,
-        team_id: &str,
         points: Option<i32>,
         assigned_to_user_id: Option<&str>,
     ) -> Item {
         Item {
             id: id.to_string(),
-            team_id: Some(team_id.to_string()),
             name: "Mow the lawn".to_string(),
             item_type: ItemType::Task {
                 schedule: Schedule::default(),
@@ -760,7 +746,7 @@ mod tests {
         items.expect_get_by_project().returning(|_, _| {
             Ok(Item {
                 project_id: Some("p1".to_string()),
-                ..team_item_with_points("item1", "t1", Some(30))
+                ..team_item_with_points("item1", Some(30))
             })
         });
         items
@@ -798,7 +784,7 @@ mod tests {
         items.expect_get_by_project().returning(|_, _| {
             Ok(Item {
                 project_id: Some("p1".to_string()),
-                ..team_item_with_points("item1", "t1", Some(30))
+                ..team_item_with_points("item1", Some(30))
             })
         });
         items
@@ -835,7 +821,7 @@ mod tests {
         let mut items = MockItemRepo::new();
         items
             .expect_get_by_project()
-            .returning(|_, _| Ok(team_item_with_points("item1", "t1", None)));
+            .returning(|_, _| Ok(team_item_with_points("item1", None)));
         items
             .expect_list_children()
             .withf(|parent_id: &str| parent_id == "item1")
@@ -879,7 +865,6 @@ mod tests {
         items.expect_get_by_project().returning(|_, _| {
             Ok(team_item_with_points_and_assignee(
                 "item1",
-                "t1",
                 None,
                 Some("member1"),
             ))
@@ -930,7 +915,6 @@ mod tests {
         items.expect_get_by_project().returning(|_, _| {
             Ok(Item {
                 id: "item1".to_string(),
-                team_id: Some("t1".to_string()),
                 project_id: Some("p1".to_string()),
                 name: "Original name".to_string(),
                 complete: true,
@@ -968,7 +952,6 @@ mod tests {
         items.expect_get_by_project().returning(|_, _| {
             Ok(Item {
                 id: "item1".to_string(),
-                team_id: Some("t1".to_string()),
                 project_id: Some("p1".to_string()),
                 name: "Same name".to_string(),
                 complete: true,
@@ -1007,7 +990,7 @@ mod tests {
         let mut items = MockItemRepo::new();
         items
             .expect_get_by_project()
-            .returning(|_, _| Ok(team_item_with_points("item1", "t1", Some(20))));
+            .returning(|_, _| Ok(team_item_with_points("item1", Some(20))));
         items.expect_list_children().returning(|_| Ok(vec![]));
 
         let items: Arc<dyn ItemRepo> = Arc::new(items);
@@ -1040,7 +1023,6 @@ mod tests {
         items.expect_get_by_project().returning(|_, _| {
             Ok(team_item_with_points_and_assignee(
                 "item1",
-                "t1",
                 Some(20),
                 Some("member1"),
             ))
@@ -1078,7 +1060,6 @@ mod tests {
         items.expect_get_by_project().returning(|_, _| {
             Ok(team_item_with_points_and_assignee(
                 "item1",
-                "t1",
                 Some(20),
                 Some("member1"),
             ))
@@ -1152,7 +1133,7 @@ mod tests {
         items.expect_get_by_project().returning(|_, _| {
             Ok(Item {
                 complete: true,
-                ..team_item_with_points_and_assignee("item1", "t1", Some(20), Some("member1"))
+                ..team_item_with_points_and_assignee("item1", Some(20), Some("member1"))
             })
         });
         items
@@ -1193,7 +1174,7 @@ mod tests {
         items.expect_get_by_project().returning(|_, _| {
             Ok(Item {
                 complete: true,
-                ..team_item_with_points_and_assignee("item1", "t1", Some(999), Some("member1"))
+                ..team_item_with_points_and_assignee("item1", Some(999), Some("member1"))
             })
         });
         items
@@ -1267,7 +1248,6 @@ mod tests {
         items.expect_get_by_project().returning(|_, _| {
             Ok(team_item_with_points_and_assignee(
                 "item1",
-                "t1",
                 None,
                 Some("member1"),
             ))
@@ -1315,7 +1295,7 @@ mod tests {
         let mut items = MockItemRepo::new();
         items.expect_get_by_project().returning(move |_, _| {
             Ok(with_due_date_and_recurrence(
-                team_item_with_points_and_assignee("item1", "t1", Some(20), Some("member1")),
+                team_item_with_points_and_assignee("item1", Some(20), Some("member1")),
                 due_date,
                 "every day",
             ))
@@ -1394,20 +1374,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_team_item_dual_writes_team_id_from_threaded_param() {
-        // Stage 4 of docs/team-id-removal-plan.md made `project_id` (not `team_id`)
-        // the primary key `create_team_item` builds items against — `project_id`
-        // comes straight from `CreateTeamItemParams` now, not resolved via
-        // `get_by_team`. `team_id` is still dual-written onto the created row (via
-        // the explicit `team_id` parameter) purely to keep `items.team_id`
-        // populated for the Stage 6 read sites that haven't migrated off it yet
-        // (see this function's own doc comment).
+    async fn create_team_item_builds_item_against_params_project_id() {
         let mut items = MockItemRepo::new();
         items
             .expect_create()
-            .withf(|item: &Item| {
-                item.project_id.as_deref() == Some("p1") && item.team_id.as_deref() == Some("t1")
-            })
+            .withf(|item: &Item| item.project_id.as_deref() == Some("p1"))
             .times(1)
             .returning(|_| Ok("new-item-id".to_string()));
         let items: Arc<dyn ItemRepo> = Arc::new(items);
@@ -1421,7 +1392,6 @@ mod tests {
             &teams,
             &projects,
             "member1",
-            "t1",
             CreateTeamItemParams {
                 project_id: "p1".to_string(),
                 name: "Mow the lawn".to_string(),
@@ -1438,7 +1408,6 @@ mod tests {
         items.expect_get_by_project().returning(|_, _| {
             Ok(Item {
                 id: "item1".to_string(),
-                team_id: Some("t1".to_string()),
                 project_id: Some("p1".to_string()),
                 name: "Same name".to_string(),
                 ..Item::default()

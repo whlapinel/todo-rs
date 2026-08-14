@@ -182,13 +182,22 @@ impl Migration for BackfillProjects {
         )
         .execute(&mut *conn)
         .await?;
-        sqlx::query(
-            "UPDATE items SET project_id = (
-                 SELECT id FROM projects WHERE projects.team_id = items.team_id
-             ) WHERE team_id IS NOT NULL AND project_id IS NULL",
-        )
-        .execute(&mut *conn)
-        .await?;
+        // `items.team_id` was dropped in Stage 6 of docs/team-id-removal-plan.md
+        // (`drop_items_team_id.rs`, version 14 — this migration is version 11, so on
+        // any DB that still needs migrating from scratch, the column is present when
+        // this step runs and gets dropped later). A DB already on the current
+        // baseline schema (fresh install, or fully migrated already) has no
+        // `items.team_id` column at all, so this step has nothing to backfill from —
+        // skip it rather than referencing a column that may not exist.
+        if column_exists(conn, "items", "team_id").await? {
+            sqlx::query(
+                "UPDATE items SET project_id = (
+                     SELECT id FROM projects WHERE projects.team_id = items.team_id
+                 ) WHERE team_id IS NOT NULL AND project_id IS NULL",
+            )
+            .execute(&mut *conn)
+            .await?;
+        }
 
         if !column_exists(conn, "activity_log", "project_id").await? {
             sqlx::query("ALTER TABLE activity_log ADD COLUMN project_id TEXT")
