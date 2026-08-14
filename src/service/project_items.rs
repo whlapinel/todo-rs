@@ -1,12 +1,13 @@
 use crate::domain::item::{Item, ItemKind};
 use crate::domain::project::Project;
 use crate::service::error::ItemError;
+use crate::service::event_series;
 use crate::service::items::{self, item_anchor, CreateItemParams, UpdateItemParams};
 use crate::service::projects::require_project_member;
 use crate::service::team_items::{
     self, CreateTeamItemParams, UpdateTeamItemContext, UpdateTeamItemParams,
 };
-use crate::storage::sqlite::{ActivityLogRepo, DueItem, ItemRepo, ProjectRepo, TeamRepo};
+use crate::storage::sqlite::{ActivityLogRepo, DueItem, EventSeriesRepo, ItemRepo, ProjectRepo, TeamRepo};
 use chrono::{DateTime, Utc};
 use std::sync::Arc;
 
@@ -431,10 +432,16 @@ pub async fn update_project_item(
 }
 
 /// Stage B4's unified delete path — same delegation shape as `create_project_item`.
+/// Stage 6 of docs/recurring-events-virtual-occurrences-rough-plan.md added the
+/// trailing `event_series::unlink_deleted_item_occurrence` call: every delete of an
+/// item goes through here regardless of caller (web UI, CLI, MCP), so this is the one
+/// place that can catch "this item was a materialized series occurrence" for all of
+/// them, rather than duplicating that check into each per-screen delete handler.
 pub async fn delete_project_item(
     repo: &Arc<dyn ItemRepo>,
     projects: &Arc<dyn ProjectRepo>,
     teams: &Arc<dyn TeamRepo>,
+    event_series: &Arc<dyn EventSeriesRepo>,
     requester_user_id: &str,
     project_id: &str,
     item_id: &str,
@@ -444,10 +451,11 @@ pub async fn delete_project_item(
     match project.team_id {
         Some(_) => {
             team_items::delete_team_item(repo, teams, projects, requester_user_id, project_id, item_id)
-                .await
+                .await?;
         }
-        None => items::delete_item(repo, &project.owner_user_id, item_id).await,
+        None => items::delete_item(repo, &project.owner_user_id, item_id).await?,
     }
+    event_series::unlink_deleted_item_occurrence(event_series, item_id).await
 }
 
 #[cfg(test)]
@@ -455,7 +463,17 @@ mod tests {
     use super::*;
     use crate::domain::project::Project;
     use crate::domain::team::TeamRole;
-    use crate::storage::sqlite::{MockActivityLogRepo, MockItemRepo, MockProjectRepo, MockTeamRepo};
+    use crate::storage::sqlite::{
+        MockActivityLogRepo, MockEventSeriesRepo, MockItemRepo, MockProjectRepo, MockTeamRepo,
+    };
+
+    /// Every `delete_project_item` test but the dedicated series-unlinking one below just
+    /// needs the reverse lookup to be a harmless no-op — this is what those tests share.
+    fn no_op_event_series_repo() -> Arc<dyn EventSeriesRepo> {
+        let mut mock = MockEventSeriesRepo::new();
+        mock.expect_find_occurrence_by_item_id().returning(|_| Ok(None));
+        Arc::new(mock)
+    }
 
     fn personal_project() -> Project {
         Project {
@@ -773,8 +791,9 @@ mod tests {
         let repo: Arc<dyn ItemRepo> = Arc::new(items_mock);
 
         let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+        let event_series = no_op_event_series_repo();
 
-        delete_project_item(&repo, &projects, &teams, "owner1", "p1", "i1")
+        delete_project_item(&repo, &projects, &teams, &event_series, "owner1", "p1", "i1")
             .await
             .expect("should delete personal project item");
     }
@@ -798,8 +817,9 @@ mod tests {
         items_mock.expect_list_by_source_event().returning(|_| Ok(vec![]));
         items_mock.expect_delete().times(1).returning(|_| Ok(()));
         let repo: Arc<dyn ItemRepo> = Arc::new(items_mock);
+        let event_series = no_op_event_series_repo();
 
-        delete_project_item(&repo, &projects, &teams, "member1", "p1", "i1")
+        delete_project_item(&repo, &projects, &teams, &event_series, "member1", "p1", "i1")
             .await
             .expect("should delete team project item");
     }
@@ -902,11 +922,52 @@ mod tests {
         items_mock.expect_list_by_source_event().returning(|_| Ok(vec![]));
         items_mock.expect_delete().times(1).returning(|_| Ok(()));
         let repo: Arc<dyn ItemRepo> = Arc::new(items_mock);
+        let event_series = no_op_event_series_repo();
 
-        delete_project_item(&repo, &projects, &teams, "member1", "p1", "i1")
+        delete_project_item(&repo, &projects, &teams, &event_series, "member1", "p1", "i1")
             .await
             .expect(
                 "delete should succeed even though the project's team changed since the item was created",
             );
+    }
+
+    #[tokio::test]
+    async fn delete_project_item_unlinks_a_materialized_series_occurrence() {
+        let mut projects_mock = MockProjectRepo::new();
+        projects_mock.expect_get().returning(|_| Ok(personal_project()));
+        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+
+        let mut items_mock = MockItemRepo::new();
+        items_mock
+            .expect_get()
+            .returning(|_, _| Ok(Item::new_user_item("owner1", "Standup")));
+        items_mock.expect_list_children().returning(|_| Ok(vec![]));
+        items_mock.expect_list_by_source_event().returning(|_| Ok(vec![]));
+        items_mock.expect_delete().times(1).returning(|_| Ok(()));
+        let repo: Arc<dyn ItemRepo> = Arc::new(items_mock);
+
+        let mut series_mock = MockEventSeriesRepo::new();
+        series_mock
+            .expect_find_occurrence_by_item_id()
+            .withf(|item_id: &str| item_id == "i1")
+            .returning(|_| {
+                Ok(Some(crate::domain::event_series::EventOccurrence {
+                    series_id: "s1".to_string(),
+                    occurrence_date: DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+                    item_id: Some("i1".to_string()),
+                    is_exdate: false,
+                }))
+            });
+        series_mock
+            .expect_mark_exdate()
+            .withf(|series_id: &str, _date| series_id == "s1")
+            .times(1)
+            .returning(|_, _| Ok(()));
+        let event_series: Arc<dyn EventSeriesRepo> = Arc::new(series_mock);
+
+        delete_project_item(&repo, &projects, &teams, &event_series, "owner1", "p1", "i1")
+            .await
+            .expect("should delete the item and mark its occurrence exdate");
     }
 }

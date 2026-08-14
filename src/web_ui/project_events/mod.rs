@@ -370,10 +370,12 @@ pub(crate) fn build_calendar_days(
                 .entry(local.date_naive())
                 .or_default()
                 .push(CalendarEventEntry {
+                    entry_id: format!("cal-item-{}", item.id),
                     href: format!("/web/projects/{project_id}/events/{}", item.id),
                     name: item.name.clone(),
                     time_label,
                     materialize_url: None,
+                    skip_url: None,
                     is_virtual: false,
                 });
         }
@@ -384,11 +386,17 @@ pub(crate) fn build_calendar_days(
             .entry(local.date_naive())
             .or_default()
             .push(CalendarEventEntry {
+                entry_id: format!("cal-virtual-{}-{}", occ.series_id, occ.occurrence_date.timestamp()),
                 href: "#".to_string(),
                 name: occ.series_name.clone(),
                 time_label: Some(local.format("%H:%M").to_string()),
                 materialize_url: Some(format!(
                     "/web/projects/{project_id}/series/{}/occurrences/{}",
+                    occ.series_id,
+                    occ.occurrence_date.timestamp(),
+                )),
+                skip_url: Some(format!(
+                    "/web/projects/{project_id}/series/{}/occurrences/{}/skip",
                     occ.series_id,
                     occ.occurrence_date.timestamp(),
                 )),

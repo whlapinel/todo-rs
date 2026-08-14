@@ -8,7 +8,7 @@ use crate::service::projects::{self as project_service};
 use crate::service::templates::{
     self as template_service, CreateProjectTemplateParams, UpdateProjectTemplateParams,
 };
-use crate::storage::sqlite::{ItemRepo, ProjectRepo, TeamRepo};
+use crate::storage::sqlite::{EventSeriesRepo, ItemRepo, ProjectRepo, TeamRepo};
 use crate::web_ui::nav::{self, ActiveContext, SidebarSection};
 use crate::web_ui::project_tasks::active_member_options;
 use crate::web_ui::project_templates::{non_empty, parse_offset, render, require_project_template};
@@ -179,11 +179,13 @@ pub async fn delete_project_template_form(
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(event_series): Extension<Arc<dyn EventSeriesRepo>>,
 ) -> Result<Html<String>, ItemError> {
     project_item_service::delete_project_item(
         &repo,
         &projects,
         &teams,
+        &event_series,
         &auth_user.user_id,
         &project_id,
         &template_id,
@@ -510,11 +512,13 @@ pub async fn delete_project_template_child_form(
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(event_series): Extension<Arc<dyn EventSeriesRepo>>,
 ) -> Result<Html<String>, ItemError> {
     project_item_service::delete_project_item(
         &repo,
         &projects,
         &teams,
+        &event_series,
         &auth_user.user_id,
         &project_id,
         &item_id,

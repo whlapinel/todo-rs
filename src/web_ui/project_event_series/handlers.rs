@@ -179,3 +179,37 @@ pub async fn materialize_project_event_series_occurrence_form(
     )
         .into_response())
 }
+
+/// Stage 6 of docs/recurring-events-virtual-occurrences-rough-plan.md — the "Skip" button
+/// wired onto virtual occurrences (dashboard list, dashboard calendar, events calendar; see
+/// each screen's own row/entry template). Unlike materialize above, this never redirects —
+/// callers target the occurrence's own row/entry element directly with `hx-swap="outerHTML"`
+/// and an empty response removes it in place, since there's no detail page to send anyone to.
+///
+/// Same defense-in-depth project_id/series match check as materialize, for the same reason.
+pub async fn skip_project_event_series_occurrence_form(
+    Path((project_id, series_id, occurrence_ts)): Path<(String, String, i64)>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(event_series): Extension<Arc<dyn EventSeriesRepo>>,
+) -> Result<Response, ItemError> {
+    let series = event_series_service::get_series(
+        &projects,
+        &teams,
+        &event_series,
+        &auth_user.user_id,
+        &series_id,
+    )
+    .await?;
+    if series.project_id != project_id {
+        return Err(ItemError::NotFound);
+    }
+
+    let occurrence_date = DateTime::<Utc>::from_timestamp(occurrence_ts, 0)
+        .ok_or_else(|| ItemError::Invalid("invalid occurrence timestamp".to_string()))?;
+
+    event_series_service::skip_occurrence(&event_series, &series_id, occurrence_date).await?;
+
+    Ok(Html(String::new()).into_response())
+}

@@ -9,6 +9,10 @@
     <span class="shrink-0 text-[10px] uppercase tracking-wide text-gray-400 dark:text-gray-500">Planned</span>
   </div>
   <div class="mt-1 flex items-center gap-x-3 pl-7 text-xs text-gray-500 dark:text-gray-400">
-    <span>Scheduled: {{ date_label }}</span>
+    <span class="flex-1">Scheduled: {{ date_label }}</span>
+    <button hx-post="{{ skip_url }}" hx-confirm="Skip this occurrence?"
+      hx-target="#proj-dash-virtual-{{ series_id }}-{{ occurrence_ts }}" hx-select="unset"
+      hx-swap="outerHTML swap:200ms"
+      class="shrink-0 cursor-pointer text-gray-400 hover:text-red-500 dark:text-gray-500 dark:hover:text-red-400">Skip</button>
   </div>
 </li>

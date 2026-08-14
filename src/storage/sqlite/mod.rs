@@ -290,10 +290,15 @@ pub trait EventSeriesRepo: Send + Sync {
         occurrence_date: DateTime<Utc>,
         item_id: &str,
     ) -> Result<(), RepoError>;
-    /// Upserts the `(series_id, occurrence_date)` row with `is_exdate = true` — the
-    /// EXDATE-equivalent "skip this date" marker. Leaves any existing `item_id`
-    /// untouched; whether an already-materialized occurrence's `items` row should be
-    /// deleted when skipped is an open call deferred to stage 6, not decided here.
+    /// Upserts the `(series_id, occurrence_date)` row with `is_exdate = true` and
+    /// `item_id` cleared — the EXDATE-equivalent "skip this date" marker. Stage 6 of
+    /// docs/recurring-events-virtual-occurrences-rough-plan.md resolved the "what
+    /// happens to an already-materialized occurrence" question deferred here at
+    /// stage 3: skipping a materialized occurrence deletes its `items` row first
+    /// (see `service::event_series::unlink_deleted_item_occurrence`), so by the time
+    /// this runs there is never a live item behind the row it's clearing — clearing
+    /// `item_id` unconditionally is therefore always correct, not just for the
+    /// purely-virtual case.
     async fn mark_exdate(
         &self,
         series_id: &str,
@@ -309,6 +314,15 @@ pub trait EventSeriesRepo: Send + Sync {
         range_start: DateTime<Utc>,
         range_end: DateTime<Utc>,
     ) -> Result<Vec<EventOccurrence>, RepoError>;
+    /// Reverse lookup used when an item is deleted (`service::project_items::delete_project_item`)
+    /// to find whether it was a materialized series occurrence, so the occurrence can be marked
+    /// exdate rather than left pointing at a now-deleted `item_id`. `None` for an item that never
+    /// came from a series — the overwhelmingly common case, so callers must treat `None` as a
+    /// normal, cheap no-op rather than something to log or special-case.
+    async fn find_occurrence_by_item_id(
+        &self,
+        item_id: &str,
+    ) -> Result<Option<EventOccurrence>, RepoError>;
 }
 
 fn db_err(e: sqlx::Error) -> RepoError {
@@ -584,6 +598,9 @@ pub async fn create_pool(url: &str) -> Result<SqlitePool, sqlx::Error> {
     )
     .execute(&pool)
     .await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_event_occurrences_item_id ON event_occurrences (item_id)")
+        .execute(&pool)
+        .await?;
     // idx_items_project_id is deliberately NOT created here — see add_projects.rs's
     // doc comment: an index on a column added to an *existing* table via a migration
     // must live inside that migration, not the baseline, since baseline indexes run

@@ -4,7 +4,9 @@ use crate::service::items::ItemError;
 use crate::service::project_items::{
     self as project_item_service, CreateProjectItemParams, UpdateProjectItemParams,
 };
-use crate::storage::sqlite::{ActivityLogRepo, ItemRepo, ProjectRepo, RepoError, TeamRepo, UserRepo};
+use crate::storage::sqlite::{
+    ActivityLogRepo, EventSeriesRepo, ItemRepo, ProjectRepo, RepoError, TeamRepo, UserRepo,
+};
 use std::collections::HashMap;
 use std::sync::Arc;
 use todo_server_sdk::{error, input, output, server, types::DateTime as SmithyDateTime};
@@ -194,12 +196,14 @@ pub async fn delete_project_item(
     server::Extension(repo): server::Extension<Arc<dyn ItemRepo>>,
     server::Extension(projects): server::Extension<Arc<dyn ProjectRepo>>,
     server::Extension(teams): server::Extension<Arc<dyn TeamRepo>>,
+    server::Extension(event_series): server::Extension<Arc<dyn EventSeriesRepo>>,
     server::Extension(auth): server::Extension<AuthUser>,
 ) -> Result<output::DeleteProjectItemOutput, error::DeleteProjectItemError> {
     project_item_service::delete_project_item(
         &repo,
         &projects,
         &teams,
+        &event_series,
         &auth.user_id,
         &input.project_id,
         &input.item_id,

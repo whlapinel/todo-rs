@@ -211,6 +211,10 @@ fn build_web_router() -> Router {
             post(materialize_project_event_series_occurrence_form),
         )
         .route(
+            "/projects/:project_id/series/:series_id/occurrences/:occurrence_ts/skip",
+            post(skip_project_event_series_occurrence_form),
+        )
+        .route(
             "/projects/:project_id/dashboard",
             get(project_dashboard_page),
         )

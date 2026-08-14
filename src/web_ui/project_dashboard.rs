@@ -94,6 +94,16 @@ fn materialize_url(project_id: &str, series_id: &str, occurrence_date: DateTime<
     format!("/web/projects/{project_id}/series/{series_id}/occurrences/{}", occurrence_date.timestamp())
 }
 
+/// Stage 6 of docs/recurring-events-virtual-occurrences-rough-plan.md — the "Skip" button's
+/// POST target, a sibling route to `materialize_url` above. See
+/// `web_ui::project_event_series::handlers::skip_project_event_series_occurrence_form`.
+fn skip_url(project_id: &str, series_id: &str, occurrence_date: DateTime<Utc>) -> String {
+    format!(
+        "/web/projects/{project_id}/series/{series_id}/occurrences/{}/skip",
+        occurrence_date.timestamp()
+    )
+}
+
 async fn names_for(
     teams: &Arc<dyn TeamRepo>,
     team_id: &str,
@@ -177,6 +187,7 @@ struct ProjectDashboardVirtualRow {
     name: String,
     date_label: String,
     materialize_url: String,
+    skip_url: String,
 }
 
 impl ProjectDashboardVirtualRow {
@@ -188,6 +199,7 @@ impl ProjectDashboardVirtualRow {
             name: occ.series_name.clone(),
             date_label: local.format("%Y-%m-%d %H:%M").to_string(),
             materialize_url: materialize_url(project_id, &occ.series_id, occ.occurrence_date),
+            skip_url: skip_url(project_id, &occ.series_id, occ.occurrence_date),
         }
     }
 }
@@ -345,6 +357,11 @@ pub async fn project_dashboard_page(
 }
 
 struct ProjectDashboardCalendarEntry {
+    /// Unique across the whole grid — a real item's own id for a materialized entry, a
+    /// `series_id`+`occurrence_ts` pair for a virtual one. Only actually needed as an
+    /// `hx-target` for the Skip button below, but set unconditionally for both kinds so the
+    /// template doesn't need an `Option` just to render an `id` attribute.
+    entry_id: String,
     detail_link: String,
     name: String,
     time_label: Option<String>,
@@ -352,6 +369,10 @@ struct ProjectDashboardCalendarEntry {
     /// `Some(...)` only for a virtual (unmaterialized) occurrence — the template POSTs here
     /// instead of following `detail_link` (which is `"#"` in that case).
     materialize_url: Option<String>,
+    /// `Some(...)` only for a virtual occurrence too (Stage 6) — a materialized occurrence's
+    /// only "skip" affordance in this stage is deleting its item via the item's own detail
+    /// page, per docs/recurring-events-virtual-occurrences-rough-plan.md's stage 6 write-up.
+    skip_url: Option<String>,
     is_virtual: bool,
 }
 
@@ -440,11 +461,13 @@ fn build_calendar_days(
                 .entry(local.date_naive())
                 .or_default()
                 .push(ProjectDashboardCalendarEntry {
+                    entry_id: format!("cal-item-{}", item.id),
                     detail_link: detail_url(item, project_id),
                     name: item.name.clone(),
                     time_label,
                     type_symbol: type_symbol(item.kind()),
                     materialize_url: None,
+                    skip_url: None,
                     is_virtual: false,
                 });
         }
@@ -455,11 +478,13 @@ fn build_calendar_days(
             .entry(local.date_naive())
             .or_default()
             .push(ProjectDashboardCalendarEntry {
+                entry_id: format!("cal-virtual-{}-{}", occ.series_id, occ.occurrence_date.timestamp()),
                 detail_link: "#".to_string(),
                 name: occ.series_name.clone(),
                 time_label: Some(local.format("%H:%M").to_string()),
                 type_symbol: "E",
                 materialize_url: Some(materialize_url(project_id, &occ.series_id, occ.occurrence_date)),
+                skip_url: Some(skip_url(project_id, &occ.series_id, occ.occurrence_date)),
                 is_virtual: true,
             });
     }

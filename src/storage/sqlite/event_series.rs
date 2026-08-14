@@ -154,7 +154,7 @@ impl EventSeriesRepo for SqliteEventSeriesRepo {
             "INSERT INTO event_occurrences (series_id, occurrence_date, item_id, is_exdate) \
              VALUES (?, ?, NULL, 1) \
              ON CONFLICT (series_id, occurrence_date) \
-             DO UPDATE SET is_exdate = 1",
+             DO UPDATE SET is_exdate = 1, item_id = NULL",
         )
         .bind(series_id)
         .bind(to_secs(occurrence_date))
@@ -182,6 +182,21 @@ impl EventSeriesRepo for SqliteEventSeriesRepo {
         .await
         .map_err(db_err)
         .map(|rows| rows.iter().map(row_to_occurrence).collect())
+    }
+
+    async fn find_occurrence_by_item_id(
+        &self,
+        item_id: &str,
+    ) -> Result<Option<EventOccurrence>, RepoError> {
+        sqlx::query(
+            "SELECT series_id, occurrence_date, item_id, is_exdate FROM event_occurrences \
+             WHERE item_id = ?",
+        )
+        .bind(item_id)
+        .fetch_optional(&self.0)
+        .await
+        .map_err(db_err)
+        .map(|row| row.map(|row| row_to_occurrence(&row)))
     }
 }
 
@@ -372,7 +387,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mark_exdate_on_materialized_occurrence_preserves_item_id() {
+    async fn mark_exdate_on_materialized_occurrence_clears_item_id() {
         let pool = test_pool().await;
         let repo = SqliteEventSeriesRepo(pool);
         let id = repo.create_series(&sample_series("p1")).await.unwrap();
@@ -384,7 +399,7 @@ mod tests {
 
         let occurrence = repo.get_occurrence(&id, dt(2_000_000)).await.unwrap().unwrap();
         assert!(occurrence.is_exdate);
-        assert_eq!(occurrence.item_id, Some("item-1".to_string()));
+        assert_eq!(occurrence.item_id, None);
     }
 
     #[tokio::test]
@@ -426,5 +441,30 @@ mod tests {
             .unwrap();
 
         assert_eq!(occurrences.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn find_occurrence_by_item_id_finds_a_materialized_occurrence() {
+        let pool = test_pool().await;
+        let repo = SqliteEventSeriesRepo(pool);
+        let id = repo.create_series(&sample_series("p1")).await.unwrap();
+        repo.record_materialized_occurrence(&id, dt(2_000_000), "item-1")
+            .await
+            .unwrap();
+
+        let occurrence = repo.find_occurrence_by_item_id("item-1").await.unwrap().unwrap();
+        assert_eq!(occurrence.series_id, id);
+        assert_eq!(occurrence.occurrence_date, dt(2_000_000));
+        assert!(!occurrence.is_exdate);
+    }
+
+    #[tokio::test]
+    async fn find_occurrence_by_item_id_returns_none_for_an_item_from_no_series() {
+        let pool = test_pool().await;
+        let repo = SqliteEventSeriesRepo(pool);
+        repo.create_series(&sample_series("p1")).await.unwrap();
+
+        let occurrence = repo.find_occurrence_by_item_id("some-unrelated-item").await.unwrap();
+        assert!(occurrence.is_none());
     }
 }

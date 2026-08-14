@@ -1,4 +1,5 @@
 mod activity_log;
+mod add_event_occurrences_item_id_index;
 mod add_event_series;
 mod add_item_description;
 mod add_item_points;
@@ -14,6 +15,7 @@ mod scheduled_end_date;
 mod team_member_points;
 
 use activity_log::ActivityLog;
+use add_event_occurrences_item_id_index::AddEventOccurrencesItemIdIndex;
 use add_event_series::AddEventSeries;
 use add_item_description::AddItemDescription;
 use add_item_points::AddItemPoints;
@@ -77,6 +79,7 @@ fn all_migrations() -> Vec<Box<dyn Migration>> {
         Box::new(DropTeamMemberPoints),
         Box::new(AddEventSeries),
         Box::new(DropItemsTeamId),
+        Box::new(AddEventOccurrencesItemIdIndex),
     ]
 }
 
@@ -438,7 +441,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 14);
+        assert_eq!(applied_count, 15);
     }
 
     #[tokio::test]
@@ -451,7 +454,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 14);
+        assert_eq!(applied_count, 15);
     }
 
     #[tokio::test]
@@ -465,6 +468,6 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 14);
+        assert_eq!(applied_count, 15);
     }
 }

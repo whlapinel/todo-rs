@@ -255,6 +255,9 @@ pub struct ProjectEventEditPageTemplate {
 }
 
 pub struct CalendarEventEntry {
+    /// Unique across the whole grid — see `project_dashboard::ProjectDashboardCalendarEntry`'s
+    /// identical field for why it's unconditional rather than `Option`.
+    pub entry_id: String,
     pub href: String,
     pub name: String,
     pub time_label: Option<String>,
@@ -262,6 +265,9 @@ pub struct CalendarEventEntry {
     /// docs/recurring-events-virtual-occurrences-rough-plan.md) — the template POSTs here
     /// instead of following `href` (which is `"#"` in that case).
     pub materialize_url: Option<String>,
+    /// `Some(...)` only for a virtual occurrence too (Stage 6) — see
+    /// `project_dashboard::ProjectDashboardCalendarEntry::skip_url`'s identical rationale.
+    pub skip_url: Option<String>,
     pub is_virtual: bool,
 }
 

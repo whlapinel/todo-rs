@@ -68,10 +68,15 @@ pub async fn get_or_materialize_occurrence(
     project_items::get_project_item_unchecked(repo, &series.project_id, &item_id).await
 }
 
-/// Marks `occurrence_date` as skipped (the EXDATE-equivalent) for `series_id`.
-/// Whether an already-materialized occurrence's `items` row should be deleted when
-/// skipped is an open call deferred to stage 6 — not decided here, so an
-/// already-materialized occurrence's `item_id` is left untouched by this call.
+/// Marks `occurrence_date` as skipped (the EXDATE-equivalent) for `series_id`. This is
+/// the web UI's explicit "Skip" action, wired only onto genuinely virtual occurrences
+/// (see `list_virtual_occurrences_for_project_unchecked` — the only source the skip
+/// button's URL is ever built from), so `occurrence_date` never already has a
+/// materialized `item_id` behind it in practice; deleting a *materialized* occurrence's
+/// item goes through `unlink_deleted_item_occurrence` below instead, called from the
+/// item's own delete path. `mark_exdate` clears `item_id` unconditionally, so even a
+/// (deliberately unhandled) direct call against an already-materialized date would just
+/// orphan that item rather than corrupt the occurrence row.
 pub async fn skip_occurrence(
     event_series: &Arc<dyn EventSeriesRepo>,
     series_id: &str,
@@ -79,6 +84,33 @@ pub async fn skip_occurrence(
 ) -> Result<(), ItemError> {
     event_series.get_series(series_id).await?;
     event_series.mark_exdate(series_id, occurrence_date).await?;
+    Ok(())
+}
+
+/// Stage 6's resolution of stage 3's deferred "what happens to a materialized
+/// occurrence's item when it's skipped" question: skipping a materialized occurrence
+/// deletes its `items` row (via `project_items::delete_project_item`, the same shared
+/// delete path every item goes through — CLI/MCP/web alike) and *then* marks the
+/// occurrence exdate, so it neither reappears as virtual nor keeps pointing at a
+/// deleted item.
+///
+/// Called from `project_items::delete_project_item` itself, after every item delete,
+/// not from a series-specific route — a materialized occurrence's item has no visible
+/// marker distinguishing it from an ordinary Event, so "delete this item" (wherever
+/// that action already lives) is the only skip affordance a materialized occurrence
+/// gets in this stage; see docs/recurring-events-virtual-occurrences-rough-plan.md's
+/// stage 6 write-up for why a dedicated materialized-occurrence "Skip" button was
+/// deliberately left out of scope. A `None` result (the overwhelmingly common case —
+/// most deleted items never came from a series) is a normal, cheap no-op.
+pub async fn unlink_deleted_item_occurrence(
+    event_series: &Arc<dyn EventSeriesRepo>,
+    item_id: &str,
+) -> Result<(), ItemError> {
+    if let Some(occurrence) = event_series.find_occurrence_by_item_id(item_id).await? {
+        event_series
+            .mark_exdate(&occurrence.series_id, occurrence.occurrence_date)
+            .await?;
+    }
     Ok(())
 }
 
@@ -497,6 +529,42 @@ mod tests {
         skip_occurrence(&event_series, "s1", occurrence_date())
             .await
             .expect("should mark the occurrence as skipped");
+    }
+
+    #[tokio::test]
+    async fn unlink_deleted_item_occurrence_marks_exdate_when_item_came_from_a_series() {
+        let mut series_mock = MockEventSeriesRepo::new();
+        series_mock.expect_find_occurrence_by_item_id().returning(|item_id| {
+            assert_eq!(item_id, "deleted-item");
+            Ok(Some(EventOccurrence {
+                series_id: "s1".to_string(),
+                occurrence_date: occurrence_date(),
+                item_id: Some("deleted-item".to_string()),
+                is_exdate: false,
+            }))
+        });
+        series_mock
+            .expect_mark_exdate()
+            .withf(|series_id: &str, date: &DateTime<Utc>| series_id == "s1" && *date == occurrence_date())
+            .times(1)
+            .returning(|_, _| Ok(()));
+        let event_series: Arc<dyn EventSeriesRepo> = Arc::new(series_mock);
+
+        unlink_deleted_item_occurrence(&event_series, "deleted-item")
+            .await
+            .expect("should mark the occurrence exdate");
+    }
+
+    #[tokio::test]
+    async fn unlink_deleted_item_occurrence_is_a_no_op_for_a_non_series_item() {
+        let mut series_mock = MockEventSeriesRepo::new();
+        series_mock.expect_find_occurrence_by_item_id().returning(|_| Ok(None));
+        series_mock.expect_mark_exdate().times(0);
+        let event_series: Arc<dyn EventSeriesRepo> = Arc::new(series_mock);
+
+        unlink_deleted_item_occurrence(&event_series, "some-task")
+            .await
+            .expect("should no-op for an item with no linked occurrence");
     }
 
     #[tokio::test]

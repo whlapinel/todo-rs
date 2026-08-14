@@ -431,6 +431,7 @@ pub async fn delete_project_event_form(
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(event_series): Extension<Arc<dyn EventSeriesRepo>>,
 ) -> Result<Html<String>, ItemError> {
     let current = project_item_service::get_project_item(
         &repo,
@@ -446,6 +447,7 @@ pub async fn delete_project_event_form(
         &repo,
         &projects,
         &teams,
+        &event_series,
         &auth_user.user_id,
         &project_id,
         &item_id,

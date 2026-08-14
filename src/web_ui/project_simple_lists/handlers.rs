@@ -4,7 +4,7 @@ use crate::service::error::ItemError;
 use crate::service::project_items::{self as project_item_service};
 use crate::service::projects::{self as project_service};
 use crate::service::teams as team_service;
-use crate::storage::sqlite::{ItemRepo, ProjectRepo, TeamRepo};
+use crate::storage::sqlite::{EventSeriesRepo, ItemRepo, ProjectRepo, TeamRepo};
 use crate::web_ui::nav::{self, ActiveContext, SidebarSection};
 use crate::web_ui::project_simple_lists::templates::*;
 use crate::web_ui::project_simple_lists::{
@@ -321,6 +321,7 @@ pub async fn delete_project_simple_item_form(
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(event_series): Extension<Arc<dyn EventSeriesRepo>>,
 ) -> Result<Html<String>, ItemError> {
     let current = project_item_service::get_project_item(
         &repo,
@@ -336,6 +337,7 @@ pub async fn delete_project_simple_item_form(
         &repo,
         &projects,
         &teams,
+        &event_series,
         &auth_user.user_id,
         &project_id,
         &item_id,
