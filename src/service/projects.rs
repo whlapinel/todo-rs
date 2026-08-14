@@ -6,27 +6,30 @@ use std::sync::Arc;
 
 /// Checks that `user_id` can access `project_id` — a personal project (`team_id ==
 /// None`) grants access to its owner only; a shared project (`team_id == Some`)
-/// grants access to any `ACTIVE` member of that team. Mirrors
-/// `service::teams::require_team_admin`'s shape, per the access-check formula in
-/// docs/project-abstraction-plan.md. `team_id` is never actually `Some` yet as of
-/// stage A3 (`create_project` doesn't set it, and there's no attach flow until A4),
-/// but the check is written generally so A4 doesn't have to revisit it.
+/// grants access to any row present in `project_members` (row presence alone means
+/// active membership — no separate status column, see `ProjectRepo::member_role`).
+/// As of docs/team-id-removal-plan.md's Stage 3, this reads `project_members`
+/// directly instead of asking `TeamRepo` about the backing team — `project_members`
+/// is already kept in sync with team membership (`attach_team`/`detach_team`,
+/// `TeamRepo::accept`/`remove_member` cascades), so `teams` is no longer consulted
+/// here; the parameter stays for now since every caller still threads it through for
+/// `require_project_admin`/other call sites, and Stage 4/5 revisit those.
 pub async fn require_project_member(
     projects: &Arc<dyn ProjectRepo>,
-    teams: &Arc<dyn TeamRepo>,
+    _teams: &Arc<dyn TeamRepo>,
     project_id: &str,
     user_id: &str,
 ) -> Result<(), ItemError> {
     let project = projects.get(project_id).await?;
     match &project.team_id {
-        Some(team_id) => {
-            let status = teams
-                .member_status(team_id, user_id)
+        Some(_) => {
+            let role = projects
+                .member_role(project_id, user_id)
                 .await
                 .map_err(|e| ItemError::Internal(format!("{e:?}")))?;
-            if status.as_deref() != Some("ACTIVE") {
+            if role.is_none() {
                 return Err(ItemError::Invalid(
-                    "you are not an active member of this project's team".to_string(),
+                    "you are not a member of this project's team".to_string(),
                 ));
             }
         }
@@ -39,6 +42,30 @@ pub async fn require_project_member(
         }
     }
     Ok(())
+}
+
+/// Project-native port of `team_items::resolve_assignee` — validates via
+/// `project_members` (`ProjectRepo::member_role`) instead of `TeamRepo::member_status`.
+/// See docs/team-id-removal-plan.md's Stage 3; Stage 4 repoints `team_items.rs`'s own
+/// assignee resolution onto this.
+pub async fn resolve_project_assignee(
+    projects: &Arc<dyn ProjectRepo>,
+    project_id: &str,
+    assignee_id: Option<String>,
+) -> Result<Option<String>, ItemError> {
+    let Some(assignee_id) = assignee_id else {
+        return Ok(None);
+    };
+    let role = projects
+        .member_role(project_id, &assignee_id)
+        .await
+        .map_err(|e| ItemError::Internal(format!("{e:?}")))?;
+    if role.is_none() {
+        return Err(ItemError::Invalid(
+            "assignee must be a member of this project".to_string(),
+        ));
+    }
+    Ok(Some(assignee_id))
 }
 
 /// Same shape one step further — requires `user_id` to hold `admin` on
@@ -293,35 +320,61 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn require_project_member_allows_active_team_member_on_shared_project() {
+    async fn require_project_member_allows_synced_member_on_shared_project() {
         let mut mock = MockProjectRepo::new();
         mock.expect_get().returning(|_| Ok(shared_project()));
-
-        let mut teams_mock = MockTeamRepo::new();
-        teams_mock
-            .expect_member_status()
-            .returning(|_, _| Ok(Some("ACTIVE".to_string())));
+        mock.expect_member_role()
+            .returning(|_, _| Ok(Some(TeamRole::Member)));
 
         let projects: Arc<dyn ProjectRepo> = Arc::new(mock);
-        let teams: Arc<dyn TeamRepo> = Arc::new(teams_mock);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
         require_project_member(&projects, &teams, "p1", "member1")
             .await
             .unwrap();
     }
 
     #[tokio::test]
-    async fn require_project_member_rejects_inactive_team_member_on_shared_project() {
+    async fn require_project_member_rejects_non_member_on_shared_project() {
         let mut mock = MockProjectRepo::new();
         mock.expect_get().returning(|_| Ok(shared_project()));
-
-        let mut teams_mock = MockTeamRepo::new();
-        teams_mock
-            .expect_member_status()
-            .returning(|_, _| Ok(Some("PENDING".to_string())));
+        mock.expect_member_role().returning(|_, _| Ok(None));
 
         let projects: Arc<dyn ProjectRepo> = Arc::new(mock);
-        let teams: Arc<dyn TeamRepo> = Arc::new(teams_mock);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
         let err = require_project_member(&projects, &teams, "p1", "member1")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ItemError::Invalid(_)));
+    }
+
+    #[tokio::test]
+    async fn resolve_project_assignee_returns_none_when_unset() {
+        let mock = MockProjectRepo::new();
+        let projects: Arc<dyn ProjectRepo> = Arc::new(mock);
+        let result = resolve_project_assignee(&projects, "p1", None).await.unwrap();
+        assert_eq!(result, None);
+    }
+
+    #[tokio::test]
+    async fn resolve_project_assignee_allows_project_member() {
+        let mut mock = MockProjectRepo::new();
+        mock.expect_member_role()
+            .returning(|_, _| Ok(Some(TeamRole::Member)));
+
+        let projects: Arc<dyn ProjectRepo> = Arc::new(mock);
+        let result = resolve_project_assignee(&projects, "p1", Some("u2".to_string()))
+            .await
+            .unwrap();
+        assert_eq!(result, Some("u2".to_string()));
+    }
+
+    #[tokio::test]
+    async fn resolve_project_assignee_rejects_non_member() {
+        let mut mock = MockProjectRepo::new();
+        mock.expect_member_role().returning(|_, _| Ok(None));
+
+        let projects: Arc<dyn ProjectRepo> = Arc::new(mock);
+        let err = resolve_project_assignee(&projects, "p1", Some("u2".to_string()))
             .await
             .unwrap_err();
         assert!(matches!(err, ItemError::Invalid(_)));
@@ -505,13 +558,8 @@ mod tests {
         mock.expect_member_role()
             .returning(|_, _| Ok(Some(TeamRole::Member)));
 
-        let mut teams_mock = MockTeamRepo::new();
-        teams_mock
-            .expect_member_status()
-            .returning(|_, _| Ok(Some("ACTIVE".to_string())));
-
         let projects: Arc<dyn ProjectRepo> = Arc::new(mock);
-        let teams: Arc<dyn TeamRepo> = Arc::new(teams_mock);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
         let err = detach_team_from_project(&projects, &teams, "p1", "member1")
             .await
             .unwrap_err();
@@ -528,13 +576,8 @@ mod tests {
             .withf(|project_id| project_id == "p1")
             .returning(|_| Ok(()));
 
-        let mut teams_mock = MockTeamRepo::new();
-        teams_mock
-            .expect_member_status()
-            .returning(|_, _| Ok(Some("ACTIVE".to_string())));
-
         let projects: Arc<dyn ProjectRepo> = Arc::new(mock);
-        let teams: Arc<dyn TeamRepo> = Arc::new(teams_mock);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
         detach_team_from_project(&projects, &teams, "p1", "owner1")
             .await
             .unwrap();

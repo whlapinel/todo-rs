@@ -352,6 +352,7 @@ pub async fn update_project_template(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::team::TeamRole;
     use crate::storage::sqlite::MockItemRepo;
 
     #[tokio::test]
@@ -697,6 +698,9 @@ mod tests {
     async fn list_project_templates_delegates_to_list_team_templates_on_shared_project() {
         let mut projects_mock = MockProjectRepo::new();
         projects_mock.expect_get().returning(|_| Ok(shared_project()));
+        projects_mock
+            .expect_member_role()
+            .returning(|_, _| Ok(Some(TeamRole::Member)));
         let mut teams_mock = MockTeamRepo::new();
         teams_mock
             .expect_member_status()
@@ -790,6 +794,9 @@ mod tests {
     async fn create_project_template_delegates_to_team_creation() {
         let mut projects_mock = MockProjectRepo::new();
         projects_mock.expect_get().returning(|_| Ok(shared_project()));
+        projects_mock
+            .expect_member_role()
+            .returning(|_, _| Ok(Some(TeamRole::Member)));
         let mut teams_mock = MockTeamRepo::new();
         teams_mock
             .expect_member_status()
@@ -891,6 +898,9 @@ mod tests {
     async fn update_project_template_delegates_to_team_update() {
         let mut projects_mock = MockProjectRepo::new();
         projects_mock.expect_get().returning(|_| Ok(shared_project()));
+        projects_mock
+            .expect_member_role()
+            .returning(|_, _| Ok(Some(TeamRole::Member)));
         let mut teams_mock = MockTeamRepo::new();
         teams_mock
             .expect_member_status()

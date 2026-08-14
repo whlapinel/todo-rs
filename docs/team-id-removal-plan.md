@@ -31,7 +31,7 @@ This plan document is the source of truth (it originated in a Claude Code plan-m
 - [x] Stage 0 — copy this plan into `docs/team-id-removal-plan.md` and commit
 - [x] Stage 1 — `list_templates_by_project`
 - [x] Stage 2 — collapse shared helpers onto `update_by_project`
-- [ ] Stage 3 — project-native membership/assignee checks
+- [x] Stage 3 — project-native membership/assignee checks
 - [ ] Stage 4 — rewrite `service::team_items.rs`
 - [ ] Stage 5 — rewrite `service::templates.rs`'s team-template twin
 - [ ] Stage 6 — external-API read-site fixes + final cleanup (drop field/column)

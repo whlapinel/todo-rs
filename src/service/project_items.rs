@@ -510,10 +510,10 @@ mod tests {
     async fn get_project_item_allows_active_team_member_on_shared_project() {
         let mut projects_mock = MockProjectRepo::new();
         projects_mock.expect_get().returning(|_| Ok(shared_project()));
-        let mut teams_mock = MockTeamRepo::new();
-        teams_mock
-            .expect_member_status()
-            .returning(|_, _| Ok(Some("ACTIVE".to_string())));
+        projects_mock
+            .expect_member_role()
+            .returning(|_, _| Ok(Some(TeamRole::Member)));
+        let teams_mock = MockTeamRepo::new();
         let mut items_mock = MockItemRepo::new();
         items_mock
             .expect_get_by_project()
@@ -533,10 +533,8 @@ mod tests {
     async fn get_project_item_rejects_inactive_team_member_on_shared_project() {
         let mut projects_mock = MockProjectRepo::new();
         projects_mock.expect_get().returning(|_| Ok(shared_project()));
-        let mut teams_mock = MockTeamRepo::new();
-        teams_mock
-            .expect_member_status()
-            .returning(|_, _| Ok(Some("PENDING".to_string())));
+        projects_mock.expect_member_role().returning(|_, _| Ok(None));
+        let teams_mock = MockTeamRepo::new();
         let items_mock = MockItemRepo::new();
 
         let repo: Arc<dyn ItemRepo> = Arc::new(items_mock);
@@ -627,6 +625,9 @@ mod tests {
         let mut projects_mock = MockProjectRepo::new();
         projects_mock.expect_get().returning(|_| Ok(shared_project()));
         projects_mock.expect_get_by_team().returning(|_| Ok(None));
+        projects_mock
+            .expect_member_role()
+            .returning(|_, _| Ok(Some(TeamRole::Member)));
         let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
 
         let mut teams_mock = MockTeamRepo::new();
@@ -724,6 +725,9 @@ mod tests {
     async fn update_project_item_delegates_to_team_item_update() {
         let mut projects_mock = MockProjectRepo::new();
         projects_mock.expect_get().returning(|_| Ok(shared_project()));
+        projects_mock
+            .expect_member_role()
+            .returning(|_, _| Ok(Some(TeamRole::Member)));
         let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
 
         let mut teams_mock = MockTeamRepo::new();
@@ -791,6 +795,9 @@ mod tests {
     async fn delete_project_item_delegates_to_team_item_delete() {
         let mut projects_mock = MockProjectRepo::new();
         projects_mock.expect_get().returning(|_| Ok(shared_project()));
+        projects_mock
+            .expect_member_role()
+            .returning(|_, _| Ok(Some(TeamRole::Member)));
         let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
 
         let mut teams_mock = MockTeamRepo::new();
