@@ -1,4 +1,5 @@
 pub mod activity_log;
+pub mod event_series;
 pub mod invites;
 pub mod item_import;
 pub mod items;

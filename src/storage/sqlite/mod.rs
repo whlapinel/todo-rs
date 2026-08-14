@@ -268,6 +268,11 @@ pub trait EventSeriesRepo: Send + Sync {
     /// Ignores `series.id` and generates a fresh one server-side, same convention
     /// as `ItemRepo::create`/`ProjectRepo::create`.
     async fn create_series(&self, series: &EventSeries) -> Result<String, RepoError>;
+    /// Full-replace update of name/description/event_type/recurrence/anchor_date.
+    /// `series.id`/`series.project_id` are ignored — `series_id` is the target, and
+    /// project_id is immutable (mirrors `create_series`'s "ignores `series.id`"
+    /// convention, extended to the one other identity-shaped field).
+    async fn update_series(&self, series_id: &str, series: &EventSeries) -> Result<(), RepoError>;
     async fn get_series(&self, series_id: &str) -> Result<EventSeries, RepoError>;
     async fn list_series_for_project(&self, project_id: &str) -> Result<Vec<EventSeries>, RepoError>;
     async fn get_occurrence(

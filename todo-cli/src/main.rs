@@ -6,6 +6,7 @@ mod config;
 mod helpers;
 mod items;
 mod projects;
+mod series;
 mod teams;
 mod users;
 
@@ -37,6 +38,10 @@ async fn main() {
         commands::Command::Projects { command } => {
             let client = build_client(url, token);
             projects::cmd_projects(&client, command, user).await;
+        }
+        commands::Command::Series { command } => {
+            let client = build_client(url, token);
+            series::cmd_series(&client, command, user).await;
         }
     }
 }

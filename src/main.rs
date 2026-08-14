@@ -8,9 +8,10 @@ mod web_ui;
 mod json_api;
 
 use crate::storage::sqlite::{
-    ActivityLogRepo, ItemRepo, ProjectRepo, TeamRepo, UserRepo,
-    activity_log::SqliteActivityLogRepo, create_pool, items::SqliteItemRepo,
-    projects::SqliteProjectRepo, teams::SqliteTeamRepo, users::SqliteUserRepo,
+    ActivityLogRepo, EventSeriesRepo, ItemRepo, ProjectRepo, TeamRepo, UserRepo,
+    activity_log::SqliteActivityLogRepo, create_pool, event_series::SqliteEventSeriesRepo,
+    items::SqliteItemRepo, projects::SqliteProjectRepo, teams::SqliteTeamRepo,
+    users::SqliteUserRepo,
 };
 use axum::{
     Extension, Router,
@@ -20,6 +21,9 @@ use axum::{
     routing::{get, post, put},
 };
 use json_api::activity_log::{list_team_activity_log, undo_activity_log_entry};
+use json_api::event_series::{
+    create_event_series, get_event_series, list_event_series_for_project, update_event_series,
+};
 use json_api::invites::send_app_invite;
 use json_api::item_import::{get_item_import_template, import_project_items};
 use json_api::items::{list_assigned_items, list_items_due};
@@ -251,6 +255,7 @@ async fn main() {
     let item_repo = Arc::new(SqliteItemRepo(pool.clone())) as Arc<dyn ItemRepo>;
     let team_repo = Arc::new(SqliteTeamRepo(pool.clone())) as Arc<dyn TeamRepo>;
     let project_repo = Arc::new(SqliteProjectRepo(pool.clone())) as Arc<dyn ProjectRepo>;
+    let event_series_repo = Arc::new(SqliteEventSeriesRepo(pool.clone())) as Arc<dyn EventSeriesRepo>;
     let activity_log_repo = Arc::new(SqliteActivityLogRepo(pool)) as Arc<dyn ActivityLogRepo>;
 
     let config = PeoplesRepublicOfListsConfig::builder().build();
@@ -285,6 +290,10 @@ async fn main() {
         .set_project_member_role(set_project_member_role)
         .attach_team_to_project(attach_team_to_project)
         .detach_team_from_project(detach_team_from_project)
+        .create_event_series(create_event_series)
+        .get_event_series(get_event_series)
+        .update_event_series(update_event_series)
+        .list_event_series_for_project(list_event_series_for_project)
         .create_project_item(create_project_item)
         .get_project_item(get_project_item)
         .update_project_item(update_project_item)
@@ -299,6 +308,7 @@ async fn main() {
         .layer(Extension(item_repo.clone()))
         .layer(Extension(team_repo.clone()))
         .layer(Extension(project_repo.clone()))
+        .layer(Extension(event_series_repo))
         .layer(Extension(activity_log_repo.clone()))
         .map_response(|res: http::Response<_>| res.map(boxed))
         .service(smithy);

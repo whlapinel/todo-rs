@@ -1,6 +1,8 @@
+use crate::domain::event_series::EventSeries;
 use crate::domain::item::{Item, ItemKind};
 use crate::service::error::ItemError;
 use crate::service::project_items::{self, CreateProjectItemParams};
+use crate::service::projects::require_project_member;
 use crate::storage::sqlite::{EventSeriesRepo, ItemRepo, ProjectRepo, TeamRepo};
 use chrono::{DateTime, Utc};
 use std::sync::Arc;
@@ -76,6 +78,100 @@ pub async fn skip_occurrence(
     event_series.get_series(series_id).await?;
     event_series.mark_exdate(series_id, occurrence_date).await?;
     Ok(())
+}
+
+/// Stage 4a's plain CRUD passthroughs, gated by project *membership* (not admin) —
+/// a series is project-scoped content like a template, not a role/points-authority
+/// action, so it follows `create_project_template`'s auth level rather than
+/// `update_project`'s.
+#[derive(Debug, Default)]
+pub struct CreateEventSeriesParams {
+    pub project_id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub event_type: Option<String>,
+    pub recurrence: String,
+    pub anchor_date: DateTime<Utc>,
+}
+
+pub async fn create_series(
+    projects: &Arc<dyn ProjectRepo>,
+    teams: &Arc<dyn TeamRepo>,
+    event_series: &Arc<dyn EventSeriesRepo>,
+    requester_user_id: &str,
+    params: CreateEventSeriesParams,
+) -> Result<String, ItemError> {
+    require_project_member(projects, teams, &params.project_id, requester_user_id).await?;
+    Ok(event_series
+        .create_series(&EventSeries {
+            id: String::new(),
+            project_id: params.project_id,
+            name: params.name,
+            description: params.description,
+            event_type: params.event_type,
+            recurrence: params.recurrence,
+            anchor_date: params.anchor_date,
+        })
+        .await?)
+}
+
+pub async fn get_series(
+    projects: &Arc<dyn ProjectRepo>,
+    teams: &Arc<dyn TeamRepo>,
+    event_series: &Arc<dyn EventSeriesRepo>,
+    requester_user_id: &str,
+    series_id: &str,
+) -> Result<EventSeries, ItemError> {
+    let series = event_series.get_series(series_id).await?;
+    require_project_member(projects, teams, &series.project_id, requester_user_id).await?;
+    Ok(series)
+}
+
+#[derive(Debug, Default)]
+pub struct UpdateEventSeriesParams {
+    pub name: String,
+    pub description: Option<String>,
+    pub event_type: Option<String>,
+    pub recurrence: String,
+    pub anchor_date: DateTime<Utc>,
+}
+
+pub async fn update_series(
+    projects: &Arc<dyn ProjectRepo>,
+    teams: &Arc<dyn TeamRepo>,
+    event_series: &Arc<dyn EventSeriesRepo>,
+    requester_user_id: &str,
+    series_id: &str,
+    params: UpdateEventSeriesParams,
+) -> Result<(), ItemError> {
+    let current = event_series.get_series(series_id).await?;
+    require_project_member(projects, teams, &current.project_id, requester_user_id).await?;
+    event_series
+        .update_series(
+            series_id,
+            &EventSeries {
+                id: series_id.to_string(),
+                project_id: current.project_id,
+                name: params.name,
+                description: params.description,
+                event_type: params.event_type,
+                recurrence: params.recurrence,
+                anchor_date: params.anchor_date,
+            },
+        )
+        .await?;
+    Ok(())
+}
+
+pub async fn list_series_for_project(
+    projects: &Arc<dyn ProjectRepo>,
+    teams: &Arc<dyn TeamRepo>,
+    event_series: &Arc<dyn EventSeriesRepo>,
+    requester_user_id: &str,
+    project_id: &str,
+) -> Result<Vec<EventSeries>, ItemError> {
+    require_project_member(projects, teams, project_id, requester_user_id).await?;
+    Ok(event_series.list_series_for_project(project_id).await?)
 }
 
 #[cfg(test)]
@@ -343,5 +439,176 @@ mod tests {
 
         let result = skip_occurrence(&event_series, "bogus", occurrence_date()).await;
         assert!(matches!(result, Err(ItemError::NotFound)));
+    }
+
+    fn create_params(project_id: &str) -> CreateEventSeriesParams {
+        CreateEventSeriesParams {
+            project_id: project_id.to_string(),
+            name: "Standup".to_string(),
+            description: None,
+            event_type: None,
+            recurrence: "every weekday".to_string(),
+            anchor_date: occurrence_date(),
+        }
+    }
+
+    fn update_params() -> UpdateEventSeriesParams {
+        UpdateEventSeriesParams {
+            name: "Retro".to_string(),
+            description: Some("Weekly retro".to_string()),
+            event_type: Some("meeting".to_string()),
+            recurrence: "every friday".to_string(),
+            anchor_date: occurrence_date(),
+        }
+    }
+
+    #[tokio::test]
+    async fn create_series_creates_after_confirming_membership() {
+        let mut projects_mock = MockProjectRepo::new();
+        projects_mock.expect_get().returning(|_| Ok(personal_project()));
+        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+
+        let mut series_mock = MockEventSeriesRepo::new();
+        series_mock
+            .expect_create_series()
+            .withf(|s: &EventSeries| s.project_id == "p1" && s.name == "Standup")
+            .times(1)
+            .returning(|_| Ok("new-series-id".to_string()));
+        let event_series: Arc<dyn EventSeriesRepo> = Arc::new(series_mock);
+
+        let id = create_series(&projects, &teams, &event_series, "owner1", create_params("p1"))
+            .await
+            .expect("owner should be able to create a series");
+        assert_eq!(id, "new-series-id");
+    }
+
+    #[tokio::test]
+    async fn create_series_rejects_non_member() {
+        let mut projects_mock = MockProjectRepo::new();
+        projects_mock.expect_get().returning(|_| Ok(personal_project()));
+        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+        let event_series: Arc<dyn EventSeriesRepo> = Arc::new(MockEventSeriesRepo::new());
+
+        let result = create_series(
+            &projects,
+            &teams,
+            &event_series,
+            "not-the-owner",
+            create_params("p1"),
+        )
+        .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn get_series_returns_series_for_a_member() {
+        let mut series_mock = MockEventSeriesRepo::new();
+        series_mock.expect_get_series().returning(|_| Ok(series("p1")));
+        let event_series: Arc<dyn EventSeriesRepo> = Arc::new(series_mock);
+
+        let mut projects_mock = MockProjectRepo::new();
+        projects_mock.expect_get().returning(|_| Ok(personal_project()));
+        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+
+        let result = get_series(&projects, &teams, &event_series, "owner1", "s1")
+            .await
+            .expect("owner should be able to read the series");
+        assert_eq!(result.name, "Standup");
+    }
+
+    #[tokio::test]
+    async fn get_series_propagates_not_found() {
+        let mut series_mock = MockEventSeriesRepo::new();
+        series_mock
+            .expect_get_series()
+            .returning(|_| Err(RepoError::NotFound));
+        let event_series: Arc<dyn EventSeriesRepo> = Arc::new(series_mock);
+        let projects: Arc<dyn ProjectRepo> = Arc::new(MockProjectRepo::new());
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+
+        let result = get_series(&projects, &teams, &event_series, "owner1", "bogus").await;
+        assert!(matches!(result, Err(ItemError::NotFound)));
+    }
+
+    #[tokio::test]
+    async fn update_series_overwrites_fields_after_confirming_membership() {
+        let mut series_mock = MockEventSeriesRepo::new();
+        series_mock.expect_get_series().returning(|_| Ok(series("p1")));
+        series_mock
+            .expect_update_series()
+            .withf(|series_id: &str, s: &EventSeries| {
+                series_id == "s1" && s.project_id == "p1" && s.name == "Retro"
+            })
+            .times(1)
+            .returning(|_, _| Ok(()));
+        let event_series: Arc<dyn EventSeriesRepo> = Arc::new(series_mock);
+
+        let mut projects_mock = MockProjectRepo::new();
+        projects_mock.expect_get().returning(|_| Ok(personal_project()));
+        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+
+        update_series(&projects, &teams, &event_series, "owner1", "s1", update_params())
+            .await
+            .expect("owner should be able to update the series");
+    }
+
+    #[tokio::test]
+    async fn update_series_rejects_non_member() {
+        let mut series_mock = MockEventSeriesRepo::new();
+        series_mock.expect_get_series().returning(|_| Ok(series("p1")));
+        series_mock.expect_update_series().times(0);
+        let event_series: Arc<dyn EventSeriesRepo> = Arc::new(series_mock);
+
+        let mut projects_mock = MockProjectRepo::new();
+        projects_mock.expect_get().returning(|_| Ok(personal_project()));
+        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+
+        let result = update_series(
+            &projects,
+            &teams,
+            &event_series,
+            "not-the-owner",
+            "s1",
+            update_params(),
+        )
+        .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn list_series_for_project_returns_series_for_a_member() {
+        let mut series_mock = MockEventSeriesRepo::new();
+        series_mock
+            .expect_list_series_for_project()
+            .returning(|_| Ok(vec![series("p1")]));
+        let event_series: Arc<dyn EventSeriesRepo> = Arc::new(series_mock);
+
+        let mut projects_mock = MockProjectRepo::new();
+        projects_mock.expect_get().returning(|_| Ok(personal_project()));
+        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+
+        let result = list_series_for_project(&projects, &teams, &event_series, "owner1", "p1")
+            .await
+            .expect("owner should be able to list series");
+        assert_eq!(result.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn list_series_for_project_rejects_non_member() {
+        let mut projects_mock = MockProjectRepo::new();
+        projects_mock.expect_get().returning(|_| Ok(personal_project()));
+        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+        let event_series: Arc<dyn EventSeriesRepo> = Arc::new(MockEventSeriesRepo::new());
+
+        let result =
+            list_series_for_project(&projects, &teams, &event_series, "not-the-owner", "p1").await;
+        assert!(result.is_err());
     }
 }

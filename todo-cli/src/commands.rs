@@ -1,5 +1,6 @@
 use crate::items::ItemsCommand;
 use crate::projects::ProjectsCommand;
+use crate::series::SeriesCommand;
 use crate::teams::TeamsCommand;
 use crate::users::UsersCommand;
 use crate::config::ConfigCommand;
@@ -45,6 +46,11 @@ pub enum Command {
     Projects {
         #[command(subcommand)]
         command: ProjectsCommand,
+    },
+    /// Manage recurring event series
+    Series {
+        #[command(subcommand)]
+        command: SeriesCommand,
     },
     /// Configure prl
     Config {

@@ -62,6 +62,26 @@ impl EventSeriesRepo for SqliteEventSeriesRepo {
         Ok(id)
     }
 
+    async fn update_series(&self, series_id: &str, series: &EventSeries) -> Result<(), RepoError> {
+        let result = sqlx::query(
+            "UPDATE event_series SET name = ?, description = ?, event_type = ?, recurrence = ?, anchor_date = ? \
+             WHERE id = ?",
+        )
+        .bind(&series.name)
+        .bind(&series.description)
+        .bind(&series.event_type)
+        .bind(&series.recurrence)
+        .bind(to_secs(series.anchor_date))
+        .bind(series_id)
+        .execute(&self.0)
+        .await
+        .map_err(db_err)?;
+        if result.rows_affected() == 0 {
+            return Err(not_found());
+        }
+        Ok(())
+    }
+
     async fn get_series(&self, series_id: &str) -> Result<EventSeries, RepoError> {
         sqlx::query(
             "SELECT id, project_id, name, description, event_type, recurrence, anchor_date \
@@ -235,6 +255,38 @@ mod tests {
         assert_eq!(series.event_type, Some("meeting".to_string()));
         assert_eq!(series.recurrence, "every weekday");
         assert_eq!(series.anchor_date, dt(1_000_000));
+    }
+
+    #[tokio::test]
+    async fn update_series_overwrites_fields_but_not_project_id() {
+        let pool = test_pool().await;
+        let repo = SqliteEventSeriesRepo(pool);
+        let id = repo.create_series(&sample_series("p1")).await.unwrap();
+
+        let mut update = sample_series("p2");
+        update.name = "Retro".to_string();
+        update.description = None;
+        update.event_type = None;
+        update.recurrence = "every friday".to_string();
+        update.anchor_date = dt(2_000_000);
+        repo.update_series(&id, &update).await.unwrap();
+
+        let series = repo.get_series(&id).await.unwrap();
+        assert_eq!(series.project_id, "p1");
+        assert_eq!(series.name, "Retro");
+        assert_eq!(series.description, None);
+        assert_eq!(series.event_type, None);
+        assert_eq!(series.recurrence, "every friday");
+        assert_eq!(series.anchor_date, dt(2_000_000));
+    }
+
+    #[tokio::test]
+    async fn update_series_missing_returns_not_found() {
+        let pool = test_pool().await;
+        let repo = SqliteEventSeriesRepo(pool);
+
+        let err = repo.update_series("missing", &sample_series("p1")).await.unwrap_err();
+        assert!(matches!(err, RepoError::NotFound));
     }
 
     #[tokio::test]

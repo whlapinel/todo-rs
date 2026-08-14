@@ -452,6 +452,65 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: "list_event_series",
+      description:
+        "List a project's recurring event series (a series is a recurrence rule + anchor date + static Event fields — distinct from a plain recurring item). The caller must be a project member.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          projectId: { type: "string" },
+        },
+        required: ["projectId"],
+      },
+    },
+    {
+      name: "create_event_series",
+      description:
+        "Create a new recurring event series on a project. The caller must be a project member.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          projectId: { type: "string" },
+          name: { type: "string" },
+          description: { type: "string" },
+          eventType: { type: "string", description: "Matched against templates' own eventType to auto-copy children when an occurrence is materialized" },
+          recurrence: { type: "string", description: "English recurrence pattern, e.g. 'every monday' — same syntax as an item's own recurrence field" },
+          anchorDate: { type: "string", description: "ISO 8601 date/time string" },
+        },
+        required: ["projectId", "name", "recurrence", "anchorDate"],
+      },
+    },
+    {
+      name: "get_event_series",
+      description: "Get one event series by ID. The caller must be a project member.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          projectId: { type: "string" },
+          seriesId: { type: "string" },
+        },
+        required: ["projectId", "seriesId"],
+      },
+    },
+    {
+      name: "update_event_series",
+      description:
+        "Update an event series (full replace of name/recurrence/anchorDate/description/eventType — round-trip description/eventType to keep them, omitting clears them). The caller must be a project member.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          projectId: { type: "string" },
+          seriesId: { type: "string" },
+          name: { type: "string" },
+          description: { type: "string" },
+          eventType: { type: "string" },
+          recurrence: { type: "string" },
+          anchorDate: { type: "string", description: "ISO 8601 date/time string" },
+        },
+        required: ["projectId", "seriesId", "name", "recurrence", "anchorDate"],
+      },
+    },
+    {
       name: "list_teams",
       description:
         "List the teams a user belongs to, including pending invites awaiting their acceptance (status PENDING or ACTIVE).",
@@ -805,6 +864,45 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       case "detach_team_from_project":
         result = await api("DELETE", `/projects/${args.projectId}/team`, {});
         break;
+
+      case "list_event_series":
+        result = await api("GET", `/projects/${args.projectId}/series`);
+        break;
+
+      case "create_event_series": {
+        const body: Record<string, unknown> = {
+          name: args.name,
+          recurrence: args.recurrence,
+          anchorDate: toEpochSecs(args.anchorDate as string),
+        };
+        if (args.description !== undefined) body.description = args.description;
+        if (args.eventType !== undefined) body.eventType = args.eventType;
+        result = await api("POST", `/projects/${args.projectId}/series`, body);
+        break;
+      }
+
+      case "get_event_series":
+        result = await api(
+          "GET",
+          `/projects/${args.projectId}/series/${args.seriesId}`
+        );
+        break;
+
+      case "update_event_series": {
+        const body: Record<string, unknown> = {
+          name: args.name,
+          recurrence: args.recurrence,
+          anchorDate: toEpochSecs(args.anchorDate as string),
+        };
+        if (args.description !== undefined) body.description = args.description;
+        if (args.eventType !== undefined) body.eventType = args.eventType;
+        result = await api(
+          "PUT",
+          `/projects/${args.projectId}/series/${args.seriesId}`,
+          body
+        );
+        break;
+      }
 
       case "list_teams":
         result = await api("GET", `/users/${args.userId}/teams`);
