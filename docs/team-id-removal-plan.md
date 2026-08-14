@@ -32,7 +32,7 @@ This plan document is the source of truth (it originated in a Claude Code plan-m
 - [x] Stage 1 — `list_templates_by_project`
 - [x] Stage 2 — collapse shared helpers onto `update_by_project`
 - [x] Stage 3 — project-native membership/assignee checks
-- [ ] Stage 4 — rewrite `service::team_items.rs`
+- [x] Stage 4 — rewrite `service::team_items.rs`
 - [ ] Stage 5 — rewrite `service::templates.rs`'s team-template twin
 - [ ] Stage 6 — external-API read-site fixes + final cleanup (drop field/column)
 
@@ -80,6 +80,13 @@ The core rearchitecture. `CreateTeamItemParams`/`UpdateTeamItemParams` take `pro
 - `project_items.rs`'s `create_project_item`/`update_project_item`/`delete_project_item` keep their `project.team_id.is_some()` branch (a genuine business-rule fork — points/assignment/team-completion-guard only apply to team-backed projects) — but both arms now call `project_id`-keyed functions, so the "which repo method" fork collapses even though the "which business rules" fork remains.
 - **Verify — largest test-fallout stage:** every existing `team_items.rs` test needs `team_id` params/mocks swapped for `project_id` ones (`expect_get_team_item`→`expect_get_by_project`, `MockTeamRepo::expect_member_status`→`MockProjectRepo::expect_member_role`, etc.). `project_items.rs`'s own tests asserting `item.team_id.as_deref() == Some(...)` move to `item.project_id`.
 - **Add the one test that directly proves the original bug is fixed**, not just patched: create an item under a team-backed project, detach the team (or attach a different one), confirm `update_project_item`/`delete_project_item` still succeed against that item. No such test exists today.
+
+**Stage 4 as implemented — two corrections to the plan above:**
+
+1. **`items.team_id` still needs a narrow dual-write on create, which this draft missed.** `ItemRepo::update_by_project`'s `UPDATE` statement never touches the `team_id` column at all (only `create`'s `INSERT` does), so `update_team_item` genuinely has no dual-write concern — but `create_team_item` does. Stage 6's "external-API read sites" (`list_items_due`'s `teamId` field, `list_assigned_items`'s owner fallback, `assigned_items::AssignedItemRow::from_item`'s `item.team_id.as_ref()?` gate) still read `item.team_id` directly and aren't fixed until Stage 6. Building the new item via a bare `Item::new_project_item` (no `team_id`) would have left every team item created between Stage 4 and Stage 6 shipping with `team_id: NULL` — invisible to those not-yet-migrated read sites, a real regression window in a live app, not just a cosmetic gap. Fixed by threading `team_id: &str` into `create_team_item` as a plain parameter (not a `CreateTeamItemParams` field — `project_id` is still the only thing repo/membership logic reads) purely to dual-write `item.team_id = Some(team_id)` before `repo.create`. The caller (`project_items::create_project_item`) already has this value for free from its own `project.team_id` match, so nothing extra is fetched. `update_team_item` also takes a `team_id: &str` parameter, but only for `log_activity`'s still-`NOT NULL` column — no dual-write inside it, since there is nothing there for `team_id` to write into.
+2. **`resolve_assignee` had no other callers anywhere in the codebase** once its two call sites inside `create_team_item`/`update_team_item` were repointed to `resolve_project_assignee` — so, per this section's own instruction, it was deleted outright rather than "kept for now." **`require_active_member` could not be deleted** the same way: `service::templates.rs` (Stage 5's own target), `service::activity_log::undo_activity_log_entry` (permanently `team_id`-keyed, see Stage 6), and the legacy `json_api::team_templates`/`json_api::activity_log` handlers all still call it directly. It stays defined in `team_items.rs`, just no longer called by that file's own `create_team_item`/`update_team_item`/`delete_team_item`.
+
+Also folded into this stage (not explicitly called out above, but a natural consequence of `project_id` becoming the primary key): `update_team_item`'s points-award path no longer needs the `get_by_team` fallback that used to resolve `award_project_id` for pre-B2 rows with `item.project_id: NULL` — `params.project_id` is now always known, so points award directly against it. This is, concretely, the exact class of bug this whole plan exists to fix.
 
 ### Stage 5 — Rewrite `service::templates.rs`'s team-template twin
 

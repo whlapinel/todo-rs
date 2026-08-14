@@ -44,10 +44,10 @@ pub async fn require_project_member(
     Ok(())
 }
 
-/// Project-native port of `team_items::resolve_assignee` — validates via
+/// Project-native port of `team_items`'s former `resolve_assignee` — validates via
 /// `project_members` (`ProjectRepo::member_role`) instead of `TeamRepo::member_status`.
-/// See docs/team-id-removal-plan.md's Stage 3; Stage 4 repoints `team_items.rs`'s own
-/// assignee resolution onto this.
+/// See docs/team-id-removal-plan.md's Stage 3; Stage 4 repointed `team_items.rs`'s own
+/// assignee resolution onto this and removed the now-unused original.
 pub async fn resolve_project_assignee(
     projects: &Arc<dyn ProjectRepo>,
     project_id: &str,

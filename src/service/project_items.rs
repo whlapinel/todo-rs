@@ -268,8 +268,9 @@ pub async fn create_project_item(
                 teams,
                 projects,
                 requester_user_id,
+                &team_id,
                 CreateTeamItemParams {
-                    team_id,
+                    project_id: params.project_id,
                     name: params.name,
                     description: params.description,
                     due_date: params.due_date,
@@ -372,8 +373,9 @@ pub async fn update_project_item(
                     activity_log: activity_log.clone(),
                 },
                 requester_user_id,
+                &team_id,
                 UpdateTeamItemParams {
-                    team_id,
+                    project_id: params.project_id,
                     item_id: params.item_id,
                     name: params.name,
                     description: params.description,
@@ -440,8 +442,9 @@ pub async fn delete_project_item(
     require_project_member(projects, teams, project_id, requester_user_id).await?;
     let project = projects.get(project_id).await?;
     match project.team_id {
-        Some(team_id) => {
-            team_items::delete_team_item(repo, teams, requester_user_id, &team_id, item_id).await
+        Some(_) => {
+            team_items::delete_team_item(repo, teams, projects, requester_user_id, project_id, item_id)
+                .await
         }
         None => items::delete_item(repo, &project.owner_user_id, item_id).await,
     }
@@ -624,20 +627,12 @@ mod tests {
     async fn create_project_item_delegates_to_team_item_creation() {
         let mut projects_mock = MockProjectRepo::new();
         projects_mock.expect_get().returning(|_| Ok(shared_project()));
-        projects_mock.expect_get_by_team().returning(|_| Ok(None));
         projects_mock
             .expect_member_role()
             .returning(|_, _| Ok(Some(TeamRole::Member)));
         let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
 
-        let mut teams_mock = MockTeamRepo::new();
-        teams_mock
-            .expect_member_status()
-            .returning(|_, _| Ok(Some("ACTIVE".to_string())));
-        teams_mock
-            .expect_member_role()
-            .returning(|_, _| Ok(Some(TeamRole::Member)));
-        let teams: Arc<dyn TeamRepo> = Arc::new(teams_mock);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
 
         let mut items_mock = MockItemRepo::new();
         items_mock
@@ -730,21 +725,14 @@ mod tests {
             .returning(|_, _| Ok(Some(TeamRole::Member)));
         let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
 
-        let mut teams_mock = MockTeamRepo::new();
-        teams_mock
-            .expect_member_status()
-            .returning(|_, _| Ok(Some("ACTIVE".to_string())));
-        teams_mock
-            .expect_member_role()
-            .returning(|_, _| Ok(Some(TeamRole::Member)));
-        let teams: Arc<dyn TeamRepo> = Arc::new(teams_mock);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
 
         let mut items_mock = MockItemRepo::new();
         items_mock
-            .expect_get_team_item()
+            .expect_get_by_project()
             .returning(|_, _| Ok(Item::new_team_item("team1", "Old name")));
         items_mock
-            .expect_update_team_item()
+            .expect_update_by_project()
             .times(1)
             .returning(|_| Ok(()));
         let repo: Arc<dyn ItemRepo> = Arc::new(items_mock);
@@ -800,15 +788,11 @@ mod tests {
             .returning(|_, _| Ok(Some(TeamRole::Member)));
         let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
 
-        let mut teams_mock = MockTeamRepo::new();
-        teams_mock
-            .expect_member_status()
-            .returning(|_, _| Ok(Some("ACTIVE".to_string())));
-        let teams: Arc<dyn TeamRepo> = Arc::new(teams_mock);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
 
         let mut items_mock = MockItemRepo::new();
         items_mock
-            .expect_get_team_item()
+            .expect_get_by_project()
             .returning(|_, _| Ok(Item::new_team_item("team1", "Task")));
         items_mock.expect_list_children().returning(|_| Ok(vec![]));
         items_mock.expect_list_by_source_event().returning(|_| Ok(vec![]));
@@ -818,5 +802,113 @@ mod tests {
         delete_project_item(&repo, &projects, &teams, "member1", "p1", "i1")
             .await
             .expect("should delete team project item");
+    }
+
+    /// Regression test for the bug docs/team-id-removal-plan.md exists to fix:
+    /// before Stage 4, `team_items::update_team_item` scoped its fetch/update via
+    /// `repo.get_team_item(&project.team_id, item_id)`/`update_team_item` — the
+    /// *project's current* team, not the item's own (frozen-at-creation) `team_id`
+    /// column, which `ProjectRepo::attach_team`/`detach_team` never touch. An item
+    /// created while the project was attached to `team1`, read again after the
+    /// project was re-attached to `team2`, would 404 forever even though the item
+    /// itself never moved. Post-Stage4, `update_team_item` scopes via
+    /// `repo.get_by_project`/`update_by_project` instead — `project_id` never
+    /// changes when a project's attached team is swapped, so this now succeeds.
+    #[tokio::test]
+    async fn update_project_item_succeeds_after_project_reattaches_a_different_team() {
+        let mut projects_mock = MockProjectRepo::new();
+        projects_mock.expect_get().returning(|_| {
+            Ok(Project {
+                id: "p1".to_string(),
+                name: "Shared".to_string(),
+                owner_user_id: "owner1".to_string(),
+                team_id: Some("team2".to_string()),
+            })
+        });
+        projects_mock
+            .expect_member_role()
+            .returning(|_, _| Ok(Some(TeamRole::Member)));
+        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
+
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+
+        let mut items_mock = MockItemRepo::new();
+        items_mock.expect_get_by_project().returning(|_, _| {
+            Ok(Item {
+                id: "i1".to_string(),
+                // Frozen at creation under team1 — never updated by attach/detach.
+                team_id: Some("team1".to_string()),
+                project_id: Some("p1".to_string()),
+                name: "Old name".to_string(),
+                ..Item::default()
+            })
+        });
+        items_mock
+            .expect_update_by_project()
+            .times(1)
+            .returning(|_| Ok(()));
+        let repo: Arc<dyn ItemRepo> = Arc::new(items_mock);
+
+        let activity_log: Arc<dyn ActivityLogRepo> = Arc::new(MockActivityLogRepo::new());
+
+        update_project_item(
+            &repo,
+            &projects,
+            &teams,
+            &activity_log,
+            "member1",
+            UpdateProjectItemParams {
+                project_id: "p1".to_string(),
+                item_id: "i1".to_string(),
+                name: "New name".to_string(),
+                complete: false,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect(
+            "update should succeed even though the project's team changed since the item was created",
+        );
+    }
+
+    /// Delete-side twin of `update_project_item_succeeds_after_project_reattaches_a_different_team`.
+    #[tokio::test]
+    async fn delete_project_item_succeeds_after_project_reattaches_a_different_team() {
+        let mut projects_mock = MockProjectRepo::new();
+        projects_mock.expect_get().returning(|_| {
+            Ok(Project {
+                id: "p1".to_string(),
+                name: "Shared".to_string(),
+                owner_user_id: "owner1".to_string(),
+                team_id: Some("team2".to_string()),
+            })
+        });
+        projects_mock
+            .expect_member_role()
+            .returning(|_, _| Ok(Some(TeamRole::Member)));
+        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
+
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+
+        let mut items_mock = MockItemRepo::new();
+        items_mock.expect_get_by_project().returning(|_, _| {
+            Ok(Item {
+                id: "i1".to_string(),
+                team_id: Some("team1".to_string()),
+                project_id: Some("p1".to_string()),
+                name: "Task".to_string(),
+                ..Item::default()
+            })
+        });
+        items_mock.expect_list_children().returning(|_| Ok(vec![]));
+        items_mock.expect_list_by_source_event().returning(|_| Ok(vec![]));
+        items_mock.expect_delete().times(1).returning(|_| Ok(()));
+        let repo: Arc<dyn ItemRepo> = Arc::new(items_mock);
+
+        delete_project_item(&repo, &projects, &teams, "member1", "p1", "i1")
+            .await
+            .expect(
+                "delete should succeed even though the project's team changed since the item was created",
+            );
     }
 }

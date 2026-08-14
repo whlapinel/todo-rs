@@ -287,6 +287,19 @@ impl Item {
         }
     }
 
+    /// `project_id`-primary constructor, added in Stage 4 of
+    /// `docs/team-id-removal-plan.md` for `service::team_items.rs`, which no longer
+    /// treats `team_id` as a scoping key at all. Leaves `user_id`/`team_id` unset —
+    /// callers that still need `team_id` dual-written (see
+    /// `team_items::create_team_item`'s own doc comment) set it explicitly afterward.
+    pub fn new_project_item(project_id: &str, name: &str) -> Self {
+        Self {
+            project_id: Some(project_id.to_string()),
+            name: name.to_string(),
+            ..Self::default()
+        }
+    }
+
     /// Thin `item_type`-setting sugar over `new_user_item`/`new_team_item` — kept
     /// separate from the owner constructors above since "who owns this" and "what kind
     /// is this" are independent axes. Note these only control an item's *initial*
