@@ -3,6 +3,7 @@ mod add_event_occurrences_item_id_index;
 mod add_event_series;
 mod add_item_description;
 mod add_item_points;
+mod add_item_series;
 mod add_item_source_event_id;
 mod add_projects;
 mod add_team_member_role;
@@ -18,6 +19,7 @@ use activity_log::ActivityLog;
 use add_event_occurrences_item_id_index::AddEventOccurrencesItemIdIndex;
 use add_event_series::AddEventSeries;
 use add_item_description::AddItemDescription;
+use add_item_series::AddItemSeries;
 use add_item_points::AddItemPoints;
 use add_item_source_event_id::AddItemSourceEventId;
 use add_projects::AddProjects;
@@ -80,6 +82,7 @@ fn all_migrations() -> Vec<Box<dyn Migration>> {
         Box::new(AddEventSeries),
         Box::new(DropItemsTeamId),
         Box::new(AddEventOccurrencesItemIdIndex),
+        Box::new(AddItemSeries),
     ]
 }
 
@@ -293,6 +296,33 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
+        sqlx::query(
+            "CREATE TABLE item_series (
+                id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                description TEXT,
+                event_type TEXT,
+                recurrence TEXT NOT NULL,
+                anchor_date INTEGER NOT NULL,
+                item_type TEXT NOT NULL DEFAULT 'EVENT'
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE item_occurrences (
+                series_id TEXT NOT NULL,
+                occurrence_date INTEGER NOT NULL,
+                item_id TEXT,
+                is_exdate INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (series_id, occurrence_date)
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         pool
     }
 
@@ -441,7 +471,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 15);
+        assert_eq!(applied_count, 16);
     }
 
     #[tokio::test]
@@ -454,7 +484,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 15);
+        assert_eq!(applied_count, 16);
     }
 
     #[tokio::test]
@@ -468,6 +498,6 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 15);
+        assert_eq!(applied_count, 16);
     }
 }

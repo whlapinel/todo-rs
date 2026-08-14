@@ -1,5 +1,5 @@
 pub mod activity_log;
-pub mod event_series;
+pub mod item_series;
 pub mod projects;
 pub mod teams;
 pub mod users;
@@ -9,8 +9,8 @@ use chrono::{DateTime, Utc};
 use sqlx::{Row, SqlitePool};
 use crate::domain::{
     activity_log::ActivityLogEntry,
-    event_series::{EventOccurrence, EventSeries},
     item::{Item, ItemKind, ItemType, Recurrence, Schedule, TeamAssignment},
+    item_series::{ItemOccurrence, ItemSeries},
     project::Project,
     team::{Team, TeamRole},
     user::User,
@@ -259,27 +259,29 @@ pub trait ActivityLogRepo: Send + Sync {
     async fn mark_reversed(&self, entry_id: &str) -> Result<(), RepoError>;
 }
 
-/// See docs/recurring-events-virtual-occurrences-rough-plan.md's staged breakdown,
-/// stage 2. Not yet called from anywhere in the running app — no service layer, no
-/// HTTP surface (that starts at stage 3/4).
+/// See docs/recurring-events-virtual-occurrences-rough-plan.md's staged breakdown.
+/// Originally `EventSeriesRepo`/Event-only (stage 2); renamed and generalized to
+/// also cover Task series at stage 7a — `item_series`/`item_occurrences` are the
+/// renamed `event_series`/`event_occurrences` tables (see `AddItemSeries`, the
+/// migration that renamed+migrated the data).
 #[cfg_attr(test, mockall::automock)]
 #[async_trait]
-pub trait EventSeriesRepo: Send + Sync {
+pub trait ItemSeriesRepo: Send + Sync {
     /// Ignores `series.id` and generates a fresh one server-side, same convention
     /// as `ItemRepo::create`/`ProjectRepo::create`.
-    async fn create_series(&self, series: &EventSeries) -> Result<String, RepoError>;
-    /// Full-replace update of name/description/event_type/recurrence/anchor_date.
+    async fn create_series(&self, series: &ItemSeries) -> Result<String, RepoError>;
+    /// Full-replace update of name/description/event_type/recurrence/anchor_date/item_type.
     /// `series.id`/`series.project_id` are ignored — `series_id` is the target, and
     /// project_id is immutable (mirrors `create_series`'s "ignores `series.id`"
     /// convention, extended to the one other identity-shaped field).
-    async fn update_series(&self, series_id: &str, series: &EventSeries) -> Result<(), RepoError>;
-    async fn get_series(&self, series_id: &str) -> Result<EventSeries, RepoError>;
-    async fn list_series_for_project(&self, project_id: &str) -> Result<Vec<EventSeries>, RepoError>;
+    async fn update_series(&self, series_id: &str, series: &ItemSeries) -> Result<(), RepoError>;
+    async fn get_series(&self, series_id: &str) -> Result<ItemSeries, RepoError>;
+    async fn list_series_for_project(&self, project_id: &str) -> Result<Vec<ItemSeries>, RepoError>;
     async fn get_occurrence(
         &self,
         series_id: &str,
         occurrence_date: DateTime<Utc>,
-    ) -> Result<Option<EventOccurrence>, RepoError>;
+    ) -> Result<Option<ItemOccurrence>, RepoError>;
     /// Upserts the `(series_id, occurrence_date)` row with a materialized
     /// `item_id`, clearing any prior `is_exdate` — the write
     /// `get_or_materialize_occurrence` (stage 3) calls the first time a virtual
@@ -313,7 +315,7 @@ pub trait EventSeriesRepo: Send + Sync {
         series_id: &str,
         range_start: DateTime<Utc>,
         range_end: DateTime<Utc>,
-    ) -> Result<Vec<EventOccurrence>, RepoError>;
+    ) -> Result<Vec<ItemOccurrence>, RepoError>;
     /// Reverse lookup used when an item is deleted (`service::project_items::delete_project_item`)
     /// to find whether it was a materialized series occurrence, so the occurrence can be marked
     /// exdate rather than left pointing at a now-deleted `item_id`. `None` for an item that never
@@ -322,7 +324,7 @@ pub trait EventSeriesRepo: Send + Sync {
     async fn find_occurrence_by_item_id(
         &self,
         item_id: &str,
-    ) -> Result<Option<EventOccurrence>, RepoError>;
+    ) -> Result<Option<ItemOccurrence>, RepoError>;
 }
 
 fn db_err(e: sqlx::Error) -> RepoError {
@@ -599,6 +601,42 @@ pub async fn create_pool(url: &str) -> Result<SqlitePool, sqlx::Error> {
     .execute(&pool)
     .await?;
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_event_occurrences_item_id ON event_occurrences (item_id)")
+        .execute(&pool)
+        .await?;
+
+    // Renamed/generalized from event_series/event_occurrences above at stage 7a of
+    // docs/recurring-events-virtual-occurrences-rough-plan.md — the old tables are left
+    // in place, unread, matching this codebase's precedent of not force-dropping
+    // superseded schema (see CLAUDE.md's Storage Layer section on `items.user_id`).
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS item_series (
+            id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            description TEXT,
+            event_type TEXT,
+            recurrence TEXT NOT NULL,
+            anchor_date INTEGER NOT NULL,
+            item_type TEXT NOT NULL DEFAULT 'EVENT'
+        )",
+    )
+    .execute(&pool)
+    .await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_item_series_project_id ON item_series (project_id)")
+        .execute(&pool)
+        .await?;
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS item_occurrences (
+            series_id TEXT NOT NULL,
+            occurrence_date INTEGER NOT NULL,
+            item_id TEXT,
+            is_exdate INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (series_id, occurrence_date)
+        )",
+    )
+    .execute(&pool)
+    .await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_item_occurrences_item_id ON item_occurrences (item_id)")
         .execute(&pool)
         .await?;
     // idx_items_project_id is deliberately NOT created here — see add_projects.rs's

@@ -5,7 +5,7 @@ use crate::service::event_series::{self as event_series_service};
 use crate::service::project_items::{self as project_item_service};
 use crate::service::projects::{self as project_service};
 use crate::service::templates::{self as template_service, CreateProjectTemplateParams};
-use crate::storage::sqlite::{EventSeriesRepo, ItemRepo, ProjectRepo, TeamRepo};
+use crate::storage::sqlite::{ItemRepo, ItemSeriesRepo, ProjectRepo, TeamRepo};
 use crate::web_ui::nav::{self, ActiveContext, SidebarSection};
 use crate::web_ui::project_events::{
     build_calendar_days, create_params_from_form, grid_start_for, list_project_events,
@@ -100,7 +100,7 @@ pub async fn project_events_calendar_page(
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
-    Extension(event_series): Extension<Arc<dyn EventSeriesRepo>>,
+    Extension(event_series): Extension<Arc<dyn ItemSeriesRepo>>,
     TzOffset(tz): TzOffset,
     Query(q): Query<CalendarQuery>,
 ) -> Result<Html<String>, ItemError> {
@@ -431,7 +431,7 @@ pub async fn delete_project_event_form(
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
-    Extension(event_series): Extension<Arc<dyn EventSeriesRepo>>,
+    Extension(event_series): Extension<Arc<dyn ItemSeriesRepo>>,
 ) -> Result<Html<String>, ItemError> {
     let current = project_item_service::get_project_item(
         &repo,

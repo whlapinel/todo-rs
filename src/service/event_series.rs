@@ -1,10 +1,10 @@
-use crate::domain::event_series::EventSeries;
 use crate::domain::item::{Item, ItemKind};
+use crate::domain::item_series::ItemSeries;
 use crate::domain::recurrence;
 use crate::service::error::ItemError;
 use crate::service::project_items::{self, CreateProjectItemParams};
 use crate::service::projects::require_project_member;
-use crate::storage::sqlite::{EventSeriesRepo, ItemRepo, ProjectRepo, TeamRepo};
+use crate::storage::sqlite::{ItemRepo, ItemSeriesRepo, ProjectRepo, TeamRepo};
 use chrono::{DateTime, Utc};
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -21,7 +21,7 @@ pub async fn get_or_materialize_occurrence(
     repo: &Arc<dyn ItemRepo>,
     projects: &Arc<dyn ProjectRepo>,
     teams: &Arc<dyn TeamRepo>,
-    event_series: &Arc<dyn EventSeriesRepo>,
+    event_series: &Arc<dyn ItemSeriesRepo>,
     requester_user_id: &str,
     series_id: &str,
     occurrence_date: DateTime<Utc>,
@@ -78,7 +78,7 @@ pub async fn get_or_materialize_occurrence(
 /// (deliberately unhandled) direct call against an already-materialized date would just
 /// orphan that item rather than corrupt the occurrence row.
 pub async fn skip_occurrence(
-    event_series: &Arc<dyn EventSeriesRepo>,
+    event_series: &Arc<dyn ItemSeriesRepo>,
     series_id: &str,
     occurrence_date: DateTime<Utc>,
 ) -> Result<(), ItemError> {
@@ -103,7 +103,7 @@ pub async fn skip_occurrence(
 /// deliberately left out of scope. A `None` result (the overwhelmingly common case —
 /// most deleted items never came from a series) is a normal, cheap no-op.
 pub async fn unlink_deleted_item_occurrence(
-    event_series: &Arc<dyn EventSeriesRepo>,
+    event_series: &Arc<dyn ItemSeriesRepo>,
     item_id: &str,
 ) -> Result<(), ItemError> {
     if let Some(occurrence) = event_series.find_occurrence_by_item_id(item_id).await? {
@@ -131,13 +131,13 @@ pub struct CreateEventSeriesParams {
 pub async fn create_series(
     projects: &Arc<dyn ProjectRepo>,
     teams: &Arc<dyn TeamRepo>,
-    event_series: &Arc<dyn EventSeriesRepo>,
+    event_series: &Arc<dyn ItemSeriesRepo>,
     requester_user_id: &str,
     params: CreateEventSeriesParams,
 ) -> Result<String, ItemError> {
     require_project_member(projects, teams, &params.project_id, requester_user_id).await?;
     Ok(event_series
-        .create_series(&EventSeries {
+        .create_series(&ItemSeries {
             id: String::new(),
             project_id: params.project_id,
             name: params.name,
@@ -145,6 +145,10 @@ pub async fn create_series(
             event_type: params.event_type,
             recurrence: params.recurrence,
             anchor_date: params.anchor_date,
+            // CreateEventSeriesParams has no item_type field yet — stage 7b adds it
+            // and makes this a real choice; every series created before then is an
+            // Event, the only kind this function could produce.
+            item_type: ItemKind::Event,
         })
         .await?)
 }
@@ -152,10 +156,10 @@ pub async fn create_series(
 pub async fn get_series(
     projects: &Arc<dyn ProjectRepo>,
     teams: &Arc<dyn TeamRepo>,
-    event_series: &Arc<dyn EventSeriesRepo>,
+    event_series: &Arc<dyn ItemSeriesRepo>,
     requester_user_id: &str,
     series_id: &str,
-) -> Result<EventSeries, ItemError> {
+) -> Result<ItemSeries, ItemError> {
     let series = event_series.get_series(series_id).await?;
     require_project_member(projects, teams, &series.project_id, requester_user_id).await?;
     Ok(series)
@@ -173,7 +177,7 @@ pub struct UpdateEventSeriesParams {
 pub async fn update_series(
     projects: &Arc<dyn ProjectRepo>,
     teams: &Arc<dyn TeamRepo>,
-    event_series: &Arc<dyn EventSeriesRepo>,
+    event_series: &Arc<dyn ItemSeriesRepo>,
     requester_user_id: &str,
     series_id: &str,
     params: UpdateEventSeriesParams,
@@ -183,7 +187,7 @@ pub async fn update_series(
     event_series
         .update_series(
             series_id,
-            &EventSeries {
+            &ItemSeries {
                 id: series_id.to_string(),
                 project_id: current.project_id,
                 name: params.name,
@@ -191,6 +195,10 @@ pub async fn update_series(
                 event_type: params.event_type,
                 recurrence: params.recurrence,
                 anchor_date: params.anchor_date,
+                // UpdateEventSeriesParams has no item_type field — like project_id,
+                // it's immutable through this path, so it's carried over from the
+                // existing row rather than reset.
+                item_type: current.item_type,
             },
         )
         .await?;
@@ -200,10 +208,10 @@ pub async fn update_series(
 pub async fn list_series_for_project(
     projects: &Arc<dyn ProjectRepo>,
     teams: &Arc<dyn TeamRepo>,
-    event_series: &Arc<dyn EventSeriesRepo>,
+    event_series: &Arc<dyn ItemSeriesRepo>,
     requester_user_id: &str,
     project_id: &str,
-) -> Result<Vec<EventSeries>, ItemError> {
+) -> Result<Vec<ItemSeries>, ItemError> {
     require_project_member(projects, teams, project_id, requester_user_id).await?;
     Ok(event_series.list_series_for_project(project_id).await?)
 }
@@ -226,7 +234,7 @@ pub struct VirtualOccurrence {
 /// project membership earlier in the same handler.
 ///
 /// A series whose `recurrence` string fails to parse is skipped silently, not propagated as
-/// an error — there is no server-side validation guaranteeing `EventSeries.recurrence` always
+/// an error — there is no server-side validation guaranteeing `ItemSeries.recurrence` always
 /// parses, and `occurrences_between` itself already set this "empty, not an error" precedent;
 /// one malformed series must not blank out an entire project's dashboard.
 ///
@@ -237,7 +245,7 @@ pub struct VirtualOccurrence {
 /// 6) correctly exclude skipped occurrences from this list today, with no exdate-specific
 /// code here at all.
 pub async fn list_virtual_occurrences_for_project_unchecked(
-    event_series: &Arc<dyn EventSeriesRepo>,
+    event_series: &Arc<dyn ItemSeriesRepo>,
     project_id: &str,
     range_start: DateTime<Utc>,
     range_end: DateTime<Utc>,
@@ -280,14 +288,14 @@ pub async fn list_virtual_occurrences_for_project_unchecked(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::event_series::{EventOccurrence, EventSeries};
+    use crate::domain::item_series::{ItemOccurrence, ItemSeries};
     use crate::domain::project::Project;
     use crate::storage::sqlite::{
-        MockEventSeriesRepo, MockItemRepo, MockProjectRepo, MockTeamRepo, RepoError,
+        MockItemSeriesRepo, MockItemRepo, MockProjectRepo, MockTeamRepo, RepoError,
     };
 
-    fn series(project_id: &str) -> EventSeries {
-        EventSeries {
+    fn series(project_id: &str) -> ItemSeries {
+        ItemSeries {
             id: "s1".to_string(),
             project_id: project_id.to_string(),
             name: "Standup".to_string(),
@@ -295,6 +303,7 @@ mod tests {
             event_type: None,
             recurrence: "every weekday".to_string(),
             anchor_date: DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+            item_type: ItemKind::Event,
         }
     }
 
@@ -322,10 +331,10 @@ mod tests {
 
     #[tokio::test]
     async fn returns_existing_item_when_already_materialized() {
-        let mut series_mock = MockEventSeriesRepo::new();
+        let mut series_mock = MockItemSeriesRepo::new();
         series_mock.expect_get_series().returning(|_| Ok(series("p1")));
         series_mock.expect_get_occurrence().returning(|_, date| {
-            Ok(Some(EventOccurrence {
+            Ok(Some(ItemOccurrence {
                 series_id: "s1".to_string(),
                 occurrence_date: date,
                 item_id: Some("existing-item".to_string()),
@@ -333,7 +342,7 @@ mod tests {
             }))
         });
         series_mock.expect_record_materialized_occurrence().times(0);
-        let event_series: Arc<dyn EventSeriesRepo> = Arc::new(series_mock);
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let mut projects_mock = MockProjectRepo::new();
         projects_mock.expect_get().returning(|_| Ok(personal_project()));
@@ -366,7 +375,7 @@ mod tests {
 
     #[tokio::test]
     async fn materializes_a_new_event_when_no_occurrence_row_exists() {
-        let mut series_mock = MockEventSeriesRepo::new();
+        let mut series_mock = MockItemSeriesRepo::new();
         series_mock.expect_get_series().returning(|_| Ok(series("p1")));
         series_mock.expect_get_occurrence().returning(|_, _| Ok(None));
         series_mock
@@ -374,7 +383,7 @@ mod tests {
             .withf(|series_id: &str, _date, item_id: &str| series_id == "s1" && item_id == "new-item-id")
             .times(1)
             .returning(|_, _, _| Ok(()));
-        let event_series: Arc<dyn EventSeriesRepo> = Arc::new(series_mock);
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let mut projects_mock = MockProjectRepo::new();
         projects_mock.expect_get().returning(|_| Ok(personal_project()));
@@ -416,12 +425,12 @@ mod tests {
 
     #[tokio::test]
     async fn propagates_not_found_for_unknown_series() {
-        let mut series_mock = MockEventSeriesRepo::new();
+        let mut series_mock = MockItemSeriesRepo::new();
         series_mock
             .expect_get_series()
             .returning(|_| Err(RepoError::NotFound));
         series_mock.expect_get_occurrence().times(0);
-        let event_series: Arc<dyn EventSeriesRepo> = Arc::new(series_mock);
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let repo: Arc<dyn ItemRepo> = Arc::new(MockItemRepo::new());
         let projects: Arc<dyn ProjectRepo> = Arc::new(MockProjectRepo::new());
@@ -443,10 +452,10 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_non_member_on_personal_project() {
-        let mut series_mock = MockEventSeriesRepo::new();
+        let mut series_mock = MockItemSeriesRepo::new();
         series_mock.expect_get_series().returning(|_| Ok(series("p1")));
         series_mock.expect_get_occurrence().returning(|_, _| Ok(None));
-        let event_series: Arc<dyn EventSeriesRepo> = Arc::new(series_mock);
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let mut projects_mock = MockProjectRepo::new();
         projects_mock.expect_get().returning(|_| Ok(personal_project()));
@@ -471,14 +480,14 @@ mod tests {
 
     #[tokio::test]
     async fn materializes_on_a_team_backed_project_too() {
-        let mut series_mock = MockEventSeriesRepo::new();
+        let mut series_mock = MockItemSeriesRepo::new();
         series_mock.expect_get_series().returning(|_| Ok(series("p1")));
         series_mock.expect_get_occurrence().returning(|_, _| Ok(None));
         series_mock
             .expect_record_materialized_occurrence()
             .times(1)
             .returning(|_, _, _| Ok(()));
-        let event_series: Arc<dyn EventSeriesRepo> = Arc::new(series_mock);
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let mut projects_mock = MockProjectRepo::new();
         projects_mock.expect_get().returning(|_| Ok(shared_project()));
@@ -517,14 +526,14 @@ mod tests {
 
     #[tokio::test]
     async fn skip_occurrence_marks_exdate_after_confirming_series_exists() {
-        let mut series_mock = MockEventSeriesRepo::new();
+        let mut series_mock = MockItemSeriesRepo::new();
         series_mock.expect_get_series().returning(|_| Ok(series("p1")));
         series_mock
             .expect_mark_exdate()
             .withf(|series_id: &str, _date| series_id == "s1")
             .times(1)
             .returning(|_, _| Ok(()));
-        let event_series: Arc<dyn EventSeriesRepo> = Arc::new(series_mock);
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         skip_occurrence(&event_series, "s1", occurrence_date())
             .await
@@ -533,10 +542,10 @@ mod tests {
 
     #[tokio::test]
     async fn unlink_deleted_item_occurrence_marks_exdate_when_item_came_from_a_series() {
-        let mut series_mock = MockEventSeriesRepo::new();
+        let mut series_mock = MockItemSeriesRepo::new();
         series_mock.expect_find_occurrence_by_item_id().returning(|item_id| {
             assert_eq!(item_id, "deleted-item");
-            Ok(Some(EventOccurrence {
+            Ok(Some(ItemOccurrence {
                 series_id: "s1".to_string(),
                 occurrence_date: occurrence_date(),
                 item_id: Some("deleted-item".to_string()),
@@ -548,7 +557,7 @@ mod tests {
             .withf(|series_id: &str, date: &DateTime<Utc>| series_id == "s1" && *date == occurrence_date())
             .times(1)
             .returning(|_, _| Ok(()));
-        let event_series: Arc<dyn EventSeriesRepo> = Arc::new(series_mock);
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         unlink_deleted_item_occurrence(&event_series, "deleted-item")
             .await
@@ -557,10 +566,10 @@ mod tests {
 
     #[tokio::test]
     async fn unlink_deleted_item_occurrence_is_a_no_op_for_a_non_series_item() {
-        let mut series_mock = MockEventSeriesRepo::new();
+        let mut series_mock = MockItemSeriesRepo::new();
         series_mock.expect_find_occurrence_by_item_id().returning(|_| Ok(None));
         series_mock.expect_mark_exdate().times(0);
-        let event_series: Arc<dyn EventSeriesRepo> = Arc::new(series_mock);
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         unlink_deleted_item_occurrence(&event_series, "some-task")
             .await
@@ -569,12 +578,12 @@ mod tests {
 
     #[tokio::test]
     async fn skip_occurrence_propagates_not_found_without_marking() {
-        let mut series_mock = MockEventSeriesRepo::new();
+        let mut series_mock = MockItemSeriesRepo::new();
         series_mock
             .expect_get_series()
             .returning(|_| Err(RepoError::NotFound));
         series_mock.expect_mark_exdate().times(0);
-        let event_series: Arc<dyn EventSeriesRepo> = Arc::new(series_mock);
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let result = skip_occurrence(&event_series, "bogus", occurrence_date()).await;
         assert!(matches!(result, Err(ItemError::NotFound)));
@@ -608,13 +617,13 @@ mod tests {
         let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
         let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
 
-        let mut series_mock = MockEventSeriesRepo::new();
+        let mut series_mock = MockItemSeriesRepo::new();
         series_mock
             .expect_create_series()
-            .withf(|s: &EventSeries| s.project_id == "p1" && s.name == "Standup")
+            .withf(|s: &ItemSeries| s.project_id == "p1" && s.name == "Standup")
             .times(1)
             .returning(|_| Ok("new-series-id".to_string()));
-        let event_series: Arc<dyn EventSeriesRepo> = Arc::new(series_mock);
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let id = create_series(&projects, &teams, &event_series, "owner1", create_params("p1"))
             .await
@@ -628,7 +637,7 @@ mod tests {
         projects_mock.expect_get().returning(|_| Ok(personal_project()));
         let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
         let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
-        let event_series: Arc<dyn EventSeriesRepo> = Arc::new(MockEventSeriesRepo::new());
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(MockItemSeriesRepo::new());
 
         let result = create_series(
             &projects,
@@ -643,9 +652,9 @@ mod tests {
 
     #[tokio::test]
     async fn get_series_returns_series_for_a_member() {
-        let mut series_mock = MockEventSeriesRepo::new();
+        let mut series_mock = MockItemSeriesRepo::new();
         series_mock.expect_get_series().returning(|_| Ok(series("p1")));
-        let event_series: Arc<dyn EventSeriesRepo> = Arc::new(series_mock);
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let mut projects_mock = MockProjectRepo::new();
         projects_mock.expect_get().returning(|_| Ok(personal_project()));
@@ -660,11 +669,11 @@ mod tests {
 
     #[tokio::test]
     async fn get_series_propagates_not_found() {
-        let mut series_mock = MockEventSeriesRepo::new();
+        let mut series_mock = MockItemSeriesRepo::new();
         series_mock
             .expect_get_series()
             .returning(|_| Err(RepoError::NotFound));
-        let event_series: Arc<dyn EventSeriesRepo> = Arc::new(series_mock);
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
         let projects: Arc<dyn ProjectRepo> = Arc::new(MockProjectRepo::new());
         let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
 
@@ -674,16 +683,16 @@ mod tests {
 
     #[tokio::test]
     async fn update_series_overwrites_fields_after_confirming_membership() {
-        let mut series_mock = MockEventSeriesRepo::new();
+        let mut series_mock = MockItemSeriesRepo::new();
         series_mock.expect_get_series().returning(|_| Ok(series("p1")));
         series_mock
             .expect_update_series()
-            .withf(|series_id: &str, s: &EventSeries| {
+            .withf(|series_id: &str, s: &ItemSeries| {
                 series_id == "s1" && s.project_id == "p1" && s.name == "Retro"
             })
             .times(1)
             .returning(|_, _| Ok(()));
-        let event_series: Arc<dyn EventSeriesRepo> = Arc::new(series_mock);
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let mut projects_mock = MockProjectRepo::new();
         projects_mock.expect_get().returning(|_| Ok(personal_project()));
@@ -697,10 +706,10 @@ mod tests {
 
     #[tokio::test]
     async fn update_series_rejects_non_member() {
-        let mut series_mock = MockEventSeriesRepo::new();
+        let mut series_mock = MockItemSeriesRepo::new();
         series_mock.expect_get_series().returning(|_| Ok(series("p1")));
         series_mock.expect_update_series().times(0);
-        let event_series: Arc<dyn EventSeriesRepo> = Arc::new(series_mock);
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let mut projects_mock = MockProjectRepo::new();
         projects_mock.expect_get().returning(|_| Ok(personal_project()));
@@ -721,11 +730,11 @@ mod tests {
 
     #[tokio::test]
     async fn list_series_for_project_returns_series_for_a_member() {
-        let mut series_mock = MockEventSeriesRepo::new();
+        let mut series_mock = MockItemSeriesRepo::new();
         series_mock
             .expect_list_series_for_project()
             .returning(|_| Ok(vec![series("p1")]));
-        let event_series: Arc<dyn EventSeriesRepo> = Arc::new(series_mock);
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let mut projects_mock = MockProjectRepo::new();
         projects_mock.expect_get().returning(|_| Ok(personal_project()));
@@ -744,15 +753,15 @@ mod tests {
         projects_mock.expect_get().returning(|_| Ok(personal_project()));
         let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
         let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
-        let event_series: Arc<dyn EventSeriesRepo> = Arc::new(MockEventSeriesRepo::new());
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(MockItemSeriesRepo::new());
 
         let result =
             list_series_for_project(&projects, &teams, &event_series, "not-the-owner", "p1").await;
         assert!(result.is_err());
     }
 
-    fn series_ex(id: &str, project_id: &str, name: &str, recurrence: &str, anchor: DateTime<Utc>) -> EventSeries {
-        EventSeries {
+    fn series_ex(id: &str, project_id: &str, name: &str, recurrence: &str, anchor: DateTime<Utc>) -> ItemSeries {
+        ItemSeries {
             id: id.to_string(),
             project_id: project_id.to_string(),
             name: name.to_string(),
@@ -760,6 +769,7 @@ mod tests {
             event_type: None,
             recurrence: recurrence.to_string(),
             anchor_date: anchor,
+            item_type: ItemKind::Event,
         }
     }
 
@@ -769,14 +779,14 @@ mod tests {
 
     #[tokio::test]
     async fn list_virtual_occurrences_returns_dates_with_no_occurrence_row() {
-        let mut series_mock = MockEventSeriesRepo::new();
+        let mut series_mock = MockItemSeriesRepo::new();
         series_mock
             .expect_list_series_for_project()
             .returning(|_| Ok(vec![series_ex("s1", "p1", "Standup", "every 3 days", anchor())]));
         series_mock
             .expect_list_occurrences_between()
             .returning(|_, _, _| Ok(vec![]));
-        let event_series: Arc<dyn EventSeriesRepo> = Arc::new(series_mock);
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let result = list_virtual_occurrences_for_project_unchecked(
             &event_series,
@@ -796,19 +806,19 @@ mod tests {
     #[tokio::test]
     async fn list_virtual_occurrences_excludes_materialized_dates() {
         let materialized_date = anchor() + chrono::Duration::days(3);
-        let mut series_mock = MockEventSeriesRepo::new();
+        let mut series_mock = MockItemSeriesRepo::new();
         series_mock
             .expect_list_series_for_project()
             .returning(|_| Ok(vec![series_ex("s1", "p1", "Standup", "every 3 days", anchor())]));
         series_mock.expect_list_occurrences_between().returning(move |_, _, _| {
-            Ok(vec![EventOccurrence {
+            Ok(vec![ItemOccurrence {
                 series_id: "s1".to_string(),
                 occurrence_date: materialized_date,
                 item_id: Some("item-1".to_string()),
                 is_exdate: false,
             }])
         });
-        let event_series: Arc<dyn EventSeriesRepo> = Arc::new(series_mock);
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let result = list_virtual_occurrences_for_project_unchecked(
             &event_series,
@@ -827,19 +837,19 @@ mod tests {
     #[tokio::test]
     async fn list_virtual_occurrences_excludes_exdate_dates() {
         let skipped_date = anchor() + chrono::Duration::days(6);
-        let mut series_mock = MockEventSeriesRepo::new();
+        let mut series_mock = MockItemSeriesRepo::new();
         series_mock
             .expect_list_series_for_project()
             .returning(|_| Ok(vec![series_ex("s1", "p1", "Standup", "every 3 days", anchor())]));
         series_mock.expect_list_occurrences_between().returning(move |_, _, _| {
-            Ok(vec![EventOccurrence {
+            Ok(vec![ItemOccurrence {
                 series_id: "s1".to_string(),
                 occurrence_date: skipped_date,
                 item_id: None,
                 is_exdate: true,
             }])
         });
-        let event_series: Arc<dyn EventSeriesRepo> = Arc::new(series_mock);
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let result = list_virtual_occurrences_for_project_unchecked(
             &event_series,
@@ -857,7 +867,7 @@ mod tests {
 
     #[tokio::test]
     async fn list_virtual_occurrences_skips_a_series_with_unparseable_recurrence() {
-        let mut series_mock = MockEventSeriesRepo::new();
+        let mut series_mock = MockItemSeriesRepo::new();
         series_mock.expect_list_series_for_project().returning(|_| {
             Ok(vec![
                 series_ex("bad", "p1", "Bad", "not a real pattern", anchor()),
@@ -868,7 +878,7 @@ mod tests {
             .expect_list_occurrences_between()
             .withf(|series_id: &str, _, _| series_id == "good")
             .returning(|_, _, _| Ok(vec![]));
-        let event_series: Arc<dyn EventSeriesRepo> = Arc::new(series_mock);
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let result = list_virtual_occurrences_for_project_unchecked(
             &event_series,
@@ -886,9 +896,9 @@ mod tests {
 
     #[tokio::test]
     async fn list_virtual_occurrences_returns_empty_for_project_with_no_series() {
-        let mut series_mock = MockEventSeriesRepo::new();
+        let mut series_mock = MockItemSeriesRepo::new();
         series_mock.expect_list_series_for_project().returning(|_| Ok(vec![]));
-        let event_series: Arc<dyn EventSeriesRepo> = Arc::new(series_mock);
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let result = list_virtual_occurrences_for_project_unchecked(
             &event_series,
@@ -905,14 +915,14 @@ mod tests {
 
     #[tokio::test]
     async fn list_virtual_occurrences_scopes_to_the_given_range() {
-        let mut series_mock = MockEventSeriesRepo::new();
+        let mut series_mock = MockItemSeriesRepo::new();
         series_mock
             .expect_list_series_for_project()
             .returning(|_| Ok(vec![series_ex("s1", "p1", "Standup", "every 3 days", anchor())]));
         series_mock
             .expect_list_occurrences_between()
             .returning(|_, _, _| Ok(vec![]));
-        let event_series: Arc<dyn EventSeriesRepo> = Arc::new(series_mock);
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         // Narrow window: only the anchor itself and +3d should land inside [anchor, anchor+4d].
         let result = list_virtual_occurrences_for_project_unchecked(
@@ -933,7 +943,7 @@ mod tests {
 
     #[tokio::test]
     async fn list_virtual_occurrences_combines_multiple_series_in_one_project() {
-        let mut series_mock = MockEventSeriesRepo::new();
+        let mut series_mock = MockItemSeriesRepo::new();
         series_mock.expect_list_series_for_project().returning(|_| {
             Ok(vec![
                 series_ex("s1", "p1", "Standup", "every 3 days", anchor()),
@@ -943,7 +953,7 @@ mod tests {
         series_mock
             .expect_list_occurrences_between()
             .returning(|_, _, _| Ok(vec![]));
-        let event_series: Arc<dyn EventSeriesRepo> = Arc::new(series_mock);
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let result = list_virtual_occurrences_for_project_unchecked(
             &event_series,

@@ -8,8 +8,8 @@ mod web_ui;
 mod json_api;
 
 use crate::storage::sqlite::{
-    ActivityLogRepo, EventSeriesRepo, ItemRepo, ProjectRepo, TeamRepo, UserRepo,
-    activity_log::SqliteActivityLogRepo, create_pool, event_series::SqliteEventSeriesRepo,
+    ActivityLogRepo, ItemRepo, ItemSeriesRepo, ProjectRepo, TeamRepo, UserRepo,
+    activity_log::SqliteActivityLogRepo, create_pool, item_series::SqliteItemSeriesRepo,
     items::SqliteItemRepo, projects::SqliteProjectRepo, teams::SqliteTeamRepo,
     users::SqliteUserRepo,
 };
@@ -272,7 +272,7 @@ async fn main() {
     let item_repo = Arc::new(SqliteItemRepo(pool.clone())) as Arc<dyn ItemRepo>;
     let team_repo = Arc::new(SqliteTeamRepo(pool.clone())) as Arc<dyn TeamRepo>;
     let project_repo = Arc::new(SqliteProjectRepo(pool.clone())) as Arc<dyn ProjectRepo>;
-    let event_series_repo = Arc::new(SqliteEventSeriesRepo(pool.clone())) as Arc<dyn EventSeriesRepo>;
+    let event_series_repo = Arc::new(SqliteItemSeriesRepo(pool.clone())) as Arc<dyn ItemSeriesRepo>;
     let activity_log_repo = Arc::new(SqliteActivityLogRepo(pool)) as Arc<dyn ActivityLogRepo>;
 
     let config = PeoplesRepublicOfListsConfig::builder().build();

@@ -7,7 +7,7 @@ use crate::service::projects::require_project_member;
 use crate::service::team_items::{
     self, CreateTeamItemParams, UpdateTeamItemContext, UpdateTeamItemParams,
 };
-use crate::storage::sqlite::{ActivityLogRepo, DueItem, EventSeriesRepo, ItemRepo, ProjectRepo, TeamRepo};
+use crate::storage::sqlite::{ActivityLogRepo, DueItem, ItemRepo, ItemSeriesRepo, ProjectRepo, TeamRepo};
 use chrono::{DateTime, Utc};
 use std::sync::Arc;
 
@@ -441,7 +441,7 @@ pub async fn delete_project_item(
     repo: &Arc<dyn ItemRepo>,
     projects: &Arc<dyn ProjectRepo>,
     teams: &Arc<dyn TeamRepo>,
-    event_series: &Arc<dyn EventSeriesRepo>,
+    event_series: &Arc<dyn ItemSeriesRepo>,
     requester_user_id: &str,
     project_id: &str,
     item_id: &str,
@@ -464,13 +464,13 @@ mod tests {
     use crate::domain::project::Project;
     use crate::domain::team::TeamRole;
     use crate::storage::sqlite::{
-        MockActivityLogRepo, MockEventSeriesRepo, MockItemRepo, MockProjectRepo, MockTeamRepo,
+        MockActivityLogRepo, MockItemSeriesRepo, MockItemRepo, MockProjectRepo, MockTeamRepo,
     };
 
     /// Every `delete_project_item` test but the dedicated series-unlinking one below just
     /// needs the reverse lookup to be a harmless no-op — this is what those tests share.
-    fn no_op_event_series_repo() -> Arc<dyn EventSeriesRepo> {
-        let mut mock = MockEventSeriesRepo::new();
+    fn no_op_event_series_repo() -> Arc<dyn ItemSeriesRepo> {
+        let mut mock = MockItemSeriesRepo::new();
         mock.expect_find_occurrence_by_item_id().returning(|_| Ok(None));
         Arc::new(mock)
     }
@@ -947,12 +947,12 @@ mod tests {
         items_mock.expect_delete().times(1).returning(|_| Ok(()));
         let repo: Arc<dyn ItemRepo> = Arc::new(items_mock);
 
-        let mut series_mock = MockEventSeriesRepo::new();
+        let mut series_mock = MockItemSeriesRepo::new();
         series_mock
             .expect_find_occurrence_by_item_id()
             .withf(|item_id: &str| item_id == "i1")
             .returning(|_| {
-                Ok(Some(crate::domain::event_series::EventOccurrence {
+                Ok(Some(crate::domain::item_series::ItemOccurrence {
                     series_id: "s1".to_string(),
                     occurrence_date: DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
                     item_id: Some("i1".to_string()),
@@ -964,7 +964,7 @@ mod tests {
             .withf(|series_id: &str, _date| series_id == "s1")
             .times(1)
             .returning(|_, _| Ok(()));
-        let event_series: Arc<dyn EventSeriesRepo> = Arc::new(series_mock);
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         delete_project_item(&repo, &projects, &teams, &event_series, "owner1", "p1", "i1")
             .await

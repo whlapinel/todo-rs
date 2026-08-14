@@ -1,10 +1,10 @@
 use super::{internal, not_found};
 use crate::auth::AuthUser;
-use crate::domain::event_series::EventSeries;
+use crate::domain::item_series::ItemSeries;
 use crate::service::event_series as event_series_service;
 use crate::service::event_series::{CreateEventSeriesParams, UpdateEventSeriesParams};
 use crate::service::items::ItemError;
-use crate::storage::sqlite::{EventSeriesRepo, ProjectRepo, TeamRepo};
+use crate::storage::sqlite::{ItemSeriesRepo, ProjectRepo, TeamRepo};
 use std::sync::Arc;
 use todo_server_sdk::{error, input, model, output, server, types::DateTime as SmithyDateTime};
 
@@ -19,7 +19,7 @@ fn anchor_from_input(dt: &SmithyDateTime) -> chrono::DateTime<chrono::Utc> {
     chrono::DateTime::from_timestamp(dt.secs(), 0).unwrap_or_default()
 }
 
-fn to_summary(series: EventSeries) -> model::EventSeriesSummary {
+fn to_summary(series: ItemSeries) -> model::EventSeriesSummary {
     model::EventSeriesSummary {
         series_id: series.id,
         project_id: series.project_id,
@@ -35,7 +35,7 @@ pub async fn create_event_series(
     input: input::CreateEventSeriesInput,
     server::Extension(projects): server::Extension<Arc<dyn ProjectRepo>>,
     server::Extension(teams): server::Extension<Arc<dyn TeamRepo>>,
-    server::Extension(event_series): server::Extension<Arc<dyn EventSeriesRepo>>,
+    server::Extension(event_series): server::Extension<Arc<dyn ItemSeriesRepo>>,
     server::Extension(auth): server::Extension<AuthUser>,
 ) -> Result<output::CreateEventSeriesOutput, error::CreateEventSeriesError> {
     let series_id = event_series_service::create_series(
@@ -61,7 +61,7 @@ pub async fn get_event_series(
     input: input::GetEventSeriesInput,
     server::Extension(projects): server::Extension<Arc<dyn ProjectRepo>>,
     server::Extension(teams): server::Extension<Arc<dyn TeamRepo>>,
-    server::Extension(event_series): server::Extension<Arc<dyn EventSeriesRepo>>,
+    server::Extension(event_series): server::Extension<Arc<dyn ItemSeriesRepo>>,
     server::Extension(auth): server::Extension<AuthUser>,
 ) -> Result<output::GetEventSeriesOutput, error::GetEventSeriesError> {
     let series = event_series_service::get_series(
@@ -88,7 +88,7 @@ pub async fn update_event_series(
     input: input::UpdateEventSeriesInput,
     server::Extension(projects): server::Extension<Arc<dyn ProjectRepo>>,
     server::Extension(teams): server::Extension<Arc<dyn TeamRepo>>,
-    server::Extension(event_series): server::Extension<Arc<dyn EventSeriesRepo>>,
+    server::Extension(event_series): server::Extension<Arc<dyn ItemSeriesRepo>>,
     server::Extension(auth): server::Extension<AuthUser>,
 ) -> Result<output::UpdateEventSeriesOutput, error::UpdateEventSeriesError> {
     event_series_service::update_series(
@@ -114,7 +114,7 @@ pub async fn list_event_series_for_project(
     input: input::ListEventSeriesForProjectInput,
     server::Extension(projects): server::Extension<Arc<dyn ProjectRepo>>,
     server::Extension(teams): server::Extension<Arc<dyn TeamRepo>>,
-    server::Extension(event_series): server::Extension<Arc<dyn EventSeriesRepo>>,
+    server::Extension(event_series): server::Extension<Arc<dyn ItemSeriesRepo>>,
     server::Extension(auth): server::Extension<AuthUser>,
 ) -> Result<output::ListEventSeriesForProjectOutput, error::ListEventSeriesForProjectError> {
     let series = event_series_service::list_series_for_project(

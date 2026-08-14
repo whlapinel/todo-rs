@@ -7,7 +7,7 @@ use crate::service::project_items::{self as project_item_service, UpdateProjectI
 use crate::service::projects::{self as project_service};
 use crate::service::teams as team_service;
 use crate::service::error::ItemError;
-use crate::storage::sqlite::{ActivityLogRepo, DueItem, EventSeriesRepo, ItemRepo, ProjectRepo, TeamRepo};
+use crate::storage::sqlite::{ActivityLogRepo, DueItem, ItemRepo, ItemSeriesRepo, ProjectRepo, TeamRepo};
 use askama::Template;
 use axum::extract::{Extension, Form, Path, Query};
 use axum::response::Html;
@@ -297,7 +297,7 @@ pub async fn project_dashboard_page(
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
-    Extension(event_series): Extension<Arc<dyn EventSeriesRepo>>,
+    Extension(event_series): Extension<Arc<dyn ItemSeriesRepo>>,
     TzOffset(tz_offset): TzOffset,
     Query(q): Query<DashboardQuery>,
 ) -> Result<Html<String>, ItemError> {
@@ -517,7 +517,7 @@ pub async fn project_dashboard_calendar_page(
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
-    Extension(event_series): Extension<Arc<dyn EventSeriesRepo>>,
+    Extension(event_series): Extension<Arc<dyn ItemSeriesRepo>>,
     TzOffset(tz): TzOffset,
     Query(q): Query<CalendarQuery>,
 ) -> Result<Html<String>, ItemError> {

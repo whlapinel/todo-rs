@@ -1,11 +1,11 @@
-use crate::domain::event_series::EventSeries;
+use crate::domain::item_series::ItemSeries;
 use crate::web_ui::to_local;
 use askama::Template;
 
 pub struct ProjectEventSeriesRow;
 
 impl ProjectEventSeriesRow {
-    pub fn from_series(s: &EventSeries, tz: i32) -> Row {
+    pub fn from_series(s: &ItemSeries, tz: i32) -> Row {
         Row {
             name: s.name.clone(),
             recurrence: s.recurrence.clone(),

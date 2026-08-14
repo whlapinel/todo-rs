@@ -2,7 +2,7 @@ use crate::auth::AuthUser;
 use crate::service::error::ItemError;
 use crate::service::event_series::{self as event_series_service, CreateEventSeriesParams};
 use crate::service::projects::{self as project_service};
-use crate::storage::sqlite::{EventSeriesRepo, ItemRepo, ProjectRepo, TeamRepo};
+use crate::storage::sqlite::{ItemRepo, ItemSeriesRepo, ProjectRepo, TeamRepo};
 use crate::web_ui::nav::{self, ActiveContext, SidebarSection};
 use crate::web_ui::project_event_series::templates::*;
 use crate::web_ui::project_event_series::{combine_local_to_utc, non_empty, render, start_of_day};
@@ -23,7 +23,7 @@ pub async fn project_event_series_page(
     Extension(auth_user): Extension<AuthUser>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
-    Extension(event_series): Extension<Arc<dyn EventSeriesRepo>>,
+    Extension(event_series): Extension<Arc<dyn ItemSeriesRepo>>,
     TzOffset(tz): TzOffset,
 ) -> Result<Html<String>, ItemError> {
     let series = event_series_service::list_series_for_project(
@@ -89,7 +89,7 @@ pub async fn create_project_event_series_form(
     Extension(auth_user): Extension<AuthUser>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
-    Extension(event_series): Extension<Arc<dyn EventSeriesRepo>>,
+    Extension(event_series): Extension<Arc<dyn ItemSeriesRepo>>,
     TzOffset(tz): TzOffset,
     Form(form): Form<CreateEventSeriesForm>,
 ) -> Result<Response, ItemError> {
@@ -142,7 +142,7 @@ pub async fn materialize_project_event_series_occurrence_form(
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
-    Extension(event_series): Extension<Arc<dyn EventSeriesRepo>>,
+    Extension(event_series): Extension<Arc<dyn ItemSeriesRepo>>,
 ) -> Result<Response, ItemError> {
     let series = event_series_service::get_series(
         &projects,
@@ -192,7 +192,7 @@ pub async fn skip_project_event_series_occurrence_form(
     Extension(auth_user): Extension<AuthUser>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
-    Extension(event_series): Extension<Arc<dyn EventSeriesRepo>>,
+    Extension(event_series): Extension<Arc<dyn ItemSeriesRepo>>,
 ) -> Result<Response, ItemError> {
     let series = event_series_service::get_series(
         &projects,
