@@ -24,6 +24,7 @@ pub enum SidebarSection {
     Events,
     SimpleLists,
     Templates,
+    EventSeries,
     None,
 }
 
@@ -64,6 +65,7 @@ fn section_href(section: SidebarSection, project_id: &str) -> String {
         SidebarSection::Events => "events",
         SidebarSection::SimpleLists => "simple-lists",
         SidebarSection::Templates => "templates",
+        SidebarSection::EventSeries => "series",
         SidebarSection::None => "dashboard",
     };
     format!("/web/projects/{project_id}/{path}")
@@ -99,6 +101,7 @@ pub async fn build_nav_html(
                 (SidebarSection::Events, "Events"),
                 (SidebarSection::SimpleLists, "Simple Lists"),
                 (SidebarSection::Templates, "Templates"),
+                (SidebarSection::EventSeries, "Series"),
             ]
             .into_iter()
             .map(|(s, label)| SectionLink {

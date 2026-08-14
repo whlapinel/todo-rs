@@ -1,0 +1,10 @@
+<li class="py-3 space-y-1">
+  <div class="flex items-center justify-between gap-x-3">
+    <span class="min-w-0 flex-1 truncate text-gray-900 dark:text-white">{{ name }}</span>
+    <span class="shrink-0 text-xs text-gray-400 dark:text-gray-500" title="repeats">&#8635; {{ recurrence }}</span>
+  </div>
+  <div class="flex items-center gap-x-3 text-xs text-gray-500 dark:text-gray-400">
+    <span>Anchor: {{ anchor_date_label }}</span>
+    {% if let Some(t) = event_type %}<span>Type: {{ t }}</span>{% endif %}
+  </div>
+</li>

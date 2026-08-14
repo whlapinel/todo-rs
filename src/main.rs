@@ -46,6 +46,7 @@ use web_ui::assigned_items::assigned_items_page;
 use web_ui::login::login_page;
 use web_ui::project_activity::*;
 use web_ui::project_dashboard::*;
+use web_ui::project_event_series::handlers::*;
 use web_ui::project_events::handlers::*;
 use web_ui::project_simple_lists::handlers::*;
 use web_ui::project_tasks::handlers::*;
@@ -198,6 +199,14 @@ fn build_web_router() -> Router {
             post(use_project_template_form),
         )
         .route(
+            "/projects/:project_id/series",
+            get(project_event_series_page).post(create_project_event_series_form),
+        )
+        .route(
+            "/projects/:project_id/series/new",
+            get(new_project_event_series_page),
+        )
+        .route(
             "/projects/:project_id/dashboard",
             get(project_dashboard_page),
         )
@@ -308,7 +317,7 @@ async fn main() {
         .layer(Extension(item_repo.clone()))
         .layer(Extension(team_repo.clone()))
         .layer(Extension(project_repo.clone()))
-        .layer(Extension(event_series_repo))
+        .layer(Extension(event_series_repo.clone()))
         .layer(Extension(activity_log_repo.clone()))
         .map_response(|res: http::Response<_>| res.map(boxed))
         .service(smithy);
@@ -341,6 +350,7 @@ async fn main() {
                 .layer(Extension(item_repo.clone()))
                 .layer(Extension(team_repo.clone()))
                 .layer(Extension(project_repo.clone()))
+                .layer(Extension(event_series_repo.clone()))
                 .layer(Extension(activity_log_repo.clone()))
                 .layer(middleware::from_fn(auth::caddy_header_middleware));
             let public_web_router = build_public_web_router();
@@ -407,6 +417,7 @@ async fn main() {
                 .layer(Extension(item_repo.clone()))
                 .layer(Extension(team_repo.clone()))
                 .layer(Extension(project_repo))
+                .layer(Extension(event_series_repo))
                 .layer(Extension(activity_log_repo))
                 .layer(middleware::from_fn(auth::web_auth_middleware));
             let public_web_router = build_public_web_router();
