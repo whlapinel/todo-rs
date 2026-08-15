@@ -4,6 +4,7 @@ use std::sync::Arc;
 use askama::Template;
 use crate::domain::item::Item;
 use crate::service::error::ItemError;
+use crate::service::item_series::VirtualOccurrence;
 use crate::storage::sqlite::ItemRepo;
 use crate::web_ui::components::row::Row;
 use crate::web_ui::to_local;
@@ -103,6 +104,46 @@ impl ProjectTaskRow {
                 .map(|s| (s.id.clone(), s.name.clone()))
                 .collect(),
             is_source_event_linked: item.source_event_id().is_some(),
+        }
+    }
+}
+
+/// Stage 10 gap 2: a Task series' `current_occurrence_date`, rendered as a distinct virtual
+/// row in the flat `/tasks` list — mirrors `project_dashboard::ProjectDashboardVirtualRow` and
+/// the Tasks calendar's `CalendarVirtualTaskEntry`, minus the type badge (this list is
+/// Task-only already). Every row built from this struct is current by construction (callers
+/// filter for `is_current` before constructing one), so the template has no "Planned" branch.
+#[derive(Template)]
+#[template(path = "project_tasks/virtual_row.html")]
+pub struct ProjectTaskVirtualRow {
+    pub series_id: String,
+    pub occurrence_ts: i64,
+    pub name: String,
+    pub date_label: String,
+    pub materialize_url: String,
+    pub skip_url: String,
+    pub is_current: bool,
+}
+
+impl ProjectTaskVirtualRow {
+    pub fn from_occurrence(occ: &VirtualOccurrence, project_id: &str, tz: i32) -> Self {
+        let local = to_local(occ.occurrence_date, tz);
+        Self {
+            series_id: occ.series_id.clone(),
+            occurrence_ts: occ.occurrence_date.timestamp(),
+            name: occ.series_name.clone(),
+            date_label: local.format("%Y-%m-%d %H:%M").to_string(),
+            materialize_url: format!(
+                "/web/projects/{project_id}/series/{}/occurrences/{}",
+                occ.series_id,
+                occ.occurrence_date.timestamp(),
+            ),
+            skip_url: format!(
+                "/web/projects/{project_id}/series/{}/occurrences/{}/skip",
+                occ.series_id,
+                occ.occurrence_date.timestamp(),
+            ),
+            is_current: occ.is_current,
         }
     }
 }

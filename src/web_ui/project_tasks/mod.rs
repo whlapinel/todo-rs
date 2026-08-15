@@ -9,7 +9,7 @@ use crate::service::teams as team_service;
 use crate::storage::sqlite::{ItemRepo, TeamRepo};
 use crate::web_ui::project_tasks::templates::{
     CalendarDay, CalendarTaskEntry, CalendarVirtualTaskEntry, DateType, ProjectTaskRow,
-    ProjectTaskRowsFragmentTemplate,
+    ProjectTaskRowsFragmentTemplate, ProjectTaskVirtualRow,
 };
 use askama::Template;
 use axum::response::Html;
@@ -345,6 +345,43 @@ pub(crate) fn render_rows(
         .map(|i| ProjectTaskRow::from_item(i, project_id, names, &visible, tz).render())
         .collect::<Result<Vec<_>, _>>()
         .map_err(ItemError::from)
+}
+
+/// Stage 10 gap 2: the flat Tasks list's own version of `render_rows`, merging in each
+/// Task-typed series' single current virtual occurrence (if any) alongside real items —
+/// mirrors `project_dashboard::render_rows`'s exact merge pattern (render each kind to
+/// `(timestamp, html)` pairs, concatenate, sort by timestamp, discard the timestamp). Kept
+/// separate from `render_rows` rather than adding a parameter to it, since `render_rows` has
+/// three other call sites in this module (children/subordinate task lists) where virtual
+/// occurrences don't apply.
+pub(crate) fn render_rows_with_virtual(
+    items: &[Item],
+    virtual_occurrences: &[VirtualOccurrence],
+    project_id: &str,
+    names: &HashMap<String, String>,
+    show_complete: bool,
+    tz: i32,
+) -> Result<Vec<String>, ItemError> {
+    let visible: Vec<&Item> = items
+        .iter()
+        .filter(|i| show_complete || !i.complete)
+        .collect();
+    let mut entries: Vec<(i64, String)> = visible
+        .iter()
+        .map(|i| {
+            ProjectTaskRow::from_item(i, project_id, names, &visible, tz)
+                .render()
+                .map(|html| (sort_key(i), html))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    for occ in virtual_occurrences {
+        entries.push((
+            occ.occurrence_date.timestamp(),
+            ProjectTaskVirtualRow::from_occurrence(occ, project_id, tz).render()?,
+        ));
+    }
+    entries.sort_by_key(|(ts, _)| *ts);
+    Ok(entries.into_iter().map(|(_, html)| html).collect())
 }
 
 /// `list_project_items_unchecked` already scopes to top-level, non-Template items — this narrows

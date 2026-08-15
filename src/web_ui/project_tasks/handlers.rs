@@ -46,6 +46,7 @@ pub async fn project_tasks_page(
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(event_series): Extension<Arc<dyn ItemSeriesRepo>>,
     TzOffset(tz): TzOffset,
     Query(q): Query<ShowCompleteQuery>,
 ) -> Result<Html<String>, ItemError> {
@@ -56,7 +57,28 @@ pub async fn project_tasks_page(
         Some(team_id) => names_for(&teams, team_id, &auth_user.user_id).await?,
         None => HashMap::new(),
     };
-    let rows = super::render_rows(&items, &project_id, &names, show_complete, tz)?;
+    // Stage 10 gap 2: a Task series' current occurrence is range-independent (a pure
+    // function of the cursor), so any degenerate range surfaces it — see
+    // `list_virtual_occurrences_for_project_unchecked`'s backlog-exemption logic.
+    let virtual_occurrences: Vec<_> = item_series_service::list_virtual_occurrences_for_project_unchecked(
+        &event_series,
+        &project_id,
+        Utc::now(),
+        Utc::now(),
+        tz,
+    )
+    .await?
+    .into_iter()
+    .filter(|occ| occ.item_type == ItemKind::Task && occ.is_current)
+    .collect();
+    let rows = super::render_rows_with_virtual(
+        &items,
+        &virtual_occurrences,
+        &project_id,
+        &names,
+        show_complete,
+        tz,
+    )?;
     let points_label = match &project.team_id {
         Some(team_id) => {
             let points = team_service::member_points(&teams, team_id, &auth_user.user_id).await?;

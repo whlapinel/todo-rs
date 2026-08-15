@@ -1,0 +1,16 @@
+<li id="task-list-virtual-{{ series_id }}-{{ occurrence_ts }}" class="py-2">
+  <div class="flex items-center gap-x-3">
+    <a href="#" hx-post="{{ materialize_url }}" hx-target="#page" hx-select="#page" hx-swap="innerHTML"
+      class="min-w-0 flex-1 truncate italic text-gray-500 dark:text-gray-400">{{ name }}</a>
+    {% if is_current %}
+    <span class="shrink-0 text-[10px] uppercase tracking-wide font-semibold text-indigo-600 dark:text-indigo-400">Current</span>
+    {% endif %}
+  </div>
+  <div class="mt-1 flex items-center gap-x-3 pl-0 text-xs text-gray-500 dark:text-gray-400">
+    <span class="flex-1">Due: {{ date_label }}</span>
+    <button hx-post="{{ skip_url }}" hx-confirm="Skip this occurrence?"
+      hx-target="#task-list-virtual-{{ series_id }}-{{ occurrence_ts }}" hx-select="unset"
+      hx-swap="outerHTML swap:200ms"
+      class="shrink-0 cursor-pointer text-gray-400 hover:text-red-500 dark:text-gray-500 dark:hover:text-red-400">Skip</button>
+  </div>
+</li>
