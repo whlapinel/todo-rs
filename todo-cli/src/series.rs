@@ -43,8 +43,6 @@ pub enum SeriesCommand {
         anchor: String,
         #[arg(long)]
         description: Option<String>,
-        #[arg(long)]
-        event_type: Option<String>,
         /// Required: 'task' or 'event' — the kind of item this series materializes
         #[arg(long)]
         item_type: Option<String>,
@@ -58,7 +56,7 @@ pub enum SeriesCommand {
         project_id: String,
         series_id: String,
     },
-    /// Update an item series (full replace — round-trip description/event-type/basis to keep them)
+    /// Update an item series (full replace — round-trip description/basis to keep them)
     Update {
         project_id: String,
         series_id: String,
@@ -67,8 +65,6 @@ pub enum SeriesCommand {
         anchor: String,
         #[arg(long)]
         description: Option<String>,
-        #[arg(long)]
-        event_type: Option<String>,
         /// Required: 'task' or 'event' — the kind of item this series materializes
         #[arg(long)]
         item_type: Option<String>,
@@ -111,7 +107,6 @@ pub async fn cmd_series(client: &Client, cmd: SeriesCommand, _user_id: Option<St
             recurrence,
             anchor,
             description,
-            event_type,
             item_type,
             basis,
         } => {
@@ -132,9 +127,6 @@ pub async fn cmd_series(client: &Client, cmd: SeriesCommand, _user_id: Option<St
                 .item_type(parse_series_item_type_flag(&item_type));
             if let Some(description) = description {
                 req = req.description(description);
-            }
-            if let Some(event_type) = event_type {
-                req = req.event_type(event_type);
             }
             if let Some(basis) = basis.and_then(|b| parse_series_basis_flag(&b)) {
                 req = req.basis(basis);
@@ -172,7 +164,6 @@ pub async fn cmd_series(client: &Client, cmd: SeriesCommand, _user_id: Option<St
             recurrence,
             anchor,
             description,
-            event_type,
             item_type,
             basis,
         } => {
@@ -194,9 +185,6 @@ pub async fn cmd_series(client: &Client, cmd: SeriesCommand, _user_id: Option<St
                 .item_type(parse_series_item_type_flag(&item_type));
             if let Some(description) = description {
                 req = req.description(description);
-            }
-            if let Some(event_type) = event_type {
-                req = req.event_type(event_type);
             }
             if let Some(basis) = basis.and_then(|b| parse_series_basis_flag(&b)) {
                 req = req.basis(basis);

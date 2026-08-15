@@ -41,9 +41,10 @@
                class="block w-full rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 placeholder:text-gray-400 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:placeholder:text-gray-500 dark:focus:outline-indigo-500" />
       </div>
     </label>
-    <div class="event-type-field">
-      {% call macros::event_type_field("") %}{% endcall %}
-    </div>
+    <!-- event_type is currently unsupported on any item series (see
+         validate_series_event_type in src/service/item_series.rs) — no form field for it
+         here, unlike the real Event/Template screens that still use
+         macros::event_type_field. -->
     <div class="completion-basis-field">
       <label class="inline-flex items-center gap-1.5 text-sm font-normal text-gray-900 dark:text-white">
         <input type="checkbox" name="basis" value="COMPLETION"
@@ -57,12 +58,6 @@
       if (!form) return;
       function toggle() {
         var isTask = form.querySelector('input[name="itemType"][value="TASK"]').checked;
-        form.querySelectorAll(".event-type-field").forEach(function (el) {
-          el.hidden = isTask;
-          el.querySelectorAll("input").forEach(function (field) {
-            field.disabled = isTask;
-          });
-        });
         form.querySelectorAll(".completion-basis-field").forEach(function (el) {
           el.hidden = !isTask;
           el.querySelectorAll("input").forEach(function (field) {

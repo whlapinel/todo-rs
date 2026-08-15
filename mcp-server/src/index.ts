@@ -466,14 +466,13 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "create_item_series",
       description:
-        "Create a new recurring item series on a project. The caller must be a project member.",
+        "Create a new recurring item series on a project. eventType is currently unsupported on any series (not accepted here) — the legacy template-trigger mechanism it would drive can conflict with a series' own materialization behavior. The caller must be a project member.",
       inputSchema: {
         type: "object",
         properties: {
           projectId: { type: "string" },
           name: { type: "string" },
           description: { type: "string" },
-          eventType: { type: "string", description: "Matched against templates' own eventType to auto-copy children when an occurrence is materialized" },
           recurrence: { type: "string", description: "English recurrence pattern, e.g. 'every monday' — same syntax as an item's own recurrence field" },
           anchorDate: { type: "string", description: "ISO 8601 date/time string" },
           itemType: {
@@ -505,7 +504,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "update_item_series",
       description:
-        "Update an item series (full replace of name/recurrence/anchorDate/description/eventType/itemType/basis — round-trip description/eventType/basis to keep them, omitting clears them). The caller must be a project member.",
+        "Update an item series (full replace of name/recurrence/anchorDate/description/itemType/basis — round-trip description/basis to keep them, omitting clears them). eventType is currently unsupported on any series and is not accepted here. The caller must be a project member.",
       inputSchema: {
         type: "object",
         properties: {
@@ -513,7 +512,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           seriesId: { type: "string" },
           name: { type: "string" },
           description: { type: "string" },
-          eventType: { type: "string" },
           recurrence: { type: "string" },
           anchorDate: { type: "string", description: "ISO 8601 date/time string" },
           itemType: {
@@ -897,7 +895,6 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           itemType: args.itemType,
         };
         if (args.description !== undefined) body.description = args.description;
-        if (args.eventType !== undefined) body.eventType = args.eventType;
         if (args.basis !== undefined) body.basis = args.basis;
         result = await api("POST", `/projects/${args.projectId}/series`, body);
         break;
@@ -918,7 +915,6 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           itemType: args.itemType,
         };
         if (args.description !== undefined) body.description = args.description;
-        if (args.eventType !== undefined) body.eventType = args.eventType;
         if (args.basis !== undefined) body.basis = args.basis;
         result = await api(
           "PUT",
