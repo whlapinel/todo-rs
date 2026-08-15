@@ -15,6 +15,7 @@ mod drop_items_team_id;
 mod drop_team_member_points;
 mod has_tasks_to_simple;
 mod item_type_event_type;
+mod migrate_legacy_recurring_items;
 mod scheduled_end_date;
 mod team_member_points;
 
@@ -36,6 +37,7 @@ use drop_items_team_id::DropItemsTeamId;
 use drop_team_member_points::DropTeamMemberPoints;
 use has_tasks_to_simple::HasTasksToSimple;
 use item_type_event_type::ItemTypeEventType;
+use migrate_legacy_recurring_items::MigrateLegacyRecurringItems;
 use scheduled_end_date::ScheduledEndDate;
 use team_member_points::TeamMemberPoints;
 use sqlx::{Row, SqlitePool, SqliteConnection};
@@ -92,6 +94,7 @@ fn all_migrations() -> Vec<Box<dyn Migration>> {
         Box::new(AddItemSeriesCursorDate),
         Box::new(AddItemSeriesBasis),
         Box::new(AddItemSeriesTemplateItemId),
+        Box::new(MigrateLegacyRecurringItems),
     ]
 }
 
@@ -192,8 +195,12 @@ mod tests {
                 user_id TEXT,
                 team_id TEXT,
                 due_date INTEGER,
+                scheduled_date INTEGER,
                 is_template INTEGER NOT NULL DEFAULT 0,
-                parent_item_id TEXT
+                parent_item_id TEXT,
+                recurrence TEXT,
+                recurrence_basis TEXT,
+                due_offset_days INTEGER
             )",
         )
         .execute(&pool)
@@ -219,6 +226,10 @@ mod tests {
                 has_end_time INTEGER NOT NULL DEFAULT 0,
                 item_type TEXT NOT NULL DEFAULT 'TASK',
                 event_type TEXT,
+                parent_item_id TEXT,
+                recurrence TEXT,
+                recurrence_basis TEXT,
+                due_offset_days INTEGER,
                 points INTEGER,
                 project_id TEXT
             )",
@@ -351,7 +362,11 @@ mod tests {
                 has_end_time INTEGER NOT NULL DEFAULT 0,
                 has_tasks INTEGER NOT NULL DEFAULT 1,
                 item_type TEXT NOT NULL DEFAULT 'TASK',
-                event_type TEXT
+                event_type TEXT,
+                parent_item_id TEXT,
+                recurrence TEXT,
+                recurrence_basis TEXT,
+                due_offset_days INTEGER
             )",
         )
         .execute(&pool)
@@ -371,8 +386,12 @@ mod tests {
                 user_id TEXT,
                 team_id TEXT,
                 due_date INTEGER,
+                scheduled_date INTEGER,
                 parent_item_id TEXT,
-                item_type TEXT NOT NULL DEFAULT 'TASK'
+                item_type TEXT NOT NULL DEFAULT 'TASK',
+                recurrence TEXT,
+                recurrence_basis TEXT,
+                due_offset_days INTEGER
             )",
         )
         .execute(&pool)
@@ -481,7 +500,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 19);
+        assert_eq!(applied_count, 20);
     }
 
     #[tokio::test]
@@ -494,7 +513,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 19);
+        assert_eq!(applied_count, 20);
     }
 
     #[tokio::test]
@@ -508,6 +527,6 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 19);
+        assert_eq!(applied_count, 20);
     }
 }
