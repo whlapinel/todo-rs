@@ -93,6 +93,14 @@ fn build_row_params(
         .ok_or_else(|| "missing required column 'name' or empty value".to_string())?
         .to_string();
 
+    if cell(record, headers, "recurrence").is_some() {
+        return Err(
+            "recurrence is no longer supported by CSV import — create an item series instead \
+             (`prl series create` or the Item Series screen)"
+                .to_string(),
+        );
+    }
+
     let due_date = cell(record, headers, "dueDate")
         .map(|s| parse_csv_date(s, tz_offset_minutes, end_of_day()))
         .transpose()?;
@@ -139,8 +147,8 @@ fn build_row_params(
         scheduled_date,
         scheduled_end_date,
         complete,
-        recurrence: cell(record, headers, "recurrence").map(str::to_string),
-        recurrence_basis: cell(record, headers, "recurrenceBasis").map(str::to_string),
+        recurrence: None,
+        recurrence_basis: None,
         has_due_time,
         has_scheduled_time,
         has_end_time,
@@ -228,10 +236,10 @@ pub async fn import_project_items(
 }
 
 const ITEM_IMPORT_TEMPLATE_CSV: &str = "\
-name,description,dueDate,scheduledDate,scheduledEndDate,complete,recurrence,recurrenceBasis,hasDueTime,hasScheduledTime,hasEndTime,itemType,eventType,dueOffsetDays,parentItemId,assignedToUserId,points,sourceEventId
-Submit report,Quarterly report for finance,2026-09-01,,,false,,,,,,TASK,,,,,,
-Team offsite,,,2026-09-10,2026-09-12,false,,,,,,EVENT,offsite,,,,,
-Buy milk,,,,,false,,,,,,SIMPLE,,,,,,
+name,description,dueDate,scheduledDate,scheduledEndDate,complete,hasDueTime,hasScheduledTime,hasEndTime,itemType,eventType,dueOffsetDays,parentItemId,assignedToUserId,points,sourceEventId
+Submit report,Quarterly report for finance,2026-09-01,,,false,,,,TASK,,,,,,
+Team offsite,,,2026-09-10,2026-09-12,false,,,,EVENT,offsite,,,,,
+Buy milk,,,,,false,,,,SIMPLE,,,,,,
 ";
 
 pub fn item_import_template() -> String {
@@ -465,11 +473,12 @@ mod tests {
             .expect_find_personal_project()
             .returning(|_| Ok(None));
 
-        let repo = MockItemRepo::new(); // no `create` calls expected — recurrence+parent is rejected before reaching the repo
+        let repo = MockItemRepo::new(); // no `create` calls expected — scheduledEndDate < scheduledDate is rejected before reaching the repo
 
         let teams = MockTeamRepo::new();
 
-        let csv_text = "name,recurrence,parentItemId\nBad combo,every week,some-parent\n";
+        let csv_text =
+            "name,scheduledDate,scheduledEndDate\nBad window,2026-09-10,2026-09-01\n";
         let results = import_project_items(
             &(Arc::new(repo) as Arc<dyn ItemRepo>),
             &(Arc::new(projects) as Arc<dyn ProjectRepo>),
@@ -486,6 +495,47 @@ mod tests {
         assert_eq!(results.len(), 1);
         assert!(!results[0].success);
         assert!(results[0].error.is_some());
+    }
+
+    /// Gap 4 of the item_series redesign (`docs/recurring-events-virtual-occurrences-rough-plan.md`,
+    /// Stage 10): CSV import no longer creates legacy recurring items — a row with `recurrence`
+    /// set is a hard error, not silently dropped/ignored. Anyone wanting a recurring series
+    /// creates it once via the UI/CLI/MCP series endpoints instead.
+    #[tokio::test]
+    async fn import_project_items_rejects_rows_with_a_recurrence_column() {
+        let mut projects = MockProjectRepo::new();
+        projects
+            .expect_get()
+            .returning(|id| Ok(test_project(id, "u1")));
+        projects
+            .expect_find_personal_project()
+            .returning(|_| Ok(None));
+
+        let repo = MockItemRepo::new(); // no `create` calls expected
+
+        let teams = MockTeamRepo::new();
+
+        let csv_text = "name,recurrence\nBad row,every week\n";
+        let results = import_project_items(
+            &(Arc::new(repo) as Arc<dyn ItemRepo>),
+            &(Arc::new(projects) as Arc<dyn ProjectRepo>),
+            &(Arc::new(teams) as Arc<dyn TeamRepo>),
+            "u1",
+            "p1",
+            csv_text,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert!(!results[0].success);
+        assert!(results[0]
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("no longer supported"));
     }
 
     #[tokio::test]
@@ -555,8 +605,6 @@ mod tests {
                 "scheduledDate",
                 "scheduledEndDate",
                 "complete",
-                "recurrence",
-                "recurrenceBasis",
                 "hasDueTime",
                 "hasScheduledTime",
                 "hasEndTime",

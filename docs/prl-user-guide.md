@@ -197,6 +197,12 @@ convention as `--due`/`--scheduled` above. `--format` defaults to `PRL`
 (the only format currently supported); it's an extension point for future
 formats (e.g. importing a Todoist export).
 
+There is no `recurrence`/`recurrenceBasis` column — a row with `recurrence`
+set is rejected as an error for that row. Bulk-import is for loading a batch
+of items, not authoring a recurring series; create a series with `prl series
+create` (or the Item Series screen) instead — see
+[Item series](#item-series) below.
+
 ### Mark complete
 
 ```sh
