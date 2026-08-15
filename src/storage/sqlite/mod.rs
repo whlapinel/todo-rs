@@ -631,7 +631,8 @@ pub async fn create_pool(url: &str) -> Result<SqlitePool, sqlx::Error> {
             anchor_date INTEGER NOT NULL,
             item_type TEXT NOT NULL DEFAULT 'EVENT',
             cursor_date INTEGER,
-            basis TEXT
+            basis TEXT,
+            template_item_id TEXT
         )",
     )
     .execute(&pool)

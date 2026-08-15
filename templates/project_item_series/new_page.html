@@ -52,15 +52,29 @@
         Base next occurrence on completion time, not schedule
       </label>
     </div>
+    <div class="template-field">
+      <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Children template
+        <div class="mt-2">
+          <select name="templateItemId"
+                  class="block w-full rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:focus:outline-indigo-500">
+            <option value="">None</option>
+            {% for (id, name) in templates %}
+            <option value="{{ id }}">{{ name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+      </label>
+      <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">If set, this template's children are copied onto every occurrence when it's materialized. Manage the template's children from the Templates screen.</p>
+    </div>
     <script>
     (function() {
       var form = document.currentScript.closest("form");
       if (!form) return;
       function toggle() {
         var isTask = form.querySelector('input[name="itemType"][value="TASK"]').checked;
-        form.querySelectorAll(".completion-basis-field").forEach(function (el) {
+        form.querySelectorAll(".completion-basis-field, .template-field").forEach(function (el) {
           el.hidden = !isTask;
-          el.querySelectorAll("input").forEach(function (field) {
+          el.querySelectorAll("input, select").forEach(function (field) {
             field.disabled = !isTask;
           });
         });

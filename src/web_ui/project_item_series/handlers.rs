@@ -13,6 +13,7 @@ use axum::extract::{Extension, Form, Path};
 use axum::http::header::HeaderName;
 use axum::response::{Html, IntoResponse, Response};
 use chrono::{DateTime, Utc};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 fn active_context(project_id: &str) -> ActiveContext {
@@ -22,6 +23,7 @@ fn active_context(project_id: &str) -> ActiveContext {
 pub async fn project_item_series_page(
     Path(project_id): Path<String>,
     Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(item_series): Extension<Arc<dyn ItemSeriesRepo>>,
@@ -35,9 +37,18 @@ pub async fn project_item_series_page(
         &project_id,
     )
     .await?;
+    let template_names: HashMap<String, String> = repo
+        .list_templates_by_project(&project_id)
+        .await?
+        .into_iter()
+        .map(|t| (t.id, t.name))
+        .collect();
     let rows = series
         .iter()
-        .map(|s| ProjectItemSeriesRow::from_series(s, tz).render())
+        .map(|s| {
+            let template_name = s.template_item_id.as_ref().and_then(|id| template_names.get(id).cloned());
+            ProjectItemSeriesRow::from_series(s, tz, template_name).render()
+        })
         .collect::<Result<Vec<_>, _>>()
         .map_err(ItemError::from)?;
     let nav_html = nav::build_nav_html(
@@ -57,10 +68,17 @@ pub async fn project_item_series_page(
 pub async fn new_project_item_series_page(
     Path(project_id): Path<String>,
     Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
 ) -> Result<Html<String>, ItemError> {
     project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
+    let templates = repo
+        .list_templates_by_project(&project_id)
+        .await?
+        .into_iter()
+        .map(|t| (t.id, t.name))
+        .collect();
     let nav_html = nav::build_nav_html(
         &projects,
         &auth_user.user_id,
@@ -71,6 +89,7 @@ pub async fn new_project_item_series_page(
     render(NewProjectItemSeriesPageTemplate {
         project_id,
         nav_html,
+        templates,
     })
 }
 
@@ -87,6 +106,9 @@ pub struct CreateItemSeriesForm {
     /// Checkbox — present with value "COMPLETION" when checked, absent otherwise
     /// (standard HTML checkbox semantics, so `Option` rather than a `bool` field).
     basis: Option<String>,
+    /// Blank `<option value="">` submits as `Some("")` — `non_empty` (this module)
+    /// normalizes that to `None`, same convention as `description`/`event_type`.
+    template_item_id: Option<String>,
 }
 
 fn parse_item_type(raw: &str) -> Result<ItemKind, ItemError> {
@@ -100,6 +122,7 @@ fn parse_item_type(raw: &str) -> Result<ItemKind, ItemError> {
 pub async fn create_project_item_series_form(
     Path(project_id): Path<String>,
     Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(item_series): Extension<Arc<dyn ItemSeriesRepo>>,
@@ -116,6 +139,7 @@ pub async fn create_project_item_series_form(
     let item_type = parse_item_type(&form.item_type)?;
 
     item_series_service::create_series(
+        &repo,
         &projects,
         &teams,
         &item_series,
@@ -129,6 +153,7 @@ pub async fn create_project_item_series_form(
             anchor_date,
             item_type,
             basis: form.basis,
+            template_item_id: non_empty(&form.template_item_id),
         },
     )
     .await?;
@@ -164,6 +189,7 @@ pub async fn materialize_project_item_series_occurrence_form(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(item_series): Extension<Arc<dyn ItemSeriesRepo>>,
+    TzOffset(tz): TzOffset,
 ) -> Result<Response, ItemError> {
     let series = item_series_service::get_series(
         &projects,
@@ -188,6 +214,7 @@ pub async fn materialize_project_item_series_occurrence_form(
         &auth_user.user_id,
         &series_id,
         occurrence_date,
+        tz,
     )
     .await?;
 

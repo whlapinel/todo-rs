@@ -45,6 +45,8 @@ structure ItemSeriesSummary {
     itemType: ItemType
 
     basis: String
+
+    templateItemId: String
 }
 
 list ItemSeriesList {
@@ -82,6 +84,9 @@ operation CreateItemSeries {
 
         @notProperty
         basis: String
+
+        @notProperty
+        templateItemId: String
     }
 
     output := {
@@ -142,6 +147,9 @@ operation GetItemSeries {
 
         @notProperty
         basis: String
+
+        @notProperty
+        templateItemId: String
     }
 
     errors: [
@@ -186,6 +194,9 @@ operation UpdateItemSeries {
 
         @notProperty
         basis: String
+
+        @notProperty
+        templateItemId: String
     }
 
     output := {}

@@ -5,7 +5,7 @@ use askama::Template;
 pub struct ProjectItemSeriesRow;
 
 impl ProjectItemSeriesRow {
-    pub fn from_series(s: &ItemSeries, tz: i32) -> Row {
+    pub fn from_series(s: &ItemSeries, tz: i32, template_name: Option<String>) -> Row {
         Row {
             name: s.name.clone(),
             recurrence: s.recurrence.clone(),
@@ -15,6 +15,7 @@ impl ProjectItemSeriesRow {
                 .to_string(),
             item_type_label: s.item_type.label(),
             item_type_badge_color: s.item_type.badge_color(),
+            template_name,
         }
     }
 }
@@ -28,6 +29,7 @@ pub struct Row {
     pub anchor_date_label: String,
     pub item_type_label: &'static str,
     pub item_type_badge_color: &'static str,
+    pub template_name: Option<String>,
 }
 
 #[derive(Template)]
@@ -43,4 +45,8 @@ pub struct ProjectItemSeriesListPageTemplate {
 pub struct NewProjectItemSeriesPageTemplate {
     pub project_id: String,
     pub nav_html: String,
+    /// (id, name) pairs for the project's Template items — Task-typed series only
+    /// (see the create form's TASK/EVENT toggle script), populated regardless of
+    /// which kind is initially selected since the toggle can flip client-side.
+    pub templates: Vec<(String, String)>,
 }

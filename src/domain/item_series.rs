@@ -44,6 +44,19 @@ pub struct ItemSeries {
     /// series with an "every N days/weeks/months/years" `recurrence` — validated at the
     /// service layer (`validate_series_basis`), not structurally enforced here.
     pub basis: Option<String>,
+    /// Stage 10 gap 3: an optional link to an `ItemType::Template` item (same project)
+    /// whose children get copied onto every occurrence this series materializes, via
+    /// `service::items::copy_template_children` — the same function
+    /// `project_templates/`'s "Use" flow and the event-trigger mechanism already call.
+    /// Chosen over copying children from "the most-recently-materialized prior
+    /// occurrence" (this doc's original sketch) specifically so a series' children
+    /// definition is stable and independently editable, not drifting with whatever the
+    /// last real occurrence happened to look like. Only ever settable on a `Task`-typed
+    /// series (`service::item_series::validate_series_template_item`) — `Event` items
+    /// can never have children at all, so this would otherwise silently create orphaned
+    /// children nested under an Event (`copy_template_children` calls `repo.create()`
+    /// directly, bypassing `create_item`'s own "Events cannot have children" check).
+    pub template_item_id: Option<String>,
 }
 
 /// One occurrence date's materialization state within a series. A date with no row

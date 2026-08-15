@@ -485,6 +485,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             enum: ["SCHEDULE", "COMPLETION"],
             description: "Defaults to SCHEDULE. COMPLETION measures the next occurrence from actual completion/skip time instead of the fixed schedule — only valid on a TASK series with an 'every N days/weeks/months/years' recurrence.",
           },
+          templateItemId: {
+            type: "string",
+            description: "Item id of a Template item whose children get copied onto every occurrence this series materializes — only valid on a TASK series.",
+          },
         },
         required: ["projectId", "name", "recurrence", "anchorDate", "itemType"],
       },
@@ -523,6 +527,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: "string",
             enum: ["SCHEDULE", "COMPLETION"],
             description: "Defaults to SCHEDULE if omitted. COMPLETION measures the next occurrence from actual completion/skip time instead of the fixed schedule — only valid on a TASK series with an 'every N days/weeks/months/years' recurrence.",
+          },
+          templateItemId: {
+            type: "string",
+            description: "Item id of a Template item whose children get copied onto every occurrence this series materializes — only valid on a TASK series. Round-trip to keep it, omit to clear it.",
           },
         },
         required: ["projectId", "seriesId", "name", "recurrence", "anchorDate", "itemType"],
@@ -896,6 +904,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         };
         if (args.description !== undefined) body.description = args.description;
         if (args.basis !== undefined) body.basis = args.basis;
+        if (args.templateItemId !== undefined) body.templateItemId = args.templateItemId;
         result = await api("POST", `/projects/${args.projectId}/series`, body);
         break;
       }
@@ -916,6 +925,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         };
         if (args.description !== undefined) body.description = args.description;
         if (args.basis !== undefined) body.basis = args.basis;
+        if (args.templateItemId !== undefined) body.templateItemId = args.templateItemId;
         result = await api(
           "PUT",
           `/projects/${args.projectId}/series/${args.seriesId}`,

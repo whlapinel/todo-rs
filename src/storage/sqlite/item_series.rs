@@ -33,6 +33,7 @@ fn row_to_series(row: &sqlx::sqlite::SqliteRow) -> ItemSeries {
         item_type: item_type.parse().unwrap_or(ItemKind::Event),
         cursor_date: cursor_secs.map(from_secs),
         basis: row.get("basis"),
+        template_item_id: row.get("template_item_id"),
     }
 }
 
@@ -52,8 +53,8 @@ impl ItemSeriesRepo for SqliteItemSeriesRepo {
     async fn create_series(&self, series: &ItemSeries) -> Result<String, RepoError> {
         let id = uuid::Uuid::new_v4().to_string();
         sqlx::query(
-            "INSERT INTO item_series (id, project_id, name, description, event_type, recurrence, anchor_date, item_type, basis) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO item_series (id, project_id, name, description, event_type, recurrence, anchor_date, item_type, basis, template_item_id) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(&series.project_id)
@@ -64,6 +65,7 @@ impl ItemSeriesRepo for SqliteItemSeriesRepo {
         .bind(to_secs(series.anchor_date))
         .bind(series.item_type.as_str())
         .bind(&series.basis)
+        .bind(&series.template_item_id)
         .execute(&self.0)
         .await
         .map_err(db_err)?;
@@ -72,7 +74,7 @@ impl ItemSeriesRepo for SqliteItemSeriesRepo {
 
     async fn update_series(&self, series_id: &str, series: &ItemSeries) -> Result<(), RepoError> {
         let result = sqlx::query(
-            "UPDATE item_series SET name = ?, description = ?, event_type = ?, recurrence = ?, anchor_date = ?, item_type = ?, basis = ? \
+            "UPDATE item_series SET name = ?, description = ?, event_type = ?, recurrence = ?, anchor_date = ?, item_type = ?, basis = ?, template_item_id = ? \
              WHERE id = ?",
         )
         .bind(&series.name)
@@ -82,6 +84,7 @@ impl ItemSeriesRepo for SqliteItemSeriesRepo {
         .bind(to_secs(series.anchor_date))
         .bind(series.item_type.as_str())
         .bind(&series.basis)
+        .bind(&series.template_item_id)
         .bind(series_id)
         .execute(&self.0)
         .await
@@ -94,7 +97,7 @@ impl ItemSeriesRepo for SqliteItemSeriesRepo {
 
     async fn get_series(&self, series_id: &str) -> Result<ItemSeries, RepoError> {
         sqlx::query(
-            "SELECT id, project_id, name, description, event_type, recurrence, anchor_date, item_type, cursor_date, basis \
+            "SELECT id, project_id, name, description, event_type, recurrence, anchor_date, item_type, cursor_date, basis, template_item_id \
              FROM item_series WHERE id = ?",
         )
         .bind(series_id)
@@ -107,7 +110,7 @@ impl ItemSeriesRepo for SqliteItemSeriesRepo {
 
     async fn list_series_for_project(&self, project_id: &str) -> Result<Vec<ItemSeries>, RepoError> {
         sqlx::query(
-            "SELECT id, project_id, name, description, event_type, recurrence, anchor_date, item_type, cursor_date, basis \
+            "SELECT id, project_id, name, description, event_type, recurrence, anchor_date, item_type, cursor_date, basis, template_item_id \
              FROM item_series WHERE project_id = ? ORDER BY name ASC",
         )
         .bind(project_id)
@@ -257,7 +260,8 @@ mod tests {
                 anchor_date INTEGER NOT NULL,
                 item_type TEXT NOT NULL DEFAULT 'EVENT',
                 cursor_date INTEGER,
-                basis TEXT
+                basis TEXT,
+                template_item_id TEXT
             )",
         )
         .execute(&pool)
@@ -294,6 +298,7 @@ mod tests {
             item_type: ItemKind::Event,
             cursor_date: None,
             basis: None,
+            template_item_id: None,
         }
     }
 
@@ -312,6 +317,21 @@ mod tests {
         assert_eq!(series.recurrence, "every weekday");
         assert_eq!(series.anchor_date, dt(1_000_000));
         assert_eq!(series.item_type, ItemKind::Event);
+        assert_eq!(series.template_item_id, None);
+    }
+
+    #[tokio::test]
+    async fn create_and_get_round_trip_for_a_series_with_a_template_item_id() {
+        let pool = test_pool().await;
+        let repo = SqliteItemSeriesRepo(pool);
+        let mut task_series = sample_series("p1");
+        task_series.item_type = ItemKind::Task;
+        task_series.template_item_id = Some("template-1".to_string());
+
+        let id = repo.create_series(&task_series).await.unwrap();
+        let series = repo.get_series(&id).await.unwrap();
+
+        assert_eq!(series.template_item_id, Some("template-1".to_string()));
     }
 
     #[tokio::test]
@@ -355,6 +375,7 @@ mod tests {
         update.anchor_date = dt(2_000_000);
         update.item_type = ItemKind::Task;
         update.basis = Some("COMPLETION".to_string());
+        update.template_item_id = Some("template-1".to_string());
         repo.update_series(&id, &update).await.unwrap();
 
         let series = repo.get_series(&id).await.unwrap();
@@ -366,6 +387,7 @@ mod tests {
         assert_eq!(series.anchor_date, dt(2_000_000));
         assert_eq!(series.item_type, ItemKind::Task);
         assert_eq!(series.basis, Some("COMPLETION".to_string()));
+        assert_eq!(series.template_item_id, Some("template-1".to_string()));
     }
 
     #[tokio::test]

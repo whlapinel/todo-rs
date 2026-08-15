@@ -481,14 +481,15 @@ An **item series** is a different way of modeling a recurring Task or Event:
 instead of one item row that gets replaced on each completion (see
 [Recurrence patterns](#recurrence-patterns) above), a series is just a
 recurrence rule plus an anchor date and a set of static fields (name,
-description, event type, item type). Individual occurrence dates aren't
-items at all until something actually materializes one — browsing/
-materializing occurrences isn't wired up yet (`prl series` only covers the
-series itself: create, read, update, list). A series's `recurrence` field
-uses the exact same English-phrase syntax as an item's own `--recurrence`.
-Every series has an `--item-type` of either `task` or `event`, controlling
-whether it materializes Task or Event occurrences — there's no default, so
-it must always be given explicitly on `create`/`update`.
+description, item type). Individual occurrence dates aren't items at all
+until something actually materializes one, via the web UI's calendar/
+dashboard/Tasks-list views (`prl series` itself only covers the series:
+create, read, update, list — there's no CLI browse/materialize command).
+A series's `recurrence` field uses the exact same English-phrase syntax as
+an item's own `--recurrence`. Every series has an `--item-type` of either
+`task` or `event`, controlling whether it materializes Task or Event
+occurrences — there's no default, so it must always be given explicitly on
+`create`/`update`. `event_type` is not currently supported on any series.
 
 ### List a project's item series
 
@@ -504,7 +505,7 @@ prl series list <project-id>
 ```sh
 prl series create <project-id> "Standup" "every weekday" 2026-08-17 --item-type event
 prl series create <project-id> "Standup" "every weekday" 2026-08-17 \
-  --item-type event --description "Daily sync" --event-type meeting
+  --item-type event --description "Daily sync"
 ```
 
 `--basis schedule` (the default) or `--basis completion` controls what the
@@ -519,6 +520,19 @@ prl series create <project-id> "Water plants" "every 3 days" 2026-08-17 \
   --item-type task --basis completion
 ```
 
+`--template <item-id>` links the series to an existing Template item — create
+one (and add its children) via the web UI's Templates screen for the
+project, then pass its id here. Every occurrence this series materializes
+copies that template's children onto it — the children definition stays
+stable and independently editable, not tied to any one materialized
+occurrence. Only valid on a task series. There's no CLI command for creating
+templates themselves.
+
+```sh
+prl series create <project-id> "Water plants" "every 3 days" 2026-08-17 \
+  --item-type task --template <template-item-id>
+```
+
 ### Show one item series
 
 ```sh
@@ -528,14 +542,14 @@ prl series get <project-id> <series-id>
 ### Update an item series
 
 Update is a full replace of `name`/`recurrence`/`anchor`/`description`/
-`event-type`/`item-type`/`basis` — pass `--description`/`--event-type`/
-`--basis` again to keep them, or omit to clear them (omitting `--basis`
-resets to `schedule`). `--item-type` is required on every update, the same
-as on create.
+`item-type`/`basis`/`template` — pass `--description`/`--basis`/`--template`
+again to keep them, or omit to clear them (omitting `--basis` resets to
+`schedule`). `--item-type` is required on every update, the same as on
+create.
 
 ```sh
 prl series update <project-id> <series-id> "Standup" "every weekday" 2026-08-17 \
-  --item-type event --description "Daily sync" --event-type meeting
+  --item-type event --description "Daily sync"
 ```
 
 ---

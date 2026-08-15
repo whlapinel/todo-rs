@@ -50,6 +50,10 @@ pub enum SeriesCommand {
         /// "every N days/weeks/months/years" recurrence
         #[arg(long)]
         basis: Option<String>,
+        /// Item id of a Template item whose children get copied onto every occurrence
+        /// this series materializes — only valid on a task series
+        #[arg(long)]
+        template: Option<String>,
     },
     /// Show one item series
     Get {
@@ -72,6 +76,10 @@ pub enum SeriesCommand {
         /// "every N days/weeks/months/years" recurrence
         #[arg(long)]
         basis: Option<String>,
+        /// Item id of a Template item whose children get copied onto every occurrence
+        /// this series materializes — only valid on a task series; round-trip to keep it
+        #[arg(long)]
+        template: Option<String>,
     },
 }
 
@@ -109,6 +117,7 @@ pub async fn cmd_series(client: &Client, cmd: SeriesCommand, _user_id: Option<St
             description,
             item_type,
             basis,
+            template,
         } => {
             let anchor_date = parse_date(&anchor).unwrap_or_else(|e| {
                 eprintln!("{e}");
@@ -130,6 +139,9 @@ pub async fn cmd_series(client: &Client, cmd: SeriesCommand, _user_id: Option<St
             }
             if let Some(basis) = basis.and_then(|b| parse_series_basis_flag(&b)) {
                 req = req.basis(basis);
+            }
+            if let Some(template) = template {
+                req = req.template_item_id(template);
             }
             let out = unwrap_or_exit(req.send().await, "create item series");
             println!("created item series {}", out.series_id());
@@ -156,6 +168,7 @@ pub async fn cmd_series(client: &Client, cmd: SeriesCommand, _user_id: Option<St
             println!("anchor:      {}", crate::helpers::fmt_date(out.anchor_date()));
             println!("item type:   {}", out.item_type());
             println!("basis:       {}", out.basis().unwrap_or("SCHEDULE"));
+            println!("template:    {}", out.template_item_id().unwrap_or("-"));
         }
         SeriesCommand::Update {
             project_id,
@@ -166,6 +179,7 @@ pub async fn cmd_series(client: &Client, cmd: SeriesCommand, _user_id: Option<St
             description,
             item_type,
             basis,
+            template,
         } => {
             let anchor_date = parse_date(&anchor).unwrap_or_else(|e| {
                 eprintln!("{e}");
@@ -188,6 +202,9 @@ pub async fn cmd_series(client: &Client, cmd: SeriesCommand, _user_id: Option<St
             }
             if let Some(basis) = basis.and_then(|b| parse_series_basis_flag(&b)) {
                 req = req.basis(basis);
+            }
+            if let Some(template) = template {
+                req = req.template_item_id(template);
             }
             unwrap_or_exit(req.send().await, "update item series");
             println!("updated item series {series_id}");
