@@ -406,6 +406,7 @@ pub struct CalendarTaskEntry {
     pub time_label: Option<String>,
     pub date_type: DateType,
     pub has_end: bool,
+    pub complete: bool,
 }
 
 pub enum DateType {

@@ -59,9 +59,9 @@
         <ol class="mt-1 space-y-1">
           {% for t in day.tasks %}
           <li>
-            <a href="/web/projects/{{ project_id }}/tasks/{{ t.id }}" hx-target="#page" hx-select="#page" hx-swap="innerHTML" class="group flex">
+            <a href="/web/projects/{{ project_id }}/tasks/{{ t.id }}" hx-target="#page" hx-select="#page" hx-swap="innerHTML" class="group flex {% if t.complete %}opacity-50{% endif %}">
               <p
-                class="flex-auto truncate font-medium text-gray-900 group-hover:text-indigo-600 dark:text-white dark:group-hover:text-indigo-400">
+                class="flex-auto truncate font-medium text-gray-900 group-hover:text-indigo-600 dark:text-white dark:group-hover:text-indigo-400 {% if t.complete %}line-through{% endif %}">
                 {% match t.date_type %}
                 {% when DateType::Due %}
                 💀
@@ -76,7 +76,7 @@
                 {{ t.name }}
               </p>
               {% if let Some(tl) = t.time_label %}<span
-                class="ml-2 hidden flex-none text-gray-500 group-hover:text-indigo-600 xl:block dark:text-gray-400 dark:group-hover:text-indigo-400">{{
+                class="ml-2 hidden flex-none text-gray-500 group-hover:text-indigo-600 xl:block dark:text-gray-400 dark:group-hover:text-indigo-400 {% if t.complete %}line-through{% endif %}">{{
                 tl }}</span>{% endif %}
             </a>
           </li>

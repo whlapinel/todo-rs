@@ -517,6 +517,7 @@ pub(crate) fn build_calendar_days(
                     time_label,
                     date_type: DateType::Due,
                     has_end: item.scheduled_end_date().is_some(),
+                    complete: item.complete,
                 });
         }
         if let Some(dt) = item.scheduled_date() {
@@ -533,6 +534,7 @@ pub(crate) fn build_calendar_days(
                     time_label,
                     date_type: DateType::ScheduledStart,
                     has_end: item.scheduled_end_date().is_some(),
+                    complete: item.complete,
                 });
         }
         if let Some(dt) = item.scheduled_end_date() {
@@ -549,6 +551,7 @@ pub(crate) fn build_calendar_days(
                     time_label,
                     date_type: DateType::ScheduledEnd,
                     has_end: true,
+                    complete: item.complete,
                 });
         }
     }

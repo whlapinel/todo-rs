@@ -252,6 +252,7 @@ fn render_rows(
 ) -> Result<Vec<String>, ItemError> {
     let mut items: Vec<&DueItem> = items
         .iter()
+        .filter(|di| di.item.kind() != ItemKind::Simple)
         .filter(|di| show_complete || !di.item.complete)
         .filter(|di| preset != "All with due date" || dashboard_date(&di.item).is_some())
         .filter(|di| match dashboard_date(&di.item) {
@@ -476,6 +477,9 @@ fn build_calendar_days(
         std::collections::HashMap::new();
     for di in due_items {
         let item = &di.item;
+        if item.kind() == ItemKind::Simple {
+            continue;
+        }
         if let Some(dt) = dashboard_date(item) {
             let local = to_local(dt, tz);
             let time_label = dashboard_has_time(item).then(|| local.format("%H:%M").to_string());
