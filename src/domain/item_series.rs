@@ -57,6 +57,19 @@ pub struct ItemSeries {
     /// children nested under an Event (`copy_template_children` calls `repo.create()`
     /// directly, bypassing `create_item`'s own "Events cannot have children" check).
     pub template_item_id: Option<String>,
+    /// Points/assignment authority for this series' materialized occurrences —
+    /// mirrors `TeamAssignment` at the item level (CLAUDE.md's Points section), but
+    /// lives on the series rather than each occurrence so every future materialization
+    /// inherits the same assignee/point value without re-specifying it per occurrence.
+    /// Only ever settable on a `Task`-typed series on a team-backed project
+    /// (`service::item_series::resolve_series_assignment`) — `Event` series and
+    /// personal-project series never carry a `TeamAssignment` at the item level either,
+    /// so this mirrors that restriction rather than introducing a new one.
+    /// `assigned_to_user_id` must be a member of the series' project;
+    /// `points` is settable only by that project's admin (silently dropped for a
+    /// non-admin request, matching `create_team_item`'s existing precedent).
+    pub assigned_to_user_id: Option<String>,
+    pub points: Option<i32>,
 }
 
 /// One occurrence date's materialization state within a series. A date with no row

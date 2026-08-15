@@ -31,6 +31,8 @@ fn to_summary(series: ItemSeries) -> model::ItemSeriesSummary {
         item_type: to_sdk_item_type(series.item_type),
         basis: series.basis,
         template_item_id: series.template_item_id,
+        assigned_to_user_id: series.assigned_to_user_id,
+        points: series.points,
     }
 }
 
@@ -58,6 +60,8 @@ pub async fn create_item_series(
             item_type: to_domain_item_type(Some(input.item_type)).unwrap(),
             basis: input.basis,
             template_item_id: input.template_item_id,
+            assigned_to_user_id: input.assigned_to_user_id,
+            points: input.points,
         },
     )
     .await
@@ -92,6 +96,8 @@ pub async fn get_item_series(
         item_type: to_sdk_item_type(series.item_type),
         basis: series.basis,
         template_item_id: series.template_item_id,
+        assigned_to_user_id: series.assigned_to_user_id,
+        points: series.points,
     })
 }
 
@@ -119,6 +125,8 @@ pub async fn update_item_series(
             item_type: to_domain_item_type(Some(input.item_type)).unwrap(),
             basis: input.basis,
             template_item_id: input.template_item_id,
+            assigned_to_user_id: input.assigned_to_user_id,
+            points: input.points,
         },
     )
     .await

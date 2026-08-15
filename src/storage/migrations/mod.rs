@@ -4,6 +4,7 @@ mod add_event_series;
 mod add_item_description;
 mod add_item_points;
 mod add_item_series;
+mod add_item_series_assignment;
 mod add_item_series_basis;
 mod add_item_series_cursor_date;
 mod add_item_series_template_item_id;
@@ -24,6 +25,7 @@ use add_event_occurrences_item_id_index::AddEventOccurrencesItemIdIndex;
 use add_event_series::AddEventSeries;
 use add_item_description::AddItemDescription;
 use add_item_series::AddItemSeries;
+use add_item_series_assignment::AddItemSeriesAssignment;
 use add_item_series_basis::AddItemSeriesBasis;
 use add_item_series_cursor_date::AddItemSeriesCursorDate;
 use add_item_series_template_item_id::AddItemSeriesTemplateItemId;
@@ -95,6 +97,7 @@ fn all_migrations() -> Vec<Box<dyn Migration>> {
         Box::new(AddItemSeriesBasis),
         Box::new(AddItemSeriesTemplateItemId),
         Box::new(MigrateLegacyRecurringItems),
+        Box::new(AddItemSeriesAssignment),
     ]
 }
 
@@ -500,7 +503,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 20);
+        assert_eq!(applied_count, 21);
     }
 
     #[tokio::test]
@@ -513,7 +516,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 20);
+        assert_eq!(applied_count, 21);
     }
 
     #[tokio::test]
@@ -527,6 +530,6 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 20);
+        assert_eq!(applied_count, 21);
     }
 }

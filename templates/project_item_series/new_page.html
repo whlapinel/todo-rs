@@ -66,13 +66,39 @@
       </label>
       <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">If set, this template's children are copied onto every occurrence when it's materialized. Manage the template's children from the Templates screen.</p>
     </div>
+    {% if is_team_project %}
+    <div class="assignment-field flex items-center gap-x-4">
+      <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Assign to
+        <div class="mt-2 grid grid-cols-1">
+          <select name="assignedToUserId"
+                  class="col-start-1 row-start-1 block w-full appearance-none rounded-md bg-white py-1.5 pr-8 pl-3 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:*:bg-gray-800 dark:focus:outline-indigo-500">
+            <option value="">Unassigned</option>
+            {% for opt in assignee_options %}
+            <option value="{{ opt.0 }}">{{ opt.1 }}</option>
+            {% endfor %}
+          </select>
+        </div>
+      </label>
+    </div>
+    {% if is_team_admin %}
+    <div class="assignment-field">
+      <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Points
+        <div class="mt-2">
+          <input type="number" name="points" min="0"
+                 class="block w-full rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 placeholder:text-gray-400 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:placeholder:text-gray-500 dark:focus:outline-indigo-500" />
+        </div>
+      </label>
+      <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">Awarded to the assignee each time an occurrence of this series is completed.</p>
+    </div>
+    {% endif %}
+    {% endif %}
     <script>
     (function() {
       var form = document.currentScript.closest("form");
       if (!form) return;
       function toggle() {
         var isTask = form.querySelector('input[name="itemType"][value="TASK"]').checked;
-        form.querySelectorAll(".completion-basis-field, .template-field").forEach(function (el) {
+        form.querySelectorAll(".completion-basis-field, .template-field, .assignment-field").forEach(function (el) {
           el.hidden = !isTask;
           el.querySelectorAll("input, select").forEach(function (field) {
             field.disabled = !isTask;

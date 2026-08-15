@@ -47,6 +47,10 @@ structure ItemSeriesSummary {
     basis: String
 
     templateItemId: String
+
+    assignedToUserId: String
+
+    points: Integer
 }
 
 list ItemSeriesList {
@@ -87,6 +91,12 @@ operation CreateItemSeries {
 
         @notProperty
         templateItemId: String
+
+        @notProperty
+        assignedToUserId: String
+
+        @notProperty
+        points: Integer
     }
 
     output := {
@@ -150,6 +160,12 @@ operation GetItemSeries {
 
         @notProperty
         templateItemId: String
+
+        @notProperty
+        assignedToUserId: String
+
+        @notProperty
+        points: Integer
     }
 
     errors: [
@@ -197,6 +213,12 @@ operation UpdateItemSeries {
 
         @notProperty
         templateItemId: String
+
+        @notProperty
+        assignedToUserId: String
+
+        @notProperty
+        points: Integer
     }
 
     output := {}

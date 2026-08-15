@@ -3,7 +3,7 @@ use crate::domain::item_series::ItemSeries;
 use crate::domain::recurrence;
 use crate::service::error::ItemError;
 use crate::service::project_items::{self, CreateProjectItemParams};
-use crate::service::projects::require_project_member;
+use crate::service::projects::{require_project_admin, require_project_member, resolve_project_assignee};
 use crate::storage::sqlite::{ItemRepo, ItemSeriesRepo, ProjectRepo, TeamRepo};
 use chrono::{DateTime, Utc};
 use std::collections::HashSet;
@@ -65,6 +65,11 @@ pub async fn get_or_materialize_occurrence(
             event_type: series.event_type.clone(),
             scheduled_date: Some(occurrence_date),
             has_scheduled_time: Some(true),
+            // Only ever Some on a Task-typed series on a team-backed project —
+            // resolve_series_assignment already enforced that at create/update time,
+            // so this is a plain carry-forward, not a re-validation.
+            assigned_to_user_id: series.assigned_to_user_id.clone(),
+            points: series.points,
             ..Default::default()
         },
     )
@@ -287,6 +292,8 @@ pub struct CreateItemSeriesParams {
     pub item_type: ItemKind,
     pub basis: Option<String>,
     pub template_item_id: Option<String>,
+    pub assigned_to_user_id: Option<String>,
+    pub points: Option<i32>,
 }
 
 /// Stage 7b: a series can only ever materialize Task or Event occurrences —
@@ -387,6 +394,59 @@ async fn validate_series_template_item(
     Ok(())
 }
 
+/// Points/assignment are only meaningful on a `Task`-typed series on a team-backed
+/// project — mirrors `TeamAssignment`'s item-level restriction (CLAUDE.md's Points
+/// section: personal-project items never carry a `TeamAssignment` at all; an
+/// `Event`-typed item has no such concept either). Neither field ever applies to an
+/// `Event` series, matching `validate_series_template_item`'s "reject early, at the
+/// input boundary" precedent, rather than silently dropping — a caller explicitly
+/// requesting assignment/points on the wrong kind of series is almost certainly a
+/// mistake worth surfacing, not a value worth quietly discarding.
+///
+/// `points`, once past that boundary check, follows `create_team_item`'s existing
+/// authority convention instead: settable only by that project's admin, with a
+/// non-admin's requested value silently dropped rather than rejecting the whole
+/// request (name/recurrence/etc. are still perfectly valid on their own).
+/// `assigned_to_user_id` has no such authority gate — any project member may set who
+/// a series' occurrences go to — but is validated via `resolve_project_assignee` the
+/// same way an item's own `assignedToUserId` is, so it must actually be a member of
+/// the series' project.
+async fn resolve_series_assignment(
+    projects: &Arc<dyn ProjectRepo>,
+    teams: &Arc<dyn TeamRepo>,
+    project_id: &str,
+    requester_user_id: &str,
+    item_type: ItemKind,
+    assigned_to_user_id: Option<String>,
+    points: Option<i32>,
+) -> Result<(Option<String>, Option<i32>), ItemError> {
+    if assigned_to_user_id.is_none() && points.is_none() {
+        return Ok((None, None));
+    }
+    if item_type != ItemKind::Task {
+        return Err(ItemError::Invalid(
+            "assignedToUserId/points are only valid on a TASK series".to_string(),
+        ));
+    }
+    let project = projects.get(project_id).await?;
+    if project.team_id.is_none() {
+        return Err(ItemError::Invalid(
+            "assignedToUserId/points require a team-backed project".to_string(),
+        ));
+    }
+    let resolved_assignee = resolve_project_assignee(projects, project_id, assigned_to_user_id).await?;
+    let resolved_points = if points.is_some()
+        && require_project_admin(projects, teams, project_id, requester_user_id)
+            .await
+            .is_ok()
+    {
+        points
+    } else {
+        None
+    };
+    Ok((resolved_assignee, resolved_points))
+}
+
 pub async fn create_series(
     repo: &Arc<dyn ItemRepo>,
     projects: &Arc<dyn ProjectRepo>,
@@ -406,6 +466,16 @@ pub async fn create_series(
         &params.template_item_id,
     )
     .await?;
+    let (assigned_to_user_id, points) = resolve_series_assignment(
+        projects,
+        teams,
+        &params.project_id,
+        requester_user_id,
+        params.item_type,
+        params.assigned_to_user_id,
+        params.points,
+    )
+    .await?;
     Ok(event_series
         .create_series(&ItemSeries {
             id: String::new(),
@@ -421,6 +491,8 @@ pub async fn create_series(
             cursor_date: None,
             basis: params.basis,
             template_item_id: params.template_item_id,
+            assigned_to_user_id,
+            points,
         })
         .await?)
 }
@@ -447,6 +519,8 @@ pub struct UpdateItemSeriesParams {
     pub item_type: ItemKind,
     pub basis: Option<String>,
     pub template_item_id: Option<String>,
+    pub assigned_to_user_id: Option<String>,
+    pub points: Option<i32>,
 }
 
 pub async fn update_series(
@@ -468,6 +542,16 @@ pub async fn update_series(
         &current.project_id,
         params.item_type,
         &params.template_item_id,
+    )
+    .await?;
+    let (assigned_to_user_id, points) = resolve_series_assignment(
+        projects,
+        teams,
+        &current.project_id,
+        requester_user_id,
+        params.item_type,
+        params.assigned_to_user_id,
+        params.points,
     )
     .await?;
     event_series
@@ -495,6 +579,11 @@ pub async fn update_series(
                 // Same round-trip convention as basis — omitting it clears it, not
                 // preserves current.template_item_id.
                 template_item_id: params.template_item_id,
+                // Same round-trip convention — omitting either clears it, not preserves
+                // current.assigned_to_user_id/points. Already re-validated above (a prior
+                // admin's points value doesn't survive a non-admin's edit of anything else).
+                assigned_to_user_id,
+                points,
             },
         )
         .await?;
@@ -680,6 +769,8 @@ mod tests {
             cursor_date: None,
             basis: None,
             template_item_id: None,
+            assigned_to_user_id: None,
+            points: None,
         }
     }
 
@@ -1386,6 +1477,8 @@ mod tests {
             item_type: ItemKind::Event,
             basis: None,
             template_item_id: None,
+            assigned_to_user_id: None,
+            points: None,
         }
     }
 
@@ -1402,6 +1495,8 @@ mod tests {
             item_type: ItemKind::Event,
             basis: None,
             template_item_id: None,
+            assigned_to_user_id: None,
+            points: None,
         }
     }
 
@@ -1473,6 +1568,101 @@ mod tests {
         let id = create_series(&no_template_repo(), &projects, &teams, &event_series, "owner1", params)
             .await
             .expect("owner should be able to create a task-typed series");
+        assert_eq!(id, "new-series-id");
+    }
+
+    #[tokio::test]
+    async fn create_series_rejects_assignment_on_event_series() {
+        let mut projects_mock = MockProjectRepo::new();
+        projects_mock.expect_get().returning(|_| Ok(shared_project()));
+        projects_mock
+            .expect_member_role()
+            .returning(|_, _| Ok(Some(crate::domain::team::TeamRole::Member)));
+        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock.expect_create_series().times(0);
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        let mut params = create_params("p1");
+        params.item_type = ItemKind::Event;
+        params.assigned_to_user_id = Some("member1".to_string());
+        let result = create_series(&no_template_repo(), &projects, &teams, &event_series, "owner1", params).await;
+        assert!(matches!(result, Err(ItemError::Invalid(_))));
+    }
+
+    #[tokio::test]
+    async fn create_series_rejects_points_on_a_personal_project() {
+        let mut projects_mock = MockProjectRepo::new();
+        projects_mock.expect_get().returning(|_| Ok(personal_project()));
+        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock.expect_create_series().times(0);
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        let mut params = create_params("p1");
+        params.item_type = ItemKind::Task;
+        params.points = Some(10);
+        let result = create_series(&no_template_repo(), &projects, &teams, &event_series, "owner1", params).await;
+        assert!(matches!(result, Err(ItemError::Invalid(_))));
+    }
+
+    #[tokio::test]
+    async fn create_series_honors_assignment_and_points_for_a_team_project_admin() {
+        let mut projects_mock = MockProjectRepo::new();
+        projects_mock.expect_get().returning(|_| Ok(shared_project()));
+        projects_mock
+            .expect_member_role()
+            .returning(|_, _| Ok(Some(crate::domain::team::TeamRole::Admin)));
+        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock
+            .expect_create_series()
+            .withf(|s: &ItemSeries| {
+                s.assigned_to_user_id == Some("member1".to_string()) && s.points == Some(10)
+            })
+            .times(1)
+            .returning(|_| Ok("new-series-id".to_string()));
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        let mut params = create_params("p1");
+        params.item_type = ItemKind::Task;
+        params.assigned_to_user_id = Some("member1".to_string());
+        params.points = Some(10);
+        let id = create_series(&no_template_repo(), &projects, &teams, &event_series, "admin1", params)
+            .await
+            .expect("admin should be able to set assignment and points");
+        assert_eq!(id, "new-series-id");
+    }
+
+    #[tokio::test]
+    async fn create_series_drops_points_but_keeps_assignment_for_a_non_admin() {
+        let mut projects_mock = MockProjectRepo::new();
+        projects_mock.expect_get().returning(|_| Ok(shared_project()));
+        projects_mock
+            .expect_member_role()
+            .returning(|_, _| Ok(Some(crate::domain::team::TeamRole::Member)));
+        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock
+            .expect_create_series()
+            .withf(|s: &ItemSeries| s.assigned_to_user_id == Some("member1".to_string()) && s.points.is_none())
+            .times(1)
+            .returning(|_| Ok("new-series-id".to_string()));
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        let mut params = create_params("p1");
+        params.item_type = ItemKind::Task;
+        params.assigned_to_user_id = Some("member1".to_string());
+        params.points = Some(10);
+        let id = create_series(&no_template_repo(), &projects, &teams, &event_series, "member1", params)
+            .await
+            .expect("non-admin member should still be able to set assignment");
         assert_eq!(id, "new-series-id");
     }
 
@@ -1929,6 +2119,8 @@ mod tests {
             cursor_date: None,
             basis: None,
             template_item_id: None,
+            assigned_to_user_id: None,
+            points: None,
         }
     }
 

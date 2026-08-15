@@ -7,6 +7,7 @@ use crate::storage::sqlite::{ItemRepo, ItemSeriesRepo, ProjectRepo, TeamRepo};
 use crate::web_ui::nav::{self, ActiveContext, SidebarSection};
 use crate::web_ui::project_item_series::templates::*;
 use crate::web_ui::project_item_series::{combine_local_to_utc, non_empty, render, start_of_day};
+use crate::web_ui::project_tasks::{active_member_options, names_for};
 use crate::web_ui::TzOffset;
 use askama::Template;
 use axum::extract::{Extension, Form, Path};
@@ -43,11 +44,17 @@ pub async fn project_item_series_page(
         .into_iter()
         .map(|t| (t.id, t.name))
         .collect();
+    let project = project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
+    let member_names = match &project.team_id {
+        Some(team_id) => names_for(&teams, team_id, &auth_user.user_id).await?,
+        None => HashMap::new(),
+    };
     let rows = series
         .iter()
         .map(|s| {
             let template_name = s.template_item_id.as_ref().and_then(|id| template_names.get(id).cloned());
-            ProjectItemSeriesRow::from_series(s, tz, template_name).render()
+            let assignee_name = s.assigned_to_user_id.as_ref().and_then(|id| member_names.get(id).cloned());
+            ProjectItemSeriesRow::from_series(s, tz, template_name, assignee_name).render()
         })
         .collect::<Result<Vec<_>, _>>()
         .map_err(ItemError::from)?;
@@ -72,13 +79,21 @@ pub async fn new_project_item_series_page(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
 ) -> Result<Html<String>, ItemError> {
-    project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
+    let project = project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
     let templates = repo
         .list_templates_by_project(&project_id)
         .await?
         .into_iter()
         .map(|t| (t.id, t.name))
         .collect();
+    let is_team_project = project.team_id.is_some();
+    let (assignee_options, is_team_admin) = match &project.team_id {
+        Some(team_id) => (
+            active_member_options(&teams, team_id, &auth_user.user_id).await?,
+            project_service::is_project_admin(&projects, &teams, &project_id, &auth_user.user_id).await,
+        ),
+        None => (Vec::new(), false),
+    };
     let nav_html = nav::build_nav_html(
         &projects,
         &auth_user.user_id,
@@ -90,6 +105,9 @@ pub async fn new_project_item_series_page(
         project_id,
         nav_html,
         templates,
+        is_team_project,
+        assignee_options,
+        is_team_admin,
     })
 }
 
@@ -109,6 +127,12 @@ pub struct CreateItemSeriesForm {
     /// Blank `<option value="">` submits as `Some("")` — `non_empty` (this module)
     /// normalizes that to `None`, same convention as `description`/`event_type`.
     template_item_id: Option<String>,
+    /// Only present/honored server-side on a team-backed project, Task-typed series —
+    /// see `service::item_series::resolve_series_assignment`'s own gate.
+    assigned_to_user_id: Option<String>,
+    /// Same team-project/Task-series-only caveat as `assigned_to_user_id`; additionally
+    /// silently dropped server-side unless the requester is that project's admin.
+    points: Option<String>,
 }
 
 fn parse_item_type(raw: &str) -> Result<ItemKind, ItemError> {
@@ -154,6 +178,13 @@ pub async fn create_project_item_series_form(
             item_type,
             basis: form.basis,
             template_item_id: non_empty(&form.template_item_id),
+            assigned_to_user_id: non_empty(&form.assigned_to_user_id),
+            points: form
+                .points
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .and_then(|s| s.parse().ok()),
         },
     )
     .await?;

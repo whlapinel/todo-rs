@@ -473,6 +473,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: "string",
             description: "Item id of a Template item whose children get copied onto every occurrence this series materializes — only valid on a TASK series.",
           },
+          assignedToUserId: {
+            type: "string",
+            description: "User id to assign every materialized occurrence to — only valid on a TASK series on a team-backed project.",
+          },
+          points: {
+            type: "number",
+            description: "Points awarded to the assignee when an occurrence of this series is completed — only valid on a TASK series on a team-backed project, and only settable by that project's admin (silently dropped otherwise).",
+          },
         },
         required: ["projectId", "name", "recurrence", "anchorDate", "itemType"],
       },
@@ -515,6 +523,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           templateItemId: {
             type: "string",
             description: "Item id of a Template item whose children get copied onto every occurrence this series materializes — only valid on a TASK series. Round-trip to keep it, omit to clear it.",
+          },
+          assignedToUserId: {
+            type: "string",
+            description: "User id to assign every materialized occurrence to — only valid on a TASK series on a team-backed project. Round-trip to keep it, omit to clear it.",
+          },
+          points: {
+            type: "number",
+            description: "Points awarded to the assignee when an occurrence of this series is completed — only valid on a TASK series on a team-backed project, and only settable by that project's admin. Round-trip to keep it, omit to clear it.",
           },
         },
         required: ["projectId", "seriesId", "name", "recurrence", "anchorDate", "itemType"],
@@ -885,6 +901,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         if (args.description !== undefined) body.description = args.description;
         if (args.basis !== undefined) body.basis = args.basis;
         if (args.templateItemId !== undefined) body.templateItemId = args.templateItemId;
+        if (args.assignedToUserId !== undefined) body.assignedToUserId = args.assignedToUserId;
+        if (args.points !== undefined) body.points = args.points;
         result = await api("POST", `/projects/${args.projectId}/series`, body);
         break;
       }
@@ -906,6 +924,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         if (args.description !== undefined) body.description = args.description;
         if (args.basis !== undefined) body.basis = args.basis;
         if (args.templateItemId !== undefined) body.templateItemId = args.templateItemId;
+        if (args.assignedToUserId !== undefined) body.assignedToUserId = args.assignedToUserId;
+        if (args.points !== undefined) body.points = args.points;
         result = await api(
           "PUT",
           `/projects/${args.projectId}/series/${args.seriesId}`,

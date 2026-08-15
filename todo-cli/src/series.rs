@@ -54,6 +54,15 @@ pub enum SeriesCommand {
         /// this series materializes — only valid on a task series
         #[arg(long)]
         template: Option<String>,
+        /// User id to assign every materialized occurrence to — only valid on a task
+        /// series on a team-backed project
+        #[arg(long)]
+        assign: Option<String>,
+        /// Points awarded to the assignee on each occurrence's completion — only valid
+        /// on a task series on a team-backed project, and only settable by that
+        /// project's admin (silently dropped otherwise)
+        #[arg(long)]
+        points: Option<i32>,
     },
     /// Show one item series
     Get {
@@ -80,6 +89,15 @@ pub enum SeriesCommand {
         /// this series materializes — only valid on a task series; round-trip to keep it
         #[arg(long)]
         template: Option<String>,
+        /// User id to assign every materialized occurrence to — only valid on a task
+        /// series on a team-backed project; round-trip to keep it, omit to clear it
+        #[arg(long)]
+        assign: Option<String>,
+        /// Points awarded to the assignee on each occurrence's completion — only valid
+        /// on a task series on a team-backed project, and only settable by that
+        /// project's admin; round-trip to keep it, omit to clear it
+        #[arg(long)]
+        points: Option<i32>,
     },
 }
 
@@ -118,6 +136,8 @@ pub async fn cmd_series(client: &Client, cmd: SeriesCommand, _user_id: Option<St
             item_type,
             basis,
             template,
+            assign,
+            points,
         } => {
             let anchor_date = parse_date(&anchor).unwrap_or_else(|e| {
                 eprintln!("{e}");
@@ -142,6 +162,12 @@ pub async fn cmd_series(client: &Client, cmd: SeriesCommand, _user_id: Option<St
             }
             if let Some(template) = template {
                 req = req.template_item_id(template);
+            }
+            if let Some(assign) = assign {
+                req = req.assigned_to_user_id(assign);
+            }
+            if let Some(points) = points {
+                req = req.points(points);
             }
             let out = unwrap_or_exit(req.send().await, "create item series");
             println!("created item series {}", out.series_id());
@@ -169,6 +195,11 @@ pub async fn cmd_series(client: &Client, cmd: SeriesCommand, _user_id: Option<St
             println!("item type:   {}", out.item_type());
             println!("basis:       {}", out.basis().unwrap_or("SCHEDULE"));
             println!("template:    {}", out.template_item_id().unwrap_or("-"));
+            println!("assigned to: {}", out.assigned_to_user_id().unwrap_or("-"));
+            println!(
+                "points:      {}",
+                out.points().map(|p| p.to_string()).unwrap_or_else(|| "-".to_string())
+            );
         }
         SeriesCommand::Update {
             project_id,
@@ -180,6 +211,8 @@ pub async fn cmd_series(client: &Client, cmd: SeriesCommand, _user_id: Option<St
             item_type,
             basis,
             template,
+            assign,
+            points,
         } => {
             let anchor_date = parse_date(&anchor).unwrap_or_else(|e| {
                 eprintln!("{e}");
@@ -205,6 +238,12 @@ pub async fn cmd_series(client: &Client, cmd: SeriesCommand, _user_id: Option<St
             }
             if let Some(template) = template {
                 req = req.template_item_id(template);
+            }
+            if let Some(assign) = assign {
+                req = req.assigned_to_user_id(assign);
+            }
+            if let Some(points) = points {
+                req = req.points(points);
             }
             unwrap_or_exit(req.send().await, "update item series");
             println!("updated item series {series_id}");
