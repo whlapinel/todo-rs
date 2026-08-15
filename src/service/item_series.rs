@@ -93,8 +93,11 @@ pub async fn skip_occurrence(
     // Stage 9: skipping settles the occurrence exactly like completing one does — see
     // record_task_completion's doc comment below for why this is symmetric. Meaningless
     // for an Event-typed series (no completion/cursor concept), so left untouched there.
+    // Stage 10 gap 1: cursor_value_for_settlement uses Utc::now() here too, for a
+    // completion-basis series — the same symmetry.
     if series.item_type == ItemKind::Task {
-        event_series.advance_cursor(series_id, occurrence_date).await?;
+        let cursor_value = cursor_value_for_settlement(&series, occurrence_date);
+        event_series.advance_cursor(series_id, cursor_value).await?;
     }
     Ok(())
 }
@@ -173,6 +176,29 @@ pub async fn unlink_deleted_item_occurrence(
     Ok(())
 }
 
+/// Stage 10 gap 1: whether `series` measures its next occurrence from *actual
+/// settlement time* rather than the fixed schedule — see `ItemSeries::basis`'s doc
+/// comment. A plain literal-string check, following the `Item::recurrence_basis`
+/// precedent CLAUDE.md documents (`ItemType` is the deliberate exception to that
+/// norm, not this).
+pub fn is_completion_basis(series: &ItemSeries) -> bool {
+    series.basis.as_deref() == Some("COMPLETION")
+}
+
+/// Stage 10 gap 1: the date to advance a Task-typed series' cursor to when settling
+/// (completing or skipping) `occurrence_date` — `Utc::now()` for a completion-basis
+/// series (measuring the next occurrence from when it was actually settled, not its
+/// nominal date), otherwise `occurrence_date` itself (today's only behavior,
+/// unchanged). Shared by `record_task_completion` and `skip_occurrence` so Complete
+/// and Skip stay symmetric, matching Stage 9's existing "settling is settling" design.
+fn cursor_value_for_settlement(series: &ItemSeries, occurrence_date: DateTime<Utc>) -> DateTime<Utc> {
+    if is_completion_basis(series) {
+        Utc::now()
+    } else {
+        occurrence_date
+    }
+}
+
 /// Stage 9: called after `service::project_items::update_project_item` successfully
 /// transitions an item to `complete: true`. A cheap no-op for the overwhelmingly common
 /// case (the item never came from a series, or came from an Event-typed one, which has
@@ -183,6 +209,9 @@ pub async fn unlink_deleted_item_occurrence(
 /// advances the cursor by exactly one step — `advance_cursor`'s own forward-only max
 /// is now a pure idempotency guard against a redundant call, not something resolving a
 /// genuine out-of-order jump (that possibility no longer exists).
+///
+/// Stage 10 gap 1: for a completion-basis series, advances the cursor to `Utc::now()`
+/// (via `cursor_value_for_settlement`) instead of the occurrence's nominal date.
 pub async fn record_task_completion(
     event_series: &Arc<dyn ItemSeriesRepo>,
     item_id: &str,
@@ -190,8 +219,9 @@ pub async fn record_task_completion(
     if let Some(occurrence) = event_series.find_occurrence_by_item_id(item_id).await? {
         let series = event_series.get_series(&occurrence.series_id).await?;
         if series.item_type == ItemKind::Task {
+            let cursor_value = cursor_value_for_settlement(&series, occurrence.occurrence_date);
             event_series
-                .advance_cursor(&occurrence.series_id, occurrence.occurrence_date)
+                .advance_cursor(&occurrence.series_id, cursor_value)
                 .await?;
         }
     }
@@ -235,6 +265,7 @@ pub struct CreateItemSeriesParams {
     pub recurrence: String,
     pub anchor_date: DateTime<Utc>,
     pub item_type: ItemKind,
+    pub basis: Option<String>,
 }
 
 /// Stage 7b: a series can only ever materialize Task or Event occurrences —
@@ -243,6 +274,39 @@ fn validate_series_item_type(item_type: ItemKind) -> Result<(), ItemError> {
     if item_type != ItemKind::Task && item_type != ItemKind::Event {
         return Err(ItemError::Invalid(
             "series item_type must be TASK or EVENT".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// Stage 10 gap 1: `basis: Some("COMPLETION")` is only valid on a `Task`-typed series
+/// (Event-typed series have no completion/cursor concept — see `ItemSeries::basis`'s
+/// doc comment), and only for "every N days/weeks/months/years" `recurrence` patterns —
+/// a fixed weekday or day-of-month has no well-defined "N units after actual
+/// completion" interpretation. `recurrence` is re-parsed here rather than threaded in
+/// pre-parsed, since `create_series`/`update_series` don't otherwise need a parsed
+/// `RecurrenceRule` for anything else.
+fn validate_series_basis(item_type: ItemKind, basis: &Option<String>, recurrence: &str) -> Result<(), ItemError> {
+    if basis.as_deref() != Some("COMPLETION") {
+        return Ok(());
+    }
+    if item_type != ItemKind::Task {
+        return Err(ItemError::Invalid(
+            "basis: COMPLETION is only valid on a TASK series".to_string(),
+        ));
+    }
+    let rule = recurrence::parse(recurrence).map_err(ItemError::Invalid)?;
+    if !matches!(
+        rule.unit,
+        recurrence::RecurrenceUnit::Days
+            | recurrence::RecurrenceUnit::Weeks
+            | recurrence::RecurrenceUnit::Months
+            | recurrence::RecurrenceUnit::Years
+    ) {
+        return Err(ItemError::Invalid(
+            "basis: COMPLETION is only valid for \"every N days/weeks/months/years\" \
+             patterns, not a fixed weekday or day-of-month"
+                .to_string(),
         ));
     }
     Ok(())
@@ -274,6 +338,7 @@ pub async fn create_series(
     require_project_member(projects, teams, &params.project_id, requester_user_id).await?;
     validate_series_item_type(params.item_type)?;
     validate_series_event_type(params.item_type, &params.event_type)?;
+    validate_series_basis(params.item_type, &params.basis, &params.recurrence)?;
     Ok(event_series
         .create_series(&ItemSeries {
             id: String::new(),
@@ -287,6 +352,7 @@ pub async fn create_series(
             // A new series has never settled an occurrence yet — its "current" one is
             // its own anchor_date (see current_occurrence_date below).
             cursor_date: None,
+            basis: params.basis,
         })
         .await?)
 }
@@ -311,6 +377,7 @@ pub struct UpdateItemSeriesParams {
     pub recurrence: String,
     pub anchor_date: DateTime<Utc>,
     pub item_type: ItemKind,
+    pub basis: Option<String>,
 }
 
 pub async fn update_series(
@@ -325,6 +392,7 @@ pub async fn update_series(
     require_project_member(projects, teams, &current.project_id, requester_user_id).await?;
     validate_series_item_type(params.item_type)?;
     validate_series_event_type(params.item_type, &params.event_type)?;
+    validate_series_basis(params.item_type, &params.basis, &params.recurrence)?;
     event_series
         .update_series(
             series_id,
@@ -344,6 +412,9 @@ pub async fn update_series(
                 // column untouched regardless of what's passed here; carried forward only
                 // so this struct literal is complete.
                 cursor_date: current.cursor_date,
+                // basis is a normal round-trip field, same category as recurrence/
+                // anchor_date — omitting it does not preserve current.basis.
+                basis: params.basis,
             },
         )
         .await?;
@@ -435,9 +506,23 @@ pub async fn list_virtual_occurrences_for_project_unchecked(
         let Ok(rule) = recurrence::parse(&series.recurrence) else {
             continue;
         };
+        // Stage 10 gap 1: the predicted list is normally rooted at the series' own
+        // anchor_date, but for a completion-basis Task series that drifts silently wrong
+        // after the first off-schedule settlement (the fixed anchor-rooted sequence and
+        // the real cursor-chained trajectory permanently diverge). Rooting at
+        // current_occurrence_date instead self-corrects every render, since nothing here
+        // is cached. When cursor_date is None this is identical to anchor_date, so a
+        // fresh series behaves the same as before. current_date must be computed before
+        // candidates below, since it's now also the root, not only the injected-extra date.
+        let current_date = current_occurrence_date(series, &rule, tz_offset_minutes);
+        let root_date = if series.item_type == ItemKind::Task && is_completion_basis(series) {
+            current_date
+        } else {
+            series.anchor_date
+        };
         let mut candidates = recurrence::occurrences_between(
             &rule,
-            series.anchor_date,
+            root_date,
             range_start,
             range_end,
             tz_offset_minutes,
@@ -452,7 +537,6 @@ pub async fn list_virtual_occurrences_for_project_unchecked(
         // actually look at by default — the whole point of this stage's backlog design would be
         // unreachable in practice. `occurrences_between` only generates dates inside
         // `[range_start, range_end]`, so a current_date outside that window needs adding by hand.
-        let current_date = current_occurrence_date(series, &rule, tz_offset_minutes);
         let current_outside_window =
             series.item_type == ItemKind::Task && !(range_start..=range_end).contains(&current_date);
         if current_outside_window {
@@ -514,6 +598,7 @@ mod tests {
             anchor_date: DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
             item_type: ItemKind::Event,
             cursor_date: None,
+            basis: None,
         }
     }
 
@@ -833,6 +918,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn skip_occurrence_advances_cursor_to_now_for_a_completion_basis_series() {
+        let mut task_series = series("p1");
+        task_series.item_type = ItemKind::Task;
+        task_series.basis = Some("COMPLETION".to_string());
+        task_series.anchor_date = occurrence_date();
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock.expect_get_series().returning(move |_| Ok(task_series.clone()));
+        series_mock.expect_mark_exdate().returning(|_, _| Ok(()));
+        series_mock
+            .expect_advance_cursor()
+            .withf(|series_id: &str, date: &DateTime<Utc>| {
+                // occurrence_date() is well in the past (a fixed test timestamp), so a
+                // completion-basis skip should advance to something close to "now," not
+                // that nominal date — assert a generous tolerance rather than exact
+                // equality, since Utc::now() can't be pinned in a unit test.
+                series_id == "s1" && (Utc::now() - *date).num_seconds().abs() < 30
+            })
+            .times(1)
+            .returning(|_, _| Ok(()));
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        skip_occurrence(&event_series, "s1", occurrence_date(), 0)
+            .await
+            .expect("should advance the cursor to roughly now");
+    }
+
+    #[tokio::test]
     async fn skip_occurrence_rejects_a_non_current_task_series_occurrence() {
         let mut task_series = series("p1");
         task_series.item_type = ItemKind::Task;
@@ -989,6 +1101,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn record_task_completion_advances_cursor_to_now_for_a_completion_basis_series() {
+        let mut task_series = series("p1");
+        task_series.item_type = ItemKind::Task;
+        task_series.basis = Some("COMPLETION".to_string());
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock.expect_find_occurrence_by_item_id().returning(|_| {
+            Ok(Some(ItemOccurrence {
+                series_id: "s1".to_string(),
+                occurrence_date: occurrence_date(),
+                item_id: Some("completed-item".to_string()),
+                is_exdate: false,
+            }))
+        });
+        series_mock.expect_get_series().returning(move |_| Ok(task_series.clone()));
+        series_mock
+            .expect_advance_cursor()
+            .withf(|series_id: &str, date: &DateTime<Utc>| {
+                series_id == "s1" && (Utc::now() - *date).num_seconds().abs() < 30
+            })
+            .times(1)
+            .returning(|_, _| Ok(()));
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        record_task_completion(&event_series, "completed-item")
+            .await
+            .expect("should advance the cursor to roughly now");
+    }
+
+    #[tokio::test]
     async fn record_task_completion_is_a_no_op_for_a_non_series_item() {
         let mut series_mock = MockItemSeriesRepo::new();
         series_mock.expect_find_occurrence_by_item_id().returning(|_| Ok(None));
@@ -1065,6 +1206,7 @@ mod tests {
             recurrence: "every weekday".to_string(),
             anchor_date: occurrence_date(),
             item_type: ItemKind::Event,
+            basis: None,
         }
     }
 
@@ -1076,6 +1218,7 @@ mod tests {
             recurrence: "every friday".to_string(),
             anchor_date: occurrence_date(),
             item_type: ItemKind::Event,
+            basis: None,
         }
     }
 
@@ -1207,6 +1350,66 @@ mod tests {
         let mut params = create_params("p1");
         params.item_type = ItemKind::Task;
         params.event_type = None;
+        let result = create_series(&projects, &teams, &event_series, "owner1", params).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn create_series_rejects_completion_basis_on_event_series() {
+        let mut projects_mock = MockProjectRepo::new();
+        projects_mock.expect_get().returning(|_| Ok(personal_project()));
+        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock.expect_create_series().times(0);
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        let mut params = create_params("p1");
+        params.item_type = ItemKind::Event;
+        params.basis = Some("COMPLETION".to_string());
+        let result = create_series(&projects, &teams, &event_series, "owner1", params).await;
+        assert!(matches!(result, Err(ItemError::Invalid(_))));
+    }
+
+    #[tokio::test]
+    async fn create_series_rejects_completion_basis_on_an_ineligible_pattern() {
+        let mut projects_mock = MockProjectRepo::new();
+        projects_mock.expect_get().returning(|_| Ok(personal_project()));
+        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock.expect_create_series().times(0);
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        let mut params = create_params("p1");
+        params.item_type = ItemKind::Task;
+        params.event_type = None;
+        // create_params()'s default recurrence is "every weekday" — a WeeklyDay pattern,
+        // not an "every N units" one.
+        params.basis = Some("COMPLETION".to_string());
+        let result = create_series(&projects, &teams, &event_series, "owner1", params).await;
+        assert!(matches!(result, Err(ItemError::Invalid(_))));
+    }
+
+    #[tokio::test]
+    async fn create_series_allows_completion_basis_on_an_eligible_task_series() {
+        let mut projects_mock = MockProjectRepo::new();
+        projects_mock.expect_get().returning(|_| Ok(personal_project()));
+        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock
+            .expect_create_series()
+            .withf(|s: &ItemSeries| s.basis.as_deref() == Some("COMPLETION"))
+            .times(1)
+            .returning(|_| Ok("new-series-id".to_string()));
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        let mut params = create_params("p1");
+        params.item_type = ItemKind::Task;
+        params.event_type = None;
+        params.recurrence = "every 3 days".to_string();
+        params.basis = Some("COMPLETION".to_string());
         let result = create_series(&projects, &teams, &event_series, "owner1", params).await;
         assert!(result.is_ok());
     }
@@ -1370,6 +1573,7 @@ mod tests {
             anchor_date: anchor,
             item_type: ItemKind::Event,
             cursor_date: None,
+            basis: None,
         }
     }
 
@@ -1565,6 +1769,62 @@ mod tests {
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].occurrence_date, anchor() + chrono::Duration::days(3));
         assert!(result[0].is_current);
+    }
+
+    #[tokio::test]
+    async fn list_virtual_occurrences_completion_basis_task_series_roots_at_current_not_anchor() {
+        // Stage 10 gap 1: cursor_date (and so current_date, one step past it) is set in the
+        // future relative to Utc::now() — deliberately, so none of the candidate dates below
+        // get dropped by the unrelated past-date clamp (Stage 9) that only ever exempts the
+        // single current_date, not its future-predicted successors. anchor_date sits 101 days
+        // before cursor_date — not a multiple of 3 away from current_date (101 % 3 != 0) — so
+        // an (incorrectly) anchor-rooted predicted list would land on different dates
+        // (current_date +1d/+4d/+7d/+10d) than the current-date-rooted one this test expects
+        // (current_date +0d/+3d/+6d/+9d), distinguishing the two roots either way this fails.
+        // Truncated to whole seconds — the `rrule` crate normalizes DTSTART to
+        // whole-second precision internally, so a sub-second `Utc::now()` fraction on a
+        // range bound can cause boundary comparisons to miss an exact-match date; every
+        // other date in this test file avoids this the same way (fixed whole-second
+        // constants), see the sibling `occurrences_between` tests in
+        // `domain::recurrence`.
+        let cursor_date = DateTime::from_timestamp((Utc::now() + chrono::Duration::days(50)).timestamp(), 0).unwrap();
+        let anchor_date = cursor_date - chrono::Duration::days(101);
+        let mut task_series = series_ex("s1", "p1", "Water plants", "every 3 days", anchor_date);
+        task_series.item_type = ItemKind::Task;
+        task_series.basis = Some("COMPLETION".to_string());
+        task_series.cursor_date = Some(cursor_date);
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock
+            .expect_list_series_for_project()
+            .returning(move |_| Ok(vec![task_series.clone()]));
+        series_mock
+            .expect_list_occurrences_between()
+            .returning(|_, _, _| Ok(vec![]));
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        let current_date = cursor_date + chrono::Duration::days(3);
+        let result = list_virtual_occurrences_for_project_unchecked(
+            &event_series,
+            "p1",
+            current_date,
+            current_date + chrono::Duration::days(10),
+            0,
+        )
+        .await
+        .expect("should succeed");
+
+        let mut dates: Vec<_> = result.iter().map(|o| o.occurrence_date).collect();
+        dates.sort();
+        assert_eq!(
+            dates,
+            vec![
+                current_date,
+                current_date + chrono::Duration::days(3),
+                current_date + chrono::Duration::days(6),
+                current_date + chrono::Duration::days(9),
+            ]
+        );
+        assert!(result.iter().find(|o| o.occurrence_date == current_date).unwrap().is_current);
     }
 
     #[tokio::test]

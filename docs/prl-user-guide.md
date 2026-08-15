@@ -507,6 +507,18 @@ prl series create <project-id> "Standup" "every weekday" 2026-08-17 \
   --item-type event --description "Daily sync" --event-type meeting
 ```
 
+`--basis schedule` (the default) or `--basis completion` controls what the
+next occurrence is measured from: `schedule` uses the fixed recurrence rule,
+`completion` measures from when the current occurrence was actually
+completed or skipped instead. Only valid on a task series (`--item-type
+task`) with an "every N days/weeks/months/years" recurrence — not a fixed
+weekday or day-of-month.
+
+```sh
+prl series create <project-id> "Water plants" "every 3 days" 2026-08-17 \
+  --item-type task --basis completion
+```
+
 ### Show one item series
 
 ```sh
@@ -516,9 +528,10 @@ prl series get <project-id> <series-id>
 ### Update an item series
 
 Update is a full replace of `name`/`recurrence`/`anchor`/`description`/
-`event-type`/`item-type` — pass `--description`/`--event-type` again to keep
-them, or omit to clear them. `--item-type` is required on every update, the
-same as on create.
+`event-type`/`item-type`/`basis` — pass `--description`/`--event-type`/
+`--basis` again to keep them, or omit to clear them (omitting `--basis`
+resets to `schedule`). `--item-type` is required on every update, the same
+as on create.
 
 ```sh
 prl series update <project-id> <series-id> "Standup" "every weekday" 2026-08-17 \

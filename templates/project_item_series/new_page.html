@@ -44,6 +44,13 @@
     <div class="event-type-field">
       {% call macros::event_type_field("") %}{% endcall %}
     </div>
+    <div class="completion-basis-field">
+      <label class="inline-flex items-center gap-1.5 text-sm font-normal text-gray-900 dark:text-white">
+        <input type="checkbox" name="basis" value="COMPLETION"
+               class="size-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-600 dark:border-white/20 dark:bg-white/5" />
+        Base next occurrence on completion time, not schedule
+      </label>
+    </div>
     <script>
     (function() {
       var form = document.currentScript.closest("form");
@@ -54,6 +61,12 @@
           el.hidden = isTask;
           el.querySelectorAll("input").forEach(function (field) {
             field.disabled = isTask;
+          });
+        });
+        form.querySelectorAll(".completion-basis-field").forEach(function (el) {
+          el.hidden = !isTask;
+          el.querySelectorAll("input").forEach(function (field) {
+            field.disabled = !isTask;
           });
         });
       }

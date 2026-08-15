@@ -481,6 +481,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             enum: ["TASK", "EVENT"],
             description: "The kind of item this series materializes occurrences as. No default — must be explicit.",
           },
+          basis: {
+            type: "string",
+            enum: ["SCHEDULE", "COMPLETION"],
+            description: "Defaults to SCHEDULE. COMPLETION measures the next occurrence from actual completion/skip time instead of the fixed schedule — only valid on a TASK series with an 'every N days/weeks/months/years' recurrence.",
+          },
         },
         required: ["projectId", "name", "recurrence", "anchorDate", "itemType"],
       },
@@ -500,7 +505,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "update_item_series",
       description:
-        "Update an item series (full replace of name/recurrence/anchorDate/description/eventType/itemType — round-trip description/eventType to keep them, omitting clears them). The caller must be a project member.",
+        "Update an item series (full replace of name/recurrence/anchorDate/description/eventType/itemType/basis — round-trip description/eventType/basis to keep them, omitting clears them). The caller must be a project member.",
       inputSchema: {
         type: "object",
         properties: {
@@ -515,6 +520,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: "string",
             enum: ["TASK", "EVENT"],
             description: "The kind of item this series materializes occurrences as. No default — must be explicit.",
+          },
+          basis: {
+            type: "string",
+            enum: ["SCHEDULE", "COMPLETION"],
+            description: "Defaults to SCHEDULE if omitted. COMPLETION measures the next occurrence from actual completion/skip time instead of the fixed schedule — only valid on a TASK series with an 'every N days/weeks/months/years' recurrence.",
           },
         },
         required: ["projectId", "seriesId", "name", "recurrence", "anchorDate", "itemType"],
@@ -888,6 +898,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         };
         if (args.description !== undefined) body.description = args.description;
         if (args.eventType !== undefined) body.eventType = args.eventType;
+        if (args.basis !== undefined) body.basis = args.basis;
         result = await api("POST", `/projects/${args.projectId}/series`, body);
         break;
       }
@@ -908,6 +919,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         };
         if (args.description !== undefined) body.description = args.description;
         if (args.eventType !== undefined) body.eventType = args.eventType;
+        if (args.basis !== undefined) body.basis = args.basis;
         result = await api(
           "PUT",
           `/projects/${args.projectId}/series/${args.seriesId}`,

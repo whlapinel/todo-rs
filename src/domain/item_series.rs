@@ -35,6 +35,15 @@ pub struct ItemSeries {
     /// occurrence is its own `anchor_date`. Meaningless for `Event`-typed series, which
     /// have no completion concept and so never advance it — always `None` for those.
     pub cursor_date: Option<DateTime<Utc>>,
+    /// Stage 10 gap 1: a plain, unvalidated-by-Smithy string, following the precedent
+    /// CLAUDE.md documents for `Item::recurrence_basis` (`ItemType` is the deliberate
+    /// exception, not the norm). `Some("COMPLETION")` measures the next occurrence from
+    /// *actual settlement time* (`Utc::now()` at completion/skip) rather than the fixed
+    /// schedule — see `service::item_series::is_completion_basis`. `None` (or any other
+    /// value) is today's only behavior, schedule-basis. Only meaningful for `Task`-typed
+    /// series with an "every N days/weeks/months/years" `recurrence` — validated at the
+    /// service layer (`validate_series_basis`), not structurally enforced here.
+    pub basis: Option<String>,
 }
 
 /// One occurrence date's materialization state within a series. A date with no row

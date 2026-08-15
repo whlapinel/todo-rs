@@ -14,6 +14,21 @@ fn parse_series_item_type_flag(s: &str) -> ItemType {
     }
 }
 
+/// Stage 10 gap 1: "schedule"/"completion" — a plain, unvalidated-by-Smithy string on
+/// the wire (see `ItemSeries::basis`'s doc comment), same as `--recurrence-basis` on
+/// `prl items add`. Only "completion" is ever sent explicitly; "schedule" maps to
+/// `None` since that's the server's own default when the field is omitted.
+fn parse_series_basis_flag(s: &str) -> Option<String> {
+    match s.to_lowercase().as_str() {
+        "schedule" => None,
+        "completion" => Some("COMPLETION".to_string()),
+        _ => {
+            eprintln!("error: --basis must be 'schedule' or 'completion'");
+            std::process::exit(1);
+        }
+    }
+}
+
 #[derive(Subcommand)]
 pub enum SeriesCommand {
     /// List a project's recurring item series
@@ -33,13 +48,17 @@ pub enum SeriesCommand {
         /// Required: 'task' or 'event' — the kind of item this series materializes
         #[arg(long)]
         item_type: Option<String>,
+        /// 'schedule' (default) or 'completion' — only valid on a task series with an
+        /// "every N days/weeks/months/years" recurrence
+        #[arg(long)]
+        basis: Option<String>,
     },
     /// Show one item series
     Get {
         project_id: String,
         series_id: String,
     },
-    /// Update an item series (full replace — round-trip description/event-type to keep them)
+    /// Update an item series (full replace — round-trip description/event-type/basis to keep them)
     Update {
         project_id: String,
         series_id: String,
@@ -53,6 +72,10 @@ pub enum SeriesCommand {
         /// Required: 'task' or 'event' — the kind of item this series materializes
         #[arg(long)]
         item_type: Option<String>,
+        /// 'schedule' (default) or 'completion' — only valid on a task series with an
+        /// "every N days/weeks/months/years" recurrence
+        #[arg(long)]
+        basis: Option<String>,
     },
 }
 
@@ -90,6 +113,7 @@ pub async fn cmd_series(client: &Client, cmd: SeriesCommand, _user_id: Option<St
             description,
             event_type,
             item_type,
+            basis,
         } => {
             let anchor_date = parse_date(&anchor).unwrap_or_else(|e| {
                 eprintln!("{e}");
@@ -111,6 +135,9 @@ pub async fn cmd_series(client: &Client, cmd: SeriesCommand, _user_id: Option<St
             }
             if let Some(event_type) = event_type {
                 req = req.event_type(event_type);
+            }
+            if let Some(basis) = basis.and_then(|b| parse_series_basis_flag(&b)) {
+                req = req.basis(basis);
             }
             let out = unwrap_or_exit(req.send().await, "create item series");
             println!("created item series {}", out.series_id());
@@ -136,6 +163,7 @@ pub async fn cmd_series(client: &Client, cmd: SeriesCommand, _user_id: Option<St
             println!("recurrence:  {}", out.recurrence());
             println!("anchor:      {}", crate::helpers::fmt_date(out.anchor_date()));
             println!("item type:   {}", out.item_type());
+            println!("basis:       {}", out.basis().unwrap_or("SCHEDULE"));
         }
         SeriesCommand::Update {
             project_id,
@@ -146,6 +174,7 @@ pub async fn cmd_series(client: &Client, cmd: SeriesCommand, _user_id: Option<St
             description,
             event_type,
             item_type,
+            basis,
         } => {
             let anchor_date = parse_date(&anchor).unwrap_or_else(|e| {
                 eprintln!("{e}");
@@ -168,6 +197,9 @@ pub async fn cmd_series(client: &Client, cmd: SeriesCommand, _user_id: Option<St
             }
             if let Some(event_type) = event_type {
                 req = req.event_type(event_type);
+            }
+            if let Some(basis) = basis.and_then(|b| parse_series_basis_flag(&b)) {
+                req = req.basis(basis);
             }
             unwrap_or_exit(req.send().await, "update item series");
             println!("updated item series {series_id}");

@@ -43,6 +43,8 @@ structure ItemSeriesSummary {
 
     @required
     itemType: ItemType
+
+    basis: String
 }
 
 list ItemSeriesList {
@@ -77,6 +79,9 @@ operation CreateItemSeries {
         @required
         @notProperty
         itemType: ItemType
+
+        @notProperty
+        basis: String
     }
 
     output := {
@@ -134,6 +139,9 @@ operation GetItemSeries {
         @required
         @notProperty
         itemType: ItemType
+
+        @notProperty
+        basis: String
     }
 
     errors: [
@@ -175,6 +183,9 @@ operation UpdateItemSeries {
         @required
         @notProperty
         itemType: ItemType
+
+        @notProperty
+        basis: String
     }
 
     output := {}

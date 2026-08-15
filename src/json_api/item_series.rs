@@ -29,6 +29,7 @@ fn to_summary(series: ItemSeries) -> model::ItemSeriesSummary {
         recurrence: series.recurrence,
         anchor_date: SmithyDateTime::from_secs(series.anchor_date.timestamp()),
         item_type: to_sdk_item_type(series.item_type),
+        basis: series.basis,
     }
 }
 
@@ -52,6 +53,7 @@ pub async fn create_item_series(
             recurrence: input.recurrence,
             anchor_date: anchor_from_input(&input.anchor_date),
             item_type: to_domain_item_type(Some(input.item_type)).unwrap(),
+            basis: input.basis,
         },
     )
     .await
@@ -84,6 +86,7 @@ pub async fn get_item_series(
         recurrence: series.recurrence,
         anchor_date: SmithyDateTime::from_secs(series.anchor_date.timestamp()),
         item_type: to_sdk_item_type(series.item_type),
+        basis: series.basis,
     })
 }
 
@@ -107,6 +110,7 @@ pub async fn update_item_series(
             recurrence: input.recurrence,
             anchor_date: anchor_from_input(&input.anchor_date),
             item_type: to_domain_item_type(Some(input.item_type)).unwrap(),
+            basis: input.basis,
         },
     )
     .await

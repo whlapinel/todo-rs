@@ -84,6 +84,9 @@ pub struct CreateItemSeriesForm {
     recurrence: String,
     anchor_date: String,
     anchor_time: Option<String>,
+    /// Checkbox — present with value "COMPLETION" when checked, absent otherwise
+    /// (standard HTML checkbox semantics, so `Option` rather than a `bool` field).
+    basis: Option<String>,
 }
 
 fn parse_item_type(raw: &str) -> Result<ItemKind, ItemError> {
@@ -125,6 +128,7 @@ pub async fn create_project_item_series_form(
             recurrence: form.recurrence.trim().to_string(),
             anchor_date,
             item_type,
+            basis: form.basis,
         },
     )
     .await?;
