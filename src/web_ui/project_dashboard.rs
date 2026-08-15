@@ -135,7 +135,10 @@ struct ProjectDashboardRow {
     /// caller's own); `team_dashboard/row.html` never had a delete affordance at all, so a
     /// team-backed project's rows don't get one here either.
     can_delete: bool,
-    toggle_target: String,
+    /// `None` for an Event row — `Item::validate` rejects `complete: true` for
+    /// `ItemType::Event` outright, so there's no toggle to render (mirrors
+    /// `components::row::Row`'s `complete_url` escape hatch used everywhere else).
+    toggle_target: Option<String>,
     detail_link: String,
     toggle_complete_json: String,
 }
@@ -174,7 +177,8 @@ impl ProjectDashboardRow {
             parent_name: if di.parent_name.is_empty() { None } else { Some(di.parent_name.clone()) },
             assignee_name: item.assigned_to_user_id().and_then(|id| names.get(&id).cloned()),
             can_delete: !is_team_project,
-            toggle_target: format!("/web/projects/{project_id}/dashboard/items/{}", item.id),
+            toggle_target: (item.kind() != ItemKind::Event)
+                .then(|| format!("/web/projects/{project_id}/dashboard/items/{}", item.id)),
             detail_link: detail_url(item, project_id),
             toggle_complete_json: (!item.complete).to_string(),
         }

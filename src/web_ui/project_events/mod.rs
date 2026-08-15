@@ -30,6 +30,10 @@ pub(crate) fn require_event(item: Item) -> Result<Item, ItemError> {
 // modules (and project_tasks) already set for this exact helper set. An Event is never a
 // child and never carries assignment/points (see events.rs/team_events.rs's own comments on
 // hardcoding `itemType: EVENT`/`parentItemId: None` and dropping assignment entirely).
+//
+// Deliberately no `complete`/`showComplete` fields — `Item::validate` rejects `complete: true`
+// outright for `ItemType::Event` (mirroring the Simple-item precedent), so there's nothing for
+// a form on this screen to ever legitimately set.
 #[derive(serde::Deserialize, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectEventForm {
@@ -42,8 +46,6 @@ pub struct ProjectEventForm {
     due_date: Option<String>,
     due_time: Option<String>,
     event_type: Option<String>,
-    complete: Option<String>,
-    show_complete: Option<String>,
     /// See `project_tasks::ProjectTaskForm`'s identical field for the redirect-vs-in-place-
     /// fragment rationale.
     redirect: Option<String>,
@@ -68,14 +70,6 @@ fn overlay_required_str(form_value: &Option<String>, current: &str) -> String {
     match form_value {
         Some(s) if !s.trim().is_empty() => s.trim().to_string(),
         _ => current.to_string(),
-    }
-}
-
-fn overlay_bool(form_value: &Option<String>, current: bool) -> bool {
-    match form_value.as_deref() {
-        Some("true") => true,
-        Some("false") => false,
-        _ => current,
     }
 }
 
@@ -194,7 +188,7 @@ pub(crate) fn create_params_from_form(
             tz,
             None,
         ),
-        complete: form.complete.as_deref().map(|s| s == "true"),
+        complete: None,
         has_due_time: form.due_time.as_deref().map(|t| !t.trim().is_empty()),
         has_scheduled_time: form.scheduled_time.as_deref().map(|t| !t.trim().is_empty()),
         has_end_time: form
@@ -237,7 +231,7 @@ pub(crate) fn update_params_from_form(
             tz,
             current.scheduled_end_date(),
         ),
-        complete: overlay_bool(&form.complete, current.complete),
+        complete: false,
         has_due_time: Some(overlay_has_due_time(&form.due_time, current.has_due_time())),
         has_scheduled_time: Some(overlay_has_due_time(
             &form.scheduled_time,
@@ -263,12 +257,10 @@ pub(crate) fn update_params_from_form(
 pub(crate) fn render_rows(
     items: &[Item],
     project_id: &str,
-    show_complete: bool,
     tz: i32,
 ) -> Result<Vec<String>, ItemError> {
     items
         .iter()
-        .filter(|i| show_complete || !i.complete)
         .map(|i| ProjectEventRow::from_item(i, project_id, tz).render())
         .collect::<Result<Vec<_>, _>>()
         .map_err(ItemError::from)

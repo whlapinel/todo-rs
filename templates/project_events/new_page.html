@@ -16,7 +16,6 @@
   <form hx-post="/web/projects/{{ project_id }}/events" hx-target="#page" hx-select="#page" hx-swap="innerHTML"
         class="rounded-lg border border-gray-200 bg-white p-4 space-y-3 dark:border-white/10 dark:bg-gray-800/50">
     <input type="hidden" name="redirect" value="1" />
-    {% if show_complete %}<input type="hidden" name="showComplete" value="1" />{% endif %}
     <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Name <span class="text-red-500" aria-hidden="true">*</span>
       <div class="mt-2">
         <input type="text" name="name" placeholder="New event" required maxlength="200"

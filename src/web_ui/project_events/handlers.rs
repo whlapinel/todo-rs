@@ -25,12 +25,6 @@ fn active_context(project_id: &str) -> ActiveContext {
     ActiveContext::Project(project_id.to_string())
 }
 
-#[derive(serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ShowCompleteQuery {
-    show_complete: Option<String>,
-}
-
 pub async fn project_events_page(
     Path(project_id): Path<String>,
     Extension(auth_user): Extension<AuthUser>,
@@ -38,12 +32,10 @@ pub async fn project_events_page(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     TzOffset(tz): TzOffset,
-    Query(q): Query<ShowCompleteQuery>,
 ) -> Result<Html<String>, ItemError> {
     let _project = project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
-    let show_complete = q.show_complete.is_some();
     let items = list_project_events(&repo, &project_id).await?;
-    let rows = super::render_rows(&items, &project_id, show_complete, tz)?;
+    let rows = super::render_rows(&items, &project_id, tz)?;
     let nav_html = nav::build_nav_html(
         &projects,
         &auth_user.user_id,
@@ -54,7 +46,6 @@ pub async fn project_events_page(
     render(ProjectEventsListPageTemplate {
         project_id,
         rows,
-        show_complete,
         nav_html,
     })
 }
@@ -64,7 +55,6 @@ pub async fn new_project_event_page(
     Extension(auth_user): Extension<AuthUser>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
-    Query(q): Query<ShowCompleteQuery>,
 ) -> Result<Html<String>, ItemError> {
     let _project = project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
     let nav_html = nav::build_nav_html(
@@ -76,7 +66,6 @@ pub async fn new_project_event_page(
     .await?;
     render(NewProjectEventPageTemplate {
         project_id,
-        show_complete: q.show_complete.is_some(),
         blank_event_type_input: String::new(),
         blank_scheduled_date_input: String::new(),
         blank_scheduled_time_input: String::new(),
@@ -176,7 +165,7 @@ pub async fn project_event_detail_page(
     )
     .await?;
     let item = require_event(item)?;
-    let view = ProjectEventDetailView::from_item(&item, &project_id, tz).render()?;
+    let view = ProjectEventDetailView::from_item(&item, tz).render()?;
     let nav_html = nav::build_nav_html(
         &projects,
         &auth_user.user_id,
@@ -188,7 +177,6 @@ pub async fn project_event_detail_page(
         id: item.id,
         project_id,
         name: item.name,
-        complete: item.complete,
         view,
         nav_html,
     })
@@ -310,16 +298,11 @@ pub async fn create_project_event_child_form(
 /// Redirect back to the project's events list (via the `hx-redirect` header) after a create
 /// from the standalone `/projects/:project_id/events/new` page. Mirrors
 /// `project_tasks::handlers::redirect_to_project_tasks`.
-fn redirect_to_project_events(project_id: &str, show_complete: bool) -> Response {
-    let location = if show_complete {
-        format!("/web/projects/{project_id}/events?showComplete=1")
-    } else {
-        format!("/web/projects/{project_id}/events")
-    };
+fn redirect_to_project_events(project_id: &str) -> Response {
     (
         [(
             axum::http::header::HeaderName::from_static("hx-redirect"),
-            location,
+            format!("/web/projects/{project_id}/events"),
         )],
         Html(String::new()),
     )
@@ -336,15 +319,14 @@ pub async fn create_project_event_form(
     Form(form): Form<ProjectEventForm>,
 ) -> Result<Response, ItemError> {
     project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
-    let show_complete = form.show_complete.is_some();
     let params = create_params_from_form(&project_id, &form, tz);
     project_item_service::create_project_item(&repo, &projects, &teams, &auth_user.user_id, params)
         .await?;
     if form.redirect.is_some() {
-        return Ok(redirect_to_project_events(&project_id, show_complete));
+        return Ok(redirect_to_project_events(&project_id));
     }
     let items = list_project_events(&repo, &project_id).await?;
-    let rows = super::render_rows(&items, &project_id, show_complete, tz)?;
+    let rows = super::render_rows(&items, &project_id, tz)?;
     Ok(render(ProjectEventRowsFragmentTemplate {
         rows,
         empty_message: "No events yet.".to_string(),
@@ -386,48 +368,29 @@ pub async fn update_project_event_form(
     )
     .await?;
 
-    match project_item_service::get_project_item_unchecked(&repo, &project_id, &item_id).await {
-        Ok(updated) if close => {
-            let view = ProjectEventDetailView::from_item(&updated, &project_id, tz).render()?;
-            let nav_html = nav::build_nav_html(
-                &projects,
-                &auth_user.user_id,
-                active_context(&project_id),
-                SidebarSection::Events,
-            )
-            .await?;
-            Ok(render(ProjectEventDetailPageTemplate {
-                id: updated.id.clone(),
-                project_id,
-                name: updated.name.clone(),
-                complete: updated.complete,
-                view,
-                nav_html,
-            })?
-            .into_response())
-        }
-        Ok(updated) => {
-            let row = ProjectEventRow::from_item(&updated, &project_id, tz).render()?;
-            let fields =
-                ProjectEventDetailFields::from_item(&updated, &project_id, tz, true).render()?;
-            let view = ProjectEventDetailView::from_item(&updated, &project_id, tz).render()?;
-            Ok(Html(format!("{row}{fields}{view}")).into_response())
-        }
-        // The event was recurring, just got marked complete, and the service layer replaced
-        // it with a fresh successor under a new id (see `service::items::update_item`/
-        // `service::team_items::update_team_item`) — same situation `events.rs`'s
-        // `update_event_form` handles, and the same fix: ask the client to reload rather than
-        // guessing at the new id.
-        Err(ItemError::NotFound) => Ok((
-            [(
-                axum::http::header::HeaderName::from_static("hx-refresh"),
-                "true",
-            )],
-            Html(String::new()),
+    let updated = project_item_service::get_project_item_unchecked(&repo, &project_id, &item_id).await?;
+    if close {
+        let view = ProjectEventDetailView::from_item(&updated, tz).render()?;
+        let nav_html = nav::build_nav_html(
+            &projects,
+            &auth_user.user_id,
+            active_context(&project_id),
+            SidebarSection::Events,
         )
-            .into_response()),
-        Err(e) => Err(e),
+        .await?;
+        return Ok(render(ProjectEventDetailPageTemplate {
+            id: updated.id.clone(),
+            project_id,
+            name: updated.name.clone(),
+            view,
+            nav_html,
+        })?
+        .into_response());
     }
+    let row = ProjectEventRow::from_item(&updated, &project_id, tz).render()?;
+    let fields = ProjectEventDetailFields::from_item(&updated, &project_id, tz, true).render()?;
+    let view = ProjectEventDetailView::from_item(&updated, tz).render()?;
+    Ok(Html(format!("{row}{fields}{view}")).into_response())
 }
 
 pub async fn delete_project_event_form(

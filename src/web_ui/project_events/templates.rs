@@ -10,7 +10,10 @@ use chrono::Utc;
 /// own — the same reuse `ProjectTaskRow` (stage B5a) established. An Event is always
 /// top-level (see `project_events::require_event`'s doc comment on why it can never have
 /// structural children), so unlike `ProjectTaskRow` this never sets `offset_label`,
-/// `assignee_name`, or `siblings` — an Event never carries any of those concepts.
+/// `assignee_name`, or `siblings` — an Event never carries any of those concepts. `complete`
+/// is hardcoded `false`/`complete_url: None` (mirroring `ProjectSimpleItemRow`'s identical
+/// precedent) — `Item::validate` rejects `complete: true` for `ItemType::Event` outright, so
+/// there's no toggle to render.
 pub struct ProjectEventRow;
 
 impl ProjectEventRow {
@@ -19,7 +22,7 @@ impl ProjectEventRow {
             id: item.id.clone(),
             item_url: format!("/web/projects/{project_id}/events/{}", item.id),
             name: item.name.clone(),
-            complete: item.complete,
+            complete: false,
             due_date: item
                 .due_date()
                 .map(|d| to_local(d, tz).format("%Y-%m-%d %H:%M").to_string()),
@@ -45,8 +48,8 @@ impl ProjectEventRow {
             has_children: false,
             offset_label: None,
             assignee_name: None,
-            complete_url: Some(format!("/web/projects/{project_id}/events/{}", item.id)),
-            toggle_complete_json: (!item.complete).to_string(),
+            complete_url: None,
+            toggle_complete_json: String::new(),
             siblings: Vec::new(),
             is_source_event_linked: false,
         }
@@ -60,7 +63,6 @@ pub struct ProjectEventDetailFields {
     pub project_id: String,
     pub name: String,
     pub description: String,
-    pub complete: bool,
     pub scheduled_date_input: String,
     pub scheduled_time_input: String,
     pub scheduled_end_date_input: String,
@@ -113,7 +115,6 @@ impl ProjectEventDetailFields {
             project_id: project_id.to_string(),
             name: item.name.clone(),
             description: item.description.clone().unwrap_or_default(),
-            complete: item.complete,
             scheduled_date_input,
             scheduled_time_input,
             scheduled_end_date_input,
@@ -127,15 +128,13 @@ impl ProjectEventDetailFields {
 }
 
 /// Read-only counterpart to `ProjectEventDetailFields` — see `items.rs`'s `DetailView` for
-/// the row-editing convention this mirrors (complete-toggle lives here too).
+/// the row-editing convention this mirrors. No complete-toggle here (unlike Task's): an
+/// Event can never be marked complete, see `Item::validate`.
 #[derive(Template)]
 #[template(path = "project_events/detail_view.html")]
 pub struct ProjectEventDetailView {
     pub id: String,
-    pub project_id: String,
     pub description: Option<String>,
-    pub complete: bool,
-    pub toggle_complete_json: String,
     pub scheduled_date: Option<String>,
     pub scheduled_end_date: Option<String>,
     pub due_date: Option<String>,
@@ -144,7 +143,7 @@ pub struct ProjectEventDetailView {
 }
 
 impl ProjectEventDetailView {
-    pub fn from_item(item: &Item, project_id: &str, tz: i32) -> Self {
+    pub fn from_item(item: &Item, tz: i32) -> Self {
         let scheduled_date = item.scheduled_date().map(|d| {
             let local = to_local(d, tz);
             if item.has_scheduled_time() {
@@ -171,10 +170,7 @@ impl ProjectEventDetailView {
         });
         Self {
             id: item.id.clone(),
-            project_id: project_id.to_string(),
             description: item.description.clone(),
-            complete: item.complete,
-            toggle_complete_json: (!item.complete).to_string(),
             scheduled_date,
             scheduled_end_date,
             due_date,
@@ -196,7 +192,6 @@ pub struct ProjectEventRowsFragmentTemplate {
 pub struct ProjectEventsListPageTemplate {
     pub project_id: String,
     pub rows: Vec<String>,
-    pub show_complete: bool,
     pub nav_html: String,
 }
 
@@ -204,7 +199,6 @@ pub struct ProjectEventsListPageTemplate {
 #[template(path = "project_events/new_page.html")]
 pub struct NewProjectEventPageTemplate {
     pub project_id: String,
-    pub show_complete: bool,
     pub blank_event_type_input: String,
     pub blank_scheduled_date_input: String,
     pub blank_scheduled_time_input: String,
@@ -219,7 +213,6 @@ pub struct ProjectEventDetailPageTemplate {
     pub id: String,
     pub project_id: String,
     pub name: String,
-    pub complete: bool,
     pub view: String,
     pub nav_html: String,
 }

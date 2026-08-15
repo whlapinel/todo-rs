@@ -410,9 +410,18 @@ impl Item {
             ));
         }
         // Simple items are bare checkable-off-nothing names: create or delete, no
-        // completion concept at all (unlike Task/Event, which support it).
+        // completion concept at all (unlike Task, which supports it).
         if self.complete && self.kind() == ItemKind::Simple {
             return Err("simple items cannot be marked complete".to_string());
+        }
+        // Events are scheduled entries, not actionable to-dos — no checkbox, no
+        // Done/Not done, no "Show completed" filter (same treatment Simple items got
+        // above). Item-level recurrence (the mechanism that used to require completion
+        // to advance a recurring Event's date) was retired in Stage 10; recurring
+        // Events now live on item_series, advanced by materialization, independent of
+        // this field. See docs/archived-features.md for the removal.
+        if self.complete && self.kind() == ItemKind::Event {
+            return Err("events cannot be marked complete".to_string());
         }
         // A task either nests under a parent or references an event, never both —
         // keeps "offset-driven" unambiguous: exactly one anchor source.
@@ -573,6 +582,13 @@ mod tests {
     #[test]
     fn validate_rejects_complete_simple_item() {
         let mut item = Item::new_simple("u1", "Milk");
+        item.complete = true;
+        assert!(item.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_complete_event() {
+        let mut item = Item::new_event("u1", "Standup");
         item.complete = true;
         assert!(item.validate().is_err());
     }
