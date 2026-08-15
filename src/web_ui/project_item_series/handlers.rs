@@ -210,6 +210,7 @@ pub async fn skip_project_item_series_occurrence_form(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(item_series): Extension<Arc<dyn ItemSeriesRepo>>,
+    TzOffset(tz): TzOffset,
 ) -> Result<Response, ItemError> {
     let series = item_series_service::get_series(
         &projects,
@@ -226,7 +227,7 @@ pub async fn skip_project_item_series_occurrence_form(
     let occurrence_date = DateTime::<Utc>::from_timestamp(occurrence_ts, 0)
         .ok_or_else(|| ItemError::Invalid("invalid occurrence timestamp".to_string()))?;
 
-    item_series_service::skip_occurrence(&item_series, &series_id, occurrence_date).await?;
+    item_series_service::skip_occurrence(&item_series, &series_id, occurrence_date, tz).await?;
 
     Ok(Html(String::new()).into_response())
 }

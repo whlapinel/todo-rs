@@ -363,7 +363,10 @@ pub struct UpdateProjectItemParams {
 /// on detecting an actual incomplete→complete *transition*, since `record_task_completion`'s
 /// own cursor advance is already idempotent (`advance_cursor`'s forward-only max) — no
 /// extra pre-read of the item's prior state is needed to make this safe to call on a
-/// no-op re-completion.
+/// no-op re-completion. Stage 10a added a *pre*-persistence counterpart,
+/// `item_series::validate_completable`, gated the same way but run before the dispatch
+/// below rather than after — it's what actually rejects an out-of-order Task-series
+/// completion; `record_task_completion` itself never rejects anything.
 pub async fn update_project_item(
     repo: &Arc<dyn ItemRepo>,
     projects: &Arc<dyn ProjectRepo>,
@@ -377,6 +380,19 @@ pub async fn update_project_item(
     let project = projects.get(&params.project_id).await?;
     let complete = params.complete;
     let item_id = params.item_id.clone();
+
+    // Stage 10a: reject an out-of-order Task-series completion before any mutation
+    // happens — `record_task_completion` below only ever runs after a successful
+    // persist, so it can no longer be the rejection point.
+    if complete {
+        item_series::validate_completable(
+            event_series,
+            &item_id,
+            params.timezone_offset_minutes.unwrap_or(0),
+        )
+        .await?;
+    }
+
     let result = match project.team_id {
         Some(team_id) => {
             team_items::update_team_item(
@@ -775,7 +791,11 @@ mod tests {
         series_mock
             .expect_find_occurrence_by_item_id()
             .withf(|item_id: &str| item_id == "i1")
-            .times(1)
+            // Stage 10a: called twice — once by the pre-persistence
+            // `validate_completable` check, once by the post-persistence
+            // `record_task_completion` hook. Both are cheap no-ops here since this
+            // item never came from a series.
+            .times(2)
             .returning(|_| Ok(None));
         let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 

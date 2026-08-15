@@ -77,18 +77,71 @@ pub async fn get_or_materialize_occurrence(
 /// item's own delete path. `mark_exdate` clears `item_id` unconditionally, so even a
 /// (deliberately unhandled) direct call against an already-materialized date would just
 /// orphan that item rather than corrupt the occurrence row.
+///
+/// Stage 10a: rejects (via `require_current_occurrence`) skipping anything but a
+/// Task-typed series' current occurrence, before either write below runs — see that
+/// function's doc comment for why this replaces Stage 9's forward-jumping behavior.
 pub async fn skip_occurrence(
     event_series: &Arc<dyn ItemSeriesRepo>,
     series_id: &str,
     occurrence_date: DateTime<Utc>,
+    tz_offset_minutes: i32,
 ) -> Result<(), ItemError> {
     let series = event_series.get_series(series_id).await?;
+    require_current_occurrence(&series, occurrence_date, tz_offset_minutes)?;
     event_series.mark_exdate(series_id, occurrence_date).await?;
     // Stage 9: skipping settles the occurrence exactly like completing one does — see
     // record_task_completion's doc comment below for why this is symmetric. Meaningless
     // for an Event-typed series (no completion/cursor concept), so left untouched there.
     if series.item_type == ItemKind::Task {
         event_series.advance_cursor(series_id, occurrence_date).await?;
+    }
+    Ok(())
+}
+
+/// Stage 10a: rejects settling (completing or skipping) anything but a Task-typed
+/// series' current occurrence — see `docs/recurring-events-virtual-occurrences-rough-plan.md`'s
+/// Stage 10 planning notes, cross-cutting decision. Reverses Stage 9's shipped
+/// behavior (commit `652724c`), which let the cursor forward-jump to whatever
+/// occurrence was completed/skipped, in any order; occurrences now settle strictly
+/// one at a time, in order, via `current_occurrence_date`'s cursor-derived value.
+/// "Current" can validly be in the future, present, or past — only settling
+/// something *beyond* current is disallowed. Always `Ok` for an Event-typed series
+/// (no cursor/current concept, unchanged from today).
+fn require_current_occurrence(
+    series: &ItemSeries,
+    occurrence_date: DateTime<Utc>,
+    tz_offset_minutes: i32,
+) -> Result<(), ItemError> {
+    if series.item_type != ItemKind::Task {
+        return Ok(());
+    }
+    let rule = recurrence::parse(&series.recurrence).map_err(ItemError::Invalid)?;
+    let current = current_occurrence_date(series, &rule, tz_offset_minutes);
+    if occurrence_date != current {
+        return Err(ItemError::Invalid(format!(
+            "cannot settle this occurrence out of order — the series' current \
+             occurrence is {current}; occurrences must be completed or skipped \
+             one at a time, in order"
+        )));
+    }
+    Ok(())
+}
+
+/// Stage 10a: the Complete-side counterpart to `require_current_occurrence`, called
+/// from `project_items::update_project_item` *before* it persists a `complete: true`
+/// request — unlike `record_task_completion` below (a post-persistence cursor-advance
+/// hook), this one can actually reject the request outright, so it has to run first.
+/// Cheap no-op for the overwhelmingly common case (item never came from a series),
+/// same shape as `record_task_completion`/`unlink_deleted_item_occurrence`.
+pub async fn validate_completable(
+    event_series: &Arc<dyn ItemSeriesRepo>,
+    item_id: &str,
+    tz_offset_minutes: i32,
+) -> Result<(), ItemError> {
+    if let Some(occurrence) = event_series.find_occurrence_by_item_id(item_id).await? {
+        let series = event_series.get_series(&occurrence.series_id).await?;
+        require_current_occurrence(&series, occurrence.occurrence_date, tz_offset_minutes)?;
     }
     Ok(())
 }
@@ -125,12 +178,11 @@ pub async fn unlink_deleted_item_occurrence(
 /// case (the item never came from a series, or came from an Event-typed one, which has
 /// no completion/cursor concept) — same shape as `unlink_deleted_item_occurrence`.
 ///
-/// Deliberately *not* gated on "is this the series' current occurrence" — completing any
-/// materialized Task-series occurrence, in any order, advances the cursor to (at least)
-/// that occurrence's date, via `advance_cursor`'s own forward-only max. Completing a
-/// future occurrence early therefore does abandon whatever backlog sat between the old
-/// cursor and the new one; that's the deliberate, simpler rule chosen over tracking
-/// "current" separately from "whatever just got completed."
+/// Stage 10a: by the time this runs, `validate_completable` has already rejected any
+/// attempt to complete anything but the series' current occurrence, so this always
+/// advances the cursor by exactly one step — `advance_cursor`'s own forward-only max
+/// is now a pure idempotency guard against a redundant call, not something resolving a
+/// genuine out-of-order jump (that possibility no longer exists).
 pub async fn record_task_completion(
     event_series: &Arc<dyn ItemSeriesRepo>,
     item_id: &str,
@@ -739,7 +791,7 @@ mod tests {
             .returning(|_, _| Ok(()));
         let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
-        skip_occurrence(&event_series, "s1", occurrence_date())
+        skip_occurrence(&event_series, "s1", occurrence_date(), 0)
             .await
             .expect("should mark the occurrence as skipped");
     }
@@ -752,7 +804,7 @@ mod tests {
         series_mock.expect_advance_cursor().times(0);
         let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
-        skip_occurrence(&event_series, "s1", occurrence_date())
+        skip_occurrence(&event_series, "s1", occurrence_date(), 0)
             .await
             .expect("should mark the occurrence as skipped");
     }
@@ -761,6 +813,10 @@ mod tests {
     async fn skip_occurrence_advances_cursor_for_a_task_series() {
         let mut task_series = series("p1");
         task_series.item_type = ItemKind::Task;
+        // A fresh series' current occurrence is its own anchor_date (cursor_date: None) —
+        // set the anchor to the date this test skips, so it's the current occurrence and
+        // require_current_occurrence lets it through.
+        task_series.anchor_date = occurrence_date();
         let mut series_mock = MockItemSeriesRepo::new();
         series_mock.expect_get_series().returning(move |_| Ok(task_series.clone()));
         series_mock.expect_mark_exdate().returning(|_, _| Ok(()));
@@ -771,9 +827,102 @@ mod tests {
             .returning(|_, _| Ok(()));
         let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
-        skip_occurrence(&event_series, "s1", occurrence_date())
+        skip_occurrence(&event_series, "s1", occurrence_date(), 0)
             .await
             .expect("should mark the occurrence as skipped and advance the cursor");
+    }
+
+    #[tokio::test]
+    async fn skip_occurrence_rejects_a_non_current_task_series_occurrence() {
+        let mut task_series = series("p1");
+        task_series.item_type = ItemKind::Task;
+        // anchor_date stays the default (not occurrence_date()), so occurrence_date()
+        // is not the series' current occurrence.
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock.expect_get_series().returning(move |_| Ok(task_series.clone()));
+        series_mock.expect_mark_exdate().times(0);
+        series_mock.expect_advance_cursor().times(0);
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        let result = skip_occurrence(&event_series, "s1", occurrence_date(), 0).await;
+        assert!(matches!(result, Err(ItemError::Invalid(_))));
+    }
+
+    #[tokio::test]
+    async fn validate_completable_rejects_a_non_current_task_series_occurrence() {
+        let mut task_series = series("p1");
+        task_series.item_type = ItemKind::Task;
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock.expect_find_occurrence_by_item_id().returning(|_| {
+            Ok(Some(ItemOccurrence {
+                series_id: "s1".to_string(),
+                // Not the series' anchor/current date.
+                occurrence_date: occurrence_date(),
+                item_id: Some("completed-item".to_string()),
+                is_exdate: false,
+            }))
+        });
+        series_mock.expect_get_series().returning(move |_| Ok(task_series.clone()));
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        let result = validate_completable(&event_series, "completed-item", 0).await;
+        assert!(matches!(result, Err(ItemError::Invalid(_))));
+    }
+
+    #[tokio::test]
+    async fn validate_completable_allows_the_current_task_series_occurrence() {
+        let mut task_series = series("p1");
+        task_series.item_type = ItemKind::Task;
+        // A fresh series' current occurrence is its own anchor_date.
+        task_series.anchor_date = occurrence_date();
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock.expect_find_occurrence_by_item_id().returning(|_| {
+            Ok(Some(ItemOccurrence {
+                series_id: "s1".to_string(),
+                occurrence_date: occurrence_date(),
+                item_id: Some("completed-item".to_string()),
+                is_exdate: false,
+            }))
+        });
+        series_mock.expect_get_series().returning(move |_| Ok(task_series.clone()));
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        validate_completable(&event_series, "completed-item", 0)
+            .await
+            .expect("the series' own current occurrence should be completable");
+    }
+
+    #[tokio::test]
+    async fn validate_completable_allows_any_date_for_an_event_series() {
+        // series("p1") defaults to ItemKind::Event — no cursor/current concept, so
+        // any occurrence date is fine.
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock.expect_find_occurrence_by_item_id().returning(|_| {
+            Ok(Some(ItemOccurrence {
+                series_id: "s1".to_string(),
+                occurrence_date: occurrence_date(),
+                item_id: Some("some-item".to_string()),
+                is_exdate: false,
+            }))
+        });
+        series_mock.expect_get_series().returning(|_| Ok(series("p1")));
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        validate_completable(&event_series, "some-item", 0)
+            .await
+            .expect("an Event-typed series has no current-occurrence restriction");
+    }
+
+    #[tokio::test]
+    async fn validate_completable_is_a_no_op_for_a_non_series_item() {
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock.expect_find_occurrence_by_item_id().returning(|_| Ok(None));
+        series_mock.expect_get_series().times(0);
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        validate_completable(&event_series, "some-task", 0)
+            .await
+            .expect("should no-op for an item with no linked occurrence");
     }
 
     #[tokio::test]
@@ -903,7 +1052,7 @@ mod tests {
         series_mock.expect_mark_exdate().times(0);
         let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
-        let result = skip_occurrence(&event_series, "bogus", occurrence_date()).await;
+        let result = skip_occurrence(&event_series, "bogus", occurrence_date(), 0).await;
         assert!(matches!(result, Err(ItemError::NotFound)));
     }
 
