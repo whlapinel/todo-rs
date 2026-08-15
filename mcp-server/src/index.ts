@@ -537,6 +537,19 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: "delete_item_series",
+      description:
+        "Delete an item series. Orphan, not cascade: this deletes only the series and its occurrence records — every already-materialized occurrence survives as a plain standalone item, unaffected. The caller must be a project member.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          projectId: { type: "string" },
+          seriesId: { type: "string" },
+        },
+        required: ["projectId", "seriesId"],
+      },
+    },
+    {
       name: "list_teams",
       description:
         "List the teams a user belongs to, including pending invites awaiting their acceptance (status PENDING or ACTIVE).",
@@ -933,6 +946,13 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         );
         break;
       }
+
+      case "delete_item_series":
+        result = await api(
+          "DELETE",
+          `/projects/${args.projectId}/series/${args.seriesId}`
+        );
+        break;
 
       case "list_teams":
         result = await api("GET", `/users/${args.userId}/teams`);

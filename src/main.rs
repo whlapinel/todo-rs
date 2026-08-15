@@ -24,7 +24,7 @@ use json_api::activity_log::{list_team_activity_log, undo_activity_log_entry};
 use json_api::invites::send_app_invite;
 use json_api::item_import::{get_item_import_template, import_project_items};
 use json_api::item_series::{
-    create_item_series, get_item_series, list_item_series_for_project, update_item_series,
+    create_item_series, delete_item_series, get_item_series, list_item_series_for_project, update_item_series,
 };
 use json_api::items::{list_assigned_items, list_items_due};
 use json_api::project_items::{
@@ -212,7 +212,7 @@ fn build_web_router() -> Router {
         )
         .route(
             "/projects/:project_id/series/:series_id",
-            put(update_project_item_series_form),
+            put(update_project_item_series_form).delete(delete_project_item_series_form),
         )
         .route(
             "/projects/:project_id/series/:series_id/occurrences/:occurrence_ts",
@@ -318,6 +318,7 @@ async fn main() {
         .create_item_series(create_item_series)
         .get_item_series(get_item_series)
         .update_item_series(update_item_series)
+        .delete_item_series(delete_item_series)
         .list_item_series_for_project(list_item_series_for_project)
         .create_project_item(create_project_item)
         .get_project_item(get_project_item)

@@ -242,6 +242,28 @@ impl ItemSeriesRepo for SqliteItemSeriesRepo {
         }
         Ok(())
     }
+
+    async fn delete_series(&self, series_id: &str) -> Result<(), RepoError> {
+        // No FK/ON DELETE CASCADE between item_occurrences.series_id and item_series.id
+        // (see the schema in create_pool()), so both deletes run in one transaction to
+        // avoid ever leaving orphaned item_occurrences rows behind on a partial failure.
+        let mut tx = self.0.begin().await.map_err(db_err)?;
+        sqlx::query("DELETE FROM item_occurrences WHERE series_id = ?")
+            .bind(series_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(db_err)?;
+        let result = sqlx::query("DELETE FROM item_series WHERE id = ?")
+            .bind(series_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(db_err)?;
+        if result.rows_affected() == 0 {
+            return Err(not_found());
+        }
+        tx.commit().await.map_err(db_err)?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -635,6 +657,31 @@ mod tests {
         let repo = SqliteItemSeriesRepo(pool);
 
         let err = repo.advance_cursor("missing", dt(2_000_000)).await.unwrap_err();
+        assert!(matches!(err, RepoError::NotFound));
+    }
+
+    #[tokio::test]
+    async fn delete_series_removes_series_and_its_occurrences() {
+        let pool = test_pool().await;
+        let repo = SqliteItemSeriesRepo(pool);
+        let id = repo.create_series(&sample_series("p1")).await.unwrap();
+        repo.record_materialized_occurrence(&id, dt(2_000_000), "item-1")
+            .await
+            .unwrap();
+
+        repo.delete_series(&id).await.unwrap();
+
+        assert!(matches!(repo.get_series(&id).await, Err(RepoError::NotFound)));
+        let occurrences = repo.list_occurrences_between(&id, dt(0), dt(9_999_999)).await.unwrap();
+        assert!(occurrences.is_empty());
+    }
+
+    #[tokio::test]
+    async fn delete_series_missing_series_returns_not_found() {
+        let pool = test_pool().await;
+        let repo = SqliteItemSeriesRepo(pool);
+
+        let err = repo.delete_series("missing").await.unwrap_err();
         assert!(matches!(err, RepoError::NotFound));
     }
 }

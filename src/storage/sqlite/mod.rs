@@ -337,6 +337,11 @@ pub trait ItemSeriesRepo: Send + Sync {
         series_id: &str,
         occurrence_date: DateTime<Utc>,
     ) -> Result<(), RepoError>;
+    /// Deletes the `item_series` row and all its `item_occurrences` rows. Orphan, not
+    /// cascade — never touches `items`; every already-materialized occurrence survives
+    /// as a plain standalone item. See item_series.smithy's `DeleteItemSeries` doc
+    /// comment for the rationale.
+    async fn delete_series(&self, series_id: &str) -> Result<(), RepoError>;
 }
 
 fn db_err(e: sqlx::Error) -> RepoError {

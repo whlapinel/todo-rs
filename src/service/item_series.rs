@@ -509,6 +509,25 @@ pub async fn get_series(
     Ok(series)
 }
 
+/// Orphan, not cascade — deletes the series and its `item_occurrences` rows only, never
+/// touches `items`. Every already-materialized occurrence survives as a plain standalone
+/// item, matching `unlink_source_event_tasks`'s precedent for an independent dependent.
+/// See item_series.smithy's `DeleteItemSeries` doc comment. Gated by project membership,
+/// same authority level as create/update/list above (a series is project-scoped content
+/// like a template, not a role/points-authority action).
+pub async fn delete_series(
+    projects: &Arc<dyn ProjectRepo>,
+    teams: &Arc<dyn TeamRepo>,
+    event_series: &Arc<dyn ItemSeriesRepo>,
+    requester_user_id: &str,
+    series_id: &str,
+) -> Result<(), ItemError> {
+    let series = event_series.get_series(series_id).await?;
+    require_project_member(projects, teams, &series.project_id, requester_user_id).await?;
+    event_series.delete_series(series_id).await?;
+    Ok(())
+}
+
 #[derive(Debug, Default)]
 pub struct UpdateItemSeriesParams {
     pub name: String,
@@ -2023,6 +2042,58 @@ mod tests {
         let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
 
         let result = get_series(&projects, &teams, &event_series, "owner1", "bogus").await;
+        assert!(matches!(result, Err(ItemError::NotFound)));
+    }
+
+    #[tokio::test]
+    async fn delete_series_deletes_after_confirming_membership() {
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock.expect_get_series().returning(|_| Ok(series("p1")));
+        series_mock
+            .expect_delete_series()
+            .withf(|series_id: &str| series_id == "s1")
+            .times(1)
+            .returning(|_| Ok(()));
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        let mut projects_mock = MockProjectRepo::new();
+        projects_mock.expect_get().returning(|_| Ok(personal_project()));
+        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+
+        delete_series(&projects, &teams, &event_series, "owner1", "s1")
+            .await
+            .expect("owner should be able to delete the series");
+    }
+
+    #[tokio::test]
+    async fn delete_series_rejects_non_member() {
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock.expect_get_series().returning(|_| Ok(series("p1")));
+        series_mock.expect_delete_series().times(0);
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        let mut projects_mock = MockProjectRepo::new();
+        projects_mock.expect_get().returning(|_| Ok(personal_project()));
+        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+
+        let result = delete_series(&projects, &teams, &event_series, "not-the-owner", "s1").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn delete_series_propagates_not_found() {
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock
+            .expect_get_series()
+            .returning(|_| Err(RepoError::NotFound));
+        series_mock.expect_delete_series().times(0);
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let projects: Arc<dyn ProjectRepo> = Arc::new(MockProjectRepo::new());
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+
+        let result = delete_series(&projects, &teams, &event_series, "owner1", "bogus").await;
         assert!(matches!(result, Err(ItemError::NotFound)));
     }
 

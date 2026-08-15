@@ -18,9 +18,15 @@ namespace common
 // it) — same convention Item's own optional fields (dueDate, eventType, etc.) already
 // follow.
 //
-// No DeleteItemSeries yet — deferred, since deleting a series with already-materialized
-// occurrences raises the same open question stage 6 already defers for skipping one, not
-// answered here.
+// DeleteItemSeries (added 2026-08-15) resolves the deferred question above as an orphan,
+// not a cascade: it deletes the item_series row and all its item_occurrences rows, but
+// never touches the items table. Every already-materialized occurrence survives as a
+// plain standalone item — same treatment `unlink_source_event_tasks` already gives a
+// deleted Event's linked tasks (CLAUDE.md's Events section), chosen for consistency with
+// that precedent over the structural-children cascade `delete_item`/`delete_team_item`
+// use, since a materialized occurrence is a full standalone item with its own
+// completion/points history, not a structural child of the series. Gated by project
+// membership, matching Create/Update/List above.
 structure ItemSeriesSummary {
     @required
     seriesId: String
@@ -219,6 +225,27 @@ operation UpdateItemSeries {
 
         @notProperty
         points: Integer
+    }
+
+    output := {}
+
+    errors: [
+        PeoplesRepublicOfListsError
+    ]
+}
+
+@idempotent
+@http(method: "DELETE", uri: "/projects/{projectId}/series/{seriesId}")
+operation DeleteItemSeries {
+    input := {
+        @required
+        @httpLabel
+        projectId: String
+
+        @required
+        @httpLabel
+        @notProperty
+        seriesId: String
     }
 
     output := {}

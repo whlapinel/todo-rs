@@ -99,6 +99,12 @@ pub enum SeriesCommand {
         #[arg(long)]
         points: Option<i32>,
     },
+    /// Delete an item series. Orphan, not cascade: already-materialized occurrences are
+    /// kept as standalone items — only the series itself (and its occurrence records) go away.
+    Delete {
+        project_id: String,
+        series_id: String,
+    },
 }
 
 pub async fn cmd_series(client: &Client, cmd: SeriesCommand, _user_id: Option<String>) {
@@ -247,6 +253,21 @@ pub async fn cmd_series(client: &Client, cmd: SeriesCommand, _user_id: Option<St
             }
             unwrap_or_exit(req.send().await, "update item series");
             println!("updated item series {series_id}");
+        }
+        SeriesCommand::Delete {
+            project_id,
+            series_id,
+        } => {
+            unwrap_or_exit(
+                client
+                    .delete_item_series()
+                    .project_id(&project_id)
+                    .series_id(&series_id)
+                    .send()
+                    .await,
+                "delete item series",
+            );
+            println!("deleted item series {series_id}");
         }
     }
 }

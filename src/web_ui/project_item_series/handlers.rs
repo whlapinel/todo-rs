@@ -413,3 +413,17 @@ pub async fn update_project_item_series_form(
     )
         .into_response())
 }
+
+/// Orphan, not cascade — see `item_series_service::delete_series`'s doc comment. Already-
+/// materialized occurrences survive as plain standalone items; only the series row and its
+/// `item_occurrences` rows go away.
+pub async fn delete_project_item_series_form(
+    Path((_project_id, series_id)): Path<(String, String)>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(item_series): Extension<Arc<dyn ItemSeriesRepo>>,
+) -> Result<Html<String>, ItemError> {
+    item_series_service::delete_series(&projects, &teams, &item_series, &auth_user.user_id, &series_id).await?;
+    Ok(Html(String::new()))
+}

@@ -134,6 +134,19 @@ pub async fn update_item_series(
     Ok(output::UpdateItemSeriesOutput {})
 }
 
+pub async fn delete_item_series(
+    input: input::DeleteItemSeriesInput,
+    server::Extension(projects): server::Extension<Arc<dyn ProjectRepo>>,
+    server::Extension(teams): server::Extension<Arc<dyn TeamRepo>>,
+    server::Extension(item_series): server::Extension<Arc<dyn ItemSeriesRepo>>,
+    server::Extension(auth): server::Extension<AuthUser>,
+) -> Result<output::DeleteItemSeriesOutput, error::DeleteItemSeriesError> {
+    item_series_service::delete_series(&projects, &teams, &item_series, &auth.user_id, &input.series_id)
+        .await
+        .map_err(|e| error::DeleteItemSeriesError::from(to_msg(e)))?;
+    Ok(output::DeleteItemSeriesOutput {})
+}
+
 pub async fn list_item_series_for_project(
     input: input::ListItemSeriesForProjectInput,
     server::Extension(projects): server::Extension<Arc<dyn ProjectRepo>>,

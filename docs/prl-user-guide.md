@@ -560,6 +560,15 @@ prl series update <project-id> <series-id> "Standup" "every weekday" 2026-08-17 
   --item-type event --description "Daily sync"
 ```
 
+### Delete an item series
+
+Orphan, not cascade: this deletes the series itself, but any occurrences
+already materialized from it are kept as plain standalone items, untouched.
+
+```sh
+prl series delete <project-id> <series-id>
+```
+
 ---
 
 ## Tips

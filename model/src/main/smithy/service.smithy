@@ -23,6 +23,7 @@ service PeoplesRepublicOfLists {
         CreateItemSeries
         GetItemSeries
         UpdateItemSeries
+        DeleteItemSeries
         ListItemSeriesForProject
         CreateProjectItem
         GetProjectItem
