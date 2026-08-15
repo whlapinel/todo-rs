@@ -108,7 +108,6 @@ prl items list --parent <item-id> --project <project-id>
 ```sh
 prl items add "Buy groceries" --project <project-id>
 prl items add "Submit report" --due 2026-06-20 --project <project-id>
-prl items add "Water plants" --recurrence "every week" --project <project-id>
 prl items add "Chapter notes" --parent <parent-item-id> --project <project-id>
 prl items add "Pack bag" --parent <parent-item-id> --due-offset-days -1 --project <project-id>
 prl items add "Team offsite" --item-type event --due 2026-09-01 --project <project-id>
@@ -124,7 +123,7 @@ required `name`, and valid on every item type/kind.
 
 `--item-type` is `task` (default), `event`, or `simple` — events are calendar-style
 items, distinguished from tasks mainly for display purposes; simple items are a bare
-checkable name with no due date, scheduled window, recurrence, or due offset (the
+checkable name with no due date, scheduled window, or due offset (the
 server rejects any of those on a `simple` item). `--event-type` is a free-text
 category (e.g. `rain`), only valid on `--item-type event` (the server rejects it on
 tasks and simple items — `prl` itself checks this too and errors before sending the
@@ -145,7 +144,7 @@ one — the server computes it from the referenced event's own due/scheduled
 date plus the offset, ignoring any `--due` you pass alongside it.
 
 `--due`, `--scheduled`, and `--scheduled-end` all accept `YYYY-MM-DD` or a Unix
-timestamp. `--due` is the deadline (drives recurrence and offset-based child due
+timestamp. `--due` is the deadline (drives offset-based child due
 dates); `--scheduled`/`--scheduled-end` describe an optional start→end window —
 when you actually plan to do it — and apply to tasks just as much as events. Note
 that a child item (`--parent`) or event-linked task (`--source-event-id`) can't
@@ -161,13 +160,13 @@ one):
 prl items add "Mow the lawn" --project <project-id> --assign <user-id> --points 25
 ```
 
-> **Note:** `--recurrence` only works on items with no `--parent`/
-> `--source-event-id` — child and event-linked items can't have their own
-> recurrence, and `prl` rejects the combination before it ever reaches the
-> server. Use `--due-offset-days` instead (days from the top-level item's or
-> linked event's due date, negative = before, positive = after) — the offset
-> is what actually sets the item's due date whenever the top-level item
-> recurs or the linked event is rescheduled.
+> **Note:** individual items don't support recurrence anymore — create an
+> [item series](#item-series) instead if you want something to repeat. A
+> child item (`--parent`) or event-linked task (`--source-event-id`) uses
+> `--due-offset-days` (days from the top-level item's or linked event's due
+> date, negative = before, positive = after) — the offset is what sets the
+> item's due date whenever the top-level item is edited or the linked event
+> is rescheduled.
 
 ### Download an import template
 
@@ -209,7 +208,7 @@ create` (or the Item Series screen) instead — see
 prl items done <item-id> --project <project-id>
 ```
 
-If the item has a recurrence rule, completing it automatically spawns the next occurrence with an updated due date, and any child items are carried over to the new occurrence — with their own due dates recalculated from their offset (or cleared, if they have none). A child's due date is always recalculated this way when its top-level ancestor recurs; manually setting one in the meantime won't survive the next recurrence.
+Completing an [item series](#item-series)'s currently-materialized occurrence advances the series to its next occurrence (materialized lazily, not eagerly created) rather than spawning a new plain item — individual items themselves don't recur anymore.
 
 On a team-backed project, completing an assigned, points-bearing item awards
 those points to the assignee — see `prl teams activity`/`undo-activity`
@@ -464,7 +463,10 @@ prl projects set-role <project-id> <target-user-id> member
 
 ## Recurrence patterns
 
-When adding an item with `--recurrence`, the system understands natural English phrases:
+Individual items don't recur anymore — recurring things are modeled as an
+[item series](#item-series) instead (`prl series create --recurrence ...`).
+The series' `--recurrence` understands the same natural English phrases the
+old per-item flag used to:
 
 | Pattern | Example |
 |---|---|
@@ -475,24 +477,24 @@ When adding an item with `--recurrence`, the system understands natural English 
 | Day of month | `every month on the 15th` |
 | Day of week | `every monday` |
 
-When a recurring item is marked done, it is replaced by a new item with the next computed date. The recurrence basis — due date, completion date, or scheduled date — controls both which date the next occurrence is measured from and which field (`due` or `scheduled`) it's written into; due-date basis writes the new due date, the other two write the new scheduled date instead. Basis must be set via the web app — `prl` has no flag for it yet.
-
-Recurrence only applies to top-level items with no `--source-event-id` — a child item (created with `--parent`) or an event-linked task (created with `--source-event-id`) can't have its own recurrence. Instead, either can have an offset (days from its top-level item's or linked event's due date, set with `--due-offset-days`), which is used to recompute its due date whenever the top-level item recurs or the linked event is rescheduled/recurs.
+A child item (created with `--parent`) or an event-linked task (created with
+`--source-event-id`) still can't have any recurrence of its own — instead it
+has an offset (days from its top-level item's or linked event's due date,
+set with `--due-offset-days`), which is used to recompute its due date
+whenever the top-level item is edited or the linked event is rescheduled.
 
 ---
 
 ## Item Series
 
-An **item series** is a different way of modeling a recurring Task or Event:
-instead of one item row that gets replaced on each completion (see
-[Recurrence patterns](#recurrence-patterns) above), a series is just a
+An **item series** is how a recurring Task or Event is modeled: a
 recurrence rule plus an anchor date and a set of static fields (name,
 description, item type). Individual occurrence dates aren't items at all
 until something actually materializes one, via the web UI's calendar/
 dashboard/Tasks-list views (`prl series` itself only covers the series:
 create, read, update, list — there's no CLI browse/materialize command).
 A series's `recurrence` field uses the exact same English-phrase syntax as
-an item's own `--recurrence`. Every series has an `--item-type` of either
+the table above. Every series has an `--item-type` of either
 `task` or `event`, controlling whether it materializes Task or Event
 occurrences — there's no default, so it must always be given explicitly on
 `create`/`update`. `event_type` is not currently supported on any series.

@@ -133,25 +133,13 @@ fn parse_weekday(s: &str) -> Option<Weekday> {
     }
 }
 
-/// Compute the next due date after `reference`, advancing until the result is in the future.
-/// `tz_offset_minutes`: value of `new Date().getTimezoneOffset()` from the client
-/// (minutes to add to local time to get UTC; positive = west of UTC, e.g. 240 for EDT).
-pub fn next_date(rule: &RecurrenceRule, reference: DateTime<Utc>, tz_offset_minutes: i32) -> DateTime<Utc> {
-    let mut next = advance(rule, reference, tz_offset_minutes);
-    let now = Utc::now();
-    while next <= now {
-        next = advance(rule, next, tz_offset_minutes);
-    }
-    next
-}
-
-/// One step forward from `reference`, per `rule` — unlike `next_date`, this never clamps
-/// to be after `Utc::now()`, so it can legitimately return a date in the past. This is
-/// the primitive a Task-typed `item_series`' "current occurrence" is derived from (see
+/// One step forward from `reference`, per `rule` — never clamps to be after `Utc::now()`,
+/// so it can legitimately return a date in the past. This is the primitive a Task-typed
+/// `item_series`' "current occurrence" is derived from (see
 /// docs/recurring-events-virtual-occurrences-rough-plan.md's Stage 9): a backlogged
 /// series needs its next unsettled occurrence to actually surface as "current," not be
-/// silently skipped past the way the legacy single-row recurrence mechanism's
-/// `next_date` would skip it.
+/// silently skipped past — the retired legacy single-row recurrence mechanism's own
+/// `next_date` used to do exactly that clamping/skipping, which is why this doesn't.
 pub fn advance_once(rule: &RecurrenceRule, reference: DateTime<Utc>, tz_offset_minutes: i32) -> DateTime<Utc> {
     advance(rule, reference, tz_offset_minutes)
 }

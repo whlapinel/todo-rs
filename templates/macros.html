@@ -21,38 +21,7 @@
 </label>
 {% endmacro %}
 
-{% macro recurrence_fields(is_top_level, recurrence, recurrence_basis, due_offset_days_input) %}
-{% if is_top_level %}
-<div class="recurrence-fields scheduling-fields">
-  <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Repeat
-    <div class="mt-2">
-      <input type="text" name="recurrence" value="{{ recurrence.as_deref().unwrap_or_default() }}"
-             placeholder="e.g. every 3 days"
-             class="block w-full rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 placeholder:text-gray-400 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:placeholder:text-gray-500 dark:focus:outline-indigo-500" />
-    </div>
-  </label>
-  <label class="block text-sm/6 font-medium text-gray-900 dark:text-white mt-2">Repeat from
-    <div class="mt-2 grid grid-cols-1">
-      <select name="recurrenceBasis"
-              class="col-start-1 row-start-1 block w-full appearance-none rounded-md bg-white py-1.5 pr-8 pl-3 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:*:bg-gray-800 dark:focus:outline-indigo-500">
-        {% if recurrence_basis.as_deref() == Some("COMPLETION_DATE") %}
-        <option value="DUE_DATE">Due date</option>
-        <option value="COMPLETION_DATE" selected>Completion date</option>
-        <option value="SCHEDULED_DATE">Scheduled date</option>
-        {% else if recurrence_basis.as_deref() == Some("SCHEDULED_DATE") %}
-        <option value="DUE_DATE">Due date</option>
-        <option value="COMPLETION_DATE">Completion date</option>
-        <option value="SCHEDULED_DATE" selected>Scheduled date</option>
-        {% else %}
-        <option value="DUE_DATE" selected>Due date</option>
-        <option value="COMPLETION_DATE">Completion date</option>
-        <option value="SCHEDULED_DATE">Scheduled date</option>
-        {% endif %}
-      </select>
-    </div>
-  </label>
-</div>
-{% else %}
+{% macro due_offset_days_field(due_offset_days_input) %}
 <div class="offset-field scheduling-fields">
   <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Due offset (days from parent's or linked event's due date)
     <div class="mt-2">
@@ -62,7 +31,6 @@
   </label>
   <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">Manual due-date edits on this item won't survive the next time an ancestor recurs — the date is recomputed from this offset.</p>
 </div>
-{% endif %}
 {% endmacro %}
 
 {% macro scheduled_fields(scheduled_date_input, scheduled_time_input, scheduled_end_date_input, scheduled_end_time_input) %}

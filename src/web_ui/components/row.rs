@@ -26,7 +26,6 @@ pub struct Row {
     pub event_type: Option<String>,
     pub has_children: bool,
     pub offset_label: Option<String>,
-    pub recurrence: Option<String>,
     /// Display name of this item's assignee, on a team-backed project — `None` on a
     /// personal project (no assignment concept) or an unassigned team item.
     pub assignee_name: Option<String>,

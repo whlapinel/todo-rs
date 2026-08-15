@@ -27,7 +27,6 @@
             {% if let Some(d) = due_date %}<span class="{% if overdue %}text-red-600 dark:text-red-400{% endif %}">💀 {{
                 d
                 }}</span>{% endif %}
-            {% if let Some(r) = recurrence %}<span title="repeats">&#8635; {{ r }}</span>{% endif %}
         </div>
     </div>
     {% endif %}

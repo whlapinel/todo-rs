@@ -43,8 +43,6 @@ pub struct ProjectEventForm {
     due_time: Option<String>,
     event_type: Option<String>,
     complete: Option<String>,
-    recurrence: Option<String>,
-    recurrence_basis: Option<String>,
     show_complete: Option<String>,
     /// See `project_tasks::ProjectTaskForm`'s identical field for the redirect-vs-in-place-
     /// fragment rationale.
@@ -197,8 +195,6 @@ pub(crate) fn create_params_from_form(
             None,
         ),
         complete: form.complete.as_deref().map(|s| s == "true"),
-        recurrence: non_empty(&form.recurrence),
-        recurrence_basis: non_empty(&form.recurrence_basis),
         has_due_time: form.due_time.as_deref().map(|t| !t.trim().is_empty()),
         has_scheduled_time: form.scheduled_time.as_deref().map(|t| !t.trim().is_empty()),
         has_end_time: form
@@ -242,8 +238,6 @@ pub(crate) fn update_params_from_form(
             current.scheduled_end_date(),
         ),
         complete: overlay_bool(&form.complete, current.complete),
-        recurrence: overlay_str(&form.recurrence, current.recurrence_pattern()),
-        recurrence_basis: overlay_str(&form.recurrence_basis, current.recurrence_basis()),
         has_due_time: Some(overlay_has_due_time(&form.due_time, current.has_due_time())),
         has_scheduled_time: Some(overlay_has_due_time(
             &form.scheduled_time,

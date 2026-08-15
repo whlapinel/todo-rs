@@ -27,7 +27,6 @@ impl ProjectSimpleItemRow {
             expanded_row: false,
             has_children: item.has_children,
             offset_label: None,
-            recurrence: None,
             assignee_name: None,
             complete_url: None,
             toggle_complete_json: String::new(),

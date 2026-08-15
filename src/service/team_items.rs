@@ -1,10 +1,8 @@
 use crate::domain::item::{Item, ItemKind, ItemType, Recurrence, Schedule, TeamAssignment};
-use crate::domain::recurrence;
 use crate::service::activity_log::reverse_entry;
 use crate::service::items::{
-    archive_recurrence, clone_children, copy_template_children_to_event, has_incomplete_children,
-    is_pure_complete_toggle, item_anchor, repoint_source_event_tasks, sync_offset_children,
-    sync_source_event_tasks, unlink_source_event_tasks, ItemError,
+    copy_template_children_to_event, has_incomplete_children, is_pure_complete_toggle, item_anchor,
+    sync_offset_children, sync_source_event_tasks, unlink_source_event_tasks, ItemError,
 };
 use crate::service::projects::{require_project_admin, require_project_member, resolve_project_assignee};
 use crate::storage::sqlite::{ActivityLogRepo, ItemRepo, ProjectRepo, TeamRepo};
@@ -32,8 +30,6 @@ pub struct CreateTeamItemParams {
     pub scheduled_date: Option<DateTime<Utc>>,
     pub scheduled_end_date: Option<DateTime<Utc>>,
     pub complete: Option<bool>,
-    pub recurrence: Option<String>,
-    pub recurrence_basis: Option<String>,
     pub has_due_time: Option<bool>,
     pub has_scheduled_time: Option<bool>,
     pub has_end_time: Option<bool>,
@@ -130,17 +126,6 @@ pub async fn create_team_item(
     params: CreateTeamItemParams,
 ) -> Result<String, ItemError> {
     require_project_member(projects, teams, &params.project_id, requester_user_id).await?;
-    if let Some(ref r) = params.recurrence {
-        recurrence::parse(r).map_err(ItemError::Invalid)?;
-    }
-    if params.recurrence.is_some()
-        && (params.parent_item_id.is_some() || params.source_event_id.is_some())
-    {
-        return Err(ItemError::Invalid(
-            "child or event-linked items cannot have their own recurrence; set dueOffsetDays instead"
-                .to_string(),
-        ));
-    }
     if params.item_type == Some(ItemKind::Template) {
         return Err(ItemError::Invalid(
             "item_type Template is not supported for team items".to_string(),
@@ -176,9 +161,11 @@ pub async fn create_team_item(
         scheduled_end_date: params.scheduled_end_date,
         has_end_time: params.has_end_time.unwrap_or(false),
     };
+    // Item-level recurrence is retired (Stage 10 core) — nothing can ever set
+    // `pattern`/`basis` again, only `due_offset_days` survives here.
     let recurrence_data = Recurrence {
-        pattern: params.recurrence.clone(),
-        basis: params.recurrence_basis.clone(),
+        pattern: None,
+        basis: None,
         due_offset_days: params.due_offset_days,
     };
 
@@ -228,29 +215,6 @@ pub async fn create_team_item(
         if let Some(schedule) = item.item_type.schedule_mut() {
             schedule.due_date = new_due_date;
             schedule.has_due_time = false;
-        }
-    } else if let Some(pattern) = item.recurrence_pattern()
-        && let Ok(rule) = recurrence::parse(&pattern)
-    {
-        let basis = item
-            .recurrence_basis()
-            .unwrap_or_else(|| "DUE_DATE".to_string());
-        if let Some(schedule) = item.item_type.schedule_mut() {
-            if basis == "DUE_DATE" && schedule.due_date.is_none() {
-                let mut deadline = recurrence::next_date(&rule, chrono::Utc::now(), tz_offset);
-                if rule.time_override.is_none() {
-                    deadline = recurrence::apply_end_of_day(deadline, tz_offset);
-                } else {
-                    schedule.has_due_time = true;
-                }
-                schedule.due_date = Some(deadline);
-            } else if basis != "DUE_DATE" && schedule.scheduled_date.is_none() {
-                let when = recurrence::next_date(&rule, chrono::Utc::now(), tz_offset);
-                if rule.time_override.is_some() {
-                    schedule.has_scheduled_time = true;
-                }
-                schedule.scheduled_date = Some(when);
-            }
         }
     }
 
@@ -352,8 +316,6 @@ pub struct UpdateTeamItemParams {
     pub scheduled_date: Option<DateTime<Utc>>,
     pub scheduled_end_date: Option<DateTime<Utc>>,
     pub complete: bool,
-    pub recurrence: Option<String>,
-    pub recurrence_basis: Option<String>,
     pub has_due_time: Option<bool>,
     pub has_scheduled_time: Option<bool>,
     pub has_end_time: Option<bool>,
@@ -390,17 +352,6 @@ pub async fn update_team_item(
     let projects = &ctx.projects;
     let activity_log = &ctx.activity_log;
     require_project_member(projects, teams, &params.project_id, requester_user_id).await?;
-    if let Some(ref r) = params.recurrence {
-        recurrence::parse(r).map_err(ItemError::Invalid)?;
-    }
-    if params.recurrence.is_some()
-        && (params.parent_item_id.is_some() || params.source_event_id.is_some())
-    {
-        return Err(ItemError::Invalid(
-            "child or event-linked items cannot have their own recurrence; set dueOffsetDays instead"
-                .to_string(),
-        ));
-    }
     if params.item_type == Some(ItemKind::Template) {
         return Err(ItemError::Invalid(
             "item_type Template is not supported for team items".to_string(),
@@ -445,9 +396,11 @@ pub async fn update_team_item(
         scheduled_end_date: params.scheduled_end_date,
         has_end_time: params.has_end_time.unwrap_or(false),
     };
+    // Item-level recurrence is retired (Stage 10 core) — nothing can ever set
+    // `pattern`/`basis` again, only `due_offset_days` survives here.
     let recurrence_data = Recurrence {
-        pattern: params.recurrence.clone(),
-        basis: params.recurrence_basis.clone(),
+        pattern: None,
+        basis: None,
         due_offset_days: params.due_offset_days,
     };
 
@@ -575,17 +528,6 @@ pub async fn update_team_item(
             .await?
     {
         reverse_entry(projects, activity_log, &entry).await?;
-    }
-
-    if let Some((next_item, next_anchor)) = item.next_recurrence(chrono::Utc::now(), tz_offset) {
-        let next_id = repo.create(&next_item).await?;
-        clone_children(repo, &item.id, &next_id, next_anchor, tz_offset).await?;
-        if item.kind() == ItemKind::Event {
-            repoint_source_event_tasks(repo, &item.id, &next_id, next_anchor, tz_offset).await?;
-        }
-        archive_recurrence(&mut item);
-        repo.update_by_project(&item).await?;
-        return Ok(());
     }
 
     repo.update_by_project(&item).await?;
@@ -728,16 +670,6 @@ mod tests {
             },
             ..Item::default()
         }
-    }
-
-    fn with_due_date_and_recurrence(mut item: Item, due_date: DateTime<Utc>, pattern: &str) -> Item {
-        if let Some(schedule) = item.item_type.schedule_mut() {
-            schedule.due_date = Some(due_date);
-        }
-        if let Some(recurrence) = item.item_type.recurrence_mut() {
-            recurrence.pattern = Some(pattern.to_string());
-        }
-        item
     }
 
     #[tokio::test]
@@ -1285,92 +1217,6 @@ mod tests {
         )
         .await
         .expect("uncompleting an item with no logged points should silently no-op");
-    }
-
-    #[tokio::test]
-    async fn update_team_item_awards_points_correctly_even_when_recurrence_also_fires() {
-        let due_date = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
-            .unwrap()
-            .with_timezone(&chrono::Utc);
-        let mut items = MockItemRepo::new();
-        items.expect_get_by_project().returning(move |_, _| {
-            Ok(with_due_date_and_recurrence(
-                team_item_with_points_and_assignee("item1", Some(20), Some("member1")),
-                due_date,
-                "every day",
-            ))
-        });
-        // Called once by the parent-gating check (has_incomplete_children), once
-        // more by clone_children's own recursive walk over the (empty) subtree —
-        // same double-call shape Stage 5's analogous personal-item test hit.
-        items
-            .expect_list_children()
-            .withf(|parent_id: &str| parent_id == "item1")
-            .times(2)
-            .returning(|_| Ok(vec![]));
-        items
-            .expect_create()
-            .times(1)
-            .returning(|_| Ok("item1-next".to_string()));
-        // The just-completed occurrence is kept as history (not deleted) with its own
-        // recurrence config stripped so it can't independently re-fire.
-        items
-            .expect_update_by_project()
-            .withf(|item: &Item| {
-                item.id == "item1"
-                    && item.complete
-                    && item.recurrence_pattern().is_none()
-                    && item.recurrence_basis().is_none()
-            })
-            .times(1)
-            .returning(|_| Ok(()));
-
-        let mut activity_log = MockActivityLogRepo::new();
-        activity_log
-            .expect_log_activity()
-            .withf(|team_id, _project_id, user_id, item_id, _item_name, points_delta| {
-                // Must be logged against the *old* item's id, never the
-                // not-yet-created successor's.
-                team_id == "t1" && user_id == "member1" && item_id == "item1" && *points_delta == 20
-            })
-            .times(1)
-            .returning(|_, _, _, _, _, _| Ok("entry1".to_string()));
-
-        let items: Arc<dyn ItemRepo> = Arc::new(items);
-        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
-        // Same no-fallback-needed shape as
-        // `update_team_item_awards_points_on_genuine_completion` above.
-        let mut projects_mock = project_with_role("p1", "t1", TeamRole::Member);
-        projects_mock
-            .expect_add_project_points()
-            .withf(|project_id, user_id, delta| {
-                project_id == "p1" && user_id == "member1" && *delta == 20
-            })
-            .times(1)
-            .returning(|_, _, _| Ok(20));
-
-        update_team_item(
-            &items,
-            &UpdateTeamItemContext {
-                teams,
-                projects: Arc::new(projects_mock),
-                activity_log: Arc::new(activity_log),
-            },
-            "member1",
-            "t1",
-            UpdateTeamItemParams {
-                project_id: "p1".to_string(),
-                item_id: "item1".to_string(),
-                name: "Mow the lawn".to_string(),
-                complete: true,
-                recurrence: Some("every day".to_string()),
-                assigned_to_user_id: Some("member1".to_string()),
-                points: Some(20),
-                ..Default::default()
-            },
-        )
-        .await
-        .expect("should award points even though recurrence also fires");
     }
 
     #[tokio::test]

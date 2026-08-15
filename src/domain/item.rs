@@ -436,59 +436,6 @@ impl Item {
         Ok(())
     }
 
-    /// If this item is complete and recurring, returns the next occurrence
-    /// (fresh id, incomplete, primary date advanced past `now`) along with the
-    /// freshly-advanced date itself (the "anchor" child items should measure
-    /// their own `due_offset_days` from). Callers are responsible for
-    /// persisting the returned item, deleting `self`, and carrying over any
-    /// child items onto the new id using the returned anchor.
-    ///
-    /// `recurrence_basis` picks both the *reference* used to compute the next
-    /// date and the *field* that date gets written into: legacy `"DUE_DATE"`
-    /// (the default when unset) reads and writes `due_date`, unchanged from
-    /// this method's original behavior. `"COMPLETION_DATE"` and
-    /// `"SCHEDULED_DATE"` both write the advanced date into `scheduled_date`
-    /// instead — `scheduled_date` is the primary field for anything not
-    /// explicitly pinned to the legacy due-date basis. `scheduled_end_date`,
-    /// if set, shifts by the same delta so the window's length survives the
-    /// recurrence. Whichever field isn't the active basis's output simply
-    /// rides along unchanged.
-    pub fn next_recurrence(&self, now: DateTime<Utc>, tz_offset_minutes: i32) -> Option<(Self, DateTime<Utc>)> {
-        if !self.complete {
-            return None;
-        }
-        let pattern = self.recurrence_pattern()?;
-        let rule = recurrence::parse(&pattern).ok()?;
-        let basis = self.recurrence_basis().unwrap_or_else(|| "DUE_DATE".to_string());
-
-        let mut next = self.clone();
-        next.id = String::new();
-        next.complete = false;
-        let schedule = next.item_type.schedule_mut()?;
-
-        let anchor = if basis == "DUE_DATE" {
-            let reference = schedule.due_date.unwrap_or(now);
-            let next_date = recurrence::next_date(&rule, reference, tz_offset_minutes);
-            schedule.has_due_time = rule.time_override.is_some() || schedule.has_due_time;
-            schedule.due_date = Some(next_date);
-            next_date
-        } else {
-            let reference = if basis == "SCHEDULED_DATE" {
-                schedule.scheduled_date.unwrap_or(now)
-            } else {
-                now
-            };
-            let next_date = recurrence::next_date(&rule, reference, tz_offset_minutes);
-            let delta = next_date - reference;
-            schedule.scheduled_end_date = schedule.scheduled_end_date.map(|e| e + delta);
-            schedule.has_scheduled_time =
-                rule.time_override.is_some() || schedule.has_scheduled_time;
-            schedule.scheduled_date = Some(next_date);
-            next_date
-        };
-        Some((next, anchor))
-    }
-
     /// Deadline for this item as a child, measured from the top-level ancestor's
     /// `root_deadline` plus this item's own `due_offset_days`. `None` if no offset
     /// is set — the item's own (pre-existing) deadline is never consulted here,
@@ -535,20 +482,6 @@ mod tests {
             .schedule_mut()
             .expect("has schedule")
             .scheduled_end_date = Some(dt);
-    }
-
-    fn set_recurrence(item: &mut Item, pattern: &str) {
-        item.item_type
-            .recurrence_mut()
-            .expect("has recurrence")
-            .pattern = Some(pattern.to_string());
-    }
-
-    fn set_recurrence_basis(item: &mut Item, basis: &str) {
-        item.item_type
-            .recurrence_mut()
-            .expect("has recurrence")
-            .basis = Some(basis.to_string());
     }
 
     fn set_due_offset_days(item: &mut Item, days: i32) {
@@ -724,7 +657,6 @@ mod tests {
         set_due_date(&mut item, now);
         set_scheduled_date(&mut item, now);
         set_scheduled_end_date(&mut item, now);
-        set_recurrence(&mut item, "every day");
         set_due_offset_days(&mut item, 1);
         assert!(item.validate().is_ok());
     }
@@ -775,99 +707,6 @@ mod tests {
         let project_item = Item::new_project_item("p1", "task");
         assert!(!user_item.complete);
         assert!(!project_item.complete);
-    }
-
-    #[test]
-    fn next_recurrence_none_when_not_complete() {
-        let mut item = Item::new_user_item("u1", "Water plants");
-        set_recurrence(&mut item, "every 3 days");
-        assert!(item.next_recurrence(Utc::now(), 0).is_none());
-    }
-
-    #[test]
-    fn next_recurrence_none_when_no_recurrence() {
-        let mut item = Item::new_user_item("u1", "One-off task");
-        item.complete = true;
-        assert!(item.next_recurrence(Utc::now(), 0).is_none());
-    }
-
-    #[test]
-    fn next_recurrence_produces_fresh_incomplete_item() {
-        let mut item = Item::new_user_item("u1", "Water plants");
-        item.id = "old-id".to_string();
-        item.complete = true;
-        set_recurrence(&mut item, "every 3 days");
-        set_due_date(&mut item, Utc::now());
-
-        let (next, anchor) = item.next_recurrence(Utc::now(), 0).expect("should recur");
-
-        assert!(next.id.is_empty());
-        assert!(!next.complete);
-        assert_eq!(next.user_id, item.user_id);
-        assert_eq!(next.name, item.name);
-        assert_eq!(next.recurrence_pattern(), item.recurrence_pattern());
-        assert!(next.due_date().unwrap() > item.due_date().unwrap());
-        assert_eq!(anchor, next.due_date().unwrap());
-    }
-
-    #[test]
-    fn next_recurrence_with_scheduled_basis_advances_scheduled_date_not_due_date() {
-        let mut item = Item::new_user_item("u1", "Water plants");
-        item.complete = true;
-        set_recurrence(&mut item, "every 3 days");
-        set_recurrence_basis(&mut item, "SCHEDULED_DATE");
-        set_scheduled_date(&mut item, Utc::now());
-        set_due_date(
-            &mut item,
-            DateTime::parse_from_rfc3339("2020-01-01T00:00:00Z")
-                .unwrap()
-                .with_timezone(&Utc),
-        );
-
-        let (next, anchor) = item.next_recurrence(Utc::now(), 0).expect("should recur");
-
-        assert!(next.scheduled_date().unwrap() > item.scheduled_date().unwrap());
-        assert_eq!(next.due_date(), item.due_date());
-        assert_eq!(anchor, next.scheduled_date().unwrap());
-    }
-
-    #[test]
-    fn next_recurrence_with_scheduled_basis_preserves_window_length() {
-        let mut item = Item::new_user_item("u1", "Work session");
-        item.complete = true;
-        set_recurrence(&mut item, "every week");
-        set_recurrence_basis(&mut item, "SCHEDULED_DATE");
-        let start = Utc::now();
-        set_scheduled_date(&mut item, start);
-        set_scheduled_end_date(&mut item, start + Duration::hours(2));
-
-        let (next, _anchor) = item.next_recurrence(Utc::now(), 0).expect("should recur");
-
-        let original_gap = item.scheduled_end_date().unwrap() - item.scheduled_date().unwrap();
-        let new_gap = next.scheduled_end_date().unwrap() - next.scheduled_date().unwrap();
-        assert_eq!(original_gap, new_gap);
-    }
-
-    #[test]
-    fn next_recurrence_with_completion_basis_writes_scheduled_date() {
-        let mut item = Item::new_user_item("u1", "Take out trash");
-        item.complete = true;
-        set_recurrence(&mut item, "every 3 days");
-        set_recurrence_basis(&mut item, "COMPLETION_DATE");
-        set_due_date(
-            &mut item,
-            DateTime::parse_from_rfc3339("2020-01-01T00:00:00Z")
-                .unwrap()
-                .with_timezone(&Utc),
-        );
-
-        let now = Utc::now();
-        let (next, anchor) = item.next_recurrence(now, 0).expect("should recur");
-
-        assert!(next.scheduled_date().is_some());
-        assert!(next.scheduled_date().unwrap() > now);
-        assert_eq!(next.due_date(), item.due_date());
-        assert_eq!(anchor, next.scheduled_date().unwrap());
     }
 
     #[test]

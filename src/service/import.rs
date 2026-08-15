@@ -147,8 +147,6 @@ fn build_row_params(
         scheduled_date,
         scheduled_end_date,
         complete,
-        recurrence: None,
-        recurrence_basis: None,
         has_due_time,
         has_scheduled_time,
         has_end_time,

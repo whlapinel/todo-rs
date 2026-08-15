@@ -108,8 +108,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "create_item",
       description:
-        "Create a new todo item in a project. Supports due dates, recurrence rules (e.g. 'every Monday', 'every 2 weeks'), and nesting under a parent item. " +
-        "Recurrence is only valid on top-level items with no parentItemId/sourceEventId — a child item or an event-linked item (sourceEventId) uses dueOffsetDays instead, and setting recurrence alongside either is rejected. " +
+        "Create a new todo item in a project. Supports due dates and nesting under a parent item. " +
+        "Item-level recurrence is retired — use create_item_series/update_item_series for recurring items instead. " +
         "assignedToUserId/points are only meaningful on a team-backed project.",
       inputSchema: {
         type: "object",
@@ -133,16 +133,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             description: "ISO 8601 date/time string for when this is scheduled to end",
           },
           complete: { type: "boolean" },
-          recurrence: {
-            type: "string",
-            description:
-              "English recurrence rule, e.g. 'every day', 'every Monday', 'every 2 weeks', 'every month on the 1st'. Only valid when parentItemId is not set.",
-          },
-          recurrenceBasis: {
-            type: "string",
-            enum: ["DUE_DATE", "COMPLETION_DATE"],
-            description: "Whether recurrence advances from due date or completion date",
-          },
           hasDueTime: {
             type: "boolean",
             description: "Whether the due date includes a specific time",
@@ -237,8 +227,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "update_item",
-      description:
-        "Update a todo item in a project. Marking a recurring item as complete will auto-create the next occurrence, carrying its child items over with deadlines recomputed from their dueOffsetDays.",
+      description: "Update a todo item in a project.",
       inputSchema: {
         type: "object",
         properties: {
@@ -256,11 +245,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           dueDate: { type: "string", description: "ISO 8601 date/time string" },
           scheduledDate: { type: "string", description: "ISO 8601 date/time string" },
           scheduledEndDate: { type: "string", description: "ISO 8601 date/time string" },
-          recurrence: { type: "string", description: "Only valid when parentItemId/sourceEventId are not set." },
-          recurrenceBasis: {
-            type: "string",
-            enum: ["DUE_DATE", "COMPLETION_DATE"],
-          },
           hasDueTime: { type: "boolean" },
           hasScheduledTime: { type: "boolean" },
           hasEndTime: { type: "boolean" },
@@ -748,8 +732,6 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         if (args.scheduledDate) body.scheduledDate = toEpochSecs(args.scheduledDate as string);
         if (args.scheduledEndDate) body.scheduledEndDate = toEpochSecs(args.scheduledEndDate as string);
         if (args.complete !== undefined) body.complete = args.complete;
-        if (args.recurrence) body.recurrence = args.recurrence;
-        if (args.recurrenceBasis) body.recurrenceBasis = args.recurrenceBasis;
         if (args.hasDueTime !== undefined) body.hasDueTime = args.hasDueTime;
         if (args.hasScheduledTime !== undefined) body.hasScheduledTime = args.hasScheduledTime;
         if (args.hasEndTime !== undefined) body.hasEndTime = args.hasEndTime;
@@ -803,8 +785,6 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         if (args.dueDate) body.dueDate = toEpochSecs(args.dueDate as string);
         if (args.scheduledDate) body.scheduledDate = toEpochSecs(args.scheduledDate as string);
         if (args.scheduledEndDate) body.scheduledEndDate = toEpochSecs(args.scheduledEndDate as string);
-        if (args.recurrence) body.recurrence = args.recurrence;
-        if (args.recurrenceBasis) body.recurrenceBasis = args.recurrenceBasis;
         if (args.hasDueTime !== undefined) body.hasDueTime = args.hasDueTime;
         if (args.hasScheduledTime !== undefined) body.hasScheduledTime = args.hasScheduledTime;
         if (args.hasEndTime !== undefined) body.hasEndTime = args.hasEndTime;

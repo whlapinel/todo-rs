@@ -21,8 +21,6 @@ structure ItemSummary {
     scheduledDate: Timestamp
     scheduledEndDate: Timestamp
     complete: Boolean
-    recurrence: String
-    recurrenceBasis: String
     hasDueTime: Boolean
     hasScheduledTime: Boolean
     hasEndTime: Boolean

@@ -61,7 +61,9 @@
         </select>
       </div>
     </label>
-    {% call macros::recurrence_fields(is_top_level && !is_offset_driven, recurrence, recurrence_basis, due_offset_days_input) %}{% endcall %}
+    {% if !is_top_level || is_offset_driven %}
+    {% call macros::due_offset_days_field(due_offset_days_input) %}{% endcall %}
+    {% endif %}
     {% if is_team_project %}
     {% call macros::points_field(is_team_admin, is_top_level, points_input) %}{% endcall %}
     {% endif %}

@@ -578,8 +578,6 @@ pub async fn use_project_template_form(
         project_id: project_id.clone(),
         name,
         due_date,
-        recurrence: template.recurrence_pattern(),
-        recurrence_basis: template.recurrence_basis(),
         assigned_to_user_id,
         timezone_offset_minutes: Some(tz),
         ..Default::default()
@@ -588,10 +586,8 @@ pub async fn use_project_template_form(
         project_item_service::create_project_item(&repo, &projects, &teams, &auth_user.user_id, params)
             .await?;
 
-    // Re-fetch: if the template carries its own recurrence and no due date was submitted
-    // above, create_item auto-computes an initial deadline server-side — the offset root for
-    // copied children must reflect that actual deadline, not the blank form input. Same
-    // rationale as `templates::use_template_form`.
+    // Re-fetch the created item so the offset root for copied children reflects its actual
+    // persisted due date, not just the raw form input (e.g. `has_due_time` normalization).
     let new_item =
         project_item_service::get_project_item_unchecked(&repo, &project_id, &new_item_id).await?;
 

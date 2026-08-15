@@ -1,6 +1,7 @@
 use crate::domain::item::{Item, ItemKind, ItemType, Recurrence, Schedule};
-use crate::domain::recurrence;
 use crate::storage::sqlite::{ItemRepo, ProjectRepo, RepoError};
+#[cfg(test)]
+use crate::domain::recurrence;
 use chrono::{DateTime, Utc};
 use std::future::Future;
 use std::pin::Pin;
@@ -21,8 +22,6 @@ pub struct CreateItemParams {
     pub scheduled_date: Option<DateTime<Utc>>,
     pub scheduled_end_date: Option<DateTime<Utc>>,
     pub complete: Option<bool>,
-    pub recurrence: Option<String>,
-    pub recurrence_basis: Option<String>,
     pub has_due_time: Option<bool>,
     pub has_scheduled_time: Option<bool>,
     pub has_end_time: Option<bool>,
@@ -73,17 +72,6 @@ pub async fn create_item(
     projects: &Arc<dyn ProjectRepo>,
     params: CreateItemParams,
 ) -> Result<String, ItemError> {
-    if let Some(ref r) = params.recurrence {
-        recurrence::parse(r).map_err(ItemError::Invalid)?;
-    }
-    if params.recurrence.is_some()
-        && (params.parent_item_id.is_some() || params.source_event_id.is_some())
-    {
-        return Err(ItemError::Invalid(
-            "child or event-linked items cannot have their own recurrence; set dueOffsetDays instead"
-                .to_string(),
-        ));
-    }
     if params.item_type == Some(ItemKind::Template) {
         return Err(ItemError::Invalid(
             "item_type Template can only be set via the template creation flow"
@@ -125,9 +113,11 @@ pub async fn create_item(
         scheduled_end_date: params.scheduled_end_date,
         has_end_time: params.has_end_time.unwrap_or(false),
     };
+    // Item-level recurrence is retired (Stage 10 core) — nothing can ever set
+    // `pattern`/`basis` again, only `due_offset_days` survives here.
     let recurrence_data = Recurrence {
-        pattern: params.recurrence.clone(),
-        basis: params.recurrence_basis.clone(),
+        pattern: None,
+        basis: None,
         due_offset_days: params.due_offset_days,
     };
 
@@ -164,29 +154,6 @@ pub async fn create_item(
             schedule.due_date = new_due_date;
             schedule.has_due_time = false;
         }
-    } else if let Some(pattern) = item.recurrence_pattern()
-        && let Ok(rule) = recurrence::parse(&pattern)
-    {
-        let basis = item
-            .recurrence_basis()
-            .unwrap_or_else(|| "DUE_DATE".to_string());
-        if let Some(schedule) = item.item_type.schedule_mut() {
-            if basis == "DUE_DATE" && schedule.due_date.is_none() {
-                let mut deadline = recurrence::next_date(&rule, chrono::Utc::now(), tz_offset);
-                if rule.time_override.is_none() {
-                    deadline = recurrence::apply_end_of_day(deadline, tz_offset);
-                } else {
-                    schedule.has_due_time = true;
-                }
-                schedule.due_date = Some(deadline);
-            } else if basis != "DUE_DATE" && schedule.scheduled_date.is_none() {
-                let when = recurrence::next_date(&rule, chrono::Utc::now(), tz_offset);
-                if rule.time_override.is_some() {
-                    schedule.has_scheduled_time = true;
-                }
-                schedule.scheduled_date = Some(when);
-            }
-        }
     }
     let item_id = repo.create(&item).await?;
 
@@ -220,8 +187,6 @@ pub struct UpdateItemParams {
     pub scheduled_date: Option<DateTime<Utc>>,
     pub scheduled_end_date: Option<DateTime<Utc>>,
     pub complete: bool,
-    pub recurrence: Option<String>,
-    pub recurrence_basis: Option<String>,
     pub has_due_time: Option<bool>,
     pub has_scheduled_time: Option<bool>,
     pub has_end_time: Option<bool>,
@@ -240,17 +205,6 @@ pub async fn update_item(
     repo: &Arc<dyn ItemRepo>,
     params: UpdateItemParams,
 ) -> Result<(), ItemError> {
-    if let Some(ref r) = params.recurrence {
-        recurrence::parse(r).map_err(ItemError::Invalid)?;
-    }
-    if params.recurrence.is_some()
-        && (params.parent_item_id.is_some() || params.source_event_id.is_some())
-    {
-        return Err(ItemError::Invalid(
-            "child or event-linked items cannot have their own recurrence; set dueOffsetDays instead"
-                .to_string(),
-        ));
-    }
     if params.item_type == Some(ItemKind::Template) {
         return Err(ItemError::Invalid(
             "item_type Template can only be set via the template creation flow"
@@ -297,9 +251,11 @@ pub async fn update_item(
         scheduled_end_date: params.scheduled_end_date,
         has_end_time: params.has_end_time.unwrap_or(false),
     };
+    // Item-level recurrence is retired (Stage 10 core) — nothing can ever set
+    // `pattern`/`basis` again, only `due_offset_days` survives here.
     let recurrence_data = Recurrence {
-        pattern: params.recurrence.clone(),
-        basis: params.recurrence_basis.clone(),
+        pattern: None,
+        basis: None,
         due_offset_days: params.due_offset_days,
     };
 
@@ -338,17 +294,6 @@ pub async fn update_item(
         return Err(ItemError::Invalid(
             "cannot edit a completed item; un-complete it first".to_string(),
         ));
-    }
-
-    if let Some((next_item, next_anchor)) = item.next_recurrence(chrono::Utc::now(), tz_offset) {
-        let next_id = repo.create(&next_item).await?;
-        clone_children(repo, &item.id, &next_id, next_anchor, tz_offset).await?;
-        if item.kind() == ItemKind::Event {
-            repoint_source_event_tasks(repo, &item.id, &next_id, next_anchor, tz_offset).await?;
-        }
-        archive_recurrence(&mut item);
-        repo.update(&item).await?;
-        return Ok(());
     }
 
     repo.update(&item).await?;
@@ -411,66 +356,6 @@ pub(crate) async fn unlink_source_event_tasks(
         repo.update_by_project(&task).await?;
     }
     Ok(())
-}
-
-/// Recursively re-parents the subtree under `old_parent_id` onto `new_parent_id`,
-/// creating fresh (incomplete) copies of every descendant. Used when a recurring
-/// item completes and is replaced by a new instance, so its children aren't
-/// orphaned pointing at the deleted parent.
-///
-/// Every descendant's deadline is recomputed from its own `due_offset_days`
-/// against `root_deadline` — the new deadline of the item that actually recurred,
-/// not each descendant's immediate parent. This is a fixed reference for the
-/// whole subtree, so a grandchild's offset is measured from the same root as a
-/// direct child's, not chained through an intermediate parent's own offset.
-/// Children have no independent recurrence (rejected at input validation), so
-/// their own prior deadline is never consulted — offset-or-none, always.
-pub(crate) fn clone_children<'a>(
-    repo: &'a Arc<dyn ItemRepo>,
-    old_parent_id: &'a str,
-    new_parent_id: &'a str,
-    root_deadline: DateTime<Utc>,
-    tz_offset_minutes: i32,
-) -> Pin<Box<dyn Future<Output = Result<(), RepoError>> + Send + 'a>> {
-    Box::pin(async move {
-        let children = repo.list_children(old_parent_id).await?;
-        for child in children {
-            let mut new_child = child.clone();
-            new_child.id = String::new();
-            new_child.parent_item_id = Some(new_parent_id.to_string());
-            new_child.complete = false;
-            let new_due_date = child.deadline_from_offset(root_deadline, tz_offset_minutes);
-            if let Some(schedule) = new_child.item_type.schedule_mut() {
-                schedule.due_date = new_due_date;
-                schedule.has_due_time = false;
-            }
-            let new_child_id = repo.create(&new_child).await?;
-            clone_children(
-                repo,
-                &child.id,
-                &new_child_id,
-                root_deadline,
-                tz_offset_minutes,
-            )
-            .await?;
-            repo.delete(&child.id).await?;
-        }
-        Ok(())
-    })
-}
-
-/// Strips the recurrence pattern/basis from a just-completed recurring item before it's kept
-/// as a history row (see `update_item`/`update_team_item`) instead of being deleted. Without
-/// this, un-completing the archived row from its own detail page (its read-only checkbox is
-/// still a valid PUT target) and completing it again would call `next_recurrence` a second
-/// time, spawning a duplicate "next occurrence" alongside the one already created by the
-/// original completion. `due_offset_days` is left alone — it only matters on a *child* item,
-/// and this always runs on the top-level item that actually recurred.
-pub(crate) fn archive_recurrence(item: &mut Item) {
-    if let Some(recurrence) = item.item_type.recurrence_mut() {
-        recurrence.pattern = None;
-        recurrence.basis = None;
-    }
 }
 
 /// An item's own reference date for anything measured relative to it (offset children,
@@ -613,36 +498,6 @@ pub(crate) async fn sync_source_event_tasks(
         if let Some(anchor) = item_anchor(&task) {
             sync_offset_children(repo, &task.id, anchor, tz_offset_minutes).await?;
         }
-    }
-    Ok(())
-}
-
-/// Re-points every task referencing `old_event_id` onto `new_event_id` and recomputes its
-/// `due_date` from `next_anchor` — the source-event-reference counterpart to `clone_children`,
-/// called when a recurring Event completes and is replaced by a fresh occurrence. Unlike
-/// `clone_children`, referencing tasks are independent entities, not structurally owned
-/// duplicates of the event, so there's nothing to clone/delete — the reference is simply
-/// updated in place, same ids.
-pub(crate) async fn repoint_source_event_tasks(
-    repo: &Arc<dyn ItemRepo>,
-    old_event_id: &str,
-    new_event_id: &str,
-    next_anchor: DateTime<Utc>,
-    tz_offset_minutes: i32,
-) -> Result<(), RepoError> {
-    let tasks = repo.list_by_source_event(old_event_id).await?;
-    for mut task in tasks {
-        let new_due_date = task.deadline_from_offset(next_anchor, tz_offset_minutes);
-        if let ItemType::Task {
-            source_event_id, ..
-        } = &mut task.item_type
-        {
-            *source_event_id = Some(new_event_id.to_string());
-        }
-        if let Some(schedule) = task.item_type.schedule_mut() {
-            schedule.due_date = new_due_date;
-        }
-        repo.update_by_project(&task).await?;
     }
     Ok(())
 }
@@ -1112,99 +967,6 @@ mod tests {
         .expect_err("should reject Template item_type");
 
         assert!(matches!(err, ItemError::Invalid(_)));
-    }
-
-    #[tokio::test]
-    async fn update_item_recurrence_anchors_child_offset_to_new_scheduled_date_not_stale_due_date() {
-        let mut mock = MockItemRepo::new();
-
-        let stale_due_date = DateTime::parse_from_rfc3339("2020-01-01T00:00:00Z")
-            .unwrap()
-            .with_timezone(&Utc);
-        let scheduled_base = DateTime::parse_from_rfc3339("2026-01-10T12:00:00Z")
-            .unwrap()
-            .with_timezone(&Utc);
-
-        mock.expect_get().returning(move |_, _| {
-            Ok(Item {
-                id: "item1".to_string(),
-                user_id: Some("u1".to_string()),
-                ..Item::default()
-            })
-        });
-
-        // The recurring item itself is re-created fresh (fresh id) with an advanced
-        // scheduled_date; due_date rides along unchanged (still the stale value).
-        mock.expect_create()
-            .withf(|item: &Item| item.parent_item_id.is_none())
-            .times(1)
-            .returning(|_| Ok("new-item-id".to_string()));
-
-        // Called twice: once by the parent-gating check (Stage 5), once by
-        // `clone_children` when the recurrence branch fires. The child is already
-        // complete, matching what parent-gating requires before a fresh completion.
-        mock.expect_list_children()
-            .withf(|parent_id: &str| parent_id == "item1")
-            .times(2)
-            .returning(|_| {
-                let mut child = task_with_due_offset("child1", "item1", 2);
-                child.complete = true;
-                Ok(vec![child])
-            });
-
-        let rule = recurrence::parse("every week").unwrap();
-        let expected_scheduled = recurrence::next_date(&rule, scheduled_base, 0);
-        let expected_child_due =
-            recurrence::apply_end_of_day(expected_scheduled + chrono::Duration::days(2), 0);
-
-        mock.expect_create()
-            .withf(move |item: &Item| {
-                item.parent_item_id.as_deref() == Some("new-item-id")
-                    && item.due_date() == Some(expected_child_due)
-            })
-            .times(1)
-            .returning(|_| Ok("new-child-id".to_string()));
-
-        mock.expect_list_children()
-            .withf(|parent_id: &str| parent_id == "child1")
-            .times(1)
-            .returning(|_| Ok(vec![]));
-
-        mock.expect_delete()
-            .withf(|id: &str| id == "child1")
-            .times(1)
-            .returning(|_| Ok(()));
-
-        // The just-completed occurrence is kept as history (not deleted) with its own
-        // recurrence config stripped so it can't independently re-fire.
-        mock.expect_update()
-            .withf(|item: &Item| {
-                item.id == "item1"
-                    && item.complete
-                    && item.recurrence_pattern().is_none()
-                    && item.recurrence_basis().is_none()
-            })
-            .times(1)
-            .returning(|_| Ok(()));
-
-        let repo: Arc<dyn ItemRepo> = Arc::new(mock);
-
-        update_item(
-            &repo,
-            UpdateItemParams {
-                user_id: "u1".to_string(),
-                item_id: "item1".to_string(),
-                name: "Work session".to_string(),
-                complete: true,
-                recurrence: Some("every week".to_string()),
-                recurrence_basis: Some("SCHEDULED_DATE".to_string()),
-                scheduled_date: Some(scheduled_base),
-                due_date: Some(stale_due_date),
-                ..Default::default()
-            },
-        )
-        .await
-        .expect("should recur and clone children");
     }
 
     #[tokio::test]

@@ -77,8 +77,6 @@ pub async fn new_project_event_page(
     render(NewProjectEventPageTemplate {
         project_id,
         show_complete: q.show_complete.is_some(),
-        blank_recurrence: None,
-        blank_recurrence_basis: Some("SCHEDULED_DATE".to_string()),
         blank_event_type_input: String::new(),
         blank_scheduled_date_input: String::new(),
         blank_scheduled_time_input: String::new(),

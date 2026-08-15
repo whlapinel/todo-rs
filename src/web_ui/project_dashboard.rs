@@ -637,8 +637,6 @@ pub async fn toggle_project_dashboard_item_complete(
         scheduled_date: current.scheduled_date(),
         scheduled_end_date: current.scheduled_end_date(),
         complete: form.complete.as_deref() == Some("true"),
-        recurrence: current.recurrence_pattern(),
-        recurrence_basis: current.recurrence_basis(),
         has_due_time: Some(current.has_due_time()),
         has_scheduled_time: Some(current.has_scheduled_time()),
         has_end_time: Some(current.has_end_time()),

@@ -23,10 +23,6 @@ structure DueItemSummary {
 
     complete: Boolean
 
-    recurrence: String
-
-    recurrenceBasis: String
-
     hasDueTime: Boolean
 }
 
@@ -81,10 +77,6 @@ structure AssignedItemSummary {
     scheduledDate: Timestamp
 
     complete: Boolean
-
-    recurrence: String
-
-    recurrenceBasis: String
 
     hasDueTime: Boolean
 }

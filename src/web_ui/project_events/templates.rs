@@ -6,15 +6,6 @@ use chrono::Utc;
 
 // ---- templates --------------------------------------------------------------
 
-pub fn recurrence_basis_label(recurrence_basis: &Option<String>) -> String {
-    match recurrence_basis.as_deref() {
-        Some("COMPLETION_DATE") => "completion date".to_string(),
-        Some("SCHEDULED_DATE") => "scheduled date".to_string(),
-        Some(other) if other != "DUE_DATE" => other.to_string(),
-        _ => "due date".to_string(),
-    }
-}
-
 /// Builds a generic `components::row::Row` rather than an Event-specific template of its
 /// own — the same reuse `ProjectTaskRow` (stage B5a) established. An Event is always
 /// top-level (see `project_events::require_event`'s doc comment on why it can never have
@@ -53,7 +44,6 @@ impl ProjectEventRow {
             expanded_row: true,
             has_children: false,
             offset_label: None,
-            recurrence: item.recurrence_pattern(),
             assignee_name: None,
             complete_url: Some(format!("/web/projects/{project_id}/events/{}", item.id)),
             toggle_complete_json: (!item.complete).to_string(),
@@ -78,8 +68,6 @@ pub struct ProjectEventDetailFields {
     pub due_date_input: String,
     pub due_time_input: String,
     pub event_type_input: String,
-    pub recurrence: Option<String>,
-    pub recurrence_basis: Option<String>,
     /// Set only on the fragment returned by a successful save — see `items.rs`'s
     /// `DetailFields.just_saved` for the full rationale.
     pub just_saved: bool,
@@ -133,8 +121,6 @@ impl ProjectEventDetailFields {
             due_date_input,
             due_time_input,
             event_type_input: item.event_type().unwrap_or_default(),
-            recurrence: item.recurrence_pattern(),
-            recurrence_basis: item.recurrence_basis(),
             just_saved,
         }
     }
@@ -155,8 +141,6 @@ pub struct ProjectEventDetailView {
     pub due_date: Option<String>,
     pub overdue: bool,
     pub event_type: Option<String>,
-    pub recurrence: Option<String>,
-    pub recurrence_basis_label: String,
 }
 
 impl ProjectEventDetailView {
@@ -196,8 +180,6 @@ impl ProjectEventDetailView {
             due_date,
             overdue: item.is_overdue(Utc::now()),
             event_type: item.event_type(),
-            recurrence: item.recurrence_pattern(),
-            recurrence_basis_label: recurrence_basis_label(&item.recurrence_basis()),
         }
     }
 }
@@ -223,8 +205,6 @@ pub struct ProjectEventsListPageTemplate {
 pub struct NewProjectEventPageTemplate {
     pub project_id: String,
     pub show_complete: bool,
-    pub blank_recurrence: Option<String>,
-    pub blank_recurrence_basis: Option<String>,
     pub blank_event_type_input: String,
     pub blank_scheduled_date_input: String,
     pub blank_scheduled_time_input: String,

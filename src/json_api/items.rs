@@ -52,8 +52,6 @@ pub async fn list_items_due(
                     .scheduled_date()
                     .map(|dt| SmithyDateTime::from_secs(dt.timestamp())),
                 complete: Some(di.item.complete),
-                recurrence: di.item.recurrence_pattern(),
-                recurrence_basis: di.item.recurrence_basis(),
                 has_due_time: Some(di.item.has_due_time()),
             }
         })
@@ -101,8 +99,6 @@ pub async fn list_assigned_items(
                     .scheduled_date()
                     .map(|dt| SmithyDateTime::from_secs(dt.timestamp())),
                 complete: Some(i.complete),
-                recurrence: i.recurrence_pattern(),
-                recurrence_basis: i.recurrence_basis(),
                 has_due_time: Some(i.has_due_time()),
             }
         })

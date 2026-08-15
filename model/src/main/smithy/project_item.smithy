@@ -24,8 +24,6 @@ resource ProjectItem {
         scheduledDate: Timestamp
         scheduledEndDate: Timestamp
         complete: Boolean
-        recurrence: String
-        recurrenceBasis: String
         hasDueTime: Boolean
         hasScheduledTime: Boolean
         hasEndTime: Boolean
@@ -64,10 +62,6 @@ operation CreateProjectItem {
         $scheduledEndDate
 
         $complete
-
-        $recurrence
-
-        $recurrenceBasis
 
         $hasDueTime
 
@@ -131,10 +125,6 @@ operation GetProjectItem {
         @required
         $complete
 
-        $recurrence
-
-        $recurrenceBasis
-
         $hasDueTime
 
         $hasScheduledTime
@@ -188,10 +178,6 @@ operation UpdateProjectItem {
 
         @required
         $complete
-
-        $recurrence
-
-        $recurrenceBasis
 
         $hasDueTime
 
@@ -256,8 +242,6 @@ structure ProjectItemSummary for ProjectItem {
     $scheduledDate
     $scheduledEndDate
     $complete
-    $recurrence
-    $recurrenceBasis
     $hasDueTime
     $hasScheduledTime
     $hasEndTime

@@ -12,15 +12,6 @@ use chrono::Utc;
 
 // ---- templates --------------------------------------------------------------
 
-pub fn recurrence_basis_label(recurrence_basis: &Option<String>) -> String {
-    match recurrence_basis.as_deref() {
-        Some("COMPLETION_DATE") => "completion date".to_string(),
-        Some("SCHEDULED_DATE") => "scheduled date".to_string(),
-        Some(other) if other != "DUE_DATE" => other.to_string(),
-        _ => "due date".to_string(),
-    }
-}
-
 pub fn offset_label_for(item: &Item) -> Option<String> {
     if !item.is_offset_driven() {
         return None;
@@ -94,7 +85,6 @@ impl ProjectTaskRow {
                 || assignee_name.is_some(),
             has_children: item.has_children,
             offset_label,
-            recurrence: item.recurrence_pattern(),
             assignee_name,
             complete_url: Some(format!("/web/projects/{project_id}/tasks/{}", item.id)),
             toggle_complete_json: (!item.complete).to_string(),
@@ -165,8 +155,6 @@ pub struct ProjectTaskDetailFields {
     pub scheduled_time_input: String,
     pub scheduled_end_date_input: String,
     pub scheduled_end_time_input: String,
-    pub recurrence: Option<String>,
-    pub recurrence_basis: Option<String>,
     pub due_offset_days_input: String,
     /// True for a team-backed project — gates the "Assign to"/points markup, which never
     /// renders at all on a personal project (not just hidden — see
@@ -242,8 +230,6 @@ impl ProjectTaskDetailFields {
             scheduled_time_input,
             scheduled_end_date_input,
             scheduled_end_time_input,
-            recurrence: item.recurrence_pattern(),
-            recurrence_basis: item.recurrence_basis(),
             due_offset_days_input: format_offset_input(item.due_offset_days()),
             is_team_project,
             assignee_options,
@@ -271,8 +257,6 @@ pub struct ProjectTaskDetailView {
     pub scheduled_end_date: Option<String>,
     pub is_top_level: bool,
     pub is_offset_driven: bool,
-    pub recurrence: Option<String>,
-    pub recurrence_basis_label: String,
     pub offset_label: Option<String>,
     pub is_team_project: bool,
     pub assignee_name: Option<String>,
@@ -325,8 +309,6 @@ impl ProjectTaskDetailView {
             scheduled_end_date,
             is_top_level: item.parent_item_id.is_none(),
             is_offset_driven: item.is_offset_driven(),
-            recurrence: item.recurrence_pattern(),
-            recurrence_basis_label: recurrence_basis_label(&item.recurrence_basis()),
             offset_label: offset_label_for(item),
             is_team_project,
             assignee_name: item
@@ -388,9 +370,6 @@ pub struct NewProjectTaskPageTemplate {
     pub show_complete: bool,
     pub is_team_project: bool,
     pub assignee_options: Vec<(String, String)>,
-    pub blank_recurrence: Option<String>,
-    pub blank_recurrence_basis: Option<String>,
-    pub blank_due_offset_days_input: String,
     pub blank_scheduled_date_input: String,
     pub blank_scheduled_time_input: String,
     pub blank_scheduled_end_date_input: String,

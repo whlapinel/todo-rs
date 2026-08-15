@@ -39,11 +39,6 @@ pub enum ItemsCommand {
         parent: Option<String>,
         #[arg(
             long,
-            help = "Recurrence pattern, e.g. 'every week' (top-level items only)"
-        )]
-        recurrence: Option<String>,
-        #[arg(
-            long,
             help = "Days from the top-level item's due date (child items only; negative = before, positive = after)"
         )]
         due_offset_days: Option<i32>,
@@ -172,7 +167,6 @@ pub async fn cmd_items(client: &Client, cmd: ItemsCommand, user_id: Option<Strin
             description,
             due,
             parent,
-            recurrence,
             due_offset_days,
             item_type,
             event_type,
@@ -183,12 +177,6 @@ pub async fn cmd_items(client: &Client, cmd: ItemsCommand, user_id: Option<Strin
             assign,
             points,
         } => {
-            if parent.is_some() && recurrence.is_some() {
-                eprintln!(
-                    "error: --recurrence can't be combined with --parent — child items can't have their own recurrence; use --due-offset-days instead"
-                );
-                std::process::exit(1);
-            }
             if event_type.is_some()
                 && item_type.as_deref().map(str::to_lowercase).as_deref() != Some("event")
             {
@@ -200,12 +188,6 @@ pub async fn cmd_items(client: &Client, cmd: ItemsCommand, user_id: Option<Strin
             if parent.is_some() && source_event_id.is_some() {
                 eprintln!(
                     "error: --source-event-id can't be combined with --parent — an item either nests under a parent or references an event, not both"
-                );
-                std::process::exit(1);
-            }
-            if source_event_id.is_some() && recurrence.is_some() {
-                eprintln!(
-                    "error: --recurrence can't be combined with --source-event-id — event-linked items can't have their own recurrence; use --due-offset-days instead"
                 );
                 std::process::exit(1);
             }
@@ -232,9 +214,6 @@ pub async fn cmd_items(client: &Client, cmd: ItemsCommand, user_id: Option<Strin
             }
             if let Some(p) = parent {
                 req = req.parent_item_id(p);
-            }
-            if let Some(r) = recurrence {
-                req = req.recurrence(r);
             }
             if let Some(o) = due_offset_days {
                 req = req.due_offset_days(o);
@@ -296,12 +275,6 @@ pub async fn cmd_items(client: &Client, cmd: ItemsCommand, user_id: Option<Strin
                 .set_due_date(item.due_date().cloned());
             if let Some(d) = item.description() {
                 req = req.description(d);
-            }
-            if let Some(r) = item.recurrence() {
-                req = req.recurrence(r);
-            }
-            if let Some(b) = item.recurrence_basis() {
-                req = req.recurrence_basis(b);
             }
             if let Some(t) = item.has_due_time() {
                 req = req.has_due_time(t);
@@ -414,7 +387,6 @@ pub async fn cmd_items(client: &Client, cmd: ItemsCommand, user_id: Option<Strin
             println!("due:        {}", fmt_date_opt(item.due_date()));
             println!("scheduled:  {}", fmt_date_opt(item.scheduled_date()));
             println!("sched end:  {}", fmt_date_opt(item.scheduled_end_date()));
-            println!("recurrence: {}", item.recurrence().unwrap_or("-"));
             println!(
                 "offset:     {}",
                 item.due_offset_days()
