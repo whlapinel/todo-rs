@@ -12,6 +12,8 @@ impl ProjectItemSeriesRow {
         assignee_name: Option<String>,
     ) -> Row {
         Row {
+            id: s.id.clone(),
+            project_id: s.project_id.clone(),
             name: s.name.clone(),
             recurrence: s.recurrence.clone(),
             event_type: s.event_type.clone(),
@@ -30,6 +32,8 @@ impl ProjectItemSeriesRow {
 #[derive(Template)]
 #[template(path = "project_item_series/row.html")]
 pub struct Row {
+    pub id: String,
+    pub project_id: String,
     pub name: String,
     pub recurrence: String,
     pub event_type: Option<String>,
@@ -64,4 +68,27 @@ pub struct NewProjectItemSeriesPageTemplate {
     pub is_team_project: bool,
     pub assignee_options: Vec<(String, String)>,
     pub is_team_admin: bool,
+}
+
+#[derive(Template)]
+#[template(path = "project_item_series/edit_page.html")]
+pub struct EditProjectItemSeriesPageTemplate {
+    pub project_id: String,
+    pub series_id: String,
+    pub nav_html: String,
+    pub name: String,
+    pub description: String,
+    pub is_task: bool,
+    pub recurrence: String,
+    pub basis_checked: bool,
+    pub anchor_date: String,
+    pub anchor_time: String,
+    /// Same shape as `NewProjectItemSeriesPageTemplate` — see its own field docs.
+    pub templates: Vec<(String, String)>,
+    pub template_item_id: Option<String>,
+    pub is_team_project: bool,
+    pub assignee_options: Vec<(String, String)>,
+    pub assigned_to_user_id: Option<String>,
+    pub is_team_admin: bool,
+    pub points: Option<i32>,
 }

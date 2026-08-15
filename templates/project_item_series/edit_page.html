@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+{% import "macros.html" as macros %}
+{% block title %}Edit series · Todo{% endblock %}
+{% block content %}
+<div class="space-y-6">
+  <div class="md:flex md:items-center md:justify-between">
+    <div class="min-w-0 flex-1">
+      <h2 class="text-2xl/7 font-bold text-gray-900 sm:truncate sm:text-3xl sm:tracking-tight dark:text-white">Edit series</h2>
+    </div>
+    <div class="mt-4 flex items-center gap-x-3 md:mt-0 md:ml-4">
+      <a href="/web/projects/{{ project_id }}/series" hx-target="#page" hx-select="#page" hx-swap="innerHTML"
+         class="inline-flex items-center justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-xs inset-ring inset-ring-gray-300 hover:bg-gray-50 dark:bg-white/10 dark:text-white dark:shadow-none dark:inset-ring-white/5 dark:hover:bg-white/20">Back to series</a>
+    </div>
+  </div>
+
+  <form hx-put="/web/projects/{{ project_id }}/series/{{ series_id }}" hx-target="#page" hx-select="#page" hx-swap="innerHTML"
+        class="rounded-lg border border-gray-200 bg-white p-4 space-y-3 dark:border-white/10 dark:bg-gray-800/50">
+    <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Name <span class="text-red-500" aria-hidden="true">*</span>
+      <div class="mt-2">
+        <input type="text" name="name" value="{{ name }}" placeholder="New series" required maxlength="200"
+               class="block w-full rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 placeholder:text-gray-400 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:placeholder:text-gray-500 dark:focus:outline-indigo-500" />
+      </div>
+    </label>
+    {% call macros::description_field(description) %}{% endcall %}
+    <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Kind <span class="text-red-500" aria-hidden="true">*</span>
+      <span class="mt-2 flex gap-4">
+        <label class="inline-flex items-center gap-1.5 text-sm font-normal text-gray-900 dark:text-white">
+          <input type="radio" name="itemType" value="TASK" {% if is_task %}checked{% endif %}
+                 class="size-4 border-gray-300 text-indigo-600 focus:ring-indigo-600 dark:border-white/20 dark:bg-white/5" /> Task
+        </label>
+        <label class="inline-flex items-center gap-1.5 text-sm font-normal text-gray-900 dark:text-white">
+          <input type="radio" name="itemType" value="EVENT" {% if !is_task %}checked{% endif %}
+                 class="size-4 border-gray-300 text-indigo-600 focus:ring-indigo-600 dark:border-white/20 dark:bg-white/5" /> Event
+        </label>
+      </span>
+    </label>
+    <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Repeat <span class="text-red-500" aria-hidden="true">*</span>
+      <div class="mt-2">
+        <input type="text" name="recurrence" value="{{ recurrence }}" placeholder="e.g. every monday" required
+               class="block w-full rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 placeholder:text-gray-400 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:placeholder:text-gray-500 dark:focus:outline-indigo-500" />
+      </div>
+    </label>
+    <!-- event_type is currently unsupported on any item series (see
+         validate_series_event_type in src/service/item_series.rs) — no form field for it
+         here, unlike the real Event/Template screens that still use
+         macros::event_type_field. -->
+    <div class="completion-basis-field">
+      <label class="inline-flex items-center gap-1.5 text-sm font-normal text-gray-900 dark:text-white">
+        <input type="checkbox" name="basis" value="COMPLETION" {% if basis_checked %}checked{% endif %}
+               class="size-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-600 dark:border-white/20 dark:bg-white/5" />
+        Base next occurrence on completion time, not schedule
+      </label>
+    </div>
+    <div class="template-field">
+      <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Children template
+        <div class="mt-2">
+          <select name="templateItemId"
+                  class="block w-full rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:focus:outline-indigo-500">
+            <option value="" {% if template_item_id.is_none() %}selected{% endif %}>None</option>
+            {% for (id, name) in templates %}
+            <option value="{{ id }}" {% if template_item_id.as_deref() == Some(id.as_str()) %}selected{% endif %}>{{ name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+      </label>
+      <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">If set, this template's children are copied onto every occurrence when it's materialized. Manage the template's children from the Templates screen.</p>
+    </div>
+    {% if is_team_project %}
+    <div class="assignment-field flex items-center gap-x-4">
+      <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Assign to
+        <div class="mt-2 grid grid-cols-1">
+          <select name="assignedToUserId"
+                  class="col-start-1 row-start-1 block w-full appearance-none rounded-md bg-white py-1.5 pr-8 pl-3 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:*:bg-gray-800 dark:focus:outline-indigo-500">
+            <option value="" {% if assigned_to_user_id.is_none() %}selected{% endif %}>Unassigned</option>
+            {% for opt in assignee_options %}
+            <option value="{{ opt.0 }}" {% if assigned_to_user_id.as_deref() == Some(opt.0.as_str()) %}selected{% endif %}>{{ opt.1 }}</option>
+            {% endfor %}
+          </select>
+        </div>
+      </label>
+    </div>
+    {% if is_team_admin %}
+    <div class="assignment-field">
+      <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Points
+        <div class="mt-2">
+          <input type="number" name="points" min="0" value="{% if let Some(p) = points %}{{ p }}{% endif %}"
+                 class="block w-full rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 placeholder:text-gray-400 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:placeholder:text-gray-500 dark:focus:outline-indigo-500" />
+        </div>
+      </label>
+      <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">Awarded to the assignee each time an occurrence of this series is completed.</p>
+    </div>
+    {% endif %}
+    {% endif %}
+    <script>
+    (function() {
+      var form = document.currentScript.closest("form");
+      if (!form) return;
+      function toggle() {
+        var isTask = form.querySelector('input[name="itemType"][value="TASK"]').checked;
+        form.querySelectorAll(".completion-basis-field, .template-field, .assignment-field").forEach(function (el) {
+          el.hidden = !isTask;
+          el.querySelectorAll("input, select").forEach(function (field) {
+            field.disabled = !isTask;
+          });
+        });
+      }
+      form.querySelectorAll('input[name="itemType"]').forEach(function (radio) {
+        radio.addEventListener("change", toggle);
+      });
+      toggle();
+    })();
+    </script>
+    <div class="border-t border-gray-100 pt-3 dark:border-white/5">
+      <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Anchor date <span class="text-red-500" aria-hidden="true">*</span>
+        <div class="mt-2 flex items-end gap-x-2">
+          <input type="date" name="anchorDate" value="{{ anchor_date }}" required
+                 class="rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:focus:outline-indigo-500" />
+          <input type="time" name="anchorTime" value="{{ anchor_time }}"
+                 class="rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:focus:outline-indigo-500" />
+        </div>
+      </label>
+    </div>
+    {% call macros::button_primary("Save") %}{% endcall %}
+  </form>
+</div>
+{% endblock %}

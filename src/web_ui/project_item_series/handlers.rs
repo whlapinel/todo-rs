@@ -1,14 +1,14 @@
 use crate::auth::AuthUser;
 use crate::domain::item::ItemKind;
 use crate::service::error::ItemError;
-use crate::service::item_series::{self as item_series_service, CreateItemSeriesParams};
+use crate::service::item_series::{self as item_series_service, CreateItemSeriesParams, UpdateItemSeriesParams};
 use crate::service::projects::{self as project_service};
 use crate::storage::sqlite::{ItemRepo, ItemSeriesRepo, ProjectRepo, TeamRepo};
 use crate::web_ui::nav::{self, ActiveContext, SidebarSection};
 use crate::web_ui::project_item_series::templates::*;
 use crate::web_ui::project_item_series::{combine_local_to_utc, non_empty, render, start_of_day};
 use crate::web_ui::project_tasks::{active_member_options, names_for};
-use crate::web_ui::TzOffset;
+use crate::web_ui::{to_local, TzOffset};
 use askama::Template;
 use axum::extract::{Extension, Form, Path};
 use axum::http::header::HeaderName;
@@ -292,4 +292,124 @@ pub async fn skip_project_item_series_occurrence_form(
     item_series_service::skip_occurrence(&item_series, &series_id, occurrence_date, tz).await?;
 
     Ok(Html(String::new()).into_response())
+}
+
+pub async fn edit_project_item_series_page(
+    Path((project_id, series_id)): Path<(String, String)>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(item_series): Extension<Arc<dyn ItemSeriesRepo>>,
+    TzOffset(tz): TzOffset,
+) -> Result<Html<String>, ItemError> {
+    let series = item_series_service::get_series(
+        &projects,
+        &teams,
+        &item_series,
+        &auth_user.user_id,
+        &series_id,
+    )
+    .await?;
+    if series.project_id != project_id {
+        return Err(ItemError::NotFound);
+    }
+    let project = project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
+    let templates = repo
+        .list_templates_by_project(&project_id)
+        .await?
+        .into_iter()
+        .map(|t| (t.id, t.name))
+        .collect();
+    let is_team_project = project.team_id.is_some();
+    let (assignee_options, is_team_admin) = match &project.team_id {
+        Some(team_id) => (
+            active_member_options(&teams, team_id, &auth_user.user_id).await?,
+            project_service::is_project_admin(&projects, &teams, &project_id, &auth_user.user_id).await,
+        ),
+        None => (Vec::new(), false),
+    };
+    let local_anchor = to_local(series.anchor_date, tz);
+    let nav_html = nav::build_nav_html(
+        &projects,
+        &auth_user.user_id,
+        active_context(&project_id),
+        SidebarSection::ItemSeries,
+    )
+    .await?;
+    render(EditProjectItemSeriesPageTemplate {
+        project_id,
+        series_id,
+        nav_html,
+        name: series.name,
+        description: series.description.unwrap_or_default(),
+        is_task: series.item_type == ItemKind::Task,
+        recurrence: series.recurrence,
+        basis_checked: series.basis.as_deref() == Some("COMPLETION"),
+        anchor_date: local_anchor.format("%Y-%m-%d").to_string(),
+        anchor_time: local_anchor.format("%H:%M").to_string(),
+        templates,
+        template_item_id: series.template_item_id,
+        is_team_project,
+        assignee_options,
+        assigned_to_user_id: series.assigned_to_user_id,
+        is_team_admin,
+        points: series.points,
+    })
+}
+
+pub async fn update_project_item_series_form(
+    Path((project_id, series_id)): Path<(String, String)>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(item_series): Extension<Arc<dyn ItemSeriesRepo>>,
+    TzOffset(tz): TzOffset,
+    Form(form): Form<CreateItemSeriesForm>,
+) -> Result<Response, ItemError> {
+    let anchor_date = combine_local_to_utc(
+        form.anchor_date.trim(),
+        form.anchor_time.as_deref(),
+        tz,
+        start_of_day(),
+    )
+    .ok_or_else(|| ItemError::Invalid("anchor date is required".to_string()))?;
+    let item_type = parse_item_type(&form.item_type)?;
+
+    item_series_service::update_series(
+        &repo,
+        &projects,
+        &teams,
+        &item_series,
+        &auth_user.user_id,
+        &series_id,
+        UpdateItemSeriesParams {
+            name: form.name.trim().to_string(),
+            description: non_empty(&form.description),
+            event_type: non_empty(&form.event_type),
+            recurrence: form.recurrence.trim().to_string(),
+            anchor_date,
+            item_type,
+            basis: form.basis,
+            template_item_id: non_empty(&form.template_item_id),
+            assigned_to_user_id: non_empty(&form.assigned_to_user_id),
+            points: form
+                .points
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .and_then(|s| s.parse().ok()),
+        },
+    )
+    .await?;
+
+    Ok((
+        [(
+            HeaderName::from_static("hx-redirect"),
+            format!("/web/projects/{project_id}/series"),
+        )],
+        Html(String::new()),
+    )
+        .into_response())
 }
