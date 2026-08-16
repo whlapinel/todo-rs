@@ -113,7 +113,7 @@ pub async fn skip_occurrence(
     tz_offset_minutes: i32,
 ) -> Result<(), ItemError> {
     let series = event_series.get_series(series_id).await?;
-    require_current_occurrence(&series, occurrence_date, tz_offset_minutes)?;
+    require_current_occurrence(event_series, &series, occurrence_date, tz_offset_minutes).await?;
     event_series.mark_exdate(series_id, occurrence_date).await?;
     // Stage 9: skipping settles the occurrence exactly like completing one does — see
     // record_task_completion's doc comment below for why this is symmetric. Meaningless
@@ -136,7 +136,22 @@ pub async fn skip_occurrence(
 /// "Current" can validly be in the future, present, or past — only settling
 /// something *beyond* current is disallowed. Always `Ok` for an Event-typed series
 /// (no cursor/current concept, unchanged from today).
-fn require_current_occurrence(
+///
+/// **2026-08-16: self-heals a "current" that's already marked exdate.** A cursor
+/// landing exactly on an excluded date should never happen under normal settlement
+/// (`skip_occurrence`/`record_task_completion` both always advance one full step past
+/// whatever they settle), but it can happen out of band — e.g. deleting a materialized
+/// *non-current* future occurrence marks it exdate without touching the cursor (by
+/// design — that deletion never happened to be "current" at the time), and the cursor
+/// can later walk forward into that same date through entirely normal, one-step-at-a-
+/// time settlement. Rather than leaving the series permanently wedged there (the shape
+/// of bug that blocked a real production series for six days — see
+/// `unlink_deleted_item_occurrence`'s doc comment above), walk forward past any
+/// consecutive already-exdate dates before comparing, persisting each step via
+/// `advance_cursor` exactly like an automatic skip, so the correction sticks instead of
+/// being silently recomputed (and rejected on) every call.
+async fn require_current_occurrence(
+    event_series: &Arc<dyn ItemSeriesRepo>,
     series: &ItemSeries,
     occurrence_date: DateTime<Utc>,
     tz_offset_minutes: i32,
@@ -145,7 +160,14 @@ fn require_current_occurrence(
         return Ok(());
     }
     let rule = recurrence::parse(&series.recurrence).map_err(ItemError::Invalid)?;
-    let current = current_occurrence_date(series, &rule, tz_offset_minutes);
+    let mut current = current_occurrence_date(series, &rule, tz_offset_minutes);
+    while let Some(occurrence) = event_series.get_occurrence(&series.id, current).await? {
+        if !occurrence.is_exdate {
+            break;
+        }
+        event_series.advance_cursor(&series.id, current).await?;
+        current = recurrence::advance_once(&rule, current, tz_offset_minutes);
+    }
     if occurrence_date != current {
         return Err(ItemError::Invalid(format!(
             "cannot settle this occurrence out of order — the series' current \
@@ -169,7 +191,7 @@ pub async fn validate_completable(
 ) -> Result<(), ItemError> {
     if let Some(occurrence) = event_series.find_occurrence_by_item_id(item_id).await? {
         let series = event_series.get_series(&occurrence.series_id).await?;
-        require_current_occurrence(&series, occurrence.occurrence_date, tz_offset_minutes)?;
+        require_current_occurrence(event_series, &series, occurrence.occurrence_date, tz_offset_minutes).await?;
     }
     Ok(())
 }
@@ -1215,6 +1237,8 @@ mod tests {
         task_series.anchor_date = occurrence_date();
         let mut series_mock = MockItemSeriesRepo::new();
         series_mock.expect_get_series().returning(move |_| Ok(task_series.clone()));
+        // No exdate row at the current date to self-heal past (2026-08-16 fix).
+        series_mock.expect_get_occurrence().returning(|_, _| Ok(None));
         series_mock.expect_mark_exdate().returning(|_, _| Ok(()));
         series_mock
             .expect_advance_cursor()
@@ -1236,6 +1260,8 @@ mod tests {
         task_series.anchor_date = occurrence_date();
         let mut series_mock = MockItemSeriesRepo::new();
         series_mock.expect_get_series().returning(move |_| Ok(task_series.clone()));
+        // No exdate row at the current date to self-heal past (2026-08-16 fix).
+        series_mock.expect_get_occurrence().returning(|_, _| Ok(None));
         series_mock.expect_mark_exdate().returning(|_, _| Ok(()));
         series_mock
             .expect_advance_cursor()
@@ -1263,6 +1289,8 @@ mod tests {
         // is not the series' current occurrence.
         let mut series_mock = MockItemSeriesRepo::new();
         series_mock.expect_get_series().returning(move |_| Ok(task_series.clone()));
+        // No exdate row at the (actual) current date to self-heal past (2026-08-16 fix).
+        series_mock.expect_get_occurrence().returning(|_, _| Ok(None));
         series_mock.expect_mark_exdate().times(0);
         series_mock.expect_advance_cursor().times(0);
         let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
@@ -1286,10 +1314,55 @@ mod tests {
             }))
         });
         series_mock.expect_get_series().returning(move |_| Ok(task_series.clone()));
+        // No exdate row at the (actual) current date to self-heal past (2026-08-16 fix).
+        series_mock.expect_get_occurrence().returning(|_, _| Ok(None));
         let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let result = validate_completable(&event_series, "completed-item", 0).await;
         assert!(matches!(result, Err(ItemError::Invalid(_))));
+    }
+
+    /// 2026-08-16 fix: a "current" that's already marked exdate (out-of-band — e.g. a
+    /// non-current materialized occurrence deleted before the cursor ever reached it)
+    /// must not permanently wedge the series there. `require_current_occurrence` should
+    /// walk forward past it, persisting the correction, and treat the next (non-exdate)
+    /// date as current.
+    #[tokio::test]
+    async fn validate_completable_self_heals_past_an_exdate_current_occurrence() {
+        let mut task_series = series("p1");
+        task_series.item_type = ItemKind::Task;
+        // "every 7 days" (series()'s recurrence) — anchor is exdate, one step later
+        // (occurrence_date()) is the real, unsettled, completable occurrence.
+        let stuck_anchor = occurrence_date() - chrono::Duration::days(7);
+        task_series.anchor_date = stuck_anchor;
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock.expect_find_occurrence_by_item_id().returning(|_| {
+            Ok(Some(ItemOccurrence {
+                series_id: "s1".to_string(),
+                occurrence_date: occurrence_date(),
+                item_id: Some("completed-item".to_string()),
+                is_exdate: false,
+            }))
+        });
+        series_mock.expect_get_series().returning(move |_| Ok(task_series.clone()));
+        series_mock.expect_get_occurrence().returning(move |_, date| {
+            Ok(Some(ItemOccurrence {
+                series_id: "s1".to_string(),
+                occurrence_date: date,
+                item_id: None,
+                is_exdate: date == stuck_anchor,
+            }))
+        });
+        series_mock
+            .expect_advance_cursor()
+            .withf(move |series_id: &str, date: &DateTime<Utc>| series_id == "s1" && *date == stuck_anchor)
+            .times(1)
+            .returning(|_, _| Ok(()));
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        validate_completable(&event_series, "completed-item", 0)
+            .await
+            .expect("should self-heal past the exdate anchor and allow the next occurrence");
     }
 
     #[tokio::test]
@@ -1308,6 +1381,8 @@ mod tests {
             }))
         });
         series_mock.expect_get_series().returning(move |_| Ok(task_series.clone()));
+        // No exdate row at the current date to self-heal past (2026-08-16 fix).
+        series_mock.expect_get_occurrence().returning(|_, _| Ok(None));
         let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         validate_completable(&event_series, "completed-item", 0)
