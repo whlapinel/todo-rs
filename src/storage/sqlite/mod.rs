@@ -293,15 +293,28 @@ pub trait ItemSeriesRepo: Send + Sync {
         item_id: &str,
     ) -> Result<(), RepoError>;
     /// Upserts the `(series_id, occurrence_date)` row with `is_exdate = true` and
-    /// `item_id` cleared — the EXDATE-equivalent "skip this date" marker. Stage 6 of
-    /// docs/recurring-events-virtual-occurrences-rough-plan.md resolved the "what
-    /// happens to an already-materialized occurrence" question deferred here at
-    /// stage 3: skipping a materialized occurrence deletes its `items` row first
-    /// (see `service::item_series::unlink_deleted_item_occurrence`), so by the time
-    /// this runs there is never a live item behind the row it's clearing — clearing
-    /// `item_id` unconditionally is therefore always correct, not just for the
-    /// purely-virtual case.
+    /// `item_id` cleared — the EXDATE-equivalent "skip this date" marker, and the
+    /// *only* path that should ever set `is_exdate`. Deleting a materialized
+    /// occurrence's item does **not** call this (see `delete_occurrence` below) —
+    /// 2026-08-16, second pass: an item delete un-materializes the occurrence
+    /// instead, since "I deleted this item" and "I explicitly excluded this date
+    /// from the series forever" are different intents, and only Skip means the
+    /// latter.
     async fn mark_exdate(
+        &self,
+        series_id: &str,
+        occurrence_date: DateTime<Utc>,
+    ) -> Result<(), RepoError>;
+    /// Deletes the `(series_id, occurrence_date)` row outright, if one exists —
+    /// un-materializes the occurrence rather than excluding it, so it goes back to
+    /// being a plain virtual occurrence: re-materializable, and (if it's the
+    /// series' current occurrence) still current, just itemless again rather than
+    /// stuck. Called from `service::item_series::unlink_deleted_item_occurrence`
+    /// when a series-linked item is deleted — deliberately distinct from
+    /// `mark_exdate`, which stays the one and only way to actually exclude a date
+    /// (via the explicit Skip action). A no-op (not an error) if no row exists for
+    /// the date, matching `mark_exdate`'s upsert-style tolerance of either state.
+    async fn delete_occurrence(
         &self,
         series_id: &str,
         occurrence_date: DateTime<Utc>,
@@ -317,10 +330,10 @@ pub trait ItemSeriesRepo: Send + Sync {
         range_end: DateTime<Utc>,
     ) -> Result<Vec<ItemOccurrence>, RepoError>;
     /// Reverse lookup used when an item is deleted (`service::project_items::delete_project_item`)
-    /// to find whether it was a materialized series occurrence, so the occurrence can be marked
-    /// exdate rather than left pointing at a now-deleted `item_id`. `None` for an item that never
-    /// came from a series — the overwhelmingly common case, so callers must treat `None` as a
-    /// normal, cheap no-op rather than something to log or special-case.
+    /// to find whether it was a materialized series occurrence, so the occurrence row can be
+    /// deleted (un-materializing it) rather than left pointing at a now-deleted `item_id`. `None`
+    /// for an item that never came from a series — the overwhelmingly common case, so callers
+    /// must treat `None` as a normal, cheap no-op rather than something to log or special-case.
     async fn find_occurrence_by_item_id(
         &self,
         item_id: &str,

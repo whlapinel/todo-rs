@@ -196,66 +196,46 @@ pub async fn validate_completable(
     Ok(())
 }
 
-/// Stage 6's resolution of stage 3's deferred "what happens to a materialized
-/// occurrence's item when it's skipped" question: skipping a materialized occurrence
-/// deletes its `items` row (via `project_items::delete_project_item`, the same shared
-/// delete path every item goes through — CLI/MCP/web alike) and *then* marks the
-/// occurrence exdate, so it neither reappears as virtual nor keeps pointing at a
-/// deleted item.
+/// Stage 6's original resolution of stage 3's deferred "what happens to a materialized
+/// occurrence's item when it's skipped" question was to make item-delete double as Skip
+/// for a materialized occurrence (mark it exdate). **2026-08-16, second pass:** reversed
+/// that — deleting an item is not the same intent as explicitly skipping a series
+/// occurrence (see `mark_exdate`'s doc comment: Skip is now the *only* path that sets
+/// `is_exdate`), so this un-materializes the occurrence instead, by deleting its
+/// `item_occurrences` row outright rather than marking it excluded. The date goes back to
+/// being a plain virtual occurrence — re-materializable, and if it happened to be the
+/// series' current occurrence, it's simply current-and-itemless again rather than
+/// current-and-permanently-stuck.
 ///
-/// Called from `project_items::delete_project_item` itself, after every item delete,
-/// not from a series-specific route — a materialized occurrence's item has no visible
-/// marker distinguishing it from an ordinary Event, so "delete this item" (wherever
-/// that action already lives) is the only skip affordance a materialized occurrence
-/// gets in this stage; see docs/recurring-events-virtual-occurrences-rough-plan.md's
-/// stage 6 write-up for why a dedicated materialized-occurrence "Skip" button was
-/// deliberately left out of scope. A `None` result (the overwhelmingly common case —
-/// most deleted items never came from a series) is a normal, cheap no-op.
-///
-/// **2026-08-16 fix:** this used to only call `mark_exdate`, never `advance_cursor` —
-/// unlike `skip_occurrence`, its explicit-Skip-button sibling, which settles *and*
-/// advances the cursor. Since Stage 10a made `current_occurrence_date` cursor-derived
-/// and made settling strictly one-at-a-time/in-order, that asymmetry meant deleting a
-/// materialized *current* occurrence's item left the series permanently believing that
-/// same (now exdate'd, itemless) date was still current — every later occurrence,
-/// including ones already materialized and worked on, became uncompletable with
-/// "cannot settle this occurrence out of order". Real-world case that surfaced this:
+/// That reversal is also what fixes the real bug that motivated this: a series whose
+/// *current* occurrence's item gets deleted used to leave `cursor_date` untouched behind
+/// a now-exdate'd date, and since Stage 10a made settling strictly one-at-a-time/in-order,
+/// the series got permanently stuck believing that dead date was still current — every
+/// later occurrence, even ones already materialized and worked on, became uncompletable
+/// with "cannot settle this occurrence out of order". (An earlier same-day fix patched
+/// this by conditionally advancing the cursor at delete time — since removed, because
+/// un-materializing needs no such special case: `current_occurrence_date` is derived
+/// purely from `cursor_date`/`anchor_date`, never from `item_occurrences` rows, so leaving
+/// the cursor untouched and just deleting the row already produces the right outcome —
+/// the same date stays current, just re-materializable instead of dead.) Real-world case:
 /// a family's daily dog-walk/poop-pickup series each had their very first materialized
-/// occurrence's item deleted early on; both series sat frozen on that stale date for
-/// six days while later occurrences kept getting materialized normally, until someone
-/// tried to complete today's and got rejected.
+/// occurrence's item deleted early on; both series sat frozen on that stale date for six
+/// days until someone tried to complete today's and got rejected.
 ///
-/// Fixed by mirroring `skip_occurrence`'s settlement, but only when the occurrence being
-/// unlinked is *currently* current — deleting a non-current materialized item (a
-/// still-unsettled past backlog date, or an ad hoc future one someone jumped ahead to
-/// materialize) must not silently fast-forward the cursor past whatever's still pending
-/// in between, so this deliberately doesn't reuse `record_task_completion`'s
-/// always-advance shape. `tz_offset_minutes: 0` is a pragmatic simplification — `delete_project_item`
-/// has several callers that don't thread a real caller timezone through today (unlike
-/// `skip_occurrence`/`validate_completable`, which do) — and only actually matters for a
-/// series whose `recurrence` carries an explicit local time-of-day override; for the
-/// (far more common) no-time-override case this is exact regardless of tz. Worst case for
-/// a time-override series is a false negative (treated as not-current, cursor untouched),
-/// i.e. today's pre-fix behavior, not a new failure mode.
+/// Called from `project_items::delete_project_item` itself, after every item delete, not
+/// from a series-specific route — a materialized occurrence's item has no visible marker
+/// distinguishing it from an ordinary Event, and there's still no dedicated
+/// materialized-occurrence "un-skip"/delete UI, so plain item-delete is the mechanism. A
+/// `None` result (the overwhelmingly common case — most deleted items never came from a
+/// series) is a normal, cheap no-op.
 pub async fn unlink_deleted_item_occurrence(
     event_series: &Arc<dyn ItemSeriesRepo>,
     item_id: &str,
 ) -> Result<(), ItemError> {
     if let Some(occurrence) = event_series.find_occurrence_by_item_id(item_id).await? {
         event_series
-            .mark_exdate(&occurrence.series_id, occurrence.occurrence_date)
+            .delete_occurrence(&occurrence.series_id, occurrence.occurrence_date)
             .await?;
-        let series = event_series.get_series(&occurrence.series_id).await?;
-        if series.item_type == ItemKind::Task {
-            if let Ok(rule) = recurrence::parse(&series.recurrence) {
-                if occurrence.occurrence_date == current_occurrence_date(&series, &rule, 0) {
-                    let cursor_value = cursor_value_for_settlement(&series, occurrence.occurrence_date);
-                    event_series
-                        .advance_cursor(&occurrence.series_id, cursor_value)
-                        .await?;
-                }
-            }
-        }
     }
     Ok(())
 }
@@ -1424,7 +1404,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unlink_deleted_item_occurrence_marks_exdate_when_item_came_from_a_series() {
+    async fn unlink_deleted_item_occurrence_un_materializes_when_item_came_from_a_series() {
         let mut series_mock = MockItemSeriesRepo::new();
         series_mock.expect_find_occurrence_by_item_id().returning(|item_id| {
             assert_eq!(item_id, "deleted-item");
@@ -1436,28 +1416,25 @@ mod tests {
             }))
         });
         series_mock
-            .expect_mark_exdate()
+            .expect_delete_occurrence()
             .withf(|series_id: &str, date: &DateTime<Utc>| series_id == "s1" && *date == occurrence_date())
             .times(1)
             .returning(|_, _| Ok(()));
-        // Event-typed (series()'s default) — no cursor/current concept, so the
-        // 2026-08-16 advance-cursor-if-current branch never fires; still needs
-        // mocking since get_series is now called unconditionally once an occurrence
-        // is found.
-        series_mock.expect_get_series().returning(|_| Ok(series("p1")));
+        series_mock.expect_mark_exdate().times(0);
+        series_mock.expect_get_series().times(0);
         series_mock.expect_advance_cursor().times(0);
         let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         unlink_deleted_item_occurrence(&event_series, "deleted-item")
             .await
-            .expect("should mark the occurrence exdate");
+            .expect("should un-materialize the occurrence");
     }
 
     #[tokio::test]
     async fn unlink_deleted_item_occurrence_is_a_no_op_for_a_non_series_item() {
         let mut series_mock = MockItemSeriesRepo::new();
         series_mock.expect_find_occurrence_by_item_id().returning(|_| Ok(None));
-        series_mock.expect_mark_exdate().times(0);
+        series_mock.expect_delete_occurrence().times(0);
         let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         unlink_deleted_item_occurrence(&event_series, "some-task")
@@ -1465,19 +1442,18 @@ mod tests {
             .expect("should no-op for an item with no linked occurrence");
     }
 
-    /// 2026-08-16 fix: deleting a materialized item behind the series' *current*
-    /// occurrence must advance the cursor the same way `skip_occurrence` does —
-    /// otherwise the series gets stuck believing that (now exdate'd, itemless) date
-    /// is still current forever, rejecting every later occurrence as "out of order"
-    /// even after they've been materialized and worked on. This was a real bug found
-    /// via a prod DB copy: two daily chore series each had their very first occurrence
-    /// deleted early on and sat frozen on that date for days.
+    /// 2026-08-16, second pass: deleting the item behind a Task series' *current*
+    /// occurrence must leave `cursor_date` untouched — un-materializing needs no
+    /// cursor special-case at all, since `current_occurrence_date` is derived purely
+    /// from `cursor_date`/`anchor_date`, never from `item_occurrences` rows. The same
+    /// date simply stays current, now itemless and re-materializable rather than
+    /// stuck (see `unlink_deleted_item_occurrence`'s doc comment for the real bug this
+    /// fixes, and why an earlier delete-time cursor-advance was removed as
+    /// unnecessary once un-materializing replaced marking exdate).
     #[tokio::test]
-    async fn unlink_deleted_item_occurrence_advances_cursor_when_deleting_the_current_task_occurrence() {
+    async fn unlink_deleted_item_occurrence_never_touches_the_cursor_even_for_the_current_task_occurrence() {
         let mut task_series = series("p1");
         task_series.item_type = ItemKind::Task;
-        // cursor_date: None => current_occurrence_date is the series' own anchor_date —
-        // deleting the item materialized for exactly that date is deleting "current".
         let current_date = task_series.anchor_date;
         let mut series_mock = MockItemSeriesRepo::new();
         series_mock.expect_find_occurrence_by_item_id().returning(move |item_id| {
@@ -1489,48 +1465,14 @@ mod tests {
                 is_exdate: false,
             }))
         });
-        series_mock.expect_mark_exdate().times(1).returning(|_, _| Ok(()));
-        series_mock.expect_get_series().returning(move |_| Ok(task_series.clone()));
-        series_mock
-            .expect_advance_cursor()
-            .withf(move |series_id: &str, date: &DateTime<Utc>| series_id == "s1" && *date == current_date)
-            .times(1)
-            .returning(|_, _| Ok(()));
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
-
-        unlink_deleted_item_occurrence(&event_series, "deleted-item")
-            .await
-            .expect("should mark exdate and advance the cursor");
-    }
-
-    /// Counterpart to the above: deleting a materialized item that is *not* the
-    /// series' current occurrence (an unsettled backlog date, or an ad hoc future one)
-    /// must never touch the cursor — doing so would silently fast-forward past
-    /// whatever's still pending in between.
-    #[tokio::test]
-    async fn unlink_deleted_item_occurrence_does_not_advance_cursor_for_a_non_current_task_occurrence() {
-        let mut task_series = series("p1");
-        task_series.item_type = ItemKind::Task;
-        // occurrence_date() != task_series.anchor_date (the current occurrence with
-        // cursor_date: None), so this is deliberately not current.
-        let mut series_mock = MockItemSeriesRepo::new();
-        series_mock.expect_find_occurrence_by_item_id().returning(|item_id| {
-            assert_eq!(item_id, "deleted-item");
-            Ok(Some(ItemOccurrence {
-                series_id: "s1".to_string(),
-                occurrence_date: occurrence_date(),
-                item_id: Some("deleted-item".to_string()),
-                is_exdate: false,
-            }))
-        });
-        series_mock.expect_mark_exdate().times(1).returning(|_, _| Ok(()));
-        series_mock.expect_get_series().returning(move |_| Ok(task_series.clone()));
+        series_mock.expect_delete_occurrence().times(1).returning(|_, _| Ok(()));
+        series_mock.expect_get_series().times(0);
         series_mock.expect_advance_cursor().times(0);
         let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         unlink_deleted_item_occurrence(&event_series, "deleted-item")
             .await
-            .expect("should mark exdate without advancing the cursor");
+            .expect("should un-materialize without touching the cursor");
     }
 
     #[tokio::test]

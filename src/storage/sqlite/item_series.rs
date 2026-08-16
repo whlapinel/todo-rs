@@ -183,6 +183,20 @@ impl ItemSeriesRepo for SqliteItemSeriesRepo {
         Ok(())
     }
 
+    async fn delete_occurrence(
+        &self,
+        series_id: &str,
+        occurrence_date: DateTime<Utc>,
+    ) -> Result<(), RepoError> {
+        sqlx::query("DELETE FROM item_occurrences WHERE series_id = ? AND occurrence_date = ?")
+            .bind(series_id)
+            .bind(to_secs(occurrence_date))
+            .execute(&self.0)
+            .await
+            .map_err(db_err)?;
+        Ok(())
+    }
+
     async fn list_occurrences_between(
         &self,
         series_id: &str,
@@ -547,6 +561,33 @@ mod tests {
         let occurrence = repo.get_occurrence(&id, dt(2_000_000)).await.unwrap().unwrap();
         assert!(occurrence.is_exdate);
         assert_eq!(occurrence.item_id, None);
+    }
+
+    #[tokio::test]
+    async fn delete_occurrence_removes_a_materialized_row_entirely() {
+        let pool = test_pool().await;
+        let repo = SqliteItemSeriesRepo(pool);
+        let id = repo.create_series(&sample_series("p1")).await.unwrap();
+        repo.record_materialized_occurrence(&id, dt(2_000_000), "item-1")
+            .await
+            .unwrap();
+
+        repo.delete_occurrence(&id, dt(2_000_000)).await.unwrap();
+
+        let occurrence = repo.get_occurrence(&id, dt(2_000_000)).await.unwrap();
+        assert!(occurrence.is_none());
+    }
+
+    #[tokio::test]
+    async fn delete_occurrence_is_a_no_op_for_a_date_with_no_row() {
+        let pool = test_pool().await;
+        let repo = SqliteItemSeriesRepo(pool);
+        let id = repo.create_series(&sample_series("p1")).await.unwrap();
+
+        repo.delete_occurrence(&id, dt(2_000_000)).await.unwrap();
+
+        let occurrence = repo.get_occurrence(&id, dt(2_000_000)).await.unwrap();
+        assert!(occurrence.is_none());
     }
 
     #[tokio::test]
