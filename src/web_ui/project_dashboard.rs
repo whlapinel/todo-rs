@@ -401,6 +401,13 @@ struct ProjectDashboardCalendarEntry {
     /// Stage 6's write-up on why materialized occurrences stay unmarked); for a virtual
     /// one, whether it's the series' `current_occurrence_date`.
     is_current: bool,
+    /// `item.complete` for a materialized entry; always `false` for a virtual occurrence,
+    /// which has no completion concept of its own until materialized. Drives the same
+    /// dimmed/line-through treatment `project_tasks/calendar_page.html` already applies —
+    /// `due_items` here is unfiltered by completion (see `project_dashboard_page`'s own
+    /// `show_complete` filter, which this calendar route never applied), so without this the
+    /// grid silently rendered completed items identically to incomplete ones.
+    complete: bool,
 }
 
 struct ProjectDashboardCalendarDay {
@@ -458,8 +465,12 @@ fn end_of_day() -> chrono::NaiveTime {
 }
 
 /// Mirrors `dashboard::build_calendar_days` exactly, project-scoped — same fixed 6-row
-/// Monday-start grid, same no-completion-filter precedent. A calendar view is a genuinely
-/// new capability for team-backed projects here (`team_dashboard.rs` never had one), same
+/// Monday-start grid. Unlike the list view (`project_dashboard_page`'s `show_complete` filter),
+/// this never filters out completed items — the grid shows every due item regardless of
+/// completion, dimmed/struck-through via `ProjectDashboardCalendarEntry::complete` (2026-08-16
+/// fix: previously completed items rendered identically to incomplete ones here). A calendar
+/// view is a genuinely new capability for team-backed projects here (`team_dashboard.rs` never
+/// had one), same
 /// framing as every prior B5 sub-stage's own calendar view. `virtual_occurrences` (Stage 5)
 /// are bucketed into the same per-day map as real due items — see CLAUDE.md's Events section
 /// for why a materialized occurrence never appears twice here: once materialized it's a real
@@ -500,6 +511,7 @@ fn build_calendar_days(
                     skip_url: None,
                     is_virtual: false,
                     is_current: false,
+                    complete: item.complete,
                 });
         }
     }
@@ -520,6 +532,7 @@ fn build_calendar_days(
                 skip_url: Some(skip_url(project_id, &occ.series_id, occ.occurrence_date)),
                 is_virtual: true,
                 is_current: occ.is_current,
+                complete: false,
             });
     }
 
