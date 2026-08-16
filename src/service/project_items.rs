@@ -1040,6 +1040,27 @@ mod tests {
             .withf(|series_id: &str, _date| series_id == "s1")
             .times(1)
             .returning(|_, _| Ok(()));
+        // Event-typed — no cursor/current concept, so the 2026-08-16
+        // advance-cursor-if-current fix never fires here; get_series is still called
+        // unconditionally once an occurrence is found.
+        series_mock.expect_get_series().returning(|_| {
+            Ok(crate::domain::item_series::ItemSeries {
+                id: "s1".to_string(),
+                project_id: "p1".to_string(),
+                name: "Standup".to_string(),
+                description: None,
+                event_type: None,
+                recurrence: "every 7 days".to_string(),
+                anchor_date: DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+                item_type: ItemKind::Event,
+                cursor_date: None,
+                basis: None,
+                template_item_id: None,
+                assigned_to_user_id: None,
+                points: None,
+            })
+        });
+        series_mock.expect_advance_cursor().times(0);
         let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         delete_project_item(&repo, &projects, &teams, &event_series, "owner1", "p1", "i1")
