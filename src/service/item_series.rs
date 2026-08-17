@@ -609,8 +609,9 @@ pub async fn duplicate_series(
     requester_user_id: &str,
     series_id: &str,
 ) -> Result<(), ItemError> {
-    let series = item_series.get_series(series_id).await?;
+    let mut series = item_series.get_series(series_id).await?;
     require_project_member(projects, teams, &series.project_id, requester_user_id).await?;
+    series.name = format!("{} (copy)", series.name);
     item_series.create_series(&series).await?;
     Ok(())
 }
