@@ -1,14 +1,19 @@
 use crate::auth::AuthUser;
 use crate::domain::item::ItemKind;
+use crate::json_api::item_series::list_item_series_for_project;
 use crate::service::error::ItemError;
-use crate::service::item_series::{self as item_series_service, CreateItemSeriesParams, UpdateItemSeriesParams};
+use crate::service::item_series::{
+    self as item_series_service, CreateItemSeriesParams, UpdateItemSeriesParams,
+};
 use crate::service::projects::{self as project_service};
 use crate::storage::sqlite::{ItemRepo, ItemSeriesRepo, ProjectRepo, TeamRepo};
 use crate::web_ui::nav::{self, ActiveContext, SidebarSection};
 use crate::web_ui::project_item_series::templates::*;
-use crate::web_ui::project_item_series::{combine_local_to_utc, end_of_day, non_empty, render, start_of_day};
+use crate::web_ui::project_item_series::{
+    combine_local_to_utc, end_of_day, non_empty, render, start_of_day,
+};
 use crate::web_ui::project_tasks::{active_member_options, names_for};
-use crate::web_ui::{to_local, TzOffset};
+use crate::web_ui::{TzOffset, hx_redirect, to_local};
 use askama::Template;
 use axum::extract::{Extension, Form, Path};
 use axum::http::header::HeaderName;
@@ -44,7 +49,8 @@ pub async fn project_item_series_page(
         .into_iter()
         .map(|t| (t.id, t.name))
         .collect();
-    let project = project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
+    let project =
+        project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
     let member_names = match &project.team_id {
         Some(team_id) => names_for(&teams, team_id, &auth_user.user_id).await?,
         None => HashMap::new(),
@@ -52,8 +58,14 @@ pub async fn project_item_series_page(
     let rows = series
         .iter()
         .map(|s| {
-            let template_name = s.template_item_id.as_ref().and_then(|id| template_names.get(id).cloned());
-            let assignee_name = s.assigned_to_user_id.as_ref().and_then(|id| member_names.get(id).cloned());
+            let template_name = s
+                .template_item_id
+                .as_ref()
+                .and_then(|id| template_names.get(id).cloned());
+            let assignee_name = s
+                .assigned_to_user_id
+                .as_ref()
+                .and_then(|id| member_names.get(id).cloned());
             ProjectItemSeriesRow::from_series(s, tz, template_name, assignee_name).render()
         })
         .collect::<Result<Vec<_>, _>>()
@@ -79,7 +91,8 @@ pub async fn new_project_item_series_page(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
 ) -> Result<Html<String>, ItemError> {
-    let project = project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
+    let project =
+        project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
     let templates = repo
         .list_templates_by_project(&project_id)
         .await?
@@ -90,7 +103,8 @@ pub async fn new_project_item_series_page(
     let (assignee_options, is_team_admin) = match &project.team_id {
         Some(team_id) => (
             active_member_options(&teams, team_id, &auth_user.user_id).await?,
-            project_service::is_project_admin(&projects, &teams, &project_id, &auth_user.user_id).await,
+            project_service::is_project_admin(&projects, &teams, &project_id, &auth_user.user_id)
+                .await,
         ),
         None => (Vec::new(), false),
     };
@@ -141,7 +155,9 @@ fn parse_item_type(raw: &str) -> Result<ItemKind, ItemError> {
     match raw {
         "TASK" => Ok(ItemKind::Task),
         "EVENT" => Ok(ItemKind::Event),
-        _ => Err(ItemError::Invalid("itemType must be TASK or EVENT".to_string())),
+        _ => Err(ItemError::Invalid(
+            "itemType must be TASK or EVENT".to_string(),
+        )),
     }
 }
 
@@ -329,7 +345,8 @@ pub async fn edit_project_item_series_page(
     if series.project_id != project_id {
         return Err(ItemError::NotFound);
     }
-    let project = project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
+    let project =
+        project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
     let templates = repo
         .list_templates_by_project(&project_id)
         .await?
@@ -340,7 +357,8 @@ pub async fn edit_project_item_series_page(
     let (assignee_options, is_team_admin) = match &project.team_id {
         Some(team_id) => (
             active_member_options(&teams, team_id, &auth_user.user_id).await?,
-            project_service::is_project_admin(&projects, &teams, &project_id, &auth_user.user_id).await,
+            project_service::is_project_admin(&projects, &teams, &project_id, &auth_user.user_id)
+                .await,
         ),
         None => (Vec::new(), false),
     };
@@ -440,6 +458,32 @@ pub async fn delete_project_item_series_form(
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(item_series): Extension<Arc<dyn ItemSeriesRepo>>,
 ) -> Result<Html<String>, ItemError> {
-    item_series_service::delete_series(&projects, &teams, &item_series, &auth_user.user_id, &series_id).await?;
+    item_series_service::delete_series(
+        &projects,
+        &teams,
+        &item_series,
+        &auth_user.user_id,
+        &series_id,
+    )
+    .await?;
     Ok(Html(String::new()))
+}
+
+pub async fn duplicate_project_item_series_form(
+    Path((_project_id, series_id)): Path<(String, String)>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(item_series): Extension<Arc<dyn ItemSeriesRepo>>,
+) -> Result<Response, ItemError> {
+    item_series_service::duplicate_series(
+        &projects,
+        &teams,
+        &item_series,
+        &auth_user.user_id,
+        &series_id,
+    )
+    .await?;
+    let location = format!("/web/projects/{_project_id}/series");
+    Ok(hx_redirect(location))
 }

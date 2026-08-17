@@ -1,21 +1,22 @@
 pub mod assigned_items;
+pub mod components;
 pub mod error;
 pub mod login;
 pub mod nav;
 pub mod project_activity;
 pub mod project_dashboard;
-pub mod project_item_series;
 pub mod project_events;
+pub mod project_item_series;
 pub mod project_simple_lists;
 pub mod project_tasks;
 pub mod project_templates;
 pub mod projects;
 pub mod teams;
-pub mod components;
 
 use async_trait::async_trait;
 use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
+use axum::response::{Html, IntoResponse, Response};
 use std::convert::Infallible;
 
 /// The browser's timezone offset (`new Date().getTimezoneOffset()`). Two sources, in
@@ -79,4 +80,15 @@ pub fn to_local(
     tz_offset_minutes: i32,
 ) -> chrono::DateTime<chrono::Utc> {
     dt - chrono::Duration::minutes(tz_offset_minutes as i64)
+}
+
+fn hx_redirect(location: String) -> Response {
+    (
+        [(
+            axum::http::header::HeaderName::from_static("hx-redirect"),
+            location,
+        )],
+        Html(String::new()),
+    )
+        .into_response()
 }

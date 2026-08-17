@@ -25,6 +25,10 @@ impl ProjectItemSeriesRow {
             template_name,
             assignee_name,
             points: s.points,
+            duplicate_url: Some(format!(
+                "/web/projects/{}/series/{}/duplicate",
+                s.project_id, s.id
+            )),
         }
     }
 }
@@ -43,6 +47,7 @@ pub struct Row {
     pub template_name: Option<String>,
     pub assignee_name: Option<String>,
     pub points: Option<i32>,
+    pub duplicate_url: Option<String>,
 }
 
 #[derive(Template)]

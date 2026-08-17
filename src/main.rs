@@ -223,6 +223,10 @@ fn build_web_router() -> Router {
             put(update_project_item_series_form).delete(delete_project_item_series_form),
         )
         .route(
+            "/projects/:project_id/series/:series_id/duplicate",
+            post(duplicate_project_item_series_form),
+        )
+        .route(
             "/projects/:project_id/series/:series_id/occurrences/:occurrence_ts",
             post(materialize_project_item_series_occurrence_form),
         )
