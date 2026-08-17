@@ -19,5 +19,5 @@ Ranked easiest → hardest (re-ranked 2026-08-15 after the item_series redesign 
 - Allow copying a task or event to another project
 - Consider change such that delete will mark a delete column true rather than actually deleting. This allows for undo within a certain timeframe and easy-viewing of recent. BUT, I'm not sure whether this is a good pattern or not and would like to know tradeoffs compared with the standard approach.
 - Allow admin to complete tasks not assigned to them
-- Make dashboard a single cross-project page for the user rather than one dashboard per-project
+- Make dashboard a single cross-project page for the user rather than one dashboard per-project - each item should clearly indicate which project it's from
 - Task rows should mirror 
