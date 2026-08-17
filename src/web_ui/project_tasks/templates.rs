@@ -1,13 +1,13 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use askama::Template;
 use crate::domain::item::Item;
 use crate::service::error::ItemError;
 use crate::service::item_series::VirtualOccurrence;
 use crate::storage::sqlite::ItemRepo;
 use crate::web_ui::components::row::Row;
 use crate::web_ui::to_local;
+use askama::Template;
 use chrono::Utc;
 
 // ---- templates --------------------------------------------------------------
@@ -374,6 +374,8 @@ pub struct NewProjectTaskPageTemplate {
     pub blank_scheduled_time_input: String,
     pub blank_scheduled_end_date_input: String,
     pub blank_scheduled_end_time_input: String,
+    pub blank_due_date_input: String,
+    pub blank_due_time_input: String,
     pub is_team_admin: bool,
     pub blank_points_input: String,
     pub nav_html: String,

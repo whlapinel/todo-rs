@@ -77,6 +77,25 @@ scheduled_end_time_input) %}
 </div>
 {% endmacro %}
 
+{% macro due_date_fields(due_date_input, due_time_input) %}
+<div class="due-date-fields space-y-3">
+  <div class="flex items-end gap-x-4">
+    <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Due date
+      <div class="mt-2">
+        <input type="date" name="dueDate" value="{{ due_date_input }}"
+          class="block rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:focus:outline-indigo-500" />
+      </div>
+    </label>
+    <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Time
+      <div class="mt-2">
+        <input type="time" name="dueTime" value="{{ due_time_input }}"
+          class="block rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:focus:outline-indigo-500" />
+      </div>
+    </label>
+  </div>
+</div>
+{% endmacro %}
+
 {% macro points_field(is_team_admin, is_top_level, points_input) %}
 {% if is_team_admin && is_top_level %}
 <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Points

@@ -7,14 +7,15 @@ use crate::service::projects::{self as project_service};
 use crate::service::teams as team_service;
 use crate::service::templates::{self as template_service, CreateProjectTemplateParams};
 use crate::storage::sqlite::{ActivityLogRepo, ItemRepo, ItemSeriesRepo, ProjectRepo, TeamRepo};
-use crate::web_ui::nav::{self, ActiveContext, SidebarSection};
-use crate::web_ui::project_tasks::{
-    active_member_options, build_calendar_days, create_params_from_form, grid_start_for,
-    list_project_tasks, local_date_to_utc, names_for, next_month, non_empty, prev_month, render,
-    render_scope_fragment, require_task, sibling_group, update_params_from_form, ProjectTaskForm,
-};
-use crate::web_ui::project_tasks::templates::*;
 use crate::web_ui::TzOffset;
+use crate::web_ui::nav::{self, ActiveContext, SidebarSection};
+use crate::web_ui::project_tasks::templates::*;
+use crate::web_ui::project_tasks::{
+    ProjectTaskForm, active_member_options, build_calendar_days, create_params_from_form,
+    grid_start_for, list_project_tasks, local_date_to_utc, names_for, next_month, non_empty,
+    prev_month, render, render_scope_fragment, require_task, sibling_group,
+    update_params_from_form,
+};
 use askama::Template;
 use axum::extract::{Extension, Form, Path, Query};
 use axum::response::{Html, IntoResponse, Response};
@@ -50,7 +51,8 @@ pub async fn project_tasks_page(
     TzOffset(tz): TzOffset,
     Query(q): Query<ShowCompleteQuery>,
 ) -> Result<Html<String>, ItemError> {
-    let project = project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
+    let project =
+        project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
     let show_complete = q.show_complete.is_some();
     let items = list_project_tasks(&repo, &project_id).await?;
     let names = match &project.team_id {
@@ -60,17 +62,18 @@ pub async fn project_tasks_page(
     // Stage 10 gap 2: a Task series' current occurrence is range-independent (a pure
     // function of the cursor), so any degenerate range surfaces it — see
     // `list_virtual_occurrences_for_project_unchecked`'s backlog-exemption logic.
-    let virtual_occurrences: Vec<_> = item_series_service::list_virtual_occurrences_for_project_unchecked(
-        &event_series,
-        &project_id,
-        Utc::now(),
-        Utc::now(),
-        tz,
-    )
-    .await?
-    .into_iter()
-    .filter(|occ| occ.item_type == ItemKind::Task && occ.is_current)
-    .collect();
+    let virtual_occurrences: Vec<_> =
+        item_series_service::list_virtual_occurrences_for_project_unchecked(
+            &event_series,
+            &project_id,
+            Utc::now(),
+            Utc::now(),
+            tz,
+        )
+        .await?
+        .into_iter()
+        .filter(|occ| occ.item_type == ItemKind::Task && occ.is_current)
+        .collect();
     let rows = super::render_rows_with_virtual(
         &items,
         &virtual_occurrences,
@@ -109,7 +112,8 @@ pub async fn new_project_task_page(
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Query(q): Query<ShowCompleteQuery>,
 ) -> Result<Html<String>, ItemError> {
-    let project = project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
+    let project =
+        project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
     let is_team_project = project.team_id.is_some();
     let (assignee_options, is_team_admin) = match &project.team_id {
         Some(team_id) => (
@@ -135,6 +139,8 @@ pub async fn new_project_task_page(
         blank_scheduled_time_input: String::new(),
         blank_scheduled_end_date_input: String::new(),
         blank_scheduled_end_time_input: String::new(),
+        blank_due_date_input: String::new(),
+        blank_due_time_input: String::new(),
         is_team_admin,
         blank_points_input: String::new(),
         nav_html,
@@ -157,7 +163,8 @@ pub async fn project_tasks_calendar_page(
     TzOffset(tz): TzOffset,
     Query(q): Query<CalendarQuery>,
 ) -> Result<Html<String>, ItemError> {
-    let _project = project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
+    let _project =
+        project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
     let today = crate::web_ui::to_local(Utc::now(), tz).date_naive();
     let year = q.year.unwrap_or_else(|| today.year());
     let month = q
@@ -176,18 +183,27 @@ pub async fn project_tasks_calendar_page(
     // Filtered to Task-typed series only (Event-typed have their own home on the Events
     // calendar) — the past-date clamp (Stage 8) and `is_current` computation (Stage 9) now
     // live inside `list_virtual_occurrences_for_project_unchecked` itself.
-    let virtual_occurrences: Vec<_> = item_series_service::list_virtual_occurrences_for_project_unchecked(
-        &event_series,
+    let virtual_occurrences: Vec<_> =
+        item_series_service::list_virtual_occurrences_for_project_unchecked(
+            &event_series,
+            &project_id,
+            range_start,
+            range_end,
+            tz,
+        )
+        .await?
+        .into_iter()
+        .filter(|occ| occ.item_type == ItemKind::Task)
+        .collect();
+    let days = build_calendar_days(
+        year,
+        month,
         &project_id,
-        range_start,
-        range_end,
+        &items,
+        &virtual_occurrences,
         tz,
-    )
-    .await?
-    .into_iter()
-    .filter(|occ| occ.item_type == ItemKind::Task)
-    .collect();
-    let days = build_calendar_days(year, month, &project_id, &items, &virtual_occurrences, tz, today);
+        today,
+    );
     let (prev_year, prev_month) = prev_month(year, month);
     let (next_year, next_month) = next_month(year, month);
     let nav_html = nav::build_nav_html(
@@ -222,8 +238,10 @@ pub async fn project_task_detail_page(
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     TzOffset(tz): TzOffset,
 ) -> Result<Html<String>, ItemError> {
-    let project = project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
-    let item = project_item_service::get_project_item_unchecked(&repo, &project_id, &item_id).await?;
+    let project =
+        project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
+    let item =
+        project_item_service::get_project_item_unchecked(&repo, &project_id, &item_id).await?;
     let item = require_task(item)?;
     let names = match &project.team_id {
         Some(team_id) => names_for(&teams, team_id, &auth_user.user_id).await?,
@@ -264,8 +282,10 @@ pub async fn project_task_edit_page(
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     TzOffset(tz): TzOffset,
 ) -> Result<Html<String>, ItemError> {
-    let project = project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
-    let item = project_item_service::get_project_item_unchecked(&repo, &project_id, &item_id).await?;
+    let project =
+        project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
+    let item =
+        project_item_service::get_project_item_unchecked(&repo, &project_id, &item_id).await?;
     let item = require_task(item)?;
     let (assignee_options, is_team_admin) = match &project.team_id {
         Some(team_id) => (
@@ -366,7 +386,8 @@ pub async fn project_task_children_fragment(
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     TzOffset(tz): TzOffset,
 ) -> Result<Html<String>, ItemError> {
-    let project = project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
+    let project =
+        project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
     // Ownership gate: confirm the parent actually belongs to this project before listing its
     // children (mirrors tasks.rs's equivalent).
     project_item_service::get_project_item_unchecked(&repo, &project_id, &item_id).await?;
@@ -410,7 +431,8 @@ pub async fn create_project_task_form(
     TzOffset(tz): TzOffset,
     Form(form): Form<ProjectTaskForm>,
 ) -> Result<Response, ItemError> {
-    let project = project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
+    let project =
+        project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
     let show_complete = form.show_complete.is_some();
     let redirect = form.redirect.is_some();
     let params = create_params_from_form(&project_id, &form, tz);
@@ -452,7 +474,8 @@ pub async fn create_project_tasks_batch(
     TzOffset(tz): TzOffset,
     Form(form): Form<BatchForm>,
 ) -> Result<Response, ItemError> {
-    let project = project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
+    let project =
+        project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
     let parent_item_id = non_empty(&form.parent_item_id);
     for line in form.names.lines() {
         let name = line.trim();
@@ -467,8 +490,14 @@ pub async fn create_project_tasks_batch(
             timezone_offset_minutes: Some(tz),
             ..Default::default()
         };
-        project_item_service::create_project_item(&repo, &projects, &teams, &auth_user.user_id, params)
-            .await?;
+        project_item_service::create_project_item(
+            &repo,
+            &projects,
+            &teams,
+            &auth_user.user_id,
+            params,
+        )
+        .await?;
     }
     if form.redirect.is_some() {
         return Ok(redirect_to_project_tasks(
@@ -501,8 +530,10 @@ pub async fn update_project_task_form(
     TzOffset(tz): TzOffset,
     Form(form): Form<ProjectTaskForm>,
 ) -> Result<Response, ItemError> {
-    let project = project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
-    let current = project_item_service::get_project_item_unchecked(&repo, &project_id, &item_id).await?;
+    let project =
+        project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
+    let current =
+        project_item_service::get_project_item_unchecked(&repo, &project_id, &item_id).await?;
     let current = require_task(current)?;
     let close = form.redirect.is_some();
     let params = update_params_from_form(&project_id, &item_id, &current, &form, tz);
@@ -558,14 +589,18 @@ pub async fn update_project_task_form(
             let siblings =
                 sibling_group(&repo, &project_id, updated.parent_item_id.as_deref()).await?;
             let siblings_ref: Vec<&Item> = siblings.iter().collect();
-            let row =
-                ProjectTaskRow::from_item(&updated, &project_id, &names, &siblings_ref, tz)
-                    .render()?;
+            let row = ProjectTaskRow::from_item(&updated, &project_id, &names, &siblings_ref, tz)
+                .render()?;
             let (assignee_options, is_team_admin) = match &project.team_id {
                 Some(team_id) => (
                     active_member_options(&teams, team_id, &auth_user.user_id).await?,
-                    project_service::is_project_admin(&projects, &teams, &project_id, &auth_user.user_id)
-                .await,
+                    project_service::is_project_admin(
+                        &projects,
+                        &teams,
+                        &project_id,
+                        &auth_user.user_id,
+                    )
+                    .await,
                 ),
                 None => (Vec::new(), false),
             };
