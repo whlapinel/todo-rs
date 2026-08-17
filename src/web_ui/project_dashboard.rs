@@ -8,7 +8,7 @@ use crate::service::project_items::{self as project_item_service, UpdateProjectI
 use crate::service::projects::{self as project_service};
 use crate::service::teams as team_service;
 use crate::storage::sqlite::{
-    ActivityLogRepo, DueItem, ItemRepo, ItemSeriesRepo, ProjectRepo, TeamRepo,
+    ActivityLogRepo, DueItem, ItemRepo, ItemSeriesRepo, ProjectRepo, TeamRepo, UserRepo,
 };
 use askama::Template;
 use axum::extract::{Extension, Form, Path, Query};
@@ -231,6 +231,7 @@ struct ProjectDashboardVirtualRow {
     /// Stage 9: whether this is the series' `current_occurrence_date` — see
     /// `service::item_series::current_occurrence_date`'s doc comment.
     is_current: bool,
+    assignee_name: Option<String>,
 }
 
 impl ProjectDashboardVirtualRow {
@@ -256,6 +257,7 @@ impl ProjectDashboardVirtualRow {
             materialize_url: materialize_url(project_id, &occ.series_id, occ.occurrence_date),
             skip_url: skip_url(project_id, &occ.series_id, occ.occurrence_date),
             is_current: occ.is_current,
+            assignee_name: occ.assigned_to_user_name.clone(),
         }
     }
 }
@@ -377,6 +379,7 @@ pub async fn project_dashboard_page(
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
+    Extension(users): Extension<Arc<dyn UserRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(event_series): Extension<Arc<dyn ItemSeriesRepo>>,
     TzOffset(tz_offset): TzOffset,
@@ -396,6 +399,7 @@ pub async fn project_dashboard_page(
     let virtual_occurrences = if virtual_after <= virtual_before {
         event_series_service::list_virtual_occurrences_for_project_unchecked(
             &event_series,
+            &users,
             &project_id,
             virtual_after,
             virtual_before,
@@ -648,6 +652,7 @@ pub async fn project_dashboard_calendar_page(
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(users): Extension<Arc<dyn UserRepo>>,
     Extension(event_series): Extension<Arc<dyn ItemSeriesRepo>>,
     TzOffset(tz): TzOffset,
     Query(q): Query<CalendarQuery>,
@@ -674,6 +679,7 @@ pub async fn project_dashboard_calendar_page(
     let range_end = local_date_to_utc(grid_start + Duration::days(41), end_of_day(), tz);
     let virtual_occurrences = event_series_service::list_virtual_occurrences_for_project_unchecked(
         &event_series,
+        &users,
         &project_id,
         range_start,
         range_end,

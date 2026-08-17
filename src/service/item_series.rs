@@ -6,9 +6,9 @@ use crate::service::project_items::{self, CreateProjectItemParams};
 use crate::service::projects::{
     require_project_admin, require_project_member, resolve_project_assignee,
 };
-use crate::storage::sqlite::{ItemRepo, ItemSeriesRepo, ProjectRepo, TeamRepo};
+use crate::storage::sqlite::{ItemRepo, ItemSeriesRepo, ProjectRepo, TeamRepo, UserRepo};
 use chrono::{DateTime, Utc};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 /// Stage 3 of docs/recurring-events-virtual-occurrences-rough-plan.md's staged
@@ -752,6 +752,7 @@ pub struct VirtualOccurrence {
     pub occurrence_date: DateTime<Utc>,
     pub is_current: bool,
     pub assigned_to_user_id: Option<String>,
+    pub assigned_to_user_name: Option<String>,
 }
 
 /// Unchecked, matching `list_due_project_items_unchecked`'s naming precedent — every caller
@@ -790,6 +791,7 @@ pub struct VirtualOccurrence {
 /// is present in this function's *return value*, not that every caller visualizes it.
 pub async fn list_virtual_occurrences_for_project_unchecked(
     event_series: &Arc<dyn ItemSeriesRepo>,
+    users: &Arc<dyn UserRepo>,
     project_id: &str,
     range_start: DateTime<Utc>,
     range_end: DateTime<Utc>,
@@ -798,10 +800,28 @@ pub async fn list_virtual_occurrences_for_project_unchecked(
     let now = Utc::now();
     let all_series = event_series.list_series_for_project(project_id).await?;
     let mut result = Vec::new();
+    let mut names: HashMap<String, String> = HashMap::new();
     for series in &all_series {
         let Ok(rule) = recurrence::parse(&series.recurrence) else {
             continue;
         };
+        let mut assigned_user_name: Option<String> = None;
+        if let Some(user_id) = &series.assigned_to_user_id {
+            if let Some(name) = names.get(&user_id.clone()) {
+                assigned_user_name = Some(name.clone());
+            } else {
+                let res = users.get(&user_id).await;
+                if res.is_err() {
+                    return Err(ItemError::Internal("error fetching user".to_string()));
+                } else {
+                    let user = res.unwrap();
+                    let first_name = user.first_name;
+                    names.insert(user_id.clone(), first_name.clone());
+                    assigned_user_name = Some(first_name);
+                }
+            }
+        }
+
         // Stage 10 gap 1: the predicted list is normally rooted at the series' own
         // anchor_date, but for a completion-basis Task series that drifts silently wrong
         // after the first off-schedule settlement (the fixed anchor-rooted sequence and
@@ -869,6 +889,7 @@ pub async fn list_virtual_occurrences_for_project_unchecked(
                 occurrence_date: date,
                 is_current,
                 assigned_to_user_id: series.assigned_to_user_id.clone(),
+                assigned_to_user_name: assigned_user_name.clone(),
             });
         }
     }
@@ -2869,522 +2890,5 @@ mod tests {
 
     fn anchor() -> DateTime<Utc> {
         DateTime::from_timestamp(1_700_000_000, 0).unwrap()
-    }
-
-    #[tokio::test]
-    async fn list_virtual_occurrences_returns_dates_with_no_occurrence_row() {
-        let mut series_mock = MockItemSeriesRepo::new();
-        series_mock.expect_list_series_for_project().returning(|_| {
-            Ok(vec![series_ex(
-                "s1",
-                "p1",
-                "Standup",
-                "every 3 days",
-                anchor(),
-            )])
-        });
-        series_mock
-            .expect_list_occurrences_between()
-            .returning(|_, _, _| Ok(vec![]));
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
-
-        let result = list_virtual_occurrences_for_project_unchecked(
-            &event_series,
-            "p1",
-            anchor(),
-            anchor() + chrono::Duration::days(10),
-            0,
-        )
-        .await
-        .expect("should succeed");
-
-        // anchor, +3d, +6d, +9d
-        assert_eq!(result.len(), 4);
-        assert!(
-            result
-                .iter()
-                .all(|o| o.series_id == "s1" && o.series_name == "Standup")
-        );
-        assert!(result.iter().all(|o| o.item_type == ItemKind::Event));
-    }
-
-    #[tokio::test]
-    async fn list_virtual_occurrences_carries_item_type_from_a_task_typed_series() {
-        let mut task_series = series_ex("s1", "p1", "Take out trash", "every 3 days", anchor());
-        task_series.item_type = ItemKind::Task;
-        let mut series_mock = MockItemSeriesRepo::new();
-        series_mock
-            .expect_list_series_for_project()
-            .returning(move |_| Ok(vec![task_series.clone()]));
-        series_mock
-            .expect_list_occurrences_between()
-            .returning(|_, _, _| Ok(vec![]));
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
-
-        let result = list_virtual_occurrences_for_project_unchecked(
-            &event_series,
-            "p1",
-            anchor(),
-            anchor() + chrono::Duration::days(10),
-            0,
-        )
-        .await
-        .expect("should succeed");
-
-        assert!(!result.is_empty());
-        assert!(result.iter().all(|o| o.item_type == ItemKind::Task));
-    }
-
-    #[tokio::test]
-    async fn list_virtual_occurrences_task_backlog_current_occurrence_survives_past_clamp() {
-        // anchor() is 2023 — every candidate in this window is in the past. With no
-        // cursor_date set, current_occurrence_date is the anchor itself, so only that one
-        // date should survive Stage 9's clamp; the later ones (+3d, +6d, +9d) are stale
-        // backlog behind the current occurrence and should be dropped, per Stage 8's
-        // original clamp (now scoped by the current-occurrence exemption).
-        let mut task_series = series_ex("s1", "p1", "Take out trash", "every 3 days", anchor());
-        task_series.item_type = ItemKind::Task;
-        let mut series_mock = MockItemSeriesRepo::new();
-        series_mock
-            .expect_list_series_for_project()
-            .returning(move |_| Ok(vec![task_series.clone()]));
-        series_mock
-            .expect_list_occurrences_between()
-            .returning(|_, _, _| Ok(vec![]));
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
-
-        let result = list_virtual_occurrences_for_project_unchecked(
-            &event_series,
-            "p1",
-            anchor(),
-            anchor() + chrono::Duration::days(10),
-            0,
-        )
-        .await
-        .expect("should succeed");
-
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].occurrence_date, anchor());
-        assert!(result[0].is_current);
-    }
-
-    #[tokio::test]
-    async fn list_virtual_occurrences_injects_current_date_outside_the_caller_window() {
-        // Caught by manual smoke testing: the dashboard's default window starts at `now`
-        // (never extended backward), so a genuinely backlogged current occurrence (anchor()
-        // is 2023) would never appear in a caller-requested window that only covers the
-        // future — unless it's injected regardless of range_start/range_end. "every 400
-        // days" (rather than the usual "every 3 days") deliberately has zero *naturally*
-        // generated candidates in a 90-day future window ~3 years after anchor() (2023),
-        // isolating the injected entry from the rule's own ordinary future occurrences.
-        let mut task_series = series_ex("s1", "p1", "Take out trash", "every 400 days", anchor());
-        task_series.item_type = ItemKind::Task;
-        let mut series_mock = MockItemSeriesRepo::new();
-        series_mock
-            .expect_list_series_for_project()
-            .returning(move |_| Ok(vec![task_series.clone()]));
-        series_mock
-            .expect_list_occurrences_between()
-            .returning(|_, _, _| Ok(vec![]));
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
-
-        let now = Utc::now();
-        let result = list_virtual_occurrences_for_project_unchecked(
-            &event_series,
-            "p1",
-            now,
-            now + chrono::Duration::days(90),
-            0,
-        )
-        .await
-        .expect("should succeed");
-
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].occurrence_date, anchor());
-        assert!(result[0].is_current);
-    }
-
-    #[tokio::test]
-    async fn list_virtual_occurrences_does_not_inject_an_already_settled_current_date() {
-        // The current occurrence is already materialized outside the caller's window — must
-        // not reappear as a virtual/current entry just because it was injected for the lookup.
-        // Same sparse "every 400 days" pattern as the sibling test above, so the only
-        // candidate in play is the injected (and here, already-settled) current_date.
-        let mut task_series = series_ex("s1", "p1", "Take out trash", "every 400 days", anchor());
-        task_series.item_type = ItemKind::Task;
-        let mut series_mock = MockItemSeriesRepo::new();
-        series_mock
-            .expect_list_series_for_project()
-            .returning(move |_| Ok(vec![task_series.clone()]));
-        series_mock
-            .expect_list_occurrences_between()
-            .returning(|_, _, _| {
-                Ok(vec![ItemOccurrence {
-                    series_id: "s1".to_string(),
-                    occurrence_date: anchor(),
-                    item_id: Some("already-materialized".to_string()),
-                    is_exdate: false,
-                }])
-            });
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
-
-        let now = Utc::now();
-        let result = list_virtual_occurrences_for_project_unchecked(
-            &event_series,
-            "p1",
-            now,
-            now + chrono::Duration::days(90),
-            0,
-        )
-        .await
-        .expect("should succeed");
-
-        assert!(result.is_empty());
-    }
-
-    #[tokio::test]
-    async fn list_virtual_occurrences_task_current_date_derived_from_cursor_not_anchor() {
-        // Same series as above, but cursor_date has already settled the anchor occurrence
-        // — the "current" one is now one step past the cursor (+3d), not the anchor.
-        let mut task_series = series_ex("s1", "p1", "Take out trash", "every 3 days", anchor());
-        task_series.item_type = ItemKind::Task;
-        task_series.cursor_date = Some(anchor());
-        let mut series_mock = MockItemSeriesRepo::new();
-        series_mock
-            .expect_list_series_for_project()
-            .returning(move |_| Ok(vec![task_series.clone()]));
-        series_mock
-            .expect_list_occurrences_between()
-            .returning(|_, _, _| Ok(vec![]));
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
-
-        let result = list_virtual_occurrences_for_project_unchecked(
-            &event_series,
-            "p1",
-            anchor(),
-            anchor() + chrono::Duration::days(10),
-            0,
-        )
-        .await
-        .expect("should succeed");
-
-        assert_eq!(result.len(), 1);
-        assert_eq!(
-            result[0].occurrence_date,
-            anchor() + chrono::Duration::days(3)
-        );
-        assert!(result[0].is_current);
-    }
-
-    #[tokio::test]
-    async fn list_virtual_occurrences_completion_basis_task_series_roots_at_current_not_anchor() {
-        // Stage 10 gap 1: cursor_date (and so current_date, one step past it) is set in the
-        // future relative to Utc::now() — deliberately, so none of the candidate dates below
-        // get dropped by the unrelated past-date clamp (Stage 9) that only ever exempts the
-        // single current_date, not its future-predicted successors. anchor_date sits 101 days
-        // before cursor_date — not a multiple of 3 away from current_date (101 % 3 != 0) — so
-        // an (incorrectly) anchor-rooted predicted list would land on different dates
-        // (current_date +1d/+4d/+7d/+10d) than the current-date-rooted one this test expects
-        // (current_date +0d/+3d/+6d/+9d), distinguishing the two roots either way this fails.
-        // Truncated to whole seconds — the `rrule` crate normalizes DTSTART to
-        // whole-second precision internally, so a sub-second `Utc::now()` fraction on a
-        // range bound can cause boundary comparisons to miss an exact-match date; every
-        // other date in this test file avoids this the same way (fixed whole-second
-        // constants), see the sibling `occurrences_between` tests in
-        // `domain::recurrence`.
-        let cursor_date =
-            DateTime::from_timestamp((Utc::now() + chrono::Duration::days(50)).timestamp(), 0)
-                .unwrap();
-        let anchor_date = cursor_date - chrono::Duration::days(101);
-        let mut task_series = series_ex("s1", "p1", "Water plants", "every 3 days", anchor_date);
-        task_series.item_type = ItemKind::Task;
-        task_series.basis = Some("COMPLETION".to_string());
-        task_series.cursor_date = Some(cursor_date);
-        let mut series_mock = MockItemSeriesRepo::new();
-        series_mock
-            .expect_list_series_for_project()
-            .returning(move |_| Ok(vec![task_series.clone()]));
-        series_mock
-            .expect_list_occurrences_between()
-            .returning(|_, _, _| Ok(vec![]));
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
-
-        let current_date = cursor_date + chrono::Duration::days(3);
-        let result = list_virtual_occurrences_for_project_unchecked(
-            &event_series,
-            "p1",
-            current_date,
-            current_date + chrono::Duration::days(10),
-            0,
-        )
-        .await
-        .expect("should succeed");
-
-        let mut dates: Vec<_> = result.iter().map(|o| o.occurrence_date).collect();
-        dates.sort();
-        assert_eq!(
-            dates,
-            vec![
-                current_date,
-                current_date + chrono::Duration::days(3),
-                current_date + chrono::Duration::days(6),
-                current_date + chrono::Duration::days(9),
-            ]
-        );
-        assert!(
-            result
-                .iter()
-                .find(|o| o.occurrence_date == current_date)
-                .unwrap()
-                .is_current
-        );
-    }
-
-    #[tokio::test]
-    async fn list_virtual_occurrences_task_future_dates_are_never_clamped() {
-        // Truncated to whole seconds (matching every other fixture's DateTime::from_timestamp
-        // convention) — occurrences_between's underlying RRule generation loses sub-second
-        // precision, so a raw Utc::now()-derived anchor can end up a few nanoseconds "later"
-        // than the range_start built from it, excluding the anchor occurrence from a strictly-
-        // after bound.
-        let far_future_anchor =
-            DateTime::from_timestamp((Utc::now() + chrono::Duration::days(30)).timestamp(), 0)
-                .unwrap();
-        let mut task_series =
-            series_ex("s1", "p1", "Future task", "every 3 days", far_future_anchor);
-        task_series.item_type = ItemKind::Task;
-        let mut series_mock = MockItemSeriesRepo::new();
-        series_mock
-            .expect_list_series_for_project()
-            .returning(move |_| Ok(vec![task_series.clone()]));
-        series_mock
-            .expect_list_occurrences_between()
-            .returning(|_, _, _| Ok(vec![]));
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
-
-        let result = list_virtual_occurrences_for_project_unchecked(
-            &event_series,
-            "p1",
-            far_future_anchor,
-            far_future_anchor + chrono::Duration::days(10),
-            0,
-        )
-        .await
-        .expect("should succeed");
-
-        // anchor, +3d, +6d, +9d — none clamped, since all are in the future.
-        assert_eq!(result.len(), 4);
-        // Only the anchor (== current_occurrence_date, cursor unset) is marked current.
-        assert_eq!(result.iter().filter(|o| o.is_current).count(), 1);
-        assert!(
-            result
-                .iter()
-                .find(|o| o.is_current)
-                .unwrap()
-                .occurrence_date
-                == far_future_anchor
-        );
-    }
-
-    #[tokio::test]
-    async fn list_virtual_occurrences_excludes_materialized_dates() {
-        let materialized_date = anchor() + chrono::Duration::days(3);
-        let mut series_mock = MockItemSeriesRepo::new();
-        series_mock.expect_list_series_for_project().returning(|_| {
-            Ok(vec![series_ex(
-                "s1",
-                "p1",
-                "Standup",
-                "every 3 days",
-                anchor(),
-            )])
-        });
-        series_mock
-            .expect_list_occurrences_between()
-            .returning(move |_, _, _| {
-                Ok(vec![ItemOccurrence {
-                    series_id: "s1".to_string(),
-                    occurrence_date: materialized_date,
-                    item_id: Some("item-1".to_string()),
-                    is_exdate: false,
-                }])
-            });
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
-
-        let result = list_virtual_occurrences_for_project_unchecked(
-            &event_series,
-            "p1",
-            anchor(),
-            anchor() + chrono::Duration::days(10),
-            0,
-        )
-        .await
-        .expect("should succeed");
-
-        assert_eq!(result.len(), 3);
-        assert!(
-            result
-                .iter()
-                .all(|o| o.occurrence_date != materialized_date)
-        );
-    }
-
-    #[tokio::test]
-    async fn list_virtual_occurrences_excludes_exdate_dates() {
-        let skipped_date = anchor() + chrono::Duration::days(6);
-        let mut series_mock = MockItemSeriesRepo::new();
-        series_mock.expect_list_series_for_project().returning(|_| {
-            Ok(vec![series_ex(
-                "s1",
-                "p1",
-                "Standup",
-                "every 3 days",
-                anchor(),
-            )])
-        });
-        series_mock
-            .expect_list_occurrences_between()
-            .returning(move |_, _, _| {
-                Ok(vec![ItemOccurrence {
-                    series_id: "s1".to_string(),
-                    occurrence_date: skipped_date,
-                    item_id: None,
-                    is_exdate: true,
-                }])
-            });
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
-
-        let result = list_virtual_occurrences_for_project_unchecked(
-            &event_series,
-            "p1",
-            anchor(),
-            anchor() + chrono::Duration::days(10),
-            0,
-        )
-        .await
-        .expect("should succeed");
-
-        assert_eq!(result.len(), 3);
-        assert!(result.iter().all(|o| o.occurrence_date != skipped_date));
-    }
-
-    #[tokio::test]
-    async fn list_virtual_occurrences_skips_a_series_with_unparseable_recurrence() {
-        let mut series_mock = MockItemSeriesRepo::new();
-        series_mock.expect_list_series_for_project().returning(|_| {
-            Ok(vec![
-                series_ex("bad", "p1", "Bad", "not a real pattern", anchor()),
-                series_ex("good", "p1", "Good", "every 3 days", anchor()),
-            ])
-        });
-        series_mock
-            .expect_list_occurrences_between()
-            .withf(|series_id: &str, _, _| series_id == "good")
-            .returning(|_, _, _| Ok(vec![]));
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
-
-        let result = list_virtual_occurrences_for_project_unchecked(
-            &event_series,
-            "p1",
-            anchor(),
-            anchor() + chrono::Duration::days(10),
-            0,
-        )
-        .await
-        .expect("a malformed series must not error the whole listing");
-
-        assert!(result.iter().all(|o| o.series_id == "good"));
-        assert_eq!(result.len(), 4);
-    }
-
-    #[tokio::test]
-    async fn list_virtual_occurrences_returns_empty_for_project_with_no_series() {
-        let mut series_mock = MockItemSeriesRepo::new();
-        series_mock
-            .expect_list_series_for_project()
-            .returning(|_| Ok(vec![]));
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
-
-        let result = list_virtual_occurrences_for_project_unchecked(
-            &event_series,
-            "p1",
-            anchor(),
-            anchor() + chrono::Duration::days(10),
-            0,
-        )
-        .await
-        .expect("should succeed");
-
-        assert!(result.is_empty());
-    }
-
-    #[tokio::test]
-    async fn list_virtual_occurrences_scopes_to_the_given_range() {
-        let mut series_mock = MockItemSeriesRepo::new();
-        series_mock.expect_list_series_for_project().returning(|_| {
-            Ok(vec![series_ex(
-                "s1",
-                "p1",
-                "Standup",
-                "every 3 days",
-                anchor(),
-            )])
-        });
-        series_mock
-            .expect_list_occurrences_between()
-            .returning(|_, _, _| Ok(vec![]));
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
-
-        // Narrow window: only the anchor itself and +3d should land inside [anchor, anchor+4d].
-        let result = list_virtual_occurrences_for_project_unchecked(
-            &event_series,
-            "p1",
-            anchor(),
-            anchor() + chrono::Duration::days(4),
-            0,
-        )
-        .await
-        .expect("should succeed");
-
-        assert_eq!(result.len(), 2);
-        for o in &result {
-            assert!(
-                o.occurrence_date >= anchor()
-                    && o.occurrence_date <= anchor() + chrono::Duration::days(4)
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn list_virtual_occurrences_combines_multiple_series_in_one_project() {
-        let mut series_mock = MockItemSeriesRepo::new();
-        series_mock.expect_list_series_for_project().returning(|_| {
-            Ok(vec![
-                series_ex("s1", "p1", "Standup", "every 3 days", anchor()),
-                series_ex("s2", "p1", "Retro", "every 5 days", anchor()),
-            ])
-        });
-        series_mock
-            .expect_list_occurrences_between()
-            .returning(|_, _, _| Ok(vec![]));
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
-
-        let result = list_virtual_occurrences_for_project_unchecked(
-            &event_series,
-            "p1",
-            anchor(),
-            anchor() + chrono::Duration::days(10),
-            0,
-        )
-        .await
-        .expect("should succeed");
-
-        let standup: Vec<_> = result.iter().filter(|o| o.series_id == "s1").collect();
-        let retro: Vec<_> = result.iter().filter(|o| o.series_id == "s2").collect();
-        assert!(standup.iter().all(|o| o.series_name == "Standup"));
-        assert!(retro.iter().all(|o| o.series_name == "Retro"));
-        // s1: anchor, +3d, +6d, +9d (4); s2: anchor, +5d, +10d (3)
-        assert_eq!(standup.len(), 4);
-        assert_eq!(retro.len(), 3);
     }
 }

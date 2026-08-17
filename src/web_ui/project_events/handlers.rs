@@ -5,16 +5,16 @@ use crate::service::item_series::{self as event_series_service};
 use crate::service::project_items::{self as project_item_service};
 use crate::service::projects::{self as project_service};
 use crate::service::templates::{self as template_service, CreateProjectTemplateParams};
-use crate::storage::sqlite::{ItemRepo, ItemSeriesRepo, ProjectRepo, TeamRepo};
-use crate::web_ui::nav::{self, ActiveContext, SidebarSection};
-use crate::web_ui::project_events::{
-    build_calendar_days, create_params_from_form, grid_start_for, list_project_events,
-    local_date_to_utc, next_month, prev_month, render, require_event, update_params_from_form,
-    ProjectEventForm,
-};
-use crate::web_ui::project_events::templates::*;
-use crate::web_ui::project_tasks::handlers::render_source_event_fragment;
+use crate::storage::sqlite::{ItemRepo, ItemSeriesRepo, ProjectRepo, TeamRepo, UserRepo};
 use crate::web_ui::TzOffset;
+use crate::web_ui::nav::{self, ActiveContext, SidebarSection};
+use crate::web_ui::project_events::templates::*;
+use crate::web_ui::project_events::{
+    ProjectEventForm, build_calendar_days, create_params_from_form, grid_start_for,
+    list_project_events, local_date_to_utc, next_month, prev_month, render, require_event,
+    update_params_from_form,
+};
+use crate::web_ui::project_tasks::handlers::render_source_event_fragment;
 use askama::Template;
 use axum::extract::{Extension, Form, Path, Query};
 use axum::response::{Html, IntoResponse, Response};
@@ -33,7 +33,8 @@ pub async fn project_events_page(
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     TzOffset(tz): TzOffset,
 ) -> Result<Html<String>, ItemError> {
-    let _project = project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
+    let _project =
+        project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
     let items = list_project_events(&repo, &project_id).await?;
     let rows = super::render_rows(&items, &project_id, tz)?;
     let nav_html = nav::build_nav_html(
@@ -56,7 +57,8 @@ pub async fn new_project_event_page(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
 ) -> Result<Html<String>, ItemError> {
-    let _project = project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
+    let _project =
+        project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
     let nav_html = nav::build_nav_html(
         &projects,
         &auth_user.user_id,
@@ -87,11 +89,13 @@ pub async fn project_events_calendar_page(
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(users): Extension<Arc<dyn UserRepo>>,
     Extension(event_series): Extension<Arc<dyn ItemSeriesRepo>>,
     TzOffset(tz): TzOffset,
     Query(q): Query<CalendarQuery>,
 ) -> Result<Html<String>, ItemError> {
-    let _project = project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
+    let _project =
+        project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
     let today = crate::web_ui::to_local(Utc::now(), tz).date_naive();
     let year = q.year.unwrap_or_else(|| today.year());
     let month = q
@@ -109,18 +113,28 @@ pub async fn project_events_calendar_page(
     );
     // Filtered to Event-typed series only (Stage 8) — Task-typed series get their own
     // equivalent surface on the Tasks calendar instead of doubling up here.
-    let virtual_occurrences: Vec<_> = event_series_service::list_virtual_occurrences_for_project_unchecked(
-        &event_series,
+    let virtual_occurrences: Vec<_> =
+        event_series_service::list_virtual_occurrences_for_project_unchecked(
+            &event_series,
+            &users,
+            &project_id,
+            range_start,
+            range_end,
+            tz,
+        )
+        .await?
+        .into_iter()
+        .filter(|occ| occ.item_type == ItemKind::Event)
+        .collect();
+    let days = build_calendar_days(
+        year,
+        month,
         &project_id,
-        range_start,
-        range_end,
+        &items,
+        &virtual_occurrences,
         tz,
-    )
-    .await?
-    .into_iter()
-    .filter(|occ| occ.item_type == ItemKind::Event)
-    .collect();
-    let days = build_calendar_days(year, month, &project_id, &items, &virtual_occurrences, tz, today);
+        today,
+    );
     let (prev_year, prev_month) = prev_month(year, month);
     let (next_year, next_month) = next_month(year, month);
     let nav_html = nav::build_nav_html(
@@ -230,7 +244,8 @@ pub async fn project_event_children_fragment(
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     TzOffset(tz): TzOffset,
 ) -> Result<Html<String>, ItemError> {
-    let project = project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
+    let project =
+        project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
     // Ownership gate (event belongs to this project) is folded into
     // `list_project_event_children_unchecked`, called inside `render_source_event_fragment`.
     render_source_event_fragment(
@@ -266,7 +281,8 @@ pub async fn create_project_event_child_form(
     TzOffset(tz): TzOffset,
     Form(form): Form<ProjectEventChildForm>,
 ) -> Result<Html<String>, ItemError> {
-    let project = project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
+    let project =
+        project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
     let params = crate::service::project_items::CreateProjectItemParams {
         project_id: project_id.clone(),
         name: form.name,
@@ -368,7 +384,8 @@ pub async fn update_project_event_form(
     )
     .await?;
 
-    let updated = project_item_service::get_project_item_unchecked(&repo, &project_id, &item_id).await?;
+    let updated =
+        project_item_service::get_project_item_unchecked(&repo, &project_id, &item_id).await?;
     if close {
         let view = ProjectEventDetailView::from_item(&updated, tz).render()?;
         let nav_html = nav::build_nav_html(
