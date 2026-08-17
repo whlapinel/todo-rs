@@ -672,6 +672,36 @@ pub async fn delete_project_task_form(
     Ok(Html(String::new()))
 }
 
+pub async fn duplicate_project_task_form(
+    Path((project_id, item_id)): Path<(String, String)>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+) -> Result<Response, ItemError> {
+    let item = project_item_service::get_project_item(
+        &repo,
+        &projects,
+        &teams,
+        &project_id,
+        &auth_user.user_id,
+        &item_id,
+    )
+    .await?;
+    require_task(item)?;
+    project_item_service::duplicate_project_item(
+        &repo,
+        &projects,
+        &teams,
+        &auth_user.user_id,
+        &project_id,
+        &item_id,
+    )
+    .await?;
+    let location = project_tasks_list_url(&project_id);
+    Ok(hx_redirect(location))
+}
+
 /// Reparent-only update, every other field round-tripped from `current` — see
 /// `tasks::reparent_params`/`team_tasks::reparent_params` for the full offset-recompute
 /// rationale (identical here, just against `UpdateProjectItemParams`).
@@ -861,3 +891,5 @@ pub async fn save_project_task_as_template(
         r#"<span class="text-xs text-green-600">Saved</span>"#.to_string(),
     ))
 }
+
+// pub async fn duplicate_task()

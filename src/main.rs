@@ -2,10 +2,10 @@ use std::{net::SocketAddr, sync::Arc};
 mod auth;
 mod domain;
 mod email;
+mod json_api;
 mod service;
 mod storage;
 mod web_ui;
-mod json_api;
 
 use crate::storage::sqlite::{
     ActivityLogRepo, ItemRepo, ItemSeriesRepo, ProjectRepo, TeamRepo, UserRepo,
@@ -24,7 +24,8 @@ use json_api::activity_log::{list_team_activity_log, undo_activity_log_entry};
 use json_api::invites::send_app_invite;
 use json_api::item_import::{get_item_import_template, import_project_items};
 use json_api::item_series::{
-    create_item_series, delete_item_series, get_item_series, list_item_series_for_project, update_item_series,
+    create_item_series, delete_item_series, get_item_series, list_item_series_for_project,
+    update_item_series,
 };
 use json_api::items::{list_assigned_items, list_items_due};
 use json_api::project_items::{
@@ -32,8 +33,8 @@ use json_api::project_items::{
     update_project_item,
 };
 use json_api::projects::{
-    attach_team_to_project, create_project, delete_project, detach_team_from_project,
-    get_project, list_project_members, list_projects, set_project_member_role, update_project,
+    attach_team_to_project, create_project, delete_project, detach_team_from_project, get_project,
+    list_project_members, list_projects, set_project_member_role, update_project,
 };
 use json_api::team_templates::{create_team_template, list_team_templates};
 use json_api::teams::{
@@ -42,21 +43,21 @@ use json_api::teams::{
 };
 use json_api::templates::{create_template, list_templates};
 use json_api::users::{get_user, list_users, update_user};
+use todo_server_sdk::{PeoplesRepublicOfLists, PeoplesRepublicOfListsConfig};
+use tower::ServiceBuilder;
+use tower_cookies::CookieManagerLayer;
+use tower_http::services::ServeDir;
 use web_ui::assigned_items::assigned_items_page;
 use web_ui::login::login_page;
 use web_ui::project_activity::*;
 use web_ui::project_dashboard::*;
-use web_ui::project_item_series::handlers::*;
 use web_ui::project_events::handlers::*;
+use web_ui::project_item_series::handlers::*;
 use web_ui::project_simple_lists::handlers::*;
 use web_ui::project_tasks::handlers::*;
 use web_ui::project_templates::handlers::*;
 use web_ui::projects::{create_project_form, projects_page};
 use web_ui::teams::*;
-use todo_server_sdk::{PeoplesRepublicOfLists, PeoplesRepublicOfListsConfig};
-use tower::ServiceBuilder;
-use tower_cookies::CookieManagerLayer;
-use tower_http::services::ServeDir;
 
 fn build_web_router() -> Router {
     Router::new()
@@ -65,7 +66,10 @@ fn build_web_router() -> Router {
             "/projects/:project_id/tasks",
             get(project_tasks_page).post(create_project_task_form),
         )
-        .route("/projects/:project_id/tasks/new", get(new_project_task_page))
+        .route(
+            "/projects/:project_id/tasks/new",
+            get(new_project_task_page),
+        )
         .route(
             "/projects/:project_id/tasks/calendar",
             get(project_tasks_calendar_page),
@@ -87,6 +91,10 @@ fn build_web_router() -> Router {
         .route(
             "/projects/:project_id/tasks/:item_id/children",
             get(project_task_children_fragment),
+        )
+        .route(
+            "/projects/:project_id/tasks/:item_id/duplicate",
+            post(duplicate_project_task_form),
         )
         .route(
             "/projects/:project_id/tasks/:item_id/save-as-template",

@@ -87,6 +87,10 @@ impl ProjectTaskRow {
             offset_label,
             assignee_name,
             complete_url: Some(format!("/web/projects/{project_id}/tasks/{}", item.id)),
+            duplicate_url: Some(format!(
+                "/web/projects/{project_id}/tasks/{}/duplicate",
+                item.id
+            )),
             toggle_complete_json: (!item.complete).to_string(),
             siblings: siblings
                 .iter()

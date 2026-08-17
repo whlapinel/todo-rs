@@ -30,6 +30,7 @@ pub struct Row {
     /// personal project (no assignment concept) or an unassigned team item.
     pub assignee_name: Option<String>,
     pub complete_url: Option<String>,
+    pub duplicate_url: Option<String>,
     pub toggle_complete_json: String,
     /// (id, name) of every other item rendered alongside this one in the same list —
     /// i.e. this item's actual siblings, since `render_rows` is only ever called with a

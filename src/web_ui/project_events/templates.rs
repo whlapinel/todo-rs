@@ -1,7 +1,7 @@
-use askama::Template;
 use crate::domain::item::Item;
 use crate::web_ui::components::row::Row;
 use crate::web_ui::to_local;
+use askama::Template;
 use chrono::Utc;
 
 // ---- templates --------------------------------------------------------------
@@ -49,6 +49,7 @@ impl ProjectEventRow {
             offset_label: None,
             assignee_name: None,
             complete_url: None,
+            duplicate_url: None,
             toggle_complete_json: String::new(),
             siblings: Vec::new(),
             is_source_event_linked: false,

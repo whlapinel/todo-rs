@@ -1,6 +1,6 @@
-use askama::Template;
 use crate::domain::item::Item;
 use crate::web_ui::components::row::Row;
+use askama::Template;
 
 // ---- templates --------------------------------------------------------------
 
@@ -29,6 +29,7 @@ impl ProjectSimpleItemRow {
             offset_label: None,
             assignee_name: None,
             complete_url: None,
+            duplicate_url: None,
             toggle_complete_json: String::new(),
             siblings: siblings
                 .iter()

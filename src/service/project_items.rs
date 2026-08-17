@@ -2,12 +2,15 @@ use crate::domain::item::{Item, ItemKind};
 use crate::domain::project::Project;
 use crate::service::error::ItemError;
 use crate::service::item_series;
-use crate::service::items::{self, item_anchor, CreateItemParams, UpdateItemParams};
+use crate::service::items::{self, CreateItemParams, UpdateItemParams, item_anchor};
 use crate::service::projects::require_project_member;
 use crate::service::team_items::{
     self, CreateTeamItemParams, UpdateTeamItemContext, UpdateTeamItemParams,
 };
-use crate::storage::sqlite::{ActivityLogRepo, DueItem, ItemRepo, ItemSeriesRepo, ProjectRepo, TeamRepo};
+use crate::storage::sqlite::{
+    ActivityLogRepo, DueItem, ItemRepo, ItemSeriesRepo, ProjectRepo, TeamRepo,
+};
+use async_recursion::async_recursion;
 use chrono::{DateTime, Utc};
 use std::sync::Arc;
 
@@ -453,6 +456,37 @@ pub async fn update_project_item(
     Ok(())
 }
 
+pub async fn duplicate_project_item(
+    repo: &Arc<dyn ItemRepo>,
+    projects: &Arc<dyn ProjectRepo>,
+    teams: &Arc<dyn TeamRepo>,
+    requester_user_id: &str,
+    project_id: &str,
+    item_id: &str,
+) -> Result<(), ItemError> {
+    require_project_member(projects, teams, project_id, requester_user_id).await?;
+    let mut copy = repo.get_by_project(project_id, item_id).await?;
+    copy.name = format!("{} (copy)", copy.name);
+    let copy_id = repo.create(&copy).await?;
+    copy_children(&copy.id, &copy_id, repo).await?;
+    Ok(())
+}
+
+#[async_recursion]
+async fn copy_children(
+    old_parent_id: &str,
+    new_parent_id: &str,
+    repo: &Arc<dyn ItemRepo>,
+) -> Result<(), ItemError> {
+    let children = repo.list_children(old_parent_id).await?;
+    for mut child in children {
+        child.parent_item_id = Some(new_parent_id.to_string());
+        let copy_id = repo.create(&child).await?;
+        copy_children(&child.id, &copy_id, repo).await?;
+    }
+    Ok(())
+}
+
 /// Stage B4's unified delete path — same delegation shape as `create_project_item`.
 /// Stage 6 of docs/recurring-events-virtual-occurrences-rough-plan.md added the
 /// trailing `item_series::unlink_deleted_item_occurrence` call: every delete of an
@@ -472,8 +506,15 @@ pub async fn delete_project_item(
     let project = projects.get(project_id).await?;
     match project.team_id {
         Some(_) => {
-            team_items::delete_team_item(repo, teams, projects, requester_user_id, project_id, item_id)
-                .await?;
+            team_items::delete_team_item(
+                repo,
+                teams,
+                projects,
+                requester_user_id,
+                project_id,
+                item_id,
+            )
+            .await?;
         }
         None => items::delete_item(repo, &project.owner_user_id, item_id).await?,
     }
@@ -486,14 +527,15 @@ mod tests {
     use crate::domain::project::Project;
     use crate::domain::team::TeamRole;
     use crate::storage::sqlite::{
-        MockActivityLogRepo, MockItemSeriesRepo, MockItemRepo, MockProjectRepo, MockTeamRepo,
+        MockActivityLogRepo, MockItemRepo, MockItemSeriesRepo, MockProjectRepo, MockTeamRepo,
     };
 
     /// Every `delete_project_item` test but the dedicated series-unlinking one below just
     /// needs the reverse lookup to be a harmless no-op — this is what those tests share.
     fn no_op_event_series_repo() -> Arc<dyn ItemSeriesRepo> {
         let mut mock = MockItemSeriesRepo::new();
-        mock.expect_find_occurrence_by_item_id().returning(|_| Ok(None));
+        mock.expect_find_occurrence_by_item_id()
+            .returning(|_| Ok(None));
         Arc::new(mock)
     }
 
@@ -518,7 +560,9 @@ mod tests {
     #[tokio::test]
     async fn get_project_item_allows_owner_on_personal_project() {
         let mut projects_mock = MockProjectRepo::new();
-        projects_mock.expect_get().returning(|_| Ok(personal_project()));
+        projects_mock
+            .expect_get()
+            .returning(|_| Ok(personal_project()));
         let mut items_mock = MockItemRepo::new();
         items_mock
             .expect_get_by_project()
@@ -538,7 +582,9 @@ mod tests {
     #[tokio::test]
     async fn get_project_item_rejects_non_owner_on_personal_project() {
         let mut projects_mock = MockProjectRepo::new();
-        projects_mock.expect_get().returning(|_| Ok(personal_project()));
+        projects_mock
+            .expect_get()
+            .returning(|_| Ok(personal_project()));
         let items_mock = MockItemRepo::new();
 
         let repo: Arc<dyn ItemRepo> = Arc::new(items_mock);
@@ -552,7 +598,9 @@ mod tests {
     #[tokio::test]
     async fn get_project_item_allows_active_team_member_on_shared_project() {
         let mut projects_mock = MockProjectRepo::new();
-        projects_mock.expect_get().returning(|_| Ok(shared_project()));
+        projects_mock
+            .expect_get()
+            .returning(|_| Ok(shared_project()));
         projects_mock
             .expect_member_role()
             .returning(|_, _| Ok(Some(TeamRole::Member)));
@@ -575,8 +623,12 @@ mod tests {
     #[tokio::test]
     async fn get_project_item_rejects_inactive_team_member_on_shared_project() {
         let mut projects_mock = MockProjectRepo::new();
-        projects_mock.expect_get().returning(|_| Ok(shared_project()));
-        projects_mock.expect_member_role().returning(|_, _| Ok(None));
+        projects_mock
+            .expect_get()
+            .returning(|_| Ok(shared_project()));
+        projects_mock
+            .expect_member_role()
+            .returning(|_, _| Ok(None));
         let teams_mock = MockTeamRepo::new();
         let items_mock = MockItemRepo::new();
 
@@ -591,7 +643,9 @@ mod tests {
     #[tokio::test]
     async fn list_project_items_delegates_to_repo_after_membership_check() {
         let mut projects_mock = MockProjectRepo::new();
-        projects_mock.expect_get().returning(|_| Ok(personal_project()));
+        projects_mock
+            .expect_get()
+            .returning(|_| Ok(personal_project()));
         let mut items_mock = MockItemRepo::new();
         items_mock
             .expect_list_by_project()
@@ -618,7 +672,9 @@ mod tests {
     #[tokio::test]
     async fn list_project_items_rejects_non_member() {
         let mut projects_mock = MockProjectRepo::new();
-        projects_mock.expect_get().returning(|_| Ok(personal_project()));
+        projects_mock
+            .expect_get()
+            .returning(|_| Ok(personal_project()));
         let items_mock = MockItemRepo::new();
 
         let repo: Arc<dyn ItemRepo> = Arc::new(items_mock);
@@ -632,8 +688,12 @@ mod tests {
     #[tokio::test]
     async fn create_project_item_delegates_to_personal_item_creation() {
         let mut projects_mock = MockProjectRepo::new();
-        projects_mock.expect_get().returning(|_| Ok(personal_project()));
-        projects_mock.expect_find_personal_project().returning(|_| Ok(None));
+        projects_mock
+            .expect_get()
+            .returning(|_| Ok(personal_project()));
+        projects_mock
+            .expect_find_personal_project()
+            .returning(|_| Ok(None));
         let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
 
         let mut items_mock = MockItemRepo::new();
@@ -666,7 +726,9 @@ mod tests {
     #[tokio::test]
     async fn create_project_item_delegates_to_team_item_creation() {
         let mut projects_mock = MockProjectRepo::new();
-        projects_mock.expect_get().returning(|_| Ok(shared_project()));
+        projects_mock
+            .expect_get()
+            .returning(|_| Ok(shared_project()));
         projects_mock
             .expect_member_role()
             .returning(|_, _| Ok(Some(TeamRole::Member)));
@@ -702,7 +764,9 @@ mod tests {
     #[tokio::test]
     async fn create_project_item_rejects_non_member() {
         let mut projects_mock = MockProjectRepo::new();
-        projects_mock.expect_get().returning(|_| Ok(personal_project()));
+        projects_mock
+            .expect_get()
+            .returning(|_| Ok(personal_project()));
         let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
         let repo: Arc<dyn ItemRepo> = Arc::new(MockItemRepo::new());
         let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
@@ -725,7 +789,9 @@ mod tests {
     #[tokio::test]
     async fn update_project_item_delegates_to_personal_item_update() {
         let mut projects_mock = MockProjectRepo::new();
-        projects_mock.expect_get().returning(|_| Ok(personal_project()));
+        projects_mock
+            .expect_get()
+            .returning(|_| Ok(personal_project()));
         let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
 
         let mut items_mock = MockItemRepo::new();
@@ -761,7 +827,9 @@ mod tests {
     #[tokio::test]
     async fn update_project_item_triggers_series_completion_hook_when_completing() {
         let mut projects_mock = MockProjectRepo::new();
-        projects_mock.expect_get().returning(|_| Ok(personal_project()));
+        projects_mock
+            .expect_get()
+            .returning(|_| Ok(personal_project()));
         let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
 
         let mut items_mock = MockItemRepo::new();
@@ -809,7 +877,9 @@ mod tests {
     #[tokio::test]
     async fn update_project_item_delegates_to_team_item_update() {
         let mut projects_mock = MockProjectRepo::new();
-        projects_mock.expect_get().returning(|_| Ok(shared_project()));
+        projects_mock
+            .expect_get()
+            .returning(|_| Ok(shared_project()));
         projects_mock
             .expect_member_role()
             .returning(|_, _| Ok(Some(TeamRole::Member)));
@@ -852,7 +922,9 @@ mod tests {
     #[tokio::test]
     async fn delete_project_item_delegates_to_personal_item_delete() {
         let mut projects_mock = MockProjectRepo::new();
-        projects_mock.expect_get().returning(|_| Ok(personal_project()));
+        projects_mock
+            .expect_get()
+            .returning(|_| Ok(personal_project()));
         let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
 
         let mut items_mock = MockItemRepo::new();
@@ -860,22 +932,34 @@ mod tests {
             .expect_get()
             .returning(|_, _| Ok(Item::new_user_item("owner1", "Task")));
         items_mock.expect_list_children().returning(|_| Ok(vec![]));
-        items_mock.expect_list_by_source_event().returning(|_| Ok(vec![]));
+        items_mock
+            .expect_list_by_source_event()
+            .returning(|_| Ok(vec![]));
         items_mock.expect_delete().times(1).returning(|_| Ok(()));
         let repo: Arc<dyn ItemRepo> = Arc::new(items_mock);
 
         let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
         let event_series = no_op_event_series_repo();
 
-        delete_project_item(&repo, &projects, &teams, &event_series, "owner1", "p1", "i1")
-            .await
-            .expect("should delete personal project item");
+        delete_project_item(
+            &repo,
+            &projects,
+            &teams,
+            &event_series,
+            "owner1",
+            "p1",
+            "i1",
+        )
+        .await
+        .expect("should delete personal project item");
     }
 
     #[tokio::test]
     async fn delete_project_item_delegates_to_team_item_delete() {
         let mut projects_mock = MockProjectRepo::new();
-        projects_mock.expect_get().returning(|_| Ok(shared_project()));
+        projects_mock
+            .expect_get()
+            .returning(|_| Ok(shared_project()));
         projects_mock
             .expect_member_role()
             .returning(|_, _| Ok(Some(TeamRole::Member)));
@@ -888,14 +972,24 @@ mod tests {
             .expect_get_by_project()
             .returning(|_, _| Ok(Item::new_project_item("p1", "Task")));
         items_mock.expect_list_children().returning(|_| Ok(vec![]));
-        items_mock.expect_list_by_source_event().returning(|_| Ok(vec![]));
+        items_mock
+            .expect_list_by_source_event()
+            .returning(|_| Ok(vec![]));
         items_mock.expect_delete().times(1).returning(|_| Ok(()));
         let repo: Arc<dyn ItemRepo> = Arc::new(items_mock);
         let event_series = no_op_event_series_repo();
 
-        delete_project_item(&repo, &projects, &teams, &event_series, "member1", "p1", "i1")
-            .await
-            .expect("should delete team project item");
+        delete_project_item(
+            &repo,
+            &projects,
+            &teams,
+            &event_series,
+            "member1",
+            "p1",
+            "i1",
+        )
+        .await
+        .expect("should delete team project item");
     }
 
     /// Regression test for the bug docs/team-id-removal-plan.md exists to fix:
@@ -995,7 +1089,9 @@ mod tests {
             })
         });
         items_mock.expect_list_children().returning(|_| Ok(vec![]));
-        items_mock.expect_list_by_source_event().returning(|_| Ok(vec![]));
+        items_mock
+            .expect_list_by_source_event()
+            .returning(|_| Ok(vec![]));
         items_mock.expect_delete().times(1).returning(|_| Ok(()));
         let repo: Arc<dyn ItemRepo> = Arc::new(items_mock);
         let event_series = no_op_event_series_repo();
@@ -1010,7 +1106,9 @@ mod tests {
     #[tokio::test]
     async fn delete_project_item_unlinks_a_materialized_series_occurrence() {
         let mut projects_mock = MockProjectRepo::new();
-        projects_mock.expect_get().returning(|_| Ok(personal_project()));
+        projects_mock
+            .expect_get()
+            .returning(|_| Ok(personal_project()));
         let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
         let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
 
@@ -1019,7 +1117,9 @@ mod tests {
             .expect_get()
             .returning(|_, _| Ok(Item::new_user_item("owner1", "Standup")));
         items_mock.expect_list_children().returning(|_| Ok(vec![]));
-        items_mock.expect_list_by_source_event().returning(|_| Ok(vec![]));
+        items_mock
+            .expect_list_by_source_event()
+            .returning(|_| Ok(vec![]));
         items_mock.expect_delete().times(1).returning(|_| Ok(()));
         let repo: Arc<dyn ItemRepo> = Arc::new(items_mock);
 
@@ -1045,8 +1145,16 @@ mod tests {
         series_mock.expect_advance_cursor().times(0);
         let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
-        delete_project_item(&repo, &projects, &teams, &event_series, "owner1", "p1", "i1")
-            .await
-            .expect("should delete the item and un-materialize its occurrence");
+        delete_project_item(
+            &repo,
+            &projects,
+            &teams,
+            &event_series,
+            "owner1",
+            "p1",
+            "i1",
+        )
+        .await
+        .expect("should delete the item and un-materialize its occurrence");
     }
 }
