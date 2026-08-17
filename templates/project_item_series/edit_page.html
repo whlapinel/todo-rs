@@ -45,10 +45,15 @@
          here, unlike the real Event/Template screens that still use
          macros::event_type_field. -->
     <div class="completion-basis-field">
-      <label class="inline-flex items-center gap-1.5 text-sm font-normal text-gray-900 dark:text-white">
-        <input type="checkbox" name="basis" value="COMPLETION" {% if basis_checked %}checked{% endif %}
-               class="size-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-600 dark:border-white/20 dark:bg-white/5" />
-        Base next occurrence on completion time, not schedule
+      <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Occurrence basis
+        <div class="mt-2">
+          <select name="basis"
+                  class="block w-full rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:focus:outline-indigo-500">
+            <option value="" {% if basis == "" %}selected{% endif %}>Schedule — next occurrence follows the fixed recurrence</option>
+            <option value="COMPLETION" {% if basis == "COMPLETION" %}selected{% endif %}>Completion — next occurrence is measured from when each one is actually completed</option>
+            <option value="DUE_DATE" {% if basis == "DUE_DATE" %}selected{% endif %}>Due date — materialize occurrences with a due date instead of a scheduled date</option>
+          </select>
+        </div>
       </label>
     </div>
     <div class="template-field">
@@ -119,6 +124,7 @@
                  class="rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:focus:outline-indigo-500" />
         </div>
       </label>
+      <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">If no time is given: with a Due date basis this defaults to 23:59, otherwise to 00:00.</p>
     </div>
     {% call macros::button_primary("Save") %}{% endcall %}
   </form>

@@ -6,7 +6,7 @@ use crate::service::projects::{self as project_service};
 use crate::storage::sqlite::{ItemRepo, ItemSeriesRepo, ProjectRepo, TeamRepo};
 use crate::web_ui::nav::{self, ActiveContext, SidebarSection};
 use crate::web_ui::project_item_series::templates::*;
-use crate::web_ui::project_item_series::{combine_local_to_utc, non_empty, render, start_of_day};
+use crate::web_ui::project_item_series::{combine_local_to_utc, end_of_day, non_empty, render, start_of_day};
 use crate::web_ui::project_tasks::{active_member_options, names_for};
 use crate::web_ui::{to_local, TzOffset};
 use askama::Template;
@@ -121,8 +121,10 @@ pub struct CreateItemSeriesForm {
     recurrence: String,
     anchor_date: String,
     anchor_time: Option<String>,
-    /// Checkbox — present with value "COMPLETION" when checked, absent otherwise
-    /// (standard HTML checkbox semantics, so `Option` rather than a `bool` field).
+    /// A `<select>` of "" (schedule, the default) / "COMPLETION" / "DUE_DATE" — see
+    /// `ItemSeries::basis`'s doc comment. A blank selection submits as `Some("")`;
+    /// normalized to `None` via `non_empty` at each call site below, same convention as
+    /// `template_item_id`.
     basis: Option<String>,
     /// Blank `<option value="">` submits as `Some("")` — `non_empty` (this module)
     /// normalizes that to `None`, same convention as `description`/`event_type`.
@@ -143,6 +145,18 @@ fn parse_item_type(raw: &str) -> Result<ItemKind, ItemError> {
     }
 }
 
+/// A due-date-basis series' anchor is a due date, which defaults a bare (no-time) input
+/// to end-of-day — matching `due_date`'s own convention (CLAUDE.md's Scheduled start/end
+/// section) rather than `scheduled_date`'s start-of-day default that every other basis
+/// still uses.
+fn anchor_default_time(basis: &Option<String>) -> chrono::NaiveTime {
+    if basis.as_deref() == Some("DUE_DATE") {
+        end_of_day()
+    } else {
+        start_of_day()
+    }
+}
+
 pub async fn create_project_item_series_form(
     Path(project_id): Path<String>,
     Extension(auth_user): Extension<AuthUser>,
@@ -153,11 +167,12 @@ pub async fn create_project_item_series_form(
     TzOffset(tz): TzOffset,
     Form(form): Form<CreateItemSeriesForm>,
 ) -> Result<Response, ItemError> {
+    let basis = non_empty(&form.basis);
     let anchor_date = combine_local_to_utc(
         form.anchor_date.trim(),
         form.anchor_time.as_deref(),
         tz,
-        start_of_day(),
+        anchor_default_time(&basis),
     )
     .ok_or_else(|| ItemError::Invalid("anchor date is required".to_string()))?;
     let item_type = parse_item_type(&form.item_type)?;
@@ -176,7 +191,7 @@ pub async fn create_project_item_series_form(
             recurrence: form.recurrence.trim().to_string(),
             anchor_date,
             item_type,
-            basis: form.basis,
+            basis,
             template_item_id: non_empty(&form.template_item_id),
             assigned_to_user_id: non_empty(&form.assigned_to_user_id),
             points: form
@@ -345,7 +360,7 @@ pub async fn edit_project_item_series_page(
         description: series.description.unwrap_or_default(),
         is_task: series.item_type == ItemKind::Task,
         recurrence: series.recurrence,
-        basis_checked: series.basis.as_deref() == Some("COMPLETION"),
+        basis: series.basis.unwrap_or_default(),
         anchor_date: local_anchor.format("%Y-%m-%d").to_string(),
         anchor_time: local_anchor.format("%H:%M").to_string(),
         templates,
@@ -368,11 +383,12 @@ pub async fn update_project_item_series_form(
     TzOffset(tz): TzOffset,
     Form(form): Form<CreateItemSeriesForm>,
 ) -> Result<Response, ItemError> {
+    let basis = non_empty(&form.basis);
     let anchor_date = combine_local_to_utc(
         form.anchor_date.trim(),
         form.anchor_time.as_deref(),
         tz,
-        start_of_day(),
+        anchor_default_time(&basis),
     )
     .ok_or_else(|| ItemError::Invalid("anchor date is required".to_string()))?;
     let item_type = parse_item_type(&form.item_type)?;
@@ -391,7 +407,7 @@ pub async fn update_project_item_series_form(
             recurrence: form.recurrence.trim().to_string(),
             anchor_date,
             item_type,
-            basis: form.basis,
+            basis,
             template_item_id: non_empty(&form.template_item_id),
             assigned_to_user_id: non_empty(&form.assigned_to_user_id),
             points: form

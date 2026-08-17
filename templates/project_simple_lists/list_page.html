@@ -9,7 +9,7 @@
       {% if let Some(label) = points_label %}{% call macros::badge(label, "indigo") %}{% endcall %}{% endif %}
     </div>
     <div class="mt-4 flex items-center gap-x-3 md:mt-0 md:ml-4">
-      <a href="/web/projects" hx-target="#page" hx-select="#page" hx-swap="innerHTML"
+      <a href="/web/projects" hx-boost="false"
          class="inline-flex items-center justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-xs inset-ring inset-ring-gray-300 hover:bg-gray-50 dark:bg-white/10 dark:text-white dark:shadow-none dark:inset-ring-white/5 dark:hover:bg-white/20">Back to projects</a>
       <a href="/web/projects/{{ project_id }}/simple-lists/new" hx-target="#page" hx-select="#page" hx-swap="innerHTML"
          class="inline-flex items-center justify-center rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-xs hover:bg-indigo-500 dark:bg-indigo-500 dark:shadow-none dark:hover:bg-indigo-400">New item</a>

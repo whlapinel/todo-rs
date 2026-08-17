@@ -466,8 +466,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           },
           basis: {
             type: "string",
-            enum: ["SCHEDULE", "COMPLETION"],
-            description: "Defaults to SCHEDULE. COMPLETION measures the next occurrence from actual completion/skip time instead of the fixed schedule — only valid on a TASK series with an 'every N days/weeks/months/years' recurrence.",
+            enum: ["SCHEDULE", "COMPLETION", "DUE_DATE"],
+            description: "Defaults to SCHEDULE. COMPLETION measures the next occurrence from actual completion/skip time instead of the fixed schedule — only valid on a TASK series with an 'every N days/weeks/months/years' recurrence. DUE_DATE materializes each occurrence with the occurrence date written to the item's due date instead of its scheduled date (the cursor still advances on the fixed schedule) — only valid on a TASK series.",
           },
           templateItemId: {
             type: "string",
@@ -517,8 +517,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           },
           basis: {
             type: "string",
-            enum: ["SCHEDULE", "COMPLETION"],
-            description: "Defaults to SCHEDULE if omitted. COMPLETION measures the next occurrence from actual completion/skip time instead of the fixed schedule — only valid on a TASK series with an 'every N days/weeks/months/years' recurrence.",
+            enum: ["SCHEDULE", "COMPLETION", "DUE_DATE"],
+            description: "Defaults to SCHEDULE if omitted. COMPLETION measures the next occurrence from actual completion/skip time instead of the fixed schedule — only valid on a TASK series with an 'every N days/weeks/months/years' recurrence. DUE_DATE materializes each occurrence with the occurrence date written to the item's due date instead of its scheduled date (the cursor still advances on the fixed schedule) — only valid on a TASK series.",
           },
           templateItemId: {
             type: "string",

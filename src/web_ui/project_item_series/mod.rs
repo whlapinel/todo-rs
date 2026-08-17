@@ -38,3 +38,7 @@ pub(crate) fn combine_local_to_utc(
 pub(crate) fn start_of_day() -> chrono::NaiveTime {
     chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap()
 }
+
+pub(crate) fn end_of_day() -> chrono::NaiveTime {
+    chrono::NaiveTime::from_hms_opt(23, 59, 59).unwrap()
+}

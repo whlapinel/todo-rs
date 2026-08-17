@@ -14,16 +14,17 @@ fn parse_series_item_type_flag(s: &str) -> ItemType {
     }
 }
 
-/// Stage 10 gap 1: "schedule"/"completion" — a plain, unvalidated-by-Smithy string on
-/// the wire (see `ItemSeries::basis`'s doc comment), same as `--recurrence-basis` on
-/// `prl items add`. Only "completion" is ever sent explicitly; "schedule" maps to
-/// `None` since that's the server's own default when the field is omitted.
+/// "schedule"/"completion"/"due-date" — a plain, unvalidated-by-Smithy string on the
+/// wire (see `ItemSeries::basis`'s doc comment). Only "completion"/"due-date" are ever
+/// sent explicitly; "schedule" maps to `None` since that's the server's own default
+/// when the field is omitted.
 fn parse_series_basis_flag(s: &str) -> Option<String> {
     match s.to_lowercase().as_str() {
         "schedule" => None,
         "completion" => Some("COMPLETION".to_string()),
+        "due-date" => Some("DUE_DATE".to_string()),
         _ => {
-            eprintln!("error: --basis must be 'schedule' or 'completion'");
+            eprintln!("error: --basis must be 'schedule', 'completion', or 'due-date'");
             std::process::exit(1);
         }
     }
@@ -46,8 +47,10 @@ pub enum SeriesCommand {
         /// Required: 'task' or 'event' — the kind of item this series materializes
         #[arg(long)]
         item_type: Option<String>,
-        /// 'schedule' (default) or 'completion' — only valid on a task series with an
-        /// "every N days/weeks/months/years" recurrence
+        /// 'schedule' (default), 'completion', or 'due-date' — 'completion' is only
+        /// valid on a task series with an "every N days/weeks/months/years" recurrence;
+        /// 'due-date' materializes each occurrence's due date instead of its scheduled
+        /// date. Both are otherwise task-series-only.
         #[arg(long)]
         basis: Option<String>,
         /// Item id of a Template item whose children get copied onto every occurrence
@@ -81,8 +84,10 @@ pub enum SeriesCommand {
         /// Required: 'task' or 'event' — the kind of item this series materializes
         #[arg(long)]
         item_type: Option<String>,
-        /// 'schedule' (default) or 'completion' — only valid on a task series with an
-        /// "every N days/weeks/months/years" recurrence
+        /// 'schedule' (default), 'completion', or 'due-date' — 'completion' is only
+        /// valid on a task series with an "every N days/weeks/months/years" recurrence;
+        /// 'due-date' materializes each occurrence's due date instead of its scheduled
+        /// date. Both are otherwise task-series-only.
         #[arg(long)]
         basis: Option<String>,
         /// Item id of a Template item whose children get copied onto every occurrence

@@ -51,7 +51,7 @@ use web_ui::project_events::handlers::*;
 use web_ui::project_simple_lists::handlers::*;
 use web_ui::project_tasks::handlers::*;
 use web_ui::project_templates::handlers::*;
-use web_ui::projects::projects_page;
+use web_ui::projects::{create_project_form, projects_page};
 use web_ui::teams::*;
 use todo_server_sdk::{PeoplesRepublicOfLists, PeoplesRepublicOfListsConfig};
 use tower::ServiceBuilder;
@@ -60,7 +60,7 @@ use tower_http::services::ServeDir;
 
 fn build_web_router() -> Router {
     Router::new()
-        .route("/projects", get(projects_page))
+        .route("/projects", get(projects_page).post(create_project_form))
         .route(
             "/projects/:project_id/tasks",
             get(project_tasks_page).post(create_project_task_form),

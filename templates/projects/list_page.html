@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "macros.html" as macros %}
 {% block title %}Projects · Todo{% endblock %}
 {% block content %}
 <div class="space-y-6">
@@ -9,13 +10,21 @@
     </div>
   </div>
 
+  <form hx-post="/web/projects" hx-target="#page" hx-select="#page" hx-swap="innerHTML"
+        hx-on::after-request="if(event.detail.successful) this.reset()"
+        class="rounded-lg border border-gray-200 bg-white p-4 flex items-center gap-x-2 dark:border-white/10 dark:bg-gray-800/50">
+    <input type="text" name="name" placeholder="New project name *" required
+           class="flex-1 rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 placeholder:text-gray-400 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:placeholder:text-gray-500 dark:focus:outline-indigo-500" />
+    {% call macros::button_primary("Create project") %}{% endcall %}
+  </form>
+
   <ul class="divide-y divide-gray-100 rounded-lg border border-gray-200 bg-white px-4 dark:divide-white/5 dark:border-white/10 dark:bg-gray-800/50">
     {% if rows.is_empty() %}
     <li class="py-3 text-sm text-gray-500 dark:text-gray-400">No projects yet.</li>
     {% else %}
     {% for row in rows %}
     <li class="py-2">
-      <a href="/web/projects/{{ row.id }}/tasks" hx-target="#page" hx-select="#page" hx-swap="innerHTML"
+      <a href="/web/projects/{{ row.id }}/tasks" hx-boost="false"
          class="flex items-center gap-x-3 text-gray-900 dark:text-white">
         <span class="min-w-0 flex-1 truncate">{{ row.name }}</span>
         {% if row.is_team_project %}<span class="shrink-0 inline-flex items-center rounded-md bg-indigo-50 px-2 py-1 text-xs font-medium text-indigo-700 inset-ring inset-ring-indigo-700/10 dark:bg-indigo-400/10 dark:text-indigo-400 dark:inset-ring-indigo-400/30">Team</span>{% endif %}

@@ -38,8 +38,8 @@ pub async fn get_or_materialize_occurrence(
     let series = event_series.get_series(series_id).await?;
     let existing = event_series.get_occurrence(series_id, occurrence_date).await?;
 
-    if let Some(occurrence) = existing {
-        if let Some(item_id) = occurrence.item_id {
+    if let Some(occurrence) = existing
+        && let Some(item_id) = occurrence.item_id {
             return project_items::get_project_item(
                 repo,
                 projects,
@@ -50,13 +50,26 @@ pub async fn get_or_materialize_occurrence(
             )
             .await;
         }
-    }
-
-    let item_id = project_items::create_project_item(
-        repo,
-        projects,
-        teams,
-        requester_user_id,
+    // Due-date-basis materializes onto due_date instead of scheduled_date (see
+    // ItemSeries::basis's doc comment) — everything else about the created item is
+    // identical between the two branches.
+    let params = if is_due_date_basis(&series) {
+        CreateProjectItemParams {
+            project_id: series.project_id.clone(),
+            name: series.name.clone(),
+            description: series.description.clone(),
+            item_type: Some(series.item_type),
+            event_type: series.event_type.clone(),
+            due_date: Some(occurrence_date),
+            has_due_time: Some(true),
+            // Only ever Some on a Task-typed series on a team-backed project —
+            // resolve_series_assignment already enforced that at create/update time,
+            // so this is a plain carry-forward, not a re-validation.
+            assigned_to_user_id: series.assigned_to_user_id.clone(),
+            points: series.points,
+            ..Default::default()
+        }
+    } else {
         CreateProjectItemParams {
             project_id: series.project_id.clone(),
             name: series.name.clone(),
@@ -65,15 +78,12 @@ pub async fn get_or_materialize_occurrence(
             event_type: series.event_type.clone(),
             scheduled_date: Some(occurrence_date),
             has_scheduled_time: Some(true),
-            // Only ever Some on a Task-typed series on a team-backed project —
-            // resolve_series_assignment already enforced that at create/update time,
-            // so this is a plain carry-forward, not a re-validation.
             assigned_to_user_id: series.assigned_to_user_id.clone(),
             points: series.points,
             ..Default::default()
-        },
-    )
-    .await?;
+        }
+    };
+    let item_id = project_items::create_project_item(repo, projects, teams, requester_user_id, params).await?;
 
     event_series
         .record_materialized_occurrence(series_id, occurrence_date, &item_id)
@@ -249,6 +259,16 @@ pub fn is_completion_basis(series: &ItemSeries) -> bool {
     series.basis.as_deref() == Some("COMPLETION")
 }
 
+/// Whether `series` materializes each occurrence with the occurrence date written to
+/// the item's `due_date` (and `has_due_time`) instead of `scheduled_date` — see
+/// `ItemSeries::basis`'s doc comment and `get_or_materialize_occurrence`. Orthogonal to
+/// `is_completion_basis`: this only changes which field a materialized occurrence's date
+/// lands on, not how the cursor advances (a due-date-basis series still advances on the
+/// fixed schedule, same as the default).
+pub fn is_due_date_basis(series: &ItemSeries) -> bool {
+    series.basis.as_deref() == Some("DUE_DATE")
+}
+
 /// Stage 10 gap 1: the date to advance a Task-typed series' cursor to when settling
 /// (completing or skipping) `occurrence_date` — `Utc::now()` for a completion-basis
 /// series (measuring the next occurrence from when it was actually settled, not its
@@ -354,29 +374,39 @@ fn validate_series_item_type(item_type: ItemKind) -> Result<(), ItemError> {
 /// pre-parsed, since `create_series`/`update_series` don't otherwise need a parsed
 /// `RecurrenceRule` for anything else.
 fn validate_series_basis(item_type: ItemKind, basis: &Option<String>, recurrence: &str) -> Result<(), ItemError> {
-    if basis.as_deref() != Some("COMPLETION") {
-        return Ok(());
+    match basis.as_deref() {
+        Some("COMPLETION") => {
+            if item_type != ItemKind::Task {
+                return Err(ItemError::Invalid(
+                    "basis: COMPLETION is only valid on a TASK series".to_string(),
+                ));
+            }
+            let rule = recurrence::parse(recurrence).map_err(ItemError::Invalid)?;
+            if !matches!(
+                rule.unit,
+                recurrence::RecurrenceUnit::Days
+                    | recurrence::RecurrenceUnit::Weeks
+                    | recurrence::RecurrenceUnit::Months
+                    | recurrence::RecurrenceUnit::Years
+            ) {
+                return Err(ItemError::Invalid(
+                    "basis: COMPLETION is only valid for \"every N days/weeks/months/years\" \
+                     patterns, not a fixed weekday or day-of-month"
+                        .to_string(),
+                ));
+            }
+            Ok(())
+        }
+        Some("DUE_DATE") => {
+            if item_type != ItemKind::Task {
+                return Err(ItemError::Invalid(
+                    "basis: DUE_DATE is only valid on a TASK series".to_string(),
+                ));
+            }
+            Ok(())
+        }
+        _ => Ok(()),
     }
-    if item_type != ItemKind::Task {
-        return Err(ItemError::Invalid(
-            "basis: COMPLETION is only valid on a TASK series".to_string(),
-        ));
-    }
-    let rule = recurrence::parse(recurrence).map_err(ItemError::Invalid)?;
-    if !matches!(
-        rule.unit,
-        recurrence::RecurrenceUnit::Days
-            | recurrence::RecurrenceUnit::Weeks
-            | recurrence::RecurrenceUnit::Months
-            | recurrence::RecurrenceUnit::Years
-    ) {
-        return Err(ItemError::Invalid(
-            "basis: COMPLETION is only valid for \"every N days/weeks/months/years\" \
-             patterns, not a fixed weekday or day-of-month"
-                .to_string(),
-        ));
-    }
-    Ok(())
 }
 
 /// Stage 7c originally let `event_type` through on an `Event`-typed series (rejecting it
@@ -946,6 +976,56 @@ mod tests {
         )
         .await
         .expect("should materialize a new occurrence");
+
+        assert_eq!(item.name, "Standup");
+    }
+
+    #[tokio::test]
+    async fn materializes_a_due_date_basis_task_onto_due_date_not_scheduled_date() {
+        let mut task_series = series("p1");
+        task_series.item_type = ItemKind::Task;
+        task_series.basis = Some("DUE_DATE".to_string());
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock.expect_get_series().returning(move |_| Ok(task_series.clone()));
+        series_mock.expect_get_occurrence().returning(|_, _| Ok(None));
+        series_mock
+            .expect_record_materialized_occurrence()
+            .times(1)
+            .returning(|_, _, _| Ok(()));
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        let mut projects_mock = MockProjectRepo::new();
+        projects_mock.expect_get().returning(|_| Ok(personal_project()));
+        projects_mock.expect_find_personal_project().returning(|_| Ok(None));
+        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
+
+        let mut items_mock = MockItemRepo::new();
+        items_mock
+            .expect_create()
+            .withf(|item: &Item| {
+                item.due_date() == Some(occurrence_date()) && item.scheduled_date().is_none() && item.has_due_time()
+            })
+            .times(1)
+            .returning(|_| Ok("new-item-id".to_string()));
+        items_mock
+            .expect_get_by_project()
+            .returning(|_, _| Ok(Item::new_project_item("p1", "Standup")));
+        let repo: Arc<dyn ItemRepo> = Arc::new(items_mock);
+
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+
+        let item = get_or_materialize_occurrence(
+            &repo,
+            &projects,
+            &teams,
+            &event_series,
+            "owner1",
+            "s1",
+            occurrence_date(),
+            0,
+        )
+        .await
+        .expect("should materialize a due-date-basis task occurrence");
 
         assert_eq!(item.name, "Standup");
     }
@@ -1916,6 +1996,48 @@ mod tests {
         params.basis = Some("COMPLETION".to_string());
         let result = create_series(&no_template_repo(), &projects, &teams, &event_series, "owner1", params).await;
         assert!(matches!(result, Err(ItemError::Invalid(_))));
+    }
+
+    #[tokio::test]
+    async fn create_series_rejects_due_date_basis_on_event_series() {
+        let mut projects_mock = MockProjectRepo::new();
+        projects_mock.expect_get().returning(|_| Ok(personal_project()));
+        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock.expect_create_series().times(0);
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        let mut params = create_params("p1");
+        params.item_type = ItemKind::Event;
+        params.basis = Some("DUE_DATE".to_string());
+        let result = create_series(&no_template_repo(), &projects, &teams, &event_series, "owner1", params).await;
+        assert!(matches!(result, Err(ItemError::Invalid(_))));
+    }
+
+    #[tokio::test]
+    async fn create_series_allows_due_date_basis_on_any_recurrence_pattern_for_a_task_series() {
+        let mut projects_mock = MockProjectRepo::new();
+        projects_mock.expect_get().returning(|_| Ok(personal_project()));
+        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock
+            .expect_create_series()
+            .withf(|s: &ItemSeries| s.basis.as_deref() == Some("DUE_DATE"))
+            .times(1)
+            .returning(|_| Ok("s1".to_string()));
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        let mut params = create_params("p1");
+        params.item_type = ItemKind::Task;
+        params.event_type = None;
+        // create_params()'s default recurrence is "every weekday" — unlike COMPLETION,
+        // DUE_DATE has no "every N units" restriction (it doesn't affect cursor
+        // advancement, only which field materialization writes to).
+        params.basis = Some("DUE_DATE".to_string());
+        let result = create_series(&no_template_repo(), &projects, &teams, &event_series, "owner1", params).await;
+        assert!(result.is_ok());
     }
 
     #[tokio::test]

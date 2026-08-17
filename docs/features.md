@@ -10,3 +10,7 @@ Ranked easiest → hardest (re-ranked 2026-08-15 after the item_series redesign 
 
 - In calendar views, show assigned user (First letter of first name) beside tasks and task series if assignment exists
 - Put delete button in all details pages
+- Series, Tasks, and Events list rows should have 'duplicate' action -- '<name>' => '<name> (copy)' -- folded into vertical elipses along with 'edit' and 'delete'
+- Ctrl+click or tap+hold should select row, allowing for bulk actions like "delete-selected" and "reschedule-selected"
+- Allow copying a task or event to another project
+- Consider change such that delete will mark a delete column true rather than actually deleting. This allows for undo within a certain timeframe and easy-viewing of recent. BUT, I'm not sure whether this is a good pattern or not and would like to know tradeoffs compared with the standard approach.  

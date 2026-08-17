@@ -516,16 +516,23 @@ prl series create <project-id> "Standup" "every weekday" 2026-08-17 \
   --item-type event --description "Daily sync"
 ```
 
-`--basis schedule` (the default) or `--basis completion` controls what the
-next occurrence is measured from: `schedule` uses the fixed recurrence rule,
-`completion` measures from when the current occurrence was actually
-completed or skipped instead. Only valid on a task series (`--item-type
-task`) with an "every N days/weeks/months/years" recurrence — not a fixed
-weekday or day-of-month.
+`--basis schedule` (the default), `--basis completion`, or `--basis
+due-date` controls what the next occurrence is measured from and which date
+field each materialized occurrence gets: `schedule` uses the fixed
+recurrence rule and materializes onto the scheduled date; `completion`
+measures the next occurrence from when the current one was actually
+completed or skipped instead (only valid with an "every N
+days/weeks/months/years" recurrence — not a fixed weekday or day-of-month);
+`due-date` still follows the fixed schedule, but materializes each
+occurrence onto its due date instead of its scheduled date. Both
+`completion` and `due-date` are only valid on a task series (`--item-type
+task`).
 
 ```sh
 prl series create <project-id> "Water plants" "every 3 days" 2026-08-17 \
   --item-type task --basis completion
+prl series create <project-id> "Pay rent" "every month on the 1st" 2026-09-01 \
+  --item-type task --basis due-date
 ```
 
 `--template <item-id>` links the series to an existing Template item — create
