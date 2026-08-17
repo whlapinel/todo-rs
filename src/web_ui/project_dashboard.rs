@@ -1,13 +1,15 @@
+use super::nav::{self, ActiveContext, SidebarSection};
+use super::{TzOffset, to_local};
 use crate::auth::AuthUser;
 use crate::domain::item::{Item, ItemKind};
-use super::nav::{self, ActiveContext, SidebarSection};
-use super::{to_local, TzOffset};
+use crate::service::error::ItemError;
 use crate::service::item_series::{self as event_series_service, VirtualOccurrence};
 use crate::service::project_items::{self as project_item_service, UpdateProjectItemParams};
 use crate::service::projects::{self as project_service};
 use crate::service::teams as team_service;
-use crate::service::error::ItemError;
-use crate::storage::sqlite::{ActivityLogRepo, DueItem, ItemRepo, ItemSeriesRepo, ProjectRepo, TeamRepo};
+use crate::storage::sqlite::{
+    ActivityLogRepo, DueItem, ItemRepo, ItemSeriesRepo, ProjectRepo, TeamRepo,
+};
 use askama::Template;
 use axum::extract::{Extension, Form, Path, Query};
 use axum::response::Html;
@@ -27,15 +29,24 @@ fn active_context(project_id: &str) -> ActiveContext {
 /// own equivalent was `pub(crate)`-visible only to itself, and every other B5 sub-stage
 /// duplicated its per-screen helpers rather than widening a legacy module's visibility just to
 /// reuse a handful of small functions (see e.g. `project_tasks/mod.rs`'s identical rationale).
-fn preset_range(preset: &str, now: DateTime<Utc>, tz_offset_minutes: i32) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
+fn preset_range(
+    preset: &str,
+    now: DateTime<Utc>,
+    tz_offset_minutes: i32,
+) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
     let offset = Duration::minutes(tz_offset_minutes as i64);
     let local_now = now - offset;
     let local_date = local_now.date_naive();
-    let to_utc = |naive: chrono::NaiveDateTime| DateTime::<Utc>::from_naive_utc_and_offset(naive, Utc) + offset;
+    let to_utc = |naive: chrono::NaiveDateTime| {
+        DateTime::<Utc>::from_naive_utc_and_offset(naive, Utc) + offset
+    };
     let today_start = to_utc(local_date.and_hms_opt(0, 0, 0).unwrap());
 
     match preset {
-        "Today" => (Some(today_start), Some(to_utc(local_date.and_hms_opt(23, 59, 59).unwrap()))),
+        "Today" => (
+            Some(today_start),
+            Some(to_utc(local_date.and_hms_opt(23, 59, 59).unwrap())),
+        ),
         "This Week" => (Some(today_start), Some(today_start + Duration::days(7))),
         "Next 30 Days" => (Some(today_start), Some(today_start + Duration::days(30))),
         "Overdue" => (None, Some(now)),
@@ -43,7 +54,14 @@ fn preset_range(preset: &str, now: DateTime<Utc>, tz_offset_minutes: i32) -> (Op
     }
 }
 
-const PRESETS: [&str; 6] = ["All", "All with due date", "Today", "This Week", "Next 30 Days", "Overdue"];
+const PRESETS: [&str; 6] = [
+    "All",
+    "All with due date",
+    "Today",
+    "This Week",
+    "Next 30 Days",
+    "Overdue",
+];
 
 /// Duplicated from `dashboard.rs` rather than shared (that module's own equivalents are
 /// private, and every other B5 sub-stage has duplicated its per-screen helpers rather than
@@ -93,7 +111,10 @@ pub(crate) fn detail_url(item: &Item, project_id: &str) -> String {
 /// occurrence and redirects to its (now real) detail page. See
 /// `web_ui::project_item_series::handlers::materialize_project_item_series_occurrence_form`.
 fn materialize_url(project_id: &str, series_id: &str, occurrence_date: DateTime<Utc>) -> String {
-    format!("/web/projects/{project_id}/series/{series_id}/occurrences/{}", occurrence_date.timestamp())
+    format!(
+        "/web/projects/{project_id}/series/{series_id}/occurrences/{}",
+        occurrence_date.timestamp()
+    )
 }
 
 /// Stage 6 of docs/recurring-events-virtual-occurrences-rough-plan.md — the "Skip" button's
@@ -114,7 +135,12 @@ async fn names_for(
     let members = team_service::list_team_members(teams, team_id, requester_user_id).await?;
     Ok(members
         .into_iter()
-        .map(|m| (m.user.id.clone(), format!("{} {}", m.user.first_name, m.user.last_name)))
+        .map(|m| {
+            (
+                m.user.id.clone(),
+                format!("{} {}", m.user.first_name, m.user.last_name),
+            )
+        })
         .collect())
 }
 
@@ -160,8 +186,7 @@ impl ProjectDashboardRow {
                 local.format("%Y-%m-%d").to_string()
             }
         });
-        let date_kind_label = if item.kind() == ItemKind::Event && item.scheduled_date().is_some()
-        {
+        let date_kind_label = if item.kind() == ItemKind::Event && item.scheduled_date().is_some() {
             "Scheduled"
         } else {
             "Due"
@@ -174,8 +199,14 @@ impl ProjectDashboardRow {
             date_kind_label,
             overdue: item.is_overdue(Utc::now()),
             type_symbol: type_symbol(item.kind()),
-            parent_name: if di.parent_name.is_empty() { None } else { Some(di.parent_name.clone()) },
-            assignee_name: item.assigned_to_user_id().and_then(|id| names.get(&id).cloned()),
+            parent_name: if di.parent_name.is_empty() {
+                None
+            } else {
+                Some(di.parent_name.clone())
+            },
+            assignee_name: item
+                .assigned_to_user_id()
+                .and_then(|id| names.get(&id).cloned()),
             can_delete: !is_team_project,
             toggle_target: (item.kind() != ItemKind::Event)
                 .then(|| format!("/web/projects/{project_id}/dashboard/items/{}", item.id)),
@@ -205,13 +236,21 @@ struct ProjectDashboardVirtualRow {
 impl ProjectDashboardVirtualRow {
     fn from_occurrence(occ: &VirtualOccurrence, project_id: &str, tz: i32) -> Self {
         let local = to_local(occ.occurrence_date, tz);
-        let kind_name = if occ.item_type == ItemKind::Event { "Event" } else { "Task" };
+        let kind_name = if occ.item_type == ItemKind::Event {
+            "Event"
+        } else {
+            "Task"
+        };
         Self {
             series_id: occ.series_id.clone(),
             occurrence_ts: occ.occurrence_date.timestamp(),
             name: occ.series_name.clone(),
             date_label: local.format("%Y-%m-%d %H:%M").to_string(),
-            date_kind_label: if occ.item_type == ItemKind::Event { "Scheduled" } else { "Due" },
+            date_kind_label: if occ.item_type == ItemKind::Event {
+                "Scheduled"
+            } else {
+                "Due"
+            },
             type_symbol: type_symbol(occ.item_type),
             title: format!("{kind_name} (not yet created)"),
             materialize_url: materialize_url(project_id, &occ.series_id, occ.occurrence_date),
@@ -227,6 +266,7 @@ struct ProjectDashboardPageTemplate {
     project_id: String,
     rows: Vec<String>,
     show_complete: bool,
+    assigned_to_any: bool,
     presets: Vec<(&'static str, bool)>,
     nav_html: String,
 }
@@ -236,6 +276,7 @@ struct ProjectDashboardPageTemplate {
 pub struct DashboardQuery {
     preset: Option<String>,
     show_complete: Option<String>,
+    assigned_to_any: Option<String>,
 }
 
 /// Same Rust-side filtering rationale as `dashboard::render_rows` — an unfiltered SQL fetch
@@ -243,6 +284,7 @@ pub struct DashboardQuery {
 /// Event showing up by `scheduled_date` isn't excluded for lacking a `due_date`.
 #[allow(clippy::too_many_arguments)]
 fn render_rows(
+    user_id: &str,
     items: &[DueItem],
     virtual_occurrences: &[VirtualOccurrence],
     project_id: &str,
@@ -250,6 +292,7 @@ fn render_rows(
     is_team_project: bool,
     preset: &str,
     show_complete: bool,
+    assigned_to_any: bool,
     after: Option<DateTime<Utc>>,
     before: Option<DateTime<Utc>>,
     tz: i32,
@@ -257,6 +300,7 @@ fn render_rows(
     let mut items: Vec<&DueItem> = items
         .iter()
         .filter(|di| di.item.kind() != ItemKind::Simple)
+        .filter(|di| assigned_to_any || di.item.assigned_to_user_id() == Some(user_id.to_string()))
         .filter(|di| show_complete || !di.item.complete)
         .filter(|di| preset != "All with due date" || dashboard_date(&di.item).is_some())
         .filter(|di| match dashboard_date(&di.item) {
@@ -264,12 +308,18 @@ fn render_rows(
             None => after.is_none() && before.is_none(),
         })
         .collect();
-    items.sort_by_key(|di| dashboard_date(&di.item).map(|d| d.timestamp()).unwrap_or(i64::MAX));
+    items.sort_by_key(|di| {
+        dashboard_date(&di.item)
+            .map(|d| d.timestamp())
+            .unwrap_or(i64::MAX)
+    });
 
     let mut entries: Vec<(i64, String)> = items
         .iter()
         .map(|di| {
-            let ts = dashboard_date(&di.item).map(|d| d.timestamp()).unwrap_or(i64::MAX);
+            let ts = dashboard_date(&di.item)
+                .map(|d| d.timestamp())
+                .unwrap_or(i64::MAX);
             ProjectDashboardRow::from_due_item(di, project_id, names, is_team_project, tz)
                 .render()
                 .map(|html| (ts, html))
@@ -284,7 +334,11 @@ fn render_rows(
     // live inside `item_series::list_virtual_occurrences_for_project_unchecked` itself — a
     // backlogged Task series' one settleable occurrence surfaces here like any other entry,
     // just marked `is_current` for the template to badge.
-    for occ in virtual_occurrences {
+    let filtered_occurrences: Vec<&VirtualOccurrence> = virtual_occurrences
+        .iter()
+        .filter(|occ| assigned_to_any || occ.assigned_to_user_id == Some(user_id.to_string()))
+        .collect();
+    for occ in filtered_occurrences {
         entries.push((
             occ.occurrence_date.timestamp(),
             ProjectDashboardVirtualRow::from_occurrence(occ, project_id, tz).render()?,
@@ -307,7 +361,11 @@ const VIRTUAL_OCCURRENCE_DEFAULT_WINDOW_DAYS: i64 = 90;
 /// `[now, now]` window deliberately: a virtual occurrence has never been "missed" in any
 /// actionable sense (there's nothing to catch up on until someone materializes or skips it),
 /// so it's excluded from "Overdue" rather than accumulating indefinitely into the past.
-fn virtual_occurrence_window(after: Option<DateTime<Utc>>, before: Option<DateTime<Utc>>, now: DateTime<Utc>) -> (DateTime<Utc>, DateTime<Utc>) {
+fn virtual_occurrence_window(
+    after: Option<DateTime<Utc>>,
+    before: Option<DateTime<Utc>>,
+    now: DateTime<Utc>,
+) -> (DateTime<Utc>, DateTime<Utc>) {
     (
         after.unwrap_or(now),
         before.unwrap_or(now + Duration::days(VIRTUAL_OCCURRENCE_DEFAULT_WINDOW_DAYS)),
@@ -324,9 +382,11 @@ pub async fn project_dashboard_page(
     TzOffset(tz_offset): TzOffset,
     Query(q): Query<DashboardQuery>,
 ) -> Result<Html<String>, ItemError> {
-    let project = project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
+    let project =
+        project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
     let preset = q.preset.unwrap_or_else(|| "Today".to_string());
     let show_complete = q.show_complete.is_some();
+    let assigned_to_any = q.assigned_to_any.is_some();
     let (after, before) = preset_range(&preset, Utc::now(), tz_offset);
 
     let due_items =
@@ -350,6 +410,7 @@ pub async fn project_dashboard_page(
         None => HashMap::new(),
     };
     let rows = render_rows(
+        &auth_user.user_id,
         &due_items,
         &virtual_occurrences,
         &project_id,
@@ -357,6 +418,7 @@ pub async fn project_dashboard_page(
         project.team_id.is_some(),
         &preset,
         show_complete,
+        assigned_to_any,
         after,
         before,
         tz_offset,
@@ -374,6 +436,7 @@ pub async fn project_dashboard_page(
         project_id,
         rows,
         show_complete,
+        assigned_to_any,
         presets,
         nav_html,
     })
@@ -433,11 +496,19 @@ struct ProjectDashboardCalendarPageTemplate {
 }
 
 fn prev_month(year: i32, month: u32) -> (i32, u32) {
-    if month == 1 { (year - 1, 12) } else { (year, month - 1) }
+    if month == 1 {
+        (year - 1, 12)
+    } else {
+        (year, month - 1)
+    }
 }
 
 fn next_month(year: i32, month: u32) -> (i32, u32) {
-    if month == 12 { (year + 1, 1) } else { (year, month + 1) }
+    if month == 12 {
+        (year + 1, 1)
+    } else {
+        (year, month + 1)
+    }
 }
 
 /// The first (Monday-start) cell of the 6-row grid for `year`/`month` — hoisted out of
@@ -452,8 +523,13 @@ fn grid_start_for(year: i32, month: u32) -> NaiveDate {
 /// Converts a local calendar date + time-of-day into the UTC instant it represents, given
 /// `tz_offset_minutes` — same `local + offset = utc` convention as
 /// `project_events::combine_local_to_utc`.
-fn local_date_to_utc(date: NaiveDate, time: chrono::NaiveTime, tz_offset_minutes: i32) -> DateTime<Utc> {
-    DateTime::<Utc>::from_naive_utc_and_offset(date.and_time(time), Utc) + Duration::minutes(tz_offset_minutes as i64)
+fn local_date_to_utc(
+    date: NaiveDate,
+    time: chrono::NaiveTime,
+    tz_offset_minutes: i32,
+) -> DateTime<Utc> {
+    DateTime::<Utc>::from_naive_utc_and_offset(date.and_time(time), Utc)
+        + Duration::minutes(tz_offset_minutes as i64)
 }
 
 fn start_of_day() -> chrono::NaiveTime {
@@ -523,12 +599,20 @@ fn build_calendar_days(
             .entry(local.date_naive())
             .or_default()
             .push(ProjectDashboardCalendarEntry {
-                entry_id: format!("cal-virtual-{}-{}", occ.series_id, occ.occurrence_date.timestamp()),
+                entry_id: format!(
+                    "cal-virtual-{}-{}",
+                    occ.series_id,
+                    occ.occurrence_date.timestamp()
+                ),
                 detail_link: "#".to_string(),
                 name: occ.series_name.clone(),
                 time_label: Some(local.format("%H:%M").to_string()),
                 type_symbol: type_symbol(occ.item_type),
-                materialize_url: Some(materialize_url(project_id, &occ.series_id, occ.occurrence_date)),
+                materialize_url: Some(materialize_url(
+                    project_id,
+                    &occ.series_id,
+                    occ.occurrence_date,
+                )),
                 skip_url: Some(skip_url(project_id, &occ.series_id, occ.occurrence_date)),
                 is_virtual: true,
                 is_current: occ.is_current,
@@ -596,7 +680,15 @@ pub async fn project_dashboard_calendar_page(
         tz,
     )
     .await?;
-    let days = build_calendar_days(year, month, &project_id, &due_items, &virtual_occurrences, tz, today);
+    let days = build_calendar_days(
+        year,
+        month,
+        &project_id,
+        &due_items,
+        &virtual_occurrences,
+        tz,
+        today,
+    );
     let (prev_year, prev_month) = prev_month(year, month);
     let (next_year, next_month) = next_month(year, month);
     let nav_html = nav::build_nav_html(
@@ -688,7 +780,10 @@ pub async fn toggle_project_dashboard_item_complete(
     };
     match project_item_service::get_project_item_unchecked(&repo, &project_id, &item_id).await {
         Ok(updated) => render(ProjectDashboardRow::from_due_item(
-            &DueItem { parent_name: String::new(), item: updated },
+            &DueItem {
+                parent_name: String::new(),
+                item: updated,
+            },
             &project_id,
             &names,
             project.team_id.is_some(),

@@ -751,6 +751,7 @@ pub struct VirtualOccurrence {
     pub event_type: Option<String>,
     pub occurrence_date: DateTime<Utc>,
     pub is_current: bool,
+    pub assigned_to_user_id: Option<String>,
 }
 
 /// Unchecked, matching `list_due_project_items_unchecked`'s naming precedent — every caller
@@ -867,6 +868,7 @@ pub async fn list_virtual_occurrences_for_project_unchecked(
                 event_type: series.event_type.clone(),
                 occurrence_date: date,
                 is_current,
+                assigned_to_user_id: series.assigned_to_user_id.clone(),
             });
         }
     }
