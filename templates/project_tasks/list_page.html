@@ -5,26 +5,34 @@
 <div class="space-y-6">
   <div class="md:flex md:items-center md:justify-between">
     <div class="min-w-0 flex-1 flex items-center gap-x-3">
-      <h2 class="text-2xl/7 font-bold text-gray-900 sm:truncate sm:text-3xl sm:tracking-tight dark:text-white">Tasks</h2>
+      <h2 class="text-2xl/7 font-bold text-gray-900 sm:truncate sm:text-3xl sm:tracking-tight dark:text-white">Tasks
+      </h2>
       {% if let Some(label) = points_label %}{% call macros::badge(label, "indigo") %}{% endcall %}{% endif %}
     </div>
     <div class="mt-4 flex items-center gap-x-3 md:mt-0 md:ml-4">
       <a href="/web/projects" hx-boost="false"
-         class="inline-flex items-center justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-xs inset-ring inset-ring-gray-300 hover:bg-gray-50 dark:bg-white/10 dark:text-white dark:shadow-none dark:inset-ring-white/5 dark:hover:bg-white/20">Back to projects</a>
+        class="inline-flex items-center justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-xs inset-ring inset-ring-gray-300 hover:bg-gray-50 dark:bg-white/10 dark:text-white dark:shadow-none dark:inset-ring-white/5 dark:hover:bg-white/20">
+        Up to projects</a>
       <label class="text-sm text-gray-600 flex items-center gap-x-1 dark:text-gray-400">
         <input type="checkbox" name="showComplete" value="1" {% if show_complete %}checked{% endif %}
-               hx-get="/web/projects/{{ project_id }}/tasks" hx-trigger="change" hx-target="#page" hx-select="#page" hx-swap="innerHTML" hx-push-url="true"
-               class="size-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-600 dark:border-white/20 dark:bg-white/5" />
+          hx-get="/web/projects/{{ project_id }}/tasks" hx-trigger="change" hx-target="#page" hx-select="#page"
+          hx-swap="innerHTML" hx-push-url="true"
+          class="size-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-600 dark:border-white/20 dark:bg-white/5" />
         Show completed
       </label>
       <a href="/web/projects/{{ project_id }}/tasks/calendar" hx-target="#page" hx-select="#page" hx-swap="innerHTML"
-         class="inline-flex items-center justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-xs inset-ring inset-ring-gray-300 hover:bg-gray-50 dark:bg-white/10 dark:text-white dark:shadow-none dark:inset-ring-white/5 dark:hover:bg-white/20">Calendar view</a>
+        class="inline-flex items-center justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-xs inset-ring inset-ring-gray-300 hover:bg-gray-50 dark:bg-white/10 dark:text-white dark:shadow-none dark:inset-ring-white/5 dark:hover:bg-white/20">
+        {% include "icons/calendar.html" %}
+      </a>
       <a href="/web/projects/{{ project_id }}/tasks/new" hx-target="#page" hx-select="#page" hx-swap="innerHTML"
-         class="inline-flex items-center justify-center rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-xs hover:bg-indigo-500 dark:bg-indigo-500 dark:shadow-none dark:hover:bg-indigo-400">New task</a>
+        class="inline-flex items-center justify-center rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-xs hover:bg-indigo-500 dark:bg-indigo-500 dark:shadow-none dark:hover:bg-indigo-400">
+        {% include "icons/add.html" %}
+      </a>
     </div>
   </div>
 
-  <ul id="items-list" class="divide-y divide-gray-100 rounded-lg border border-gray-200 bg-white px-4 dark:divide-white/5 dark:border-white/10 dark:bg-gray-800/50">
+  <ul id="items-list"
+    class="divide-y divide-gray-100 rounded-lg border border-gray-200 bg-white px-4 dark:divide-white/5 dark:border-white/10 dark:bg-gray-800/50">
     {% if rows.is_empty() %}
     <li class="py-3 text-sm text-gray-500 dark:text-gray-400">No tasks yet.</li>
     {% else %}
