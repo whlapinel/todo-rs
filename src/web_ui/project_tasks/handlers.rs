@@ -3,7 +3,7 @@ use crate::domain::item::{Item, ItemKind};
 use crate::service::error::ItemError;
 use crate::service::item_series::{self as item_series_service};
 use crate::service::project_items::{self as project_item_service, UpdateProjectItemParams};
-use crate::service::projects::{self as project_service};
+use crate::service::projects::{self as project_service, require_project_member};
 use crate::service::teams as team_service;
 use crate::service::templates::{self as template_service, CreateProjectTemplateParams};
 use crate::storage::sqlite::{
@@ -898,4 +898,15 @@ pub async fn save_project_task_as_template(
     ))
 }
 
-// pub async fn duplicate_task()
+pub async fn get_reschedule_task(
+    Path((project_id, item_id)): Path<(String, String)>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+) -> Result<Html<String>, ItemError> {
+    let task = repo.get(&auth_user.user_id, &item_id).await?;
+    require_task(task.clone())?;
+    require_project_member(&projects, &teams, &project_id, &auth_user.user_id).await?;
+    render(RescheduleDialog::from_task(task, &project_id))
+}

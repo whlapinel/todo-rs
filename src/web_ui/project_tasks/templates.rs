@@ -91,6 +91,10 @@ impl ProjectTaskRow {
                 "/web/projects/{project_id}/tasks/{}/duplicate",
                 item.id
             )),
+            reschedule_url: Some(format!(
+                "/web/projects/{project_id}/tasks/{}/reschedule",
+                item.id
+            )),
             toggle_complete_json: (!item.complete).to_string(),
             siblings: siblings
                 .iter()
@@ -98,6 +102,56 @@ impl ProjectTaskRow {
                 .map(|s| (s.id.clone(), s.name.clone()))
                 .collect(),
             is_source_event_linked: item.source_event_id().is_some(),
+        }
+    }
+}
+
+#[derive(Template)]
+#[template(path = "components/reschedule_dialog.html")]
+pub struct RescheduleDialog {
+    pub post_reschedule_url: String,
+    pub scheduled_start_date: Option<String>,
+    pub scheduled_start_time: Option<String>,
+    pub scheduled_end_date: Option<String>,
+    pub scheduled_end_time: Option<String>,
+    pub due_date: Option<String>,
+    pub due_time: Option<String>,
+}
+
+impl RescheduleDialog {
+    pub fn from_task(task: Item, project_id: &str) -> Self {
+        RescheduleDialog {
+            post_reschedule_url: format!("/web/projects/{}/tasks/{}/", project_id, task.id),
+            scheduled_start_date: task
+                .scheduled_date()
+                .map(|date| date.format(&"%Y-%m-%d").to_string()),
+            scheduled_start_time: task
+                .has_scheduled_time()
+                .then(|| {
+                    task.scheduled_date()
+                        .map(|date| date.format(&"%Y-%m-%d").to_string())
+                })
+                .flatten(),
+            scheduled_end_date: task
+                .scheduled_end_date()
+                .map(|date| date.format("%Y-%m-%d").to_string()),
+            scheduled_end_time: task
+                .has_end_time()
+                .then(|| {
+                    task.scheduled_end_date()
+                        .map(|date| date.format(&"%Y-%m-%d").to_string())
+                })
+                .flatten(),
+            due_date: task
+                .due_date()
+                .map(|date| date.format("%Y-%m-%d").to_string()),
+            due_time: task
+                .has_due_time()
+                .then(|| {
+                    task.scheduled_end_date()
+                        .map(|date| date.format(&"%Y-%m-%d").to_string())
+                })
+                .flatten(),
         }
     }
 }

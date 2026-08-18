@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -22,8 +23,11 @@
     // load, before this has ever run once, is truly unavoidable (no cookie yet either).
     document.cookie = "tz_offset=" + new Date().getTimezoneOffset() + "; path=/; max-age=31536000; samesite=lax";
   </script>
+  <script src="https://cdn.jsdelivr.net/npm/@tailwindplus/elements@1" type="module"></script>
 </head>
-<body class="bg-gray-50 text-gray-900 dark:bg-gray-900 dark:text-white" hx-boost="true" hx-target="#page" hx-select="#page" hx-swap="innerHTML">
+
+<body class="bg-gray-50 text-gray-900 dark:bg-gray-900 dark:text-white" hx-boost="true" hx-target="#page"
+  hx-select="#page" hx-swap="innerHTML">
   {% block header %}{{ nav_html|safe }}{% endblock %}
 
   <main id="page">
@@ -83,6 +87,12 @@
       localStorage.setItem("sidebarCollapsed", collapsed ? "1" : "0");
     }
 
+    document.addEventListener('htmx:afterSwap', (e) => {
+      // Automatically find and open any native dialog freshly swapped by HTMX
+      e.detail.target.querySelector('dialog')?.showModal();
+    });
+
+
     // Mirrors #sidebar-mobile's backdrop-click-to-close: clicking anywhere outside the
     // expanded desktop sidebar (and outside its own toggle button, so that click doesn't
     // immediately re-open what toggleSidebar() just closed) collapses it too.
@@ -96,5 +106,9 @@
       toggleSidebar();
     });
   </script>
+  <dialog id="action-dialog" class="dialog"></dialog>
+  <dialog id="error-msg" class="dialog"></dialog>
+  <dialog id="confirm-msg" class="dialog"></dialog>
 </body>
+
 </html>

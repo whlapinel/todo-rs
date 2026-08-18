@@ -20,6 +20,10 @@ Ranked easiest → hardest (re-ranked 2026-08-15 after the item_series redesign 
 - Consider change such that delete will mark a delete column true rather than actually deleting. This allows for undo within a certain timeframe and easy-viewing of recent. BUT, I'm not sure whether this is a good pattern or not and would like to know tradeoffs compared with the standard approach.
 - Allow admin to complete tasks not assigned to them
 - Make dashboard a single cross-project page for the user rather than one dashboard per-project - each item should clearly indicate which project it's from
-- Task rows should mirror 
-
+    - OR, maybe keep project dashboards but add a main cross-project dashboard
+    - Main dashboard will show:
+        - All events for all projects 
+            - (materialized and virtual occurrences of event series)
+        - All tasks assigned to me for all projects + all tasks for personal projects (i.e. no team assigned)
+            - (materialized and virtual occurrences of task series assigned to me)
 - Show assignee in tasks list as well

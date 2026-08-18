@@ -50,6 +50,7 @@ impl ProjectEventRow {
             assignee_name: None,
             complete_url: None,
             duplicate_url: None,
+            reschedule_url: None,
             toggle_complete_json: String::new(),
             siblings: Vec::new(),
             is_source_event_linked: false,
