@@ -21,3 +21,5 @@ Ranked easiest → hardest (re-ranked 2026-08-15 after the item_series redesign 
 - Allow admin to complete tasks not assigned to them
 - Make dashboard a single cross-project page for the user rather than one dashboard per-project - each item should clearly indicate which project it's from
 - Task rows should mirror 
+
+- Show assignee in tasks list as well
