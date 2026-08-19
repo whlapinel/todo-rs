@@ -942,6 +942,44 @@ pub struct ProjectOccurrence {
     pub state: OccurrenceState,
 }
 
+impl ProjectOccurrence {
+    pub fn is_skipped(&self) -> bool {
+        matches!(self.state, OccurrenceState::Skipped)
+    }
+
+    /// Unique id for this occurrence's cell in a calendar grid — every calendar view
+    /// (Tasks/Events/Dashboard) formatted this independently before Stage D of
+    /// `docs/unify-virtual-materialized-occurrences-plan.md` consolidated it here.
+    pub fn calendar_entry_id(&self) -> String {
+        format!(
+            "cal-virtual-{}-{}",
+            self.series_id,
+            self.occurrence_date.timestamp()
+        )
+    }
+
+    /// `GET`s the no-side-effect read-only view for a still-virtual/skipped occurrence (see
+    /// `project_item_series::handlers::project_item_series_occurrence_detail_page`), and is
+    /// the base path every mutation route below nests under. The name predates Stage C, which
+    /// changed the `GET` itself to no longer materialize on load — kept for the URL segment
+    /// stability, not because a plain `GET` here still creates anything.
+    pub fn materialize_url(&self, project_id: &str) -> String {
+        format!(
+            "/web/projects/{project_id}/series/{}/occurrences/{}",
+            self.series_id,
+            self.occurrence_date.timestamp(),
+        )
+    }
+
+    pub fn skip_url(&self, project_id: &str) -> String {
+        format!("{}/skip", self.materialize_url(project_id))
+    }
+
+    pub fn unskip_url(&self, project_id: &str) -> String {
+        format!("{}/unskip", self.materialize_url(project_id))
+    }
+}
+
 pub async fn list_occurrence_states_for_project(
     event_series: &Arc<dyn ItemSeriesRepo>,
     users: &Arc<dyn UserRepo>,

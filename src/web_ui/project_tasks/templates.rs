@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use crate::domain::item::Item;
 use crate::service::error::ItemError;
-use crate::service::item_series::{OccurrenceState, ProjectOccurrence};
+use crate::service::item_series::ProjectOccurrence;
 use crate::storage::sqlite::ItemRepo;
 use crate::web_ui::components::row::Row;
 use crate::web_ui::to_local;
@@ -187,23 +187,11 @@ impl ProjectTaskVirtualRow {
             occurrence_ts: occ.occurrence_date.timestamp(),
             name: occ.series_name.clone(),
             date_label: local.format("%Y-%m-%d %H:%M").to_string(),
-            materialize_url: format!(
-                "/web/projects/{project_id}/series/{}/occurrences/{}",
-                occ.series_id,
-                occ.occurrence_date.timestamp(),
-            ),
-            skip_url: format!(
-                "/web/projects/{project_id}/series/{}/occurrences/{}/skip",
-                occ.series_id,
-                occ.occurrence_date.timestamp(),
-            ),
+            materialize_url: occ.materialize_url(project_id),
+            skip_url: occ.skip_url(project_id),
             is_current: occ.is_current,
-            is_skipped: matches!(occ.state, OccurrenceState::Skipped),
-            unskip_url: format!(
-                "/web/projects/{project_id}/series/{}/occurrences/{}/unskip",
-                occ.series_id,
-                occ.occurrence_date.timestamp(),
-            ),
+            is_skipped: occ.is_skipped(),
+            unskip_url: occ.unskip_url(project_id),
         }
     }
 }
@@ -681,13 +669,43 @@ pub struct ProjectTaskEditPageTemplate {
     pub nav_html: String,
 }
 
+/// Stage D of `docs/unify-virtual-materialized-occurrences-plan.md` collapsed this and the
+/// former `CalendarVirtualTaskEntry` into one shape, following the precedent
+/// `project_events::templates::CalendarEventEntry` already set: one struct with
+/// `Option`/`bool` fields distinguishing a virtual/skipped occurrence from a real task, and
+/// one render block in `calendar_page.html` for both, rather than two parallel per-day lists.
 pub struct CalendarTaskEntry {
-    pub id: String,
+    /// Unique across the whole grid — a real task's own id for a materialized entry, a
+    /// `series_id`+`occurrence_ts` pair (see `ProjectOccurrence::calendar_entry_id`) for a
+    /// virtual one.
+    pub entry_id: String,
+    pub href: String,
     pub name: String,
     pub time_label: Option<String>,
-    pub date_type: DateType,
+    /// `None` for a virtual/skipped occurrence — it has no real date *field* yet, just a
+    /// bare `occurrence_date` (see the former `CalendarVirtualTaskEntry`'s identical
+    /// rationale for why this distinction exists at all).
+    pub date_type: Option<DateType>,
     pub has_end: bool,
     pub complete: bool,
+    /// `Some(...)` only for a virtual (unmaterialized) occurrence — the template follows
+    /// this instead of `href` (which is `"#"` in that case). See
+    /// `ProjectOccurrence::materialize_url`'s doc comment for why the name predates the
+    /// route's Stage C no-side-effect change.
+    pub materialize_url: Option<String>,
+    /// `Some(...)` only for a virtual occurrence too.
+    pub skip_url: Option<String>,
+    pub is_virtual: bool,
+    /// Stage 9: whether this is the series' `current_occurrence_date` — the one
+    /// settleable occurrence a Task-typed series exposes, possibly backlogged into
+    /// the past (see `service::item_series::current_occurrence_date`). Always `false` for a
+    /// materialized entry (no visible "current" marker once real).
+    pub is_current: bool,
+    /// See `ProjectTaskVirtualRow::is_skipped`'s identical rationale — always `false` for a
+    /// materialized entry.
+    pub is_skipped: bool,
+    /// `Some(...)` only for a skipped occurrence — mirrors `skip_url`'s `Option` shape.
+    pub unskip_url: Option<String>,
 }
 
 pub enum DateType {
@@ -696,33 +714,12 @@ pub enum DateType {
     ScheduledEnd,
 }
 
-/// A Task-series (Stage 8) virtual occurrence rendered on the Tasks calendar. Kept separate
-/// from `CalendarTaskEntry`/`DateType` — those mean "which real date field of this real task
-/// is this," a distinction a virtual occurrence (one bare `occurrence_date`, no materialized
-/// row yet) doesn't have, and they carry no materialize/skip affordance since a real task
-/// never needs one.
-pub struct CalendarVirtualTaskEntry {
-    pub entry_id: String,
-    pub name: String,
-    pub time_label: Option<String>,
-    pub materialize_url: String,
-    pub skip_url: String,
-    /// Stage 9: whether this is the series' `current_occurrence_date` — the one
-    /// settleable occurrence a Task-typed series exposes, possibly backlogged into
-    /// the past (see `service::item_series::current_occurrence_date`).
-    pub is_current: bool,
-    /// See `ProjectTaskVirtualRow::is_skipped`'s identical rationale.
-    pub is_skipped: bool,
-    pub unskip_url: String,
-}
-
 pub struct CalendarDay {
     pub date: String,
     pub day_number: u32,
     pub is_current_month: bool,
     pub is_today: bool,
     pub tasks: Vec<CalendarTaskEntry>,
-    pub virtual_tasks: Vec<CalendarVirtualTaskEntry>,
 }
 
 #[derive(Template)]

@@ -58,11 +58,26 @@
         {% if !day.tasks.is_empty() %}
         <ol class="mt-1 space-y-1">
           {% for t in day.tasks %}
-          <li>
-            <a href="/web/projects/{{ project_id }}/tasks/{{ t.id }}" hx-target="#page" hx-select="#page" hx-swap="innerHTML" class="group flex {% if t.complete %}opacity-50{% endif %}">
+          <li id="{{ t.entry_id }}" class="flex items-center gap-x-0.5">
+            {% if t.is_skipped %}
+            <span class="group flex min-w-0 flex-1 items-center gap-x-1 opacity-70">
+              <p class="flex-auto truncate font-medium italic line-through text-gray-400 dark:text-gray-500">{{ t.name }}</p>
+              {% if let Some(tl) = t.time_label %}<span
+                class="ml-2 hidden flex-none text-gray-500 xl:block dark:text-gray-400">{{ tl }}</span>{% endif %}
+              <span class="shrink-0 text-[10px] uppercase tracking-wide font-semibold text-gray-400 dark:text-gray-500">Skipped</span>
+            </span>
+            {% if let Some(uu) = t.unskip_url %}
+            <button type="button" hx-post="{{ uu }}"
+              class="shrink-0 cursor-pointer text-gray-400 hover:text-indigo-500 dark:text-gray-500 dark:hover:text-indigo-400"
+              title="Unskip occurrence">&#8635;</button>
+            {% endif %}
+            {% else %}
+            <a href="{% if let Some(url) = t.materialize_url %}{{ url }}{% else %}{{ t.href }}{% endif %}"
+              class="group flex min-w-0 flex-1 items-center gap-x-1 {% if t.is_virtual %}opacity-70{% else if t.complete %}opacity-50{% endif %}">
               <p
-                class="flex-auto truncate font-medium text-gray-900 group-hover:text-indigo-600 dark:text-white dark:group-hover:text-indigo-400 {% if t.complete %}line-through{% endif %}">
-                {% match t.date_type %}
+                class="flex-auto truncate font-medium {% if t.is_virtual %}italic text-gray-500 dark:text-gray-400{% else %}text-gray-900 group-hover:text-indigo-600 dark:text-white dark:group-hover:text-indigo-400{% endif %} {% if t.complete %}line-through{% endif %}">
+                {% if let Some(dt) = t.date_type %}
+                {% match dt %}
                 {% when DateType::Due %}
                 💀
                 {% when DateType::ScheduledStart %}
@@ -73,45 +88,25 @@
                 {% when DateType::ScheduledEnd %}
                 📅 (end)
                 {% endmatch %}
+                {% endif %}
                 {{ t.name }}
               </p>
               {% if let Some(tl) = t.time_label %}<span
                 class="ml-2 hidden flex-none text-gray-500 group-hover:text-indigo-600 xl:block dark:text-gray-400 dark:group-hover:text-indigo-400 {% if t.complete %}line-through{% endif %}">{{
                 tl }}</span>{% endif %}
-            </a>
-          </li>
-          {% endfor %}
-        </ol>
-        {% endif %}
-        {% if !day.virtual_tasks.is_empty() %}
-        <ol class="mt-1 space-y-1">
-          {% for v in day.virtual_tasks %}
-          <li id="{{ v.entry_id }}" class="flex items-center gap-x-0.5">
-            {% if v.is_skipped %}
-            <span class="group flex min-w-0 flex-1 items-center gap-x-1 opacity-70">
-              <p class="flex-auto truncate font-medium italic line-through text-gray-400 dark:text-gray-500">{{ v.name }}</p>
-              {% if let Some(tl) = v.time_label %}<span
-                class="ml-2 hidden flex-none text-gray-500 xl:block dark:text-gray-400">{{ tl }}</span>{% endif %}
-              <span class="shrink-0 text-[10px] uppercase tracking-wide font-semibold text-gray-400 dark:text-gray-500">Skipped</span>
-            </span>
-            <button type="button" hx-post="{{ v.unskip_url }}"
-              class="shrink-0 cursor-pointer text-gray-400 hover:text-indigo-500 dark:text-gray-500 dark:hover:text-indigo-400"
-              title="Unskip occurrence">&#8635;</button>
-            {% else %}
-            <a href="{{ v.materialize_url }}"
-              class="group flex min-w-0 flex-1 items-center gap-x-1 opacity-70">
-              <p class="flex-auto truncate font-medium italic text-gray-500 dark:text-gray-400">{{ v.name }}</p>
-              {% if let Some(tl) = v.time_label %}<span
-                class="ml-2 hidden flex-none text-gray-500 xl:block dark:text-gray-400">{{ tl }}</span>{% endif %}
-              {% if v.is_current %}
+              {% if t.is_virtual %}
+              {% if t.is_current %}
               <span class="shrink-0 text-[10px] uppercase tracking-wide font-semibold text-indigo-600 dark:text-indigo-400">Current</span>
               {% else %}
               <span class="shrink-0 text-[10px] uppercase tracking-wide text-gray-400 dark:text-gray-500">Planned</span>
               {% endif %}
+              {% endif %}
             </a>
-            <button type="button" hx-post="{{ v.skip_url }}" hx-confirm="Skip this occurrence?"
+            {% if let Some(su) = t.skip_url %}
+            <button type="button" hx-post="{{ su }}" hx-confirm="Skip this occurrence?"
               class="shrink-0 cursor-pointer text-gray-400 hover:text-red-500 dark:text-gray-500 dark:hover:text-red-400"
               title="Skip occurrence">&times;</button>
+            {% endif %}
             {% endif %}
           </li>
           {% endfor %}

@@ -58,6 +58,45 @@ impl ProjectEventRow {
     }
 }
 
+/// Stage D of `docs/unify-virtual-materialized-occurrences-plan.md` — an Event-series
+/// virtual/skipped occurrence rendered as its own row in the flat `/events` list, mirroring
+/// `project_tasks::templates::ProjectTaskVirtualRow`. No `is_current` field here (unlike
+/// Tasks') — an Event-typed series has no cursor/"current" concept at all (see
+/// `ItemSeries::cursor_date`'s doc comment), so every occurrence in the window is equally
+/// "just upcoming."
+#[derive(Template)]
+#[template(path = "project_events/virtual_row.html")]
+pub struct ProjectEventVirtualRow {
+    pub series_id: String,
+    pub occurrence_ts: i64,
+    pub name: String,
+    pub date_label: String,
+    pub materialize_url: String,
+    pub skip_url: String,
+    pub is_skipped: bool,
+    pub unskip_url: String,
+}
+
+impl ProjectEventVirtualRow {
+    pub fn from_occurrence(
+        occ: &crate::service::item_series::ProjectOccurrence,
+        project_id: &str,
+        tz: i32,
+    ) -> Self {
+        let local = to_local(occ.occurrence_date, tz);
+        Self {
+            series_id: occ.series_id.clone(),
+            occurrence_ts: occ.occurrence_date.timestamp(),
+            name: occ.series_name.clone(),
+            date_label: local.format("%Y-%m-%d %H:%M").to_string(),
+            materialize_url: occ.materialize_url(project_id),
+            skip_url: occ.skip_url(project_id),
+            is_skipped: occ.is_skipped(),
+            unskip_url: occ.unskip_url(project_id),
+        }
+    }
+}
+
 #[derive(Template)]
 #[template(path = "project_events/detail_fields.html")]
 pub struct ProjectEventDetailFields {

@@ -48,12 +48,37 @@ pub async fn project_events_page(
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(users): Extension<Arc<dyn UserRepo>>,
+    Extension(event_series): Extension<Arc<dyn ItemSeriesRepo>>,
     TzOffset(tz): TzOffset,
 ) -> Result<Html<String>, ItemError> {
     let _project =
         project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
     let items = list_project_events(&repo, &project_id).await?;
-    let rows = super::render_rows(&items, &project_id, tz)?;
+    // Stage D of docs/unify-virtual-materialized-occurrences-plan.md: the flat list view
+    // previously had zero virtual-occurrence support (only the calendar did) — bounded to
+    // `virtual_occurrence_window` since, unlike the calendar's own month grid, this view has
+    // no natural range of its own.
+    let (range_start, range_end) = super::virtual_occurrence_window(Utc::now());
+    let virtual_occurrences: Vec<_> = event_series_service::list_occurrence_states_for_project(
+        &event_series,
+        &users,
+        &project_id,
+        range_start,
+        range_end,
+        tz,
+    )
+    .await?
+    .into_iter()
+    .filter(|occ| occ.item_type == ItemKind::Event)
+    .filter(|occ| {
+        !matches!(
+            occ.state,
+            event_series_service::OccurrenceState::Materialized { .. }
+        )
+    })
+    .collect();
+    let rows = super::render_rows_with_virtual(&items, &virtual_occurrences, &project_id, tz)?;
     let nav_html = nav::build_nav_html(
         &projects,
         &auth_user.user_id,

@@ -1,6 +1,6 @@
 # Unify virtual & materialized series occurrences
 
-Status: **Stages A, B, and C implemented (2026-08-19). Stage D planned, not yet implemented.**
+Status: **Stages A, B, C, and D implemented (2026-08-19). Complete.**
 
 ## Context
 
@@ -54,11 +54,24 @@ Critical files: `src/service/item_series.rs`, `src/web_ui/project_item_series/ha
 
 Critical files: `src/web_ui/project_item_series/handlers.rs`, `src/web_ui/project_tasks/{handlers.rs,templates.rs}`, `src/web_ui/project_events/{handlers.rs,templates.rs}`, `templates/project_tasks/series_occurrence_{view,fields,detail_page,edit_page}.html`, `templates/project_events/series_occurrence_{view,fields,detail_page,edit_page}.html`, `templates/project_tasks/{virtual_row.html,calendar_page.html}`, `templates/project_events/calendar_page.html`, `templates/project_dashboard/{virtual_row.html,calendar_page.html}`, `src/main.rs`.
 
-### Stage D — collapse duplicated rendering (planned)
+### Stage D — collapse duplicated rendering (implemented 2026-08-19)
 
-- Replace the parallel struct pairs — `ProjectTaskRow`/`ProjectTaskVirtualRow`, `CalendarTaskEntry`/`CalendarVirtualTaskEntry` (Tasks currently uses two full parallel types per surface) — with one shape built on Stage A's `ProjectOccurrence`/`OccurrenceState`, closer to the precedent Events' calendar already set with `CalendarEventEntry` (one struct, `Option`/`bool` fields distinguishing virtual vs. materialized, single render block) rather than Tasks' fully bifurcated approach.
-- Extend Events' list view (`project_events_page`) to show virtual/skipped occurrences too — today it has **zero** virtual-occurrence support (only the Events calendar does); Tasks' list view already merges them.
-- Consolidate the `entry_id`/`materialize_url`/`skip_url` string-building logic, currently duplicated three times (Tasks calendar, Events calendar, Tasks virtual row) with an identical format string, into one helper.
+- `ProjectOccurrence` (`src/service/item_series.rs`) gained `calendar_entry_id()`/`materialize_url(project_id)`/`skip_url(project_id)`/`unskip_url(project_id)`/`is_skipped()` methods, replacing four independent copies of the same format strings (Tasks calendar, Events calendar, Tasks flat-list virtual row, and `project_dashboard.rs`'s own trio of free functions). Every call site across `project_tasks/`, `project_events/`, and `project_dashboard.rs` now calls these instead of formatting the URL/id itself — one place to change if the route shape ever moves.
+- Tasks' `CalendarTaskEntry`/`CalendarVirtualTaskEntry` pair collapsed into one `CalendarTaskEntry` struct (`Option<DateType>`/`is_virtual`/`is_skipped`/`is_current` fields), `CalendarDay` down to a single `tasks: Vec<CalendarTaskEntry>` (the former `virtual_tasks` field is gone), and `templates/project_tasks/calendar_page.html` down to one render block per day — following the shape `CalendarEventEntry`/`project_events/calendar_page.html` had already established, rather than two parallel per-day lists. `ProjectTaskRow` (a thin builder for the shared `components::row::Row` template) and `ProjectTaskVirtualRow` were deliberately **not** merged into one struct/template: `Row` unconditionally renders a delete button and other affordances (edit, duplicate, reschedule, subordinate-under picker) that assume a real, persisted item, and `Row` is shared by Events' and Simple Lists' rows too, which never have virtual occurrences at all — bolting virtual-occurrence fields onto it would ripple into screens that don't need them for the sake of a resemblance the calendar entries already share more directly. The list-row duplication that *was* addressed is the URL-building (previous bullet); the two structs' differing markup stays separate on purpose.
+- Events' flat list view (`project_events_page`) now shows virtual/skipped occurrences too, via a new `project_events::render_rows_with_virtual` (mirroring `project_tasks::render_rows_with_virtual`) and a new `ProjectEventVirtualRow`/`templates/project_events/virtual_row.html`. Unlike Tasks (whose flat list shows only a Task-typed series' single current occurrence, by construction of that series' cursor), an Event-typed series has no cursor/"current" concept at all, so every occurrence in a forward window is shown — the same problem `project_dashboard.rs`'s flat list already solved for its own unbounded view, via a `VIRTUAL_OCCURRENCE_DEFAULT_WINDOW_DAYS`-style constant. `project_events::mod.rs` got its own `VIRTUAL_OCCURRENCE_WINDOW_DAYS = 90`/`virtual_occurrence_window(now)` pair (duplicated rather than shared, per this module's own established convention for these small per-screen helpers) with the same 90-day value.
+
+Critical files: `src/service/item_series.rs`, `src/web_ui/project_tasks/{mod.rs,templates.rs}`, `src/web_ui/project_events/{mod.rs,handlers.rs,templates.rs}`, `src/web_ui/project_dashboard.rs`, `templates/project_tasks/calendar_page.html`, `templates/project_events/virtual_row.html` (new).
+
+#### Verification (Stage D)
+
+- `cargo build`/`cargo test`/`cargo clippy` clean — full suite still 385 passed (no service-layer logic changed, only web_ui-layer rendering composition and URL-building consolidation, so no new unit tests were needed — see the live smoke test below for end-to-end coverage). Clippy's total warning count moved from 56 to 57: one handler (`project_events_page`) crossed the existing "too many arguments" lint threshold (6 → 8 args) by gaining the two `Extension`s (`UserRepo`, `ItemSeriesRepo`) its new virtual-occurrence lookup needs — consistent with every sibling handler in this file, which already sits at 8–9 args for the same reason.
+- Live smoke test via a running server against a scratch SQLite DB (`TODO_AUTH_MODE=caddy`, `TODO_DEV_EMAIL`), same approach Stage C used:
+  - Created a Task-typed series ("Standup", daily) and an Event-typed series ("Trash day", every 7 days) via the JSON API.
+  - `GET .../tasks/calendar` rendered materialized-shaped `cal-virtual-*` entries correctly through the merged `CalendarTaskEntry` struct/single render block — confirmed the `href`/`materialize_url` branch, the `Current`/`Planned` badge, and the emoji `date_type` match block all still render for a real vs. virtual entry in the same list.
+  - `GET .../events` (the flat list, previously empty of virtual occurrences) returned 12 `event-list-virtual-*` rows spanning the 90-day window — confirming the new `render_rows_with_virtual` merge and window are wired correctly.
+  - `GET .../events/calendar` still rendered its own `cal-virtual-*` entries unchanged.
+  - `POST .../series/{id}/occurrences/{ts}/skip` then a re-`GET` of the Events list showed the occurrence struck through with "Skipped"; `POST .../unskip` reversed it — confirming Skip/Unskip still round-trip correctly through the now-consolidated `ProjectOccurrence` URL helpers.
+  - `GET .../series/{id}/occurrences/{ts}` (the Stage C no-side-effect detail route) returned 200 without materializing anything, confirming the shared `materialize_url()` helper still points at the right no-op-on-GET route.
 
 ## Verification (Stage A)
 

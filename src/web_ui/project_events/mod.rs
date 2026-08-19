@@ -3,8 +3,11 @@ pub mod handlers;
 
 use crate::domain::item::{Item, ItemKind};
 use crate::service::error::ItemError;
+use crate::service::item_series::ProjectOccurrence;
 use crate::storage::sqlite::ItemRepo;
-use crate::web_ui::project_events::templates::{CalendarDay, CalendarEventEntry, ProjectEventRow};
+use crate::web_ui::project_events::templates::{
+    CalendarDay, CalendarEventEntry, ProjectEventRow, ProjectEventVirtualRow,
+};
 use askama::Template;
 use axum::response::Html;
 use chrono::{DateTime, Datelike, NaiveDate, Utc};
@@ -265,6 +268,50 @@ pub(crate) fn render_rows(
         .map(|i| ProjectEventRow::from_item(i, project_id, tz).render())
         .collect::<Result<Vec<_>, _>>()
         .map_err(ItemError::from)
+}
+
+/// Sane forward window for the virtual/skipped Event-series occurrences the (otherwise
+/// unbounded) flat list view now shows too, as of Stage D of
+/// `docs/unify-virtual-materialized-occurrences-plan.md` — matches
+/// `project_dashboard::VIRTUAL_OCCURRENCE_DEFAULT_WINDOW_DAYS`'s identical rationale and
+/// value; duplicated per this module's own convention of not sharing small per-screen
+/// helpers (see e.g. `local_date_to_utc`'s neighboring comment) rather than importing it.
+const VIRTUAL_OCCURRENCE_WINDOW_DAYS: i64 = 90;
+
+pub(crate) fn virtual_occurrence_window(now: DateTime<Utc>) -> (DateTime<Utc>, DateTime<Utc>) {
+    (now, now + chrono::Duration::days(VIRTUAL_OCCURRENCE_WINDOW_DAYS))
+}
+
+/// The Events list-view counterpart to `project_tasks::render_rows_with_virtual` — merges
+/// each real top-level Event with every still-`Virtual`/`Skipped` Event-series occurrence
+/// within `virtual_occurrence_window`'s forward window, sorted together by date. Unlike
+/// Tasks (whose flat list only ever shows a Task-typed series' single current occurrence, by
+/// construction of that series' cursor), an Event-typed series has no cursor/"current"
+/// concept at all (see `ItemSeries::cursor_date`'s doc comment) — every occurrence in the
+/// window is shown, exactly as the Events calendar already does, just without a month grid
+/// bounding it.
+pub(crate) fn render_rows_with_virtual(
+    items: &[Item],
+    virtual_occurrences: &[ProjectOccurrence],
+    project_id: &str,
+    tz: i32,
+) -> Result<Vec<String>, ItemError> {
+    let mut entries: Vec<(i64, String)> = items
+        .iter()
+        .map(|i| {
+            ProjectEventRow::from_item(i, project_id, tz)
+                .render()
+                .map(|html| (sort_key(i), html))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    for occ in virtual_occurrences {
+        entries.push((
+            occ.occurrence_date.timestamp(),
+            ProjectEventVirtualRow::from_occurrence(occ, project_id, tz).render()?,
+        ));
+    }
+    entries.sort_by_key(|(ts, _)| *ts);
+    Ok(entries.into_iter().map(|(_, html)| html).collect())
 }
 
 /// Sort key for the events list: primary date is `scheduled_date` (falling back to

@@ -107,36 +107,6 @@ pub(crate) fn detail_url(item: &Item, project_id: &str) -> String {
     }
 }
 
-/// Shared by the list and calendar views below — the POST target that materializes a virtual
-/// occurrence and redirects to its (now real) detail page. See
-/// `web_ui::project_item_series::handlers::materialize_project_item_series_occurrence_form`.
-fn materialize_url(project_id: &str, series_id: &str, occurrence_date: DateTime<Utc>) -> String {
-    format!(
-        "/web/projects/{project_id}/series/{series_id}/occurrences/{}",
-        occurrence_date.timestamp()
-    )
-}
-
-/// Stage 6 of docs/recurring-events-virtual-occurrences-rough-plan.md — the "Skip" button's
-/// POST target, a sibling route to `materialize_url` above. See
-/// `web_ui::project_item_series::handlers::skip_project_item_series_occurrence_form`.
-fn skip_url(project_id: &str, series_id: &str, occurrence_date: DateTime<Utc>) -> String {
-    format!(
-        "/web/projects/{project_id}/series/{series_id}/occurrences/{}/skip",
-        occurrence_date.timestamp()
-    )
-}
-
-/// Stage B of `docs/unify-virtual-materialized-occurrences-plan.md` — the "Unskip" button's
-/// POST target, a sibling route to `skip_url` above. See
-/// `web_ui::project_item_series::handlers::unskip_project_item_series_occurrence_form`.
-fn unskip_url(project_id: &str, series_id: &str, occurrence_date: DateTime<Utc>) -> String {
-    format!(
-        "/web/projects/{project_id}/series/{series_id}/occurrences/{}/unskip",
-        occurrence_date.timestamp()
-    )
-}
-
 async fn names_for(
     teams: &Arc<dyn TeamRepo>,
     team_id: &str,
@@ -268,12 +238,12 @@ impl ProjectDashboardVirtualRow {
             },
             type_symbol: type_symbol(occ.item_type),
             title: format!("{kind_name} (not yet created)"),
-            materialize_url: materialize_url(project_id, &occ.series_id, occ.occurrence_date),
-            skip_url: skip_url(project_id, &occ.series_id, occ.occurrence_date),
+            materialize_url: occ.materialize_url(project_id),
+            skip_url: occ.skip_url(project_id),
             is_current: occ.is_current,
             assignee_name: occ.assigned_to_user_name.clone(),
-            is_skipped: matches!(occ.state, OccurrenceState::Skipped),
-            unskip_url: unskip_url(project_id, &occ.series_id, occ.occurrence_date),
+            is_skipped: occ.is_skipped(),
+            unskip_url: occ.unskip_url(project_id),
         }
     }
 }
@@ -642,26 +612,18 @@ fn build_calendar_days(
             .entry(local.date_naive())
             .or_default()
             .push(ProjectDashboardCalendarEntry {
-                entry_id: format!(
-                    "cal-virtual-{}-{}",
-                    occ.series_id,
-                    occ.occurrence_date.timestamp()
-                ),
+                entry_id: occ.calendar_entry_id(),
                 detail_link: "#".to_string(),
                 name: occ.series_name.clone(),
                 time_label: Some(local.format("%H:%M").to_string()),
                 type_symbol: type_symbol(occ.item_type),
-                materialize_url: Some(materialize_url(
-                    project_id,
-                    &occ.series_id,
-                    occ.occurrence_date,
-                )),
-                skip_url: Some(skip_url(project_id, &occ.series_id, occ.occurrence_date)),
+                materialize_url: Some(occ.materialize_url(project_id)),
+                skip_url: Some(occ.skip_url(project_id)),
                 is_virtual: true,
                 is_current: occ.is_current,
                 complete: false,
-                is_skipped: matches!(occ.state, OccurrenceState::Skipped),
-                unskip_url: Some(unskip_url(project_id, &occ.series_id, occ.occurrence_date)),
+                is_skipped: occ.is_skipped(),
+                unskip_url: Some(occ.unskip_url(project_id)),
             });
     }
 

@@ -8,8 +8,8 @@ use crate::service::project_items::list_project_items_unchecked;
 use crate::service::teams as team_service;
 use crate::storage::sqlite::{ItemRepo, TeamRepo};
 use crate::web_ui::project_tasks::templates::{
-    CalendarDay, CalendarTaskEntry, CalendarVirtualTaskEntry, DateType, ProjectTaskRow,
-    ProjectTaskRowsFragmentTemplate, ProjectTaskVirtualRow,
+    CalendarDay, CalendarTaskEntry, DateType, ProjectTaskRow, ProjectTaskRowsFragmentTemplate,
+    ProjectTaskVirtualRow,
 };
 use askama::Template;
 use axum::response::Html;
@@ -482,11 +482,12 @@ pub(crate) fn local_date_to_utc(date: NaiveDate, time: chrono::NaiveTime, tz_off
 /// local calendar day off `due_date` — mirrors `tasks::build_calendar_days` exactly (Tasks are
 /// due-date-primary); team-backed projects never had a calendar view before this stage, so
 /// this is a new capability for them, not a port of an existing one. `virtual_occurrences`
-/// (Stage 8 of docs/recurring-events-virtual-occurrences-rough-plan.md) are bucketed into a
-/// second, parallel per-day list (`CalendarDay::virtual_tasks`) rather than folded into
-/// `CalendarTaskEntry` — see `CalendarVirtualTaskEntry`'s own doc comment for why. Callers are
-/// expected to have already filtered `virtual_occurrences` to `item_type == Task` — the
-/// past-date clamp itself (Stage 8) now lives inside
+/// (Stage 8 of docs/recurring-events-virtual-occurrences-rough-plan.md) are bucketed into the
+/// same per-day list as real tasks (`CalendarDay::tasks`) since Stage D of
+/// `docs/unify-virtual-materialized-occurrences-plan.md` collapsed `CalendarTaskEntry`/
+/// `CalendarVirtualTaskEntry` into one shape — see `CalendarTaskEntry`'s own doc comment.
+/// Callers are expected to have already filtered `virtual_occurrences` to `item_type == Task`
+/// — the past-date clamp itself (Stage 8) now lives inside
 /// `item_series::list_virtual_occurrences_for_project_unchecked` (Stage 9), which also computes
 /// `is_current` per occurrence, so this function no longer needs to re-derive either.
 pub(crate) fn build_calendar_days(
@@ -503,6 +504,7 @@ pub(crate) fn build_calendar_days(
     let mut by_date: std::collections::HashMap<NaiveDate, Vec<CalendarTaskEntry>> =
         std::collections::HashMap::new();
     for item in items {
+        let href = format!("/web/projects/{project_id}/tasks/{}", item.id);
         if let Some(dt) = item.due_date() {
             let local = crate::web_ui::to_local(dt, tz);
             let time_label = item
@@ -512,12 +514,19 @@ pub(crate) fn build_calendar_days(
                 .entry(local.date_naive())
                 .or_default()
                 .push(CalendarTaskEntry {
-                    id: item.id.clone(),
+                    entry_id: format!("cal-item-{}", item.id),
+                    href: href.clone(),
                     name: item.name.clone(),
                     time_label,
-                    date_type: DateType::Due,
+                    date_type: Some(DateType::Due),
                     has_end: item.scheduled_end_date().is_some(),
                     complete: item.complete,
+                    materialize_url: None,
+                    skip_url: None,
+                    is_virtual: false,
+                    is_current: false,
+                    is_skipped: false,
+                    unskip_url: None,
                 });
         }
         if let Some(dt) = item.scheduled_date() {
@@ -529,12 +538,19 @@ pub(crate) fn build_calendar_days(
                 .entry(local.date_naive())
                 .or_default()
                 .push(CalendarTaskEntry {
-                    id: item.id.clone(),
+                    entry_id: format!("cal-item-{}-start", item.id),
+                    href: href.clone(),
                     name: item.name.clone(),
                     time_label,
-                    date_type: DateType::ScheduledStart,
+                    date_type: Some(DateType::ScheduledStart),
                     has_end: item.scheduled_end_date().is_some(),
                     complete: item.complete,
+                    materialize_url: None,
+                    skip_url: None,
+                    is_virtual: false,
+                    is_current: false,
+                    is_skipped: false,
+                    unskip_url: None,
                 });
         }
         if let Some(dt) = item.scheduled_end_date() {
@@ -546,47 +562,42 @@ pub(crate) fn build_calendar_days(
                 .entry(local.date_naive())
                 .or_default()
                 .push(CalendarTaskEntry {
-                    id: item.id.clone(),
+                    entry_id: format!("cal-item-{}-end", item.id),
+                    href: href.clone(),
                     name: item.name.clone(),
                     time_label,
-                    date_type: DateType::ScheduledEnd,
+                    date_type: Some(DateType::ScheduledEnd),
                     has_end: true,
                     complete: item.complete,
+                    materialize_url: None,
+                    skip_url: None,
+                    is_virtual: false,
+                    is_current: false,
+                    is_skipped: false,
+                    unskip_url: None,
                 });
         }
     }
 
-    let mut virtual_by_date: std::collections::HashMap<NaiveDate, Vec<CalendarVirtualTaskEntry>> =
-        std::collections::HashMap::new();
     for occ in virtual_occurrences {
         let local = crate::web_ui::to_local(occ.occurrence_date, tz);
-        virtual_by_date
+        by_date
             .entry(local.date_naive())
             .or_default()
-            .push(CalendarVirtualTaskEntry {
-                entry_id: format!("cal-virtual-{}-{}", occ.series_id, occ.occurrence_date.timestamp()),
+            .push(CalendarTaskEntry {
+                entry_id: occ.calendar_entry_id(),
+                href: "#".to_string(),
                 name: occ.series_name.clone(),
                 time_label: Some(local.format("%H:%M").to_string()),
-                materialize_url: format!(
-                    "/web/projects/{project_id}/series/{}/occurrences/{}",
-                    occ.series_id,
-                    occ.occurrence_date.timestamp(),
-                ),
-                skip_url: format!(
-                    "/web/projects/{project_id}/series/{}/occurrences/{}/skip",
-                    occ.series_id,
-                    occ.occurrence_date.timestamp(),
-                ),
+                date_type: None,
+                has_end: false,
+                complete: false,
+                materialize_url: Some(occ.materialize_url(project_id)),
+                skip_url: Some(occ.skip_url(project_id)),
+                is_virtual: true,
                 is_current: occ.is_current,
-                is_skipped: matches!(
-                    occ.state,
-                    crate::service::item_series::OccurrenceState::Skipped
-                ),
-                unskip_url: format!(
-                    "/web/projects/{project_id}/series/{}/occurrences/{}/unskip",
-                    occ.series_id,
-                    occ.occurrence_date.timestamp(),
-                ),
+                is_skipped: occ.is_skipped(),
+                unskip_url: Some(occ.unskip_url(project_id)),
             });
     }
 
@@ -595,15 +606,12 @@ pub(crate) fn build_calendar_days(
         let date = grid_start + chrono::Duration::days(i);
         let mut tasks = by_date.remove(&date).unwrap_or_default();
         tasks.sort_by(|a, b| a.time_label.cmp(&b.time_label));
-        let mut virtual_tasks = virtual_by_date.remove(&date).unwrap_or_default();
-        virtual_tasks.sort_by(|a, b| a.time_label.cmp(&b.time_label));
         days.push(CalendarDay {
             date: date.format("%Y-%m-%d").to_string(),
             day_number: date.day(),
             is_current_month: date.month() == month && date.year() == year,
             is_today: date == today,
             tasks,
-            virtual_tasks,
         });
     }
     days
