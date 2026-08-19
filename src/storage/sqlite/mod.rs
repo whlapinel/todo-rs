@@ -549,9 +549,14 @@ pub async fn create_pool(url: &str) -> Result<SqlitePool, sqlx::Error> {
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_items_assigned_to ON items (assigned_to_user_id)")
         .execute(&pool)
         .await?;
-    sqlx::query("CREATE INDEX IF NOT EXISTS idx_items_series_id ON items (series_id)")
-        .execute(&pool)
-        .await?;
+    // idx_items_series_id is deliberately NOT created here — same index-ordering reason as
+    // idx_items_project_id below: `series_id` is in this baseline `CREATE TABLE` for a fresh
+    // DB, but an existing DB that predates it hits this statement with `CREATE TABLE IF NOT
+    // EXISTS` as a no-op (table already exists, column doesn't), and this index creation ran
+    // unconditionally, before `run_migrations()` ever got a chance to add the column via
+    // `AddItemSeriesId` — "no such column: series_id" on every startup against such a DB.
+    // `AddItemSeriesId` (migration version 23) creates this index itself, after adding the
+    // column if missing, exactly like `idx_items_project_id`'s own migration does.
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS teams (
