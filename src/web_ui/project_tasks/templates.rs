@@ -398,6 +398,186 @@ impl ProjectTaskDetailView {
     }
 }
 
+/// Stage C of `docs/unify-virtual-materialized-occurrences-plan.md` — the read-only view for
+/// a still-virtual or skipped series occurrence, rendered by the new
+/// `GET /projects/:project_id/series/:series_id/occurrences/:occurrence_ts` route (no side
+/// effect — this never materializes). Visually mirrors `ProjectTaskDetailView`, but every
+/// mutating affordance (checkbox, Skip/Unskip) points at a series/occurrence-scoped route
+/// that materializes the occurrence as an internal step of the write, rather than at
+/// `/tasks/{id}` (which doesn't exist yet). Once materialized, the detail *page* route
+/// redirects to the item's real `/tasks/{id}` page instead of rendering this — so this
+/// struct is only ever built for a `Virtual` or `Skipped` occurrence, never a materialized
+/// one; there is no `is_top_level`/offset/linked-event handling here because a series
+/// occurrence is always top-level and never offset-driven.
+#[derive(Template)]
+#[template(path = "project_tasks/series_occurrence_view.html")]
+pub struct ProjectTaskSeriesOccurrenceView {
+    pub series_id: String,
+    pub occurrence_ts: i64,
+    pub description: Option<String>,
+    pub is_skipped: bool,
+    pub is_current: bool,
+    pub due_date: Option<String>,
+    pub overdue: bool,
+    pub scheduled_date: Option<String>,
+    pub is_team_project: bool,
+    pub assignee_name: Option<String>,
+    pub update_url: String,
+    pub skip_url: String,
+    pub unskip_url: String,
+}
+
+impl ProjectTaskSeriesOccurrenceView {
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_series(
+        series: &crate::domain::item_series::ItemSeries,
+        occurrence_date: chrono::DateTime<Utc>,
+        project_id: &str,
+        is_team_project: bool,
+        names: &HashMap<String, String>,
+        is_skipped: bool,
+        is_current: bool,
+        tz: i32,
+    ) -> Self {
+        let occurrence_ts = occurrence_date.timestamp();
+        let local = to_local(occurrence_date, tz);
+        let is_due_date_basis = crate::service::item_series::is_due_date_basis(series);
+        let due_date = is_due_date_basis.then(|| local.format("%Y-%m-%d %H:%M").to_string());
+        let scheduled_date =
+            (!is_due_date_basis).then(|| local.format("%Y-%m-%d %H:%M").to_string());
+        Self {
+            series_id: series.id.clone(),
+            occurrence_ts,
+            description: series.description.clone(),
+            is_skipped,
+            is_current,
+            overdue: is_due_date_basis && occurrence_date < Utc::now(),
+            due_date,
+            scheduled_date,
+            is_team_project,
+            assignee_name: series
+                .assigned_to_user_id
+                .as_ref()
+                .map(|id| names.get(id).cloned().unwrap_or_else(|| id.clone())),
+            update_url: format!(
+                "/web/projects/{project_id}/series/{}/occurrences/{occurrence_ts}/task",
+                series.id,
+            ),
+            skip_url: format!(
+                "/web/projects/{project_id}/series/{}/occurrences/{occurrence_ts}/skip",
+                series.id,
+            ),
+            unskip_url: format!(
+                "/web/projects/{project_id}/series/{}/occurrences/{occurrence_ts}/unskip",
+                series.id,
+            ),
+        }
+    }
+}
+
+/// Stage C counterpart to `ProjectTaskSeriesOccurrenceView` — the edit form for a still-
+/// virtual series occurrence, prefilled from `ItemSeries` + `occurrence_date` rather than a
+/// real `Item` (none exists yet). Submitting it (`Save`) materializes the occurrence and
+/// applies the edit in one step — see
+/// `project_tasks::handlers::update_project_task_series_occurrence_form`.
+#[derive(Template)]
+#[template(path = "project_tasks/series_occurrence_fields.html")]
+pub struct ProjectTaskSeriesOccurrenceFields {
+    pub series_id: String,
+    pub occurrence_ts: i64,
+    pub name: String,
+    pub description: String,
+    pub due_date_input: String,
+    pub due_time_input: String,
+    pub scheduled_date_input: String,
+    pub scheduled_time_input: String,
+    pub scheduled_end_date_input: String,
+    pub scheduled_end_time_input: String,
+    pub is_team_project: bool,
+    pub assignee_options: Vec<(String, String)>,
+    pub assigned_to_user_id: Option<String>,
+    pub is_team_admin: bool,
+    pub points_input: String,
+    pub update_url: String,
+}
+
+impl ProjectTaskSeriesOccurrenceFields {
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_series(
+        series: &crate::domain::item_series::ItemSeries,
+        occurrence_date: chrono::DateTime<Utc>,
+        project_id: &str,
+        is_team_project: bool,
+        assignee_options: Vec<(String, String)>,
+        is_team_admin: bool,
+        tz: i32,
+    ) -> Self {
+        let occurrence_ts = occurrence_date.timestamp();
+        let local = to_local(occurrence_date, tz);
+        let date_input = local.format("%Y-%m-%d").to_string();
+        let time_input = local.format("%H:%M").to_string();
+        let is_due_date_basis = crate::service::item_series::is_due_date_basis(series);
+        Self {
+            series_id: series.id.clone(),
+            occurrence_ts,
+            name: series.name.clone(),
+            description: series.description.clone().unwrap_or_default(),
+            due_date_input: if is_due_date_basis {
+                date_input.clone()
+            } else {
+                String::new()
+            },
+            due_time_input: if is_due_date_basis {
+                time_input.clone()
+            } else {
+                String::new()
+            },
+            scheduled_date_input: if is_due_date_basis {
+                String::new()
+            } else {
+                date_input
+            },
+            scheduled_time_input: if is_due_date_basis {
+                String::new()
+            } else {
+                time_input
+            },
+            scheduled_end_date_input: String::new(),
+            scheduled_end_time_input: String::new(),
+            is_team_project,
+            assignee_options,
+            assigned_to_user_id: series.assigned_to_user_id.clone(),
+            is_team_admin,
+            points_input: format_points_input(series.points),
+            update_url: format!(
+                "/web/projects/{project_id}/series/{}/occurrences/{occurrence_ts}/task",
+                series.id,
+            ),
+        }
+    }
+}
+
+#[derive(Template)]
+#[template(path = "project_tasks/series_occurrence_detail_page.html")]
+pub struct ProjectTaskSeriesOccurrenceDetailPageTemplate {
+    pub project_id: String,
+    pub name: String,
+    pub is_skipped: bool,
+    pub view: String,
+    pub child_create_url: String,
+    pub edit_url: String,
+    pub nav_html: String,
+}
+
+#[derive(Template)]
+#[template(path = "project_tasks/series_occurrence_edit_page.html")]
+pub struct ProjectTaskSeriesOccurrenceEditPageTemplate {
+    pub name: String,
+    pub fields: String,
+    pub back_url: String,
+    pub nav_html: String,
+}
+
 /// Resolves the (name, detail-page URL) of the Event a task references via `sourceEventId`,
 /// scoped to `project_id` — the project-scoped counterpart of `tasks::resolve_linked_event`/
 /// `team_tasks::resolve_linked_event`. Links to the project-scoped Events screen directly

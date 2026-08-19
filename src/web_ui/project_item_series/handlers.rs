@@ -1,6 +1,5 @@
 use crate::auth::AuthUser;
 use crate::domain::item::ItemKind;
-use crate::json_api::item_series::list_item_series_for_project;
 use crate::service::error::ItemError;
 use crate::service::item_series::{
     self as item_series_service, CreateItemSeriesParams, UpdateItemSeriesParams,
@@ -18,7 +17,7 @@ use askama::Template;
 use axum::extract::{Extension, Form, Path};
 use axum::http::HeaderMap;
 use axum::http::header::HeaderName;
-use axum::response::{Html, IntoResponse, Response};
+use axum::response::{Html, IntoResponse, Redirect, Response};
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -42,6 +41,152 @@ fn redirect_to_current_page(headers: &HeaderMap, project_id: &str) -> Response {
         .map(str::to_string)
         .unwrap_or_else(|| format!("/web/projects/{project_id}/series"));
     hx_redirect(location)
+}
+
+/// Stage C of `docs/unify-virtual-materialized-occurrences-plan.md` — the deferred-
+/// materialization detail page: `GET /projects/:project_id/series/:series_id/occurrences/
+/// :occurrence_ts`, sharing its path with the existing POST materialize route below. No side
+/// effect — never calls `get_or_materialize_occurrence`. If `occurrence_date` is already
+/// materialized, redirects to the item's real, permanent detail URL (`/tasks/{id}` or
+/// `/events/{id}`, via `project_dashboard::detail_url`) rather than rendering anything here —
+/// this route only ever renders a synthesized view for a still-`Virtual`/`Skipped`
+/// occurrence. Otherwise dispatches to the Task- or Event-flavored renderer by
+/// `series.item_type` (an `ItemSeries` is restricted to one of those two kinds — see
+/// `ItemSeries::item_type`'s doc comment).
+pub async fn project_item_series_occurrence_detail_page(
+    Path((project_id, series_id, occurrence_ts)): Path<(String, String, i64)>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(item_series): Extension<Arc<dyn ItemSeriesRepo>>,
+    TzOffset(tz): TzOffset,
+) -> Result<Response, ItemError> {
+    let series = item_series_service::get_series(
+        &projects,
+        &teams,
+        &item_series,
+        &auth_user.user_id,
+        &series_id,
+    )
+    .await?;
+    if series.project_id != project_id {
+        return Err(ItemError::NotFound);
+    }
+    let occurrence_date = DateTime::<Utc>::from_timestamp(occurrence_ts, 0)
+        .ok_or_else(|| ItemError::Invalid("invalid occurrence timestamp".to_string()))?;
+    let occurrence = item_series.get_occurrence(&series_id, occurrence_date).await?;
+    if let Some(item_id) = occurrence.as_ref().and_then(|o| o.item_id.clone()) {
+        let item = crate::service::project_items::get_project_item_unchecked(
+            &repo,
+            &project_id,
+            &item_id,
+        )
+        .await?;
+        return Ok(Redirect::to(&crate::web_ui::project_dashboard::detail_url(
+            &item,
+            &project_id,
+        ))
+        .into_response());
+    }
+    let is_skipped = occurrence.map(|o| o.is_exdate).unwrap_or(false);
+    match series.item_type {
+        ItemKind::Task => Ok(crate::web_ui::project_tasks::handlers::render_series_occurrence_detail_page(
+            &projects,
+            &teams,
+            &auth_user,
+            &project_id,
+            &series,
+            occurrence_date,
+            is_skipped,
+            tz,
+        )
+        .await?
+        .into_response()),
+        ItemKind::Event => Ok(crate::web_ui::project_events::handlers::render_series_occurrence_detail_page(
+            &projects,
+            &auth_user,
+            &project_id,
+            &series,
+            occurrence_date,
+            is_skipped,
+            tz,
+        )
+        .await?
+        .into_response()),
+        _ => Err(ItemError::NotFound),
+    }
+}
+
+/// The edit-page counterpart to `project_item_series_occurrence_detail_page` — same no-side-
+/// effect/redirect-if-materialized/dispatch-by-item_type shape, `GET .../occurrences/
+/// :occurrence_ts/edit`. Redirects to the real item's own `/edit` page once materialized,
+/// same as the detail route redirects to its own real page.
+pub async fn project_item_series_occurrence_edit_page(
+    Path((project_id, series_id, occurrence_ts)): Path<(String, String, i64)>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(item_series): Extension<Arc<dyn ItemSeriesRepo>>,
+    TzOffset(tz): TzOffset,
+) -> Result<Response, ItemError> {
+    let series = item_series_service::get_series(
+        &projects,
+        &teams,
+        &item_series,
+        &auth_user.user_id,
+        &series_id,
+    )
+    .await?;
+    if series.project_id != project_id {
+        return Err(ItemError::NotFound);
+    }
+    let occurrence_date = DateTime::<Utc>::from_timestamp(occurrence_ts, 0)
+        .ok_or_else(|| ItemError::Invalid("invalid occurrence timestamp".to_string()))?;
+    let occurrence = item_series.get_occurrence(&series_id, occurrence_date).await?;
+    if let Some(item_id) = occurrence.as_ref().and_then(|o| o.item_id.clone()) {
+        let item = crate::service::project_items::get_project_item_unchecked(
+            &repo,
+            &project_id,
+            &item_id,
+        )
+        .await?;
+        let edit_url = format!("{}/edit", crate::web_ui::project_dashboard::detail_url(
+            &item,
+            &project_id,
+        ));
+        return Ok(Redirect::to(&edit_url).into_response());
+    }
+    if occurrence.map(|o| o.is_exdate).unwrap_or(false) {
+        // Nothing to edit on a skipped occurrence — mirrors the detail page's own
+        // Edit-link omission for the skipped case.
+        return Err(ItemError::NotFound);
+    }
+    match series.item_type {
+        ItemKind::Task => Ok(crate::web_ui::project_tasks::handlers::render_series_occurrence_edit_page(
+            &projects,
+            &teams,
+            &auth_user,
+            &project_id,
+            &series,
+            occurrence_date,
+            tz,
+        )
+        .await?
+        .into_response()),
+        ItemKind::Event => Ok(crate::web_ui::project_events::handlers::render_series_occurrence_edit_page(
+            &projects,
+            &auth_user,
+            &project_id,
+            &series,
+            occurrence_date,
+            tz,
+        )
+        .await?
+        .into_response()),
+        _ => Err(ItemError::NotFound),
+    }
 }
 
 pub async fn project_item_series_page(

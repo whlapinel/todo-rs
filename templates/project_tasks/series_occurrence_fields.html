@@ -1,0 +1,55 @@
+{% import "macros.html" as macros %}
+<div id="series-occurrence-{{ series_id }}-{{ occurrence_ts }}-fields" class="rounded-lg border border-gray-200 bg-white p-6 space-y-3 dark:border-white/10 dark:bg-gray-800/50">
+  <form hx-put="{{ update_url }}" hx-target="#page" hx-select="#page" hx-swap="innerHTML" class="space-y-3">
+    <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Name <span class="text-red-500" aria-hidden="true">*</span>
+      <div class="mt-2">
+        <input type="text" name="name" value="{{ name }}" required maxlength="200"
+               class="block w-full rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 placeholder:text-gray-400 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:placeholder:text-gray-500 dark:focus:outline-indigo-500" />
+      </div>
+    </label>
+    {% call macros::description_field(description) %}{% endcall %}
+    <div class="flex items-end gap-x-4">
+      <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Due date
+        <div class="mt-2">
+          <input type="date" name="dueDate" value="{{ due_date_input }}"
+                 class="block rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:focus:outline-indigo-500" />
+        </div>
+      </label>
+      <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Due time
+        <div class="mt-2">
+          <input type="time" name="dueTime" value="{{ due_time_input }}"
+                 class="block rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:focus:outline-indigo-500" />
+        </div>
+      </label>
+    </div>
+    {% call macros::scheduled_fields(scheduled_date_input, scheduled_time_input, scheduled_end_date_input, scheduled_end_time_input) %}{% endcall %}
+    {% if is_team_project %}
+    <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Assign to
+      <div class="mt-2 grid grid-cols-1">
+        <select name="assignedToUserId"
+                class="col-start-1 row-start-1 block w-full appearance-none rounded-md bg-white py-1.5 pr-8 pl-3 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:*:bg-gray-800 dark:focus:outline-indigo-500">
+          <option value="" {% if assigned_to_user_id.is_none() %}selected{% endif %}>Unassigned</option>
+          {% for opt in assignee_options %}
+          <option value="{{ opt.0 }}" {% if assigned_to_user_id.as_deref() == Some(opt.0.as_str()) %}selected{% endif %}>{{ opt.1 }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    </label>
+    {% endif %}
+    <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Status
+      <div class="mt-2 grid grid-cols-1">
+        <select name="complete"
+                class="col-start-1 row-start-1 block w-full appearance-none rounded-md bg-white py-1.5 pr-8 pl-3 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:*:bg-gray-800 dark:focus:outline-indigo-500">
+          <option value="false" selected>Not done</option>
+          <option value="true">Done</option>
+        </select>
+      </div>
+    </label>
+    {% if is_team_project %}
+    {% call macros::points_field(is_team_admin, true, points_input) %}{% endcall %}
+    {% endif %}
+    <div class="flex items-center gap-x-3">
+      {% call macros::button_primary("Save") %}{% endcall %}
+    </div>
+  </form>
+</div>

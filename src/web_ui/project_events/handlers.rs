@@ -18,11 +18,28 @@ use crate::web_ui::project_tasks::handlers::render_source_event_fragment;
 use askama::Template;
 use axum::extract::{Extension, Form, Path, Query};
 use axum::response::{Html, IntoResponse, Response};
-use chrono::{Datelike, Duration, NaiveDate, NaiveTime, Utc};
+use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveTime, Utc};
 use std::sync::Arc;
 
 fn active_context(project_id: &str) -> ActiveContext {
     ActiveContext::Project(project_id.to_string())
+}
+
+fn project_event_url(project_id: &str, item_id: &str) -> String {
+    format!("/web/projects/{project_id}/events/{item_id}")
+}
+
+/// See `project_tasks::handlers::hx_redirect`'s identical rationale — duplicated per that
+/// module's own precedent rather than shared.
+fn hx_redirect(location: String) -> Response {
+    (
+        [(
+            axum::http::header::HeaderName::from_static("hx-redirect"),
+            location,
+        )],
+        Html(String::new()),
+    )
+        .into_response()
 }
 
 pub async fn project_events_page(
@@ -248,6 +265,196 @@ pub async fn project_event_edit_page(
         fields,
         nav_html,
     })
+}
+
+/// Stage C of `docs/unify-virtual-materialized-occurrences-plan.md` — the Events counterpart
+/// of `project_tasks::handlers::render_series_occurrence_detail_page`, called by
+/// `project_item_series::handlers::occurrence_detail_page` once dispatched on
+/// `series.item_type == Event`. No side effect.
+pub(crate) async fn render_series_occurrence_detail_page(
+    projects: &Arc<dyn ProjectRepo>,
+    auth_user: &AuthUser,
+    project_id: &str,
+    series: &crate::domain::item_series::ItemSeries,
+    occurrence_date: DateTime<Utc>,
+    is_skipped: bool,
+    tz: i32,
+) -> Result<Html<String>, ItemError> {
+    let view =
+        ProjectEventSeriesOccurrenceView::from_series(series, occurrence_date, project_id, is_skipped, tz)
+            .render()?;
+    let occurrence_ts = occurrence_date.timestamp();
+    let nav_html = nav::build_nav_html(
+        projects,
+        &auth_user.user_id,
+        active_context(project_id),
+        SidebarSection::Events,
+    )
+    .await?;
+    render(ProjectEventSeriesOccurrenceDetailPageTemplate {
+        project_id: project_id.to_string(),
+        name: series.name.clone(),
+        is_skipped,
+        view,
+        child_create_url: format!(
+            "/web/projects/{project_id}/series/{}/occurrences/{occurrence_ts}/event-children",
+            series.id
+        ),
+        edit_url: format!(
+            "/web/projects/{project_id}/series/{}/occurrences/{occurrence_ts}/edit",
+            series.id
+        ),
+        nav_html,
+    })
+}
+
+/// The Events counterpart of `project_tasks::handlers::render_series_occurrence_edit_page`.
+pub(crate) async fn render_series_occurrence_edit_page(
+    projects: &Arc<dyn ProjectRepo>,
+    auth_user: &AuthUser,
+    project_id: &str,
+    series: &crate::domain::item_series::ItemSeries,
+    occurrence_date: DateTime<Utc>,
+    tz: i32,
+) -> Result<Html<String>, ItemError> {
+    let fields =
+        ProjectEventSeriesOccurrenceFields::from_series(series, occurrence_date, project_id, tz)
+            .render()?;
+    let occurrence_ts = occurrence_date.timestamp();
+    let nav_html = nav::build_nav_html(
+        projects,
+        &auth_user.user_id,
+        active_context(project_id),
+        SidebarSection::Events,
+    )
+    .await?;
+    render(ProjectEventSeriesOccurrenceEditPageTemplate {
+        name: series.name.clone(),
+        fields,
+        back_url: format!(
+            "/web/projects/{project_id}/series/{}/occurrences/{occurrence_ts}",
+            series.id
+        ),
+        nav_html,
+    })
+}
+
+/// Stage C — materializes the occurrence (if not already) and applies the edit in one step,
+/// the PUT target for `render_series_occurrence_edit_page`'s form. Always redirects to the
+/// now-real item's canonical `/events/{id}` page — see
+/// `project_tasks::handlers::update_project_task_series_occurrence_form`'s identical
+/// rationale.
+pub async fn update_project_event_series_occurrence_form(
+    Path((project_id, series_id, occurrence_ts)): Path<(String, String, i64)>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(item_series): Extension<Arc<dyn ItemSeriesRepo>>,
+    Extension(activity_log): Extension<Arc<dyn crate::storage::sqlite::ActivityLogRepo>>,
+    TzOffset(tz): TzOffset,
+    Form(form): Form<ProjectEventForm>,
+) -> Result<Response, ItemError> {
+    let series = event_series_service::get_series(
+        &projects,
+        &teams,
+        &item_series,
+        &auth_user.user_id,
+        &series_id,
+    )
+    .await?;
+    if series.project_id != project_id || series.item_type != ItemKind::Event {
+        return Err(ItemError::NotFound);
+    }
+    let occurrence_date = DateTime::<Utc>::from_timestamp(occurrence_ts, 0)
+        .ok_or_else(|| ItemError::Invalid("invalid occurrence timestamp".to_string()))?;
+    let item = event_series_service::get_or_materialize_occurrence(
+        &repo,
+        &projects,
+        &teams,
+        &item_series,
+        &auth_user.user_id,
+        &series_id,
+        occurrence_date,
+        tz,
+    )
+    .await?;
+    let params = update_params_from_form(&project_id, &item.id, &item, &form, tz);
+    project_item_service::update_project_item(
+        &repo,
+        &projects,
+        &teams,
+        &activity_log,
+        &item_series,
+        &auth_user.user_id,
+        params,
+    )
+    .await?;
+    Ok(hx_redirect(project_event_url(&project_id, &item.id)))
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectEventSeriesOccurrenceChildForm {
+    name: String,
+    due_offset_days: Option<String>,
+}
+
+/// Stage C — "adding a linked task" to a still-virtual Event occurrence: materializes it
+/// first, then creates the `sourceEventId`-linked task (mirroring
+/// `create_project_event_child_form`'s own shape), then redirects to the now-real event's
+/// canonical `/events/{id}` page.
+pub async fn create_project_event_series_occurrence_child_form(
+    Path((project_id, series_id, occurrence_ts)): Path<(String, String, i64)>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(item_series): Extension<Arc<dyn ItemSeriesRepo>>,
+    TzOffset(tz): TzOffset,
+    Form(form): Form<ProjectEventSeriesOccurrenceChildForm>,
+) -> Result<Response, ItemError> {
+    let series = event_series_service::get_series(
+        &projects,
+        &teams,
+        &item_series,
+        &auth_user.user_id,
+        &series_id,
+    )
+    .await?;
+    if series.project_id != project_id || series.item_type != ItemKind::Event {
+        return Err(ItemError::NotFound);
+    }
+    let occurrence_date = DateTime::<Utc>::from_timestamp(occurrence_ts, 0)
+        .ok_or_else(|| ItemError::Invalid("invalid occurrence timestamp".to_string()))?;
+    let item = event_series_service::get_or_materialize_occurrence(
+        &repo,
+        &projects,
+        &teams,
+        &item_series,
+        &auth_user.user_id,
+        &series_id,
+        occurrence_date,
+        tz,
+    )
+    .await?;
+    let params = crate::service::project_items::CreateProjectItemParams {
+        project_id: project_id.clone(),
+        name: form.name,
+        source_event_id: Some(item.id.clone()),
+        item_type: Some(ItemKind::Task),
+        due_offset_days: form
+            .due_offset_days
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .and_then(|s| s.parse().ok()),
+        timezone_offset_minutes: Some(tz),
+        ..Default::default()
+    };
+    project_item_service::create_project_item(&repo, &projects, &teams, &auth_user.user_id, params)
+        .await?;
+    Ok(hx_redirect(project_event_url(&project_id, &item.id)))
 }
 
 /// An Event can never have structural children (see `Item::validate`/`create_project_item`'s

@@ -352,6 +352,250 @@ pub async fn project_task_edit_page(
     })
 }
 
+/// Stage C of `docs/unify-virtual-materialized-occurrences-plan.md` — the Task-flavored half
+/// of the deferred-materialization detail page, called by
+/// `project_item_series::handlers::occurrence_detail_page` once it's dispatched on
+/// `series.item_type == Task` and confirmed the occurrence isn't already materialized (that
+/// case redirects to the real `/tasks/{id}` page instead of calling this — see that
+/// function's doc comment). Renders read-only, with no side effect: never calls
+/// `get_or_materialize_occurrence`.
+pub(crate) async fn render_series_occurrence_detail_page(
+    projects: &Arc<dyn ProjectRepo>,
+    teams: &Arc<dyn TeamRepo>,
+    auth_user: &AuthUser,
+    project_id: &str,
+    series: &crate::domain::item_series::ItemSeries,
+    occurrence_date: DateTime<Utc>,
+    is_skipped: bool,
+    tz: i32,
+) -> Result<Html<String>, ItemError> {
+    let project = project_service::get_project(projects, teams, project_id, &auth_user.user_id).await?;
+    let names = match &project.team_id {
+        Some(team_id) => names_for(teams, team_id, &auth_user.user_id).await?,
+        None => HashMap::new(),
+    };
+    let is_current = current_occurrence_is(series, occurrence_date, tz)?;
+    let view = ProjectTaskSeriesOccurrenceView::from_series(
+        series,
+        occurrence_date,
+        project_id,
+        project.team_id.is_some(),
+        &names,
+        is_skipped,
+        is_current,
+        tz,
+    )
+    .render()?;
+    let occurrence_ts = occurrence_date.timestamp();
+    let nav_html = nav::build_nav_html(
+        projects,
+        &auth_user.user_id,
+        active_context(project_id),
+        SidebarSection::Tasks,
+    )
+    .await?;
+    render(ProjectTaskSeriesOccurrenceDetailPageTemplate {
+        project_id: project_id.to_string(),
+        name: series.name.clone(),
+        is_skipped,
+        view,
+        child_create_url: format!(
+            "/web/projects/{project_id}/series/{}/occurrences/{occurrence_ts}/task-children",
+            series.id
+        ),
+        edit_url: format!(
+            "/web/projects/{project_id}/series/{}/occurrences/{occurrence_ts}/edit",
+            series.id
+        ),
+        nav_html,
+    })
+}
+
+/// The Task-flavored half of the deferred-materialization edit page — see
+/// `render_series_occurrence_detail_page`'s doc comment for the dispatch this is called from.
+/// Also no side effect: prefilled from `series`/`occurrence_date` directly, not a real `Item`.
+pub(crate) async fn render_series_occurrence_edit_page(
+    projects: &Arc<dyn ProjectRepo>,
+    teams: &Arc<dyn TeamRepo>,
+    auth_user: &AuthUser,
+    project_id: &str,
+    series: &crate::domain::item_series::ItemSeries,
+    occurrence_date: DateTime<Utc>,
+    tz: i32,
+) -> Result<Html<String>, ItemError> {
+    let project = project_service::get_project(projects, teams, project_id, &auth_user.user_id).await?;
+    let (assignee_options, is_team_admin) = match &project.team_id {
+        Some(team_id) => (
+            active_member_options(teams, team_id, &auth_user.user_id).await?,
+            project_service::is_project_admin(projects, teams, project_id, &auth_user.user_id)
+                .await,
+        ),
+        None => (Vec::new(), false),
+    };
+    let fields = ProjectTaskSeriesOccurrenceFields::from_series(
+        series,
+        occurrence_date,
+        project_id,
+        project.team_id.is_some(),
+        assignee_options,
+        is_team_admin,
+        tz,
+    )
+    .render()?;
+    let occurrence_ts = occurrence_date.timestamp();
+    let nav_html = nav::build_nav_html(
+        projects,
+        &auth_user.user_id,
+        active_context(project_id),
+        SidebarSection::Tasks,
+    )
+    .await?;
+    render(ProjectTaskSeriesOccurrenceEditPageTemplate {
+        name: series.name.clone(),
+        fields,
+        back_url: format!(
+            "/web/projects/{project_id}/series/{}/occurrences/{occurrence_ts}",
+            series.id
+        ),
+        nav_html,
+    })
+}
+
+/// Whether `occurrence_date` is `series`'s current occurrence — same check
+/// `service::item_series::require_current_occurrence` makes internally, duplicated here
+/// (rather than exposed from that module) since it's purely a display concern on this page,
+/// not a mutation gate. `Event`-typed series have no cursor/current concept, so always
+/// `false` there — this is only ever called from the Task-flavored render path above anyway.
+fn current_occurrence_is(
+    series: &crate::domain::item_series::ItemSeries,
+    occurrence_date: DateTime<Utc>,
+    tz_offset_minutes: i32,
+) -> Result<bool, ItemError> {
+    let rule = crate::domain::recurrence::parse(&series.recurrence).map_err(ItemError::Invalid)?;
+    Ok(item_series_service::current_occurrence_date(series, &rule, tz_offset_minutes) == occurrence_date)
+}
+
+/// Stage C — materializes the occurrence (if not already) and applies the edit in one step,
+/// the shared PUT target for both the checkbox on
+/// `render_series_occurrence_detail_page`'s view (`hx-vals='{"complete": "true"}'`) and the
+/// full edit form on `render_series_occurrence_edit_page` (same `ProjectTaskForm` shape either
+/// way — a checkbox toggle is just a form submission with only `complete` set). Always
+/// redirects to the now-real item's canonical `/tasks/{id}` page — there's no meaningful
+/// in-place fragment to return to once the surrounding page's whole premise (a still-virtual
+/// occurrence) has changed.
+pub async fn update_project_task_series_occurrence_form(
+    Path((project_id, series_id, occurrence_ts)): Path<(String, String, i64)>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(item_series): Extension<Arc<dyn ItemSeriesRepo>>,
+    Extension(activity_log): Extension<Arc<dyn ActivityLogRepo>>,
+    TzOffset(tz): TzOffset,
+    Form(form): Form<ProjectTaskForm>,
+) -> Result<Response, ItemError> {
+    let series = item_series_service::get_series(
+        &projects,
+        &teams,
+        &item_series,
+        &auth_user.user_id,
+        &series_id,
+    )
+    .await?;
+    if series.project_id != project_id || series.item_type != ItemKind::Task {
+        return Err(ItemError::NotFound);
+    }
+    let occurrence_date = DateTime::<Utc>::from_timestamp(occurrence_ts, 0)
+        .ok_or_else(|| ItemError::Invalid("invalid occurrence timestamp".to_string()))?;
+    let item = item_series_service::get_or_materialize_occurrence(
+        &repo,
+        &projects,
+        &teams,
+        &item_series,
+        &auth_user.user_id,
+        &series_id,
+        occurrence_date,
+        tz,
+    )
+    .await?;
+    let params = update_params_from_form(&project_id, &item.id, &item, &form, tz);
+    project_item_service::update_project_item(
+        &repo,
+        &projects,
+        &teams,
+        &activity_log,
+        &item_series,
+        &auth_user.user_id,
+        params,
+    )
+    .await?;
+    Ok(hx_redirect(project_task_url(&project_id, &item.id)))
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectTaskSeriesOccurrenceChildForm {
+    name: String,
+    due_offset_days: Option<String>,
+}
+
+/// Stage C — "adding a sub-item" to a still-virtual occurrence: materializes it first, then
+/// creates the child underneath the resulting real item, then redirects to that item's
+/// canonical `/tasks/{id}` page (mirrors `update_project_task_series_occurrence_form`'s own
+/// redirect rationale — there's nothing left to render in place of the virtual page).
+pub async fn create_project_task_series_occurrence_child_form(
+    Path((project_id, series_id, occurrence_ts)): Path<(String, String, i64)>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(item_series): Extension<Arc<dyn ItemSeriesRepo>>,
+    TzOffset(tz): TzOffset,
+    Form(form): Form<ProjectTaskSeriesOccurrenceChildForm>,
+) -> Result<Response, ItemError> {
+    let series = item_series_service::get_series(
+        &projects,
+        &teams,
+        &item_series,
+        &auth_user.user_id,
+        &series_id,
+    )
+    .await?;
+    if series.project_id != project_id || series.item_type != ItemKind::Task {
+        return Err(ItemError::NotFound);
+    }
+    let occurrence_date = DateTime::<Utc>::from_timestamp(occurrence_ts, 0)
+        .ok_or_else(|| ItemError::Invalid("invalid occurrence timestamp".to_string()))?;
+    let item = item_series_service::get_or_materialize_occurrence(
+        &repo,
+        &projects,
+        &teams,
+        &item_series,
+        &auth_user.user_id,
+        &series_id,
+        occurrence_date,
+        tz,
+    )
+    .await?;
+    let params = crate::service::project_items::CreateProjectItemParams {
+        project_id: project_id.clone(),
+        name: form.name,
+        parent_item_id: Some(item.id.clone()),
+        item_type: Some(ItemKind::Task),
+        due_offset_days: form
+            .due_offset_days
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .and_then(|s| s.parse().ok()),
+        timezone_offset_minutes: Some(tz),
+        ..Default::default()
+    };
+    project_item_service::create_project_item(&repo, &projects, &teams, &auth_user.user_id, params)
+        .await?;
+    Ok(hx_redirect(project_task_url(&project_id, &item.id)))
+}
+
 /// Renders a parent item's children as `Row`s — see `tasks::render_children_fragment`'s
 /// identical rationale, project-scoped. Callers are responsible for their own membership gate
 /// before calling this (see `project_task_children_fragment`).

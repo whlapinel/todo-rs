@@ -232,7 +232,28 @@ fn build_web_router() -> Router {
         )
         .route(
             "/projects/:project_id/series/:series_id/occurrences/:occurrence_ts",
-            post(materialize_project_item_series_occurrence_form),
+            get(project_item_series_occurrence_detail_page)
+                .post(materialize_project_item_series_occurrence_form),
+        )
+        .route(
+            "/projects/:project_id/series/:series_id/occurrences/:occurrence_ts/edit",
+            get(project_item_series_occurrence_edit_page),
+        )
+        .route(
+            "/projects/:project_id/series/:series_id/occurrences/:occurrence_ts/task",
+            put(update_project_task_series_occurrence_form),
+        )
+        .route(
+            "/projects/:project_id/series/:series_id/occurrences/:occurrence_ts/task-children",
+            post(create_project_task_series_occurrence_child_form),
+        )
+        .route(
+            "/projects/:project_id/series/:series_id/occurrences/:occurrence_ts/event",
+            put(update_project_event_series_occurrence_form),
+        )
+        .route(
+            "/projects/:project_id/series/:series_id/occurrences/:occurrence_ts/event-children",
+            post(create_project_event_series_occurrence_child_form),
         )
         .route(
             "/projects/:project_id/series/:series_id/occurrences/:occurrence_ts/skip",

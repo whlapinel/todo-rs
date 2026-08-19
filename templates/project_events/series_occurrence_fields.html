@@ -1,0 +1,27 @@
+{% import "macros.html" as macros %}
+<div id="series-occurrence-{{ series_id }}-{{ occurrence_ts }}-fields" class="rounded-lg border border-gray-200 bg-white p-6 space-y-3 dark:border-white/10 dark:bg-gray-800/50">
+  <form hx-put="{{ update_url }}" hx-target="#page" hx-select="#page" hx-swap="innerHTML" class="space-y-3">
+    <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Name <span class="text-red-500" aria-hidden="true">*</span>
+      <div class="mt-2">
+        <input type="text" name="name" value="{{ name }}" required maxlength="200"
+               class="block w-full rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 placeholder:text-gray-400 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:placeholder:text-gray-500 dark:focus:outline-indigo-500" />
+      </div>
+    </label>
+    {% call macros::description_field(description) %}{% endcall %}
+    {% call macros::scheduled_fields(scheduled_date_input, scheduled_time_input, scheduled_end_date_input, scheduled_end_time_input) %}{% endcall %}
+    {% call macros::event_type_field(event_type_input) %}{% endcall %}
+    <div class="border-t border-gray-100 pt-3 dark:border-white/5">
+      <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Due date <span class="font-normal text-gray-400 dark:text-gray-500">(optional, separate from the scheduled window above)</span>
+        <div class="mt-2 flex items-end gap-x-2">
+          <input type="date" name="dueDate" value="{{ due_date_input }}"
+                 class="rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:focus:outline-indigo-500" />
+          <input type="time" name="dueTime" value="{{ due_time_input }}"
+                 class="rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:focus:outline-indigo-500" />
+        </div>
+      </label>
+    </div>
+    <div class="flex items-center gap-x-3">
+      {% call macros::button_primary("Save") %}{% endcall %}
+    </div>
+  </form>
+</div>

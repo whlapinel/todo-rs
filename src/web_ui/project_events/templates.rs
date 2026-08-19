@@ -186,6 +186,147 @@ impl ProjectEventDetailView {
     }
 }
 
+/// Stage C of `docs/unify-virtual-materialized-occurrences-plan.md` — the Events counterpart
+/// of `project_tasks::templates::ProjectTaskSeriesOccurrenceView`. No complete-toggle/
+/// current-badge here, mirroring `ProjectEventDetailView`'s own precedent — an Event-typed
+/// series has no cursor/completion concept at all (see `ItemSeries::cursor_date`'s doc
+/// comment).
+#[derive(Template)]
+#[template(path = "project_events/series_occurrence_view.html")]
+pub struct ProjectEventSeriesOccurrenceView {
+    pub series_id: String,
+    pub occurrence_ts: i64,
+    pub description: Option<String>,
+    pub is_skipped: bool,
+    pub scheduled_date: Option<String>,
+    pub due_date: Option<String>,
+    pub overdue: bool,
+    pub event_type: Option<String>,
+    pub skip_url: String,
+    pub unskip_url: String,
+}
+
+impl ProjectEventSeriesOccurrenceView {
+    pub fn from_series(
+        series: &crate::domain::item_series::ItemSeries,
+        occurrence_date: chrono::DateTime<Utc>,
+        project_id: &str,
+        is_skipped: bool,
+        tz: i32,
+    ) -> Self {
+        let occurrence_ts = occurrence_date.timestamp();
+        let local = to_local(occurrence_date, tz);
+        let is_due_date_basis = crate::service::item_series::is_due_date_basis(series);
+        let due_date = is_due_date_basis.then(|| local.format("%Y-%m-%d %H:%M").to_string());
+        let scheduled_date =
+            (!is_due_date_basis).then(|| local.format("%Y-%m-%d %H:%M").to_string());
+        Self {
+            series_id: series.id.clone(),
+            occurrence_ts,
+            description: series.description.clone(),
+            is_skipped,
+            scheduled_date,
+            overdue: is_due_date_basis && occurrence_date < Utc::now(),
+            due_date,
+            event_type: series.event_type.clone(),
+            skip_url: format!(
+                "/web/projects/{project_id}/series/{}/occurrences/{occurrence_ts}/skip",
+                series.id,
+            ),
+            unskip_url: format!(
+                "/web/projects/{project_id}/series/{}/occurrences/{occurrence_ts}/unskip",
+                series.id,
+            ),
+        }
+    }
+}
+
+/// Stage C counterpart to `ProjectEventSeriesOccurrenceView` — the edit form for a still-
+/// virtual Event series occurrence. Mirrors
+/// `project_tasks::templates::ProjectTaskSeriesOccurrenceFields`, minus the
+/// assignee/points/status fields Events never carry (see `ProjectEventDetailFields`).
+#[derive(Template)]
+#[template(path = "project_events/series_occurrence_fields.html")]
+pub struct ProjectEventSeriesOccurrenceFields {
+    pub series_id: String,
+    pub occurrence_ts: i64,
+    pub name: String,
+    pub description: String,
+    pub scheduled_date_input: String,
+    pub scheduled_time_input: String,
+    pub scheduled_end_date_input: String,
+    pub scheduled_end_time_input: String,
+    pub due_date_input: String,
+    pub due_time_input: String,
+    pub event_type_input: String,
+    pub update_url: String,
+}
+
+impl ProjectEventSeriesOccurrenceFields {
+    pub fn from_series(
+        series: &crate::domain::item_series::ItemSeries,
+        occurrence_date: chrono::DateTime<Utc>,
+        project_id: &str,
+        tz: i32,
+    ) -> Self {
+        let occurrence_ts = occurrence_date.timestamp();
+        let local = to_local(occurrence_date, tz);
+        let date_input = local.format("%Y-%m-%d").to_string();
+        let time_input = local.format("%H:%M").to_string();
+        let is_due_date_basis = crate::service::item_series::is_due_date_basis(series);
+        Self {
+            series_id: series.id.clone(),
+            occurrence_ts,
+            name: series.name.clone(),
+            description: series.description.clone().unwrap_or_default(),
+            scheduled_date_input: if is_due_date_basis {
+                String::new()
+            } else {
+                date_input.clone()
+            },
+            scheduled_time_input: if is_due_date_basis {
+                String::new()
+            } else {
+                time_input.clone()
+            },
+            scheduled_end_date_input: String::new(),
+            scheduled_end_time_input: String::new(),
+            due_date_input: if is_due_date_basis {
+                date_input
+            } else {
+                String::new()
+            },
+            due_time_input: if is_due_date_basis { time_input } else { String::new() },
+            event_type_input: series.event_type.clone().unwrap_or_default(),
+            update_url: format!(
+                "/web/projects/{project_id}/series/{}/occurrences/{occurrence_ts}/event",
+                series.id,
+            ),
+        }
+    }
+}
+
+#[derive(Template)]
+#[template(path = "project_events/series_occurrence_detail_page.html")]
+pub struct ProjectEventSeriesOccurrenceDetailPageTemplate {
+    pub project_id: String,
+    pub name: String,
+    pub is_skipped: bool,
+    pub view: String,
+    pub child_create_url: String,
+    pub edit_url: String,
+    pub nav_html: String,
+}
+
+#[derive(Template)]
+#[template(path = "project_events/series_occurrence_edit_page.html")]
+pub struct ProjectEventSeriesOccurrenceEditPageTemplate {
+    pub name: String,
+    pub fields: String,
+    pub back_url: String,
+    pub nav_html: String,
+}
+
 /// Resolves the (series_name, edit-page URL) of the `ItemSeries` this item was materialized
 /// from — the Events counterpart of
 /// `project_tasks::templates::resolve_series_link`, identical rationale.

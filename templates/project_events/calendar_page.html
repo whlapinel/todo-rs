@@ -62,9 +62,7 @@
               title="Unskip occurrence">&#8635;</button>
             {% endif %}
             {% else %}
-            <a href="{{ ev.href }}"
-               {% if let Some(post_url) = ev.materialize_url %}hx-post="{{ post_url }}"{% endif %}
-               hx-target="#page" hx-select="#page" hx-swap="innerHTML"
+            <a href="{% if let Some(url) = ev.materialize_url %}{{ url }}{% else %}{{ ev.href }}{% endif %}"
                class="group flex min-w-0 flex-1 {% if ev.is_virtual %}opacity-70{% endif %}">
               <p class="flex-auto truncate font-medium {% if ev.is_virtual %}italic text-gray-500 dark:text-gray-400{% else %}text-gray-900 group-hover:text-indigo-600 dark:text-white dark:group-hover:text-indigo-400{% endif %}">{{ ev.name }}</p>
               {% if let Some(t) = ev.time_label %}<span class="ml-2 hidden flex-none text-gray-500 group-hover:text-indigo-600 xl:block dark:text-gray-400 dark:group-hover:text-indigo-400">{{ t }}</span>{% endif %}

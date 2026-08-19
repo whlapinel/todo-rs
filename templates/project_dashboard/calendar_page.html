@@ -66,9 +66,7 @@
               title="Unskip occurrence">&#8635;</button>
             {% endif %}
             {% else %}
-            <a href="{{ entry.detail_link }}"
-               {% if let Some(post_url) = entry.materialize_url %}hx-post="{{ post_url }}"{% endif %}
-               hx-target="#page" hx-select="#page" hx-swap="innerHTML"
+            <a href="{% if let Some(url) = entry.materialize_url %}{{ url }}{% else %}{{ entry.detail_link }}{% endif %}"
                class="group flex min-w-0 flex-1 items-center gap-x-1 {% if entry.is_virtual %}opacity-70{% else if entry.complete %}opacity-50{% endif %}">
               <span class="shrink-0 inline-flex size-3.5 items-center justify-center rounded-full bg-gray-200 text-[9px] font-semibold text-gray-600 dark:bg-white/10 dark:text-gray-300 {% if entry.is_current %}ring-2 ring-indigo-500 dark:ring-indigo-400{% endif %}"
                 title="{% if entry.is_current %}Current occurrence{% endif %}">{{ entry.type_symbol }}</span>
