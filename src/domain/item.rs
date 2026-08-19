@@ -269,6 +269,11 @@ pub struct Item {
     pub complete: bool,
     pub has_children: bool,
     pub item_type: ItemType,
+    /// Set once, at creation, only by `service::item_series::get_or_materialize_occurrence` —
+    /// no Smithy field, CLI flag, or MCP parameter can ever set or clear it. `None` for every
+    /// item not materialized from a series. Carried forward on every update (like `project_id`)
+    /// since an item's series membership never changes after creation.
+    pub series_id: Option<String>,
 }
 
 impl Item {

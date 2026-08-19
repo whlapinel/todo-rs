@@ -158,6 +158,7 @@ fn build_row_params(
         source_event_id: cell(record, headers, "sourceEventId").map(str::to_string),
         timezone_offset_minutes: None,
         points,
+        series_id: None,
     })
 }
 

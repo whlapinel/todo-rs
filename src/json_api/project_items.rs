@@ -68,6 +68,7 @@ pub async fn create_project_item(
             source_event_id: input.source_event_id,
             timezone_offset_minutes: input.timezone_offset_minutes,
             points: input.points,
+            series_id: None,
         },
     )
     .await

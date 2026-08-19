@@ -242,6 +242,9 @@ pub struct CreateProjectItemParams {
     pub source_event_id: Option<String>,
     pub timezone_offset_minutes: Option<i32>,
     pub points: Option<i32>,
+    /// Internal-only — never exposed via Smithy/CLI/MCP. Set exclusively by
+    /// `service::item_series::get_or_materialize_occurrence`.
+    pub series_id: Option<String>,
 }
 
 /// Stage B4's unified create path. Rather than reimplementing the recurrence/
@@ -290,6 +293,7 @@ pub async fn create_project_item(
                     source_event_id: params.source_event_id,
                     timezone_offset_minutes: params.timezone_offset_minutes,
                     points: params.points,
+                    series_id: params.series_id,
                 },
             )
             .await
@@ -315,6 +319,7 @@ pub async fn create_project_item(
                     due_offset_days: params.due_offset_days,
                     source_event_id: params.source_event_id,
                     timezone_offset_minutes: params.timezone_offset_minutes,
+                    series_id: params.series_id,
                 },
             )
             .await

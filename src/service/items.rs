@@ -32,6 +32,9 @@ pub struct CreateItemParams {
     pub due_offset_days: Option<i32>,
     pub source_event_id: Option<String>,
     pub timezone_offset_minutes: Option<i32>,
+    /// Internal-only — never exposed via Smithy/CLI/MCP. Set exclusively by
+    /// `service::item_series::get_or_materialize_occurrence`.
+    pub series_id: Option<String>,
 }
 
 /// Builds the `ItemType` payload for a given kind from a `CreateItemParams`/`UpdateItemParams`-
@@ -136,6 +139,7 @@ pub async fn create_item(
     item.complete = params.complete.unwrap_or(false);
     item.parent_item_id = params.parent_item_id.clone();
     item.description = params.description.clone();
+    item.series_id = params.series_id.clone();
     // Dual-write, stage B2 (docs/project-abstraction-plan.md) — alongside the
     // still-authoritative `user_id`. Left `None` if the user somehow has no personal
     // project yet (shouldn't happen post-login, see `ensure_default_project`) rather
@@ -287,6 +291,9 @@ pub async fn update_item(
     // Carried forward from `current` rather than re-resolved (stage B2) — an item's
     // owner, and thus its personal project, never changes after creation.
     item.project_id = current.project_id.clone();
+    // Same reasoning as project_id above — series membership is set once at
+    // materialization and never re-resolved from update params.
+    item.series_id = current.series_id.clone();
 
     let tz_offset = params.timezone_offset_minutes.unwrap_or(0);
     if item.is_offset_driven() {

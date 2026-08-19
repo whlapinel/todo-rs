@@ -41,6 +41,9 @@ pub struct CreateTeamItemParams {
     pub source_event_id: Option<String>,
     pub timezone_offset_minutes: Option<i32>,
     pub points: Option<i32>,
+    /// Internal-only — never exposed via Smithy/CLI/MCP. Set exclusively by
+    /// `service::item_series::get_or_materialize_occurrence`.
+    pub series_id: Option<String>,
 }
 
 /// Builds the `ItemType` payload for a team item. `team_assignment` is only ever
@@ -207,6 +210,7 @@ pub async fn create_team_item(
     item.complete = params.complete.unwrap_or(false);
     item.parent_item_id = params.parent_item_id.clone();
     item.description = params.description.clone();
+    item.series_id = params.series_id.clone();
 
     let tz_offset = params.timezone_offset_minutes.unwrap_or(0);
     if item.is_offset_driven() {
@@ -440,6 +444,9 @@ pub async fn update_team_item(
     item.complete = params.complete;
     item.parent_item_id = params.parent_item_id.clone();
     item.description = params.description.clone();
+    // Same reasoning as `items::update_item`'s project_id carry-forward — series
+    // membership is set once at materialization and never re-resolved from params.
+    item.series_id = current.series_id.clone();
     item.item_type = build_item_type(
         kind,
         schedule,

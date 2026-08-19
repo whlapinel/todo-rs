@@ -477,6 +477,7 @@ fn row_to_item(row: &sqlx::sqlite::SqliteRow) -> Item {
         complete: complete.unwrap_or(0) != 0,
         has_children: row.get::<Option<i64>, _>("has_children").unwrap_or(0) != 0,
         item_type,
+        series_id: row.get("series_id"),
     }
 }
 
@@ -533,7 +534,8 @@ pub async fn create_pool(url: &str) -> Result<SqlitePool, sqlx::Error> {
             assigned_to_user_id TEXT,
             points INTEGER,
             source_event_id TEXT,
-            project_id TEXT
+            project_id TEXT,
+            series_id TEXT
         )",
     )
     .execute(&pool)
@@ -545,6 +547,9 @@ pub async fn create_pool(url: &str) -> Result<SqlitePool, sqlx::Error> {
         .execute(&pool)
         .await?;
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_items_assigned_to ON items (assigned_to_user_id)")
+        .execute(&pool)
+        .await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_items_series_id ON items (series_id)")
         .execute(&pool)
         .await?;
 

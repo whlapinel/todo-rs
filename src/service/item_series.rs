@@ -1,5 +1,5 @@
 use crate::domain::item::{self, Item, ItemKind};
-use crate::domain::item_series::ItemSeries;
+use crate::domain::item_series::{ItemOccurrence, ItemSeries};
 use crate::domain::recurrence;
 use crate::service::error::ItemError;
 use crate::service::project_items::{self, CreateProjectItemParams};
@@ -72,6 +72,7 @@ pub async fn get_or_materialize_occurrence(
             // so this is a plain carry-forward, not a re-validation.
             assigned_to_user_id: series.assigned_to_user_id.clone(),
             points: series.points,
+            series_id: Some(series.id.clone()),
             ..Default::default()
         }
     } else {
@@ -85,6 +86,7 @@ pub async fn get_or_materialize_occurrence(
             has_scheduled_time: Some(true),
             assigned_to_user_id: series.assigned_to_user_id.clone(),
             points: series.points,
+            series_id: Some(series.id.clone()),
             ..Default::default()
         }
     };
@@ -988,13 +990,153 @@ pub async fn list_virtual_occurrences_for_project_unchecked(
     Ok(result)
 }
 
+/// Stage A of `docs/unify-virtual-materialized-occurrences-plan.md`. Unlike
+/// `list_virtual_occurrences_for_project_unchecked` above (which drops any date that
+/// already has an `item_occurrences` row), this classifies *every* candidate date into
+/// exactly one of `OccurrenceState::{Materialized, Skipped, Virtual}` — the single data
+/// source later stages build unified (virtual-looks-like-materialized) row/calendar
+/// rendering on top of, replacing the current per-screen pattern of querying materialized
+/// items and virtual occurrences separately and merging them by hand.
+///
+/// Returns only `item_id` for a materialized date, not a full `Item` — callers batch-fetch
+/// real items via their own existing `list_by_project`/`list_due_by_project` calls rather
+/// than this function duplicating that fetch.
+///
+/// New and not yet called from any `web_ui` code — Stage A is additive only, existing
+/// screens are untouched until Stage D wires them onto this instead.
+#[derive(Debug, Clone, PartialEq)]
+pub enum OccurrenceState {
+    Materialized { item_id: String },
+    Skipped,
+    Virtual,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProjectOccurrence {
+    pub series_id: String,
+    pub series_name: String,
+    pub item_type: ItemKind,
+    pub event_type: Option<String>,
+    pub occurrence_date: DateTime<Utc>,
+    pub is_current: bool,
+    pub assigned_to_user_id: Option<String>,
+    pub assigned_to_user_name: Option<String>,
+    pub state: OccurrenceState,
+}
+
+pub async fn list_occurrence_states_for_project(
+    event_series: &Arc<dyn ItemSeriesRepo>,
+    users: &Arc<dyn UserRepo>,
+    project_id: &str,
+    range_start: DateTime<Utc>,
+    range_end: DateTime<Utc>,
+    tz_offset_minutes: i32,
+) -> Result<Vec<ProjectOccurrence>, ItemError> {
+    let now = Utc::now();
+    let all_series = event_series.list_series_for_project(project_id).await?;
+    let mut result = Vec::new();
+    let mut names: HashMap<String, String> = HashMap::new();
+    for series in &all_series {
+        let Ok(rule) = recurrence::parse(&series.recurrence) else {
+            continue;
+        };
+        let mut assigned_user_name: Option<String> = None;
+        if let Some(user_id) = &series.assigned_to_user_id {
+            if let Some(name) = names.get(&user_id.clone()) {
+                assigned_user_name = Some(name.clone());
+            } else {
+                let res = users.get(user_id).await;
+                if res.is_err() {
+                    return Err(ItemError::Internal("error fetching user".to_string()));
+                } else {
+                    let user = res.unwrap();
+                    let first_name = user.first_name;
+                    names.insert(user_id.clone(), first_name.clone());
+                    assigned_user_name = Some(first_name);
+                }
+            }
+        }
+
+        // Mirrors list_virtual_occurrences_for_project_unchecked's rooting/injection
+        // logic exactly (see that function's doc comment for why) — only what happens
+        // per-candidate-date below differs.
+        let current_date = current_occurrence_date(series, &rule, tz_offset_minutes);
+        let root_date = if series.item_type == ItemKind::Task && is_completion_basis(series) {
+            current_date
+        } else {
+            series.anchor_date
+        };
+        let mut candidates = recurrence::occurrences_between(
+            &rule,
+            root_date,
+            range_start,
+            range_end,
+            tz_offset_minutes,
+        );
+        let current_outside_window = series.item_type == ItemKind::Task
+            && !(range_start..=range_end).contains(&current_date);
+        if current_outside_window {
+            candidates.push(current_date);
+        }
+        if candidates.is_empty() {
+            continue;
+        }
+        let query_start = range_start.min(current_date);
+        let query_end = range_end.max(current_date);
+        let existing = event_series
+            .list_occurrences_between(&series.id, query_start, query_end)
+            .await?;
+        let existing_by_ts: HashMap<i64, &ItemOccurrence> = existing
+            .iter()
+            .map(|o| (o.occurrence_date.timestamp(), o))
+            .collect();
+        for date in candidates {
+            let is_current = series.item_type == ItemKind::Task && date == current_date;
+            let existing_occ = existing_by_ts.get(&date.timestamp());
+            // Same past-date clamp as list_virtual_occurrences_for_project_unchecked, with
+            // one difference: a past date that's already settled (materialized or skipped)
+            // is real state and still surfaces — only a purely virtual past date (nothing
+            // ever happened) is dropped, since it was never actionable and is not history.
+            if series.item_type == ItemKind::Task
+                && date < now
+                && !is_current
+                && existing_occ.is_none()
+            {
+                continue;
+            }
+            let state = match existing_occ {
+                Some(occ) if occ.is_exdate => OccurrenceState::Skipped,
+                // ItemOccurrence's invariant (see its own doc comment): the only two writes
+                // into this table never produce (item_id: None, is_exdate: false), so a
+                // non-exdate row always has an item_id.
+                Some(occ) => OccurrenceState::Materialized {
+                    item_id: occ.item_id.clone().unwrap_or_default(),
+                },
+                None => OccurrenceState::Virtual,
+            };
+            result.push(ProjectOccurrence {
+                series_id: series.id.clone(),
+                series_name: series.name.clone(),
+                item_type: series.item_type,
+                event_type: series.event_type.clone(),
+                occurrence_date: date,
+                is_current,
+                assigned_to_user_id: series.assigned_to_user_id.clone(),
+                assigned_to_user_name: assigned_user_name.clone(),
+                state,
+            });
+        }
+    }
+    Ok(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::item_series::{ItemOccurrence, ItemSeries};
+    use crate::domain::item_series::ItemSeries;
     use crate::domain::project::Project;
     use crate::storage::sqlite::{
-        MockItemRepo, MockItemSeriesRepo, MockProjectRepo, MockTeamRepo, RepoError,
+        MockItemRepo, MockItemSeriesRepo, MockProjectRepo, MockTeamRepo, MockUserRepo, RepoError,
     };
 
     fn series(project_id: &str) -> ItemSeries {
@@ -1125,6 +1267,7 @@ mod tests {
                 item.kind() == ItemKind::Event
                     && item.scheduled_date() == Some(occurrence_date())
                     && item.has_scheduled_time()
+                    && item.series_id == Some("s1".to_string())
             })
             .times(1)
             .returning(|_| Ok("new-item-id".to_string()));
@@ -3264,5 +3407,96 @@ mod tests {
 
     fn anchor() -> DateTime<Utc> {
         DateTime::from_timestamp(1_700_000_000, 0).unwrap()
+    }
+
+    #[tokio::test]
+    async fn list_occurrence_states_classifies_materialized_skipped_and_virtual_dates() {
+        let s = series_ex("s1", "p1", "Standup", "every 7 days", anchor());
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock
+            .expect_list_series_for_project()
+            .returning(move |_| Ok(vec![s.clone()]));
+        series_mock.expect_list_occurrences_between().returning(|_, _, _| {
+            Ok(vec![
+                ItemOccurrence {
+                    series_id: "s1".to_string(),
+                    occurrence_date: anchor(),
+                    item_id: Some("item-a".to_string()),
+                    is_exdate: false,
+                },
+                ItemOccurrence {
+                    series_id: "s1".to_string(),
+                    occurrence_date: anchor() + chrono::Duration::days(7),
+                    item_id: None,
+                    is_exdate: true,
+                },
+            ])
+        });
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let users: Arc<dyn UserRepo> = Arc::new(MockUserRepo::new());
+
+        let range_start = anchor() - chrono::Duration::days(1);
+        let range_end = anchor() + chrono::Duration::days(20);
+        let mut result = list_occurrence_states_for_project(
+            &event_series,
+            &users,
+            "p1",
+            range_start,
+            range_end,
+            0,
+        )
+        .await
+        .unwrap();
+        result.sort_by_key(|o| o.occurrence_date);
+
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0].occurrence_date, anchor());
+        assert_eq!(
+            result[0].state,
+            OccurrenceState::Materialized {
+                item_id: "item-a".to_string()
+            }
+        );
+        assert_eq!(result[1].occurrence_date, anchor() + chrono::Duration::days(7));
+        assert_eq!(result[1].state, OccurrenceState::Skipped);
+        assert_eq!(result[2].occurrence_date, anchor() + chrono::Duration::days(14));
+        assert_eq!(result[2].state, OccurrenceState::Virtual);
+    }
+
+    #[tokio::test]
+    async fn list_occurrence_states_marks_the_task_series_current_occurrence() {
+        let mut s = series_ex("s1", "p1", "Daily chore", "every 7 days", anchor());
+        s.item_type = ItemKind::Task;
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock
+            .expect_list_series_for_project()
+            .returning(move |_| Ok(vec![s.clone()]));
+        series_mock
+            .expect_list_occurrences_between()
+            .returning(|_, _, _| Ok(vec![]));
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let users: Arc<dyn UserRepo> = Arc::new(MockUserRepo::new());
+
+        // A window that doesn't naturally contain the series' current (anchor)
+        // occurrence at all — exercises the same "current is force-injected even
+        // outside the caller's window" behavior list_virtual_occurrences_for_project_
+        // unchecked already relies on (see its own doc comment).
+        let range_start = anchor() + chrono::Duration::days(3);
+        let range_end = anchor() + chrono::Duration::days(4);
+        let result = list_occurrence_states_for_project(
+            &event_series,
+            &users,
+            "p1",
+            range_start,
+            range_end,
+            0,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].occurrence_date, anchor());
+        assert!(result[0].is_current);
+        assert_eq!(result[0].state, OccurrenceState::Virtual);
     }
 }
