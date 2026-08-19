@@ -1,5 +1,6 @@
 use crate::domain::item::{Item, ItemKind, ItemType, Recurrence, Schedule};
-use crate::storage::sqlite::{ItemRepo, ProjectRepo, RepoError};
+use crate::service::activity_log::reverse_entry;
+use crate::storage::sqlite::{ActivityLogRepo, ItemRepo, ProjectRepo, RepoError};
 #[cfg(test)]
 use crate::domain::recurrence;
 use chrono::{DateTime, Utc};
@@ -201,8 +202,17 @@ pub struct UpdateItemParams {
 /// Moved from `json_api::items::update_item`. `repo.get` below scopes the fetch to
 /// `params.user_id`, so a mismatched (non-owned) `item_id` surfaces as `ItemError::NotFound`
 /// rather than silently operating on someone else's item.
+///
+/// `activity_log` (see docs/issues.md's "unify completion-undo" note) mirrors
+/// `team_items::update_team_item`'s own completion logging, minus the points/assignee
+/// concepts a personal item doesn't have: a top-level completion still gets logged (0
+/// points, `team_id: None`), so the project activity feed's Undo button works on a
+/// personal item exactly the way it already does on a team one, and an uncomplete
+/// (whether via the checkbox or that Undo button) still reverses/flags that entry.
 pub async fn update_item(
     repo: &Arc<dyn ItemRepo>,
+    projects: &Arc<dyn ProjectRepo>,
+    activity_log: &Arc<dyn ActivityLogRepo>,
     params: UpdateItemParams,
 ) -> Result<(), ItemError> {
     if params.item_type == Some(ItemKind::Template) {
@@ -294,6 +304,28 @@ pub async fn update_item(
         return Err(ItemError::Invalid(
             "cannot edit a completed item; un-complete it first".to_string(),
         ));
+    }
+
+    let just_completed = !current.complete && item.complete;
+    let just_uncompleted = current.complete && !item.complete;
+    if just_completed && item.parent_item_id.is_none() {
+        activity_log
+            .log_activity(
+                None,
+                item.project_id.as_deref(),
+                &params.user_id,
+                &item.id,
+                &item.name,
+                0,
+            )
+            .await?;
+    }
+    if just_uncompleted
+        && let Some(entry) = activity_log
+            .most_recent_unreversed(&item.id, &params.user_id)
+            .await?
+    {
+        reverse_entry(projects, activity_log, &entry).await?;
     }
 
     repo.update(&item).await?;
@@ -644,15 +676,27 @@ pub(crate) fn copy_children_as_template<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::sqlite::{MockItemRepo, MockProjectRepo};
+    use crate::storage::sqlite::{MockActivityLogRepo, MockItemRepo, MockProjectRepo};
 
     /// `create_item`'s `find_personal_project` lookup, stubbed to "none found" — none
     /// of these tests care about the resolved `project_id`, so this keeps them from
-    /// each having to build their own `MockProjectRepo`.
+    /// each having to build their own `MockProjectRepo`. Doubles as a harmless
+    /// `update_item` `projects` stub for tests that never hit a genuine uncomplete
+    /// transition (see `no_op_activity_log`'s doc comment) — a mock method with no
+    /// matching call made against it is never an error, only an unmocked *called*
+    /// method is.
     fn no_personal_project() -> Arc<dyn ProjectRepo> {
         let mut mock = MockProjectRepo::new();
         mock.expect_find_personal_project().returning(|_| Ok(None));
         Arc::new(mock)
+    }
+
+    /// `update_item` only ever touches `activity_log` on a genuine complete<->incomplete
+    /// transition (see its own doc comment) — every test that isn't specifically
+    /// exercising that logging/reversal behavior can pass this empty mock and never
+    /// set up an expectation on it.
+    fn no_op_activity_log() -> Arc<dyn ActivityLogRepo> {
+        Arc::new(MockActivityLogRepo::new())
     }
 
     fn template_item(id: &str, user_id: &str, event_type: &str) -> Item {
@@ -1008,6 +1052,8 @@ mod tests {
 
         let err = update_item(
             &repo,
+            &no_personal_project(),
+            &no_op_activity_log(),
             UpdateItemParams {
                 user_id: "u1".to_string(),
                 item_id: "item1".to_string(),
@@ -1078,6 +1124,8 @@ mod tests {
 
         update_item(
             &repo,
+            &no_personal_project(),
+            &no_op_activity_log(),
             UpdateItemParams {
                 user_id: "u1".to_string(),
                 item_id: "item1".to_string(),
@@ -1112,6 +1160,8 @@ mod tests {
 
         update_item(
             &repo,
+            &no_personal_project(),
+            &no_op_activity_log(),
             UpdateItemParams {
                 user_id: "u1".to_string(),
                 item_id: "item1".to_string(),
@@ -1152,6 +1202,8 @@ mod tests {
 
         let err = update_item(
             &repo,
+            &no_personal_project(),
+            &no_op_activity_log(),
             UpdateItemParams {
                 user_id: "u1".to_string(),
                 item_id: "item1".to_string(),
@@ -1193,8 +1245,23 @@ mod tests {
 
         let repo: Arc<dyn ItemRepo> = Arc::new(mock);
 
+        let mut activity_log = MockActivityLogRepo::new();
+        activity_log
+            .expect_log_activity()
+            .withf(|team_id, _project_id, user_id, item_id, item_name, points_delta| {
+                team_id.is_none()
+                    && user_id == "u1"
+                    && item_id == "item1"
+                    && item_name == "Parent"
+                    && *points_delta == 0
+            })
+            .times(1)
+            .returning(|_, _, _, _, _, _| Ok("entry1".to_string()));
+
         update_item(
             &repo,
+            &no_personal_project(),
+            &(Arc::new(activity_log) as Arc<dyn ActivityLogRepo>),
             UpdateItemParams {
                 user_id: "u1".to_string(),
                 item_id: "item1".to_string(),
@@ -1225,6 +1292,8 @@ mod tests {
 
         let err = update_item(
             &repo,
+            &no_personal_project(),
+            &no_op_activity_log(),
             UpdateItemParams {
                 user_id: "u1".to_string(),
                 item_id: "item1".to_string(),
@@ -1256,9 +1325,20 @@ mod tests {
 
         let repo: Arc<dyn ItemRepo> = Arc::new(mock);
 
+        let mut activity_log = MockActivityLogRepo::new();
+        // Nothing was ever logged for this item in this test, so there's nothing to
+        // reverse — `update_item` must still check, though (see its own doc comment).
+        activity_log
+            .expect_most_recent_unreversed()
+            .withf(|item_id, user_id| item_id == "item1" && user_id == "u1")
+            .times(1)
+            .returning(|_, _| Ok(None));
+
         // true -> false: un-completing, every other field round-tripped unchanged.
         update_item(
             &repo,
+            &no_personal_project(),
+            &(Arc::new(activity_log) as Arc<dyn ActivityLogRepo>),
             UpdateItemParams {
                 user_id: "u1".to_string(),
                 item_id: "item1".to_string(),
@@ -1327,6 +1407,8 @@ mod tests {
 
         update_item(
             &repo,
+            &no_personal_project(),
+            &no_op_activity_log(),
             UpdateItemParams {
                 user_id: "u1".to_string(),
                 item_id: "item1".to_string(),

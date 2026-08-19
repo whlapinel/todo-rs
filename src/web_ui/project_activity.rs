@@ -6,7 +6,7 @@ use crate::service::activity_log as activity_log_service;
 use crate::service::error::ItemError;
 use crate::service::projects::get_project;
 use crate::service::teams as team_service;
-use crate::storage::sqlite::{ActivityLogRepo, ProjectRepo, TeamRepo};
+use crate::storage::sqlite::{ActivityLogRepo, ItemRepo, ItemSeriesRepo, ProjectRepo, TeamRepo};
 use askama::Template;
 use axum::extract::{Extension, Path};
 use axum::response::Html;
@@ -87,12 +87,13 @@ struct ProjectActivityPageTemplate {
 
 /// Project-scoped counterpart to `team_activity.rs`'s `render_activity_page` — the
 /// underlying data query has been `project_id`-keyed since stage B2 already (see
-/// `list_activity_for_project`'s own doc comment), so this stage is purely a new
+/// `list_activity_for_project`'s own doc comment), so this stage was originally a new
 /// URL/screen on top of already-correct data, not a data-layer change. A personal
-/// project simply has no activity (points only exist on team items, see CLAUDE.md's
-/// Points section), so this renders an empty list rather than being hidden — no
-/// special-casing needed since `list_activity_for_project` naturally returns nothing
-/// for a project no completion has ever awarded points against.
+/// project's completions are logged too now (see docs/issues.md's "unify
+/// completion-undo" note and `service::items::update_item`), so this is no longer the
+/// "always empty for personal projects" case it started as — `list_activity_for_project`
+/// naturally returns nothing only for a project with no completions logged yet at
+/// all, personal or team.
 async fn render_activity_page(
     projects: &Arc<dyn ProjectRepo>,
     teams: &Arc<dyn TeamRepo>,
@@ -137,27 +138,26 @@ pub async fn project_activity_page(
 pub async fn undo_project_activity_log_entry_form(
     Path((project_id, entry_id)): Path<(String, String)>,
     Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(activity_log): Extension<Arc<dyn ActivityLogRepo>>,
+    Extension(event_series): Extension<Arc<dyn ItemSeriesRepo>>,
     TzOffset(tz): TzOffset,
 ) -> Result<Html<String>, ItemError> {
-    // `undo_activity_log_entry` (service::activity_log) is still `team_id`-keyed for
-    // its own membership check, but points themselves moved to `project_members` as
-    // of stage C1 (docs/project-abstraction-plan.md). This still resolves the
-    // project's backing team first, since the JSON API's own `team_id`-scoped shape
-    // is unchanged. A personal project has none and can never have an entry to undo
-    // in the first place (see `render_activity_page`'s own doc comment), so that
-    // case 404s rather than reaching the service layer.
-    let project = get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
-    let team_id = project.team_id.ok_or(ItemError::NotFound)?;
-    activity_log_service::undo_activity_log_entry(
-        &teams,
+    // Project-scoped (see docs/issues.md's "unify completion-undo" note) — works for
+    // a personal project too now, not just a team-backed one, since it's gated by
+    // project membership rather than resolving a backing team.
+    activity_log_service::undo_project_activity_log_entry(
+        &repo,
         &projects,
+        &teams,
         &activity_log,
-        &team_id,
+        &event_series,
+        &project_id,
         &entry_id,
         &auth_user.user_id,
+        tz,
     )
     .await?;
     render_activity_page(&projects, &teams, &activity_log, &project_id, &auth_user.user_id, tz).await

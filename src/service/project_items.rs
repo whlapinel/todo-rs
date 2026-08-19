@@ -362,6 +362,16 @@ pub struct UpdateProjectItemParams {
 /// `item_series::validate_completable`, gated the same way but run before the dispatch
 /// below rather than after — it's what actually rejects an out-of-order Task-series
 /// completion; `record_task_completion` itself never rejects anything.
+///
+/// The Uncomplete side mirrors this but can't reuse the same idempotency trick:
+/// `retreat_cursor`'s backward-only min isn't safe to call on every `complete: false`
+/// request the way `advance_cursor` is on every `complete: true` one, since most
+/// `complete: false` requests are plain edits of an item that was never complete to
+/// begin with, not an actual complete→incomplete transition. So both
+/// `item_series::validate_uncompletable` (pre-persistence, rejection) and
+/// `item_series::record_task_uncompletion` (post-persistence, cursor restore) are
+/// gated on `was_complete` — a real fetch-and-check of the item's prior state — rather
+/// than on `!params.complete` alone.
 pub async fn update_project_item(
     repo: &Arc<dyn ItemRepo>,
     projects: &Arc<dyn ProjectRepo>,
@@ -387,6 +397,28 @@ pub async fn update_project_item(
         )
         .await?;
     }
+
+    // The Uncomplete-side counterpart to the completable check above: reject
+    // out-of-order Task-series uncompletion before any mutation happens, so the
+    // cursor can never get out of sync with what's actually settled. Gated the same
+    // way as the completable check — only fetch the current item (needed to know
+    // whether this request is actually a complete->incomplete transition, not just
+    // any edit of an already-incomplete item) when the request isn't itself a
+    // completion, so a completion or a plain field edit never pays for this read.
+    // `was_complete` also gates `record_task_uncompletion` below — unlike
+    // `record_task_completion`'s forward-only `advance_cursor`, retreating the cursor
+    // is not idempotent against a repeated call, so it must only ever fire on a real
+    // transition, never on every `complete: false` request (which is the overwhelming
+    // majority — most updates aren't touching `complete` at all).
+    let was_complete = if complete {
+        false
+    } else {
+        let item = repo.get_by_project(&params.project_id, &item_id).await?;
+        if item.complete {
+            item_series::validate_uncompletable(event_series, &item_id).await?;
+        }
+        item.complete
+    };
 
     let result = match project.team_id {
         Some(team_id) => {
@@ -426,6 +458,8 @@ pub async fn update_project_item(
         None => {
             items::update_item(
                 repo,
+                projects,
+                activity_log,
                 UpdateItemParams {
                     user_id: project.owner_user_id,
                     item_id: params.item_id,
@@ -452,6 +486,13 @@ pub async fn update_project_item(
     result?;
     if complete {
         item_series::record_task_completion(event_series, &item_id).await?;
+    } else if was_complete {
+        item_series::record_task_uncompletion(
+            event_series,
+            &item_id,
+            params.timezone_offset_minutes.unwrap_or(0),
+        )
+        .await?;
     }
     Ok(())
 }
@@ -798,6 +839,13 @@ mod tests {
         items_mock
             .expect_get()
             .returning(|_, _| Ok(Item::new_user_item("owner1", "Old name")));
+        // `complete: false` in the request against an already-incomplete item is not a
+        // complete->incomplete transition, so this is the `!complete` fetch that gates
+        // `validate_uncompletable`/`record_task_uncompletion` (see update_project_item's
+        // doc comment) — not a series-related call at all here.
+        items_mock
+            .expect_get_by_project()
+            .returning(|_, _| Ok(Item::new_user_item("owner1", "Old name")));
         items_mock.expect_update().times(1).returning(|_| Ok(()));
         let repo: Arc<dyn ItemRepo> = Arc::new(items_mock);
 
@@ -841,7 +889,21 @@ mod tests {
         let repo: Arc<dyn ItemRepo> = Arc::new(items_mock);
 
         let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
-        let activity_log: Arc<dyn ActivityLogRepo> = Arc::new(MockActivityLogRepo::new());
+        let mut activity_log_mock = MockActivityLogRepo::new();
+        // A personal item's completion now logs too (see docs/issues.md's "unify
+        // completion-undo" note) — 0 points, no team.
+        activity_log_mock
+            .expect_log_activity()
+            .withf(|team_id, _project_id, user_id, item_id, item_name, points_delta| {
+                team_id.is_none()
+                    && user_id == "owner1"
+                    && item_id == "i1"
+                    && item_name == "Old name"
+                    && *points_delta == 0
+            })
+            .times(1)
+            .returning(|_, _, _, _, _, _| Ok("entry1".to_string()));
+        let activity_log: Arc<dyn ActivityLogRepo> = Arc::new(activity_log_mock);
 
         let mut series_mock = MockItemSeriesRepo::new();
         series_mock
@@ -867,6 +929,62 @@ mod tests {
                 item_id: "i1".to_string(),
                 name: "Old name".to_string(),
                 complete: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("should update and check for a linked series occurrence");
+    }
+
+    #[tokio::test]
+    async fn update_project_item_triggers_series_uncompletion_hook_when_uncompleting() {
+        let mut projects_mock = MockProjectRepo::new();
+        projects_mock
+            .expect_get()
+            .returning(|_| Ok(personal_project()));
+        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
+
+        let mut items_mock = MockItemRepo::new();
+        items_mock
+            .expect_get()
+            .returning(|_, _| Ok(Item::new_user_item("owner1", "Old name")));
+        // The `!complete` fetch that decides whether this is actually a
+        // complete->incomplete transition — the item was complete, and the request
+        // asks for `complete: false`, so it is.
+        items_mock.expect_get_by_project().returning(|_, _| {
+            let mut item = Item::new_user_item("owner1", "Old name");
+            item.complete = true;
+            Ok(item)
+        });
+        items_mock.expect_update().times(1).returning(|_| Ok(()));
+        let repo: Arc<dyn ItemRepo> = Arc::new(items_mock);
+
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+        let activity_log: Arc<dyn ActivityLogRepo> = Arc::new(MockActivityLogRepo::new());
+
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock
+            .expect_find_occurrence_by_item_id()
+            .withf(|item_id: &str| item_id == "i1")
+            // Called twice — once by the pre-persistence `validate_uncompletable`
+            // check, once by the post-persistence `record_task_uncompletion` hook.
+            // Both are cheap no-ops here since this item never came from a series.
+            .times(2)
+            .returning(|_| Ok(None));
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        update_project_item(
+            &repo,
+            &projects,
+            &teams,
+            &activity_log,
+            &event_series,
+            "owner1",
+            UpdateProjectItemParams {
+                project_id: "p1".to_string(),
+                item_id: "i1".to_string(),
+                name: "Old name".to_string(),
+                complete: false,
                 ..Default::default()
             },
         )
@@ -917,6 +1035,162 @@ mod tests {
         )
         .await
         .expect("should update team project item");
+    }
+
+    /// End-to-end through `update_project_item` (not `team_items::update_team_item`
+    /// directly) for a team-backed item that's both points-bearing *and* a
+    /// materialized series occurrence — the two reversal concerns (points, via
+    /// `team_items::update_team_item`'s existing `reverse_entry` call, and the series
+    /// cursor, via `item_series::record_task_uncompletion`) are independent hooks off
+    /// the same `complete: false` request and must both fire together on an
+    /// uncomplete of a series-backed team item.
+    #[tokio::test]
+    async fn update_project_item_uncomplete_reverses_points_and_restores_series_cursor() {
+        use crate::domain::activity_log::ActivityLogEntry;
+        use crate::domain::item::{ItemType, Recurrence, Schedule, TeamAssignment};
+        use crate::domain::item_series::{ItemOccurrence, ItemSeries};
+
+        let occurrence_date = DateTime::from_timestamp(1_700_500_000, 0).unwrap();
+        let series_recurrence = "every 7 days".to_string();
+        let rule = crate::domain::recurrence::parse(&series_recurrence).unwrap();
+        let expected_previous = crate::domain::recurrence::retreat_once(&rule, occurrence_date, 0);
+
+        let mut projects_mock = MockProjectRepo::new();
+        projects_mock
+            .expect_get()
+            .returning(|_| Ok(shared_project()));
+        projects_mock
+            .expect_member_role()
+            .returning(|_, _| Ok(Some(TeamRole::Member)));
+        projects_mock
+            .expect_add_project_points()
+            .withf(|project_id, user_id, delta| {
+                project_id == "p1" && user_id == "member1" && *delta == -15
+            })
+            .times(1)
+            .returning(|_, _, _| Ok(0));
+        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
+
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+
+        let mut items_mock = MockItemRepo::new();
+        items_mock.expect_get_by_project().returning(|_, _| {
+            Ok(Item {
+                id: "i1".to_string(),
+                name: "Standup".to_string(),
+                project_id: Some("p1".to_string()),
+                complete: true,
+                item_type: ItemType::Task {
+                    schedule: Schedule::default(),
+                    recurrence: Recurrence::default(),
+                    team_assignment: Some(TeamAssignment {
+                        points: Some(15),
+                        assigned_to_user_id: Some("member1".to_string()),
+                    }),
+                    source_event_id: None,
+                },
+                ..Item::default()
+            })
+        });
+        items_mock
+            .expect_update_by_project()
+            .times(1)
+            .returning(|_| Ok(()));
+        let repo: Arc<dyn ItemRepo> = Arc::new(items_mock);
+
+        let mut activity_log_mock = MockActivityLogRepo::new();
+        activity_log_mock
+            .expect_most_recent_unreversed()
+            .withf(|item_id, user_id| item_id == "i1" && user_id == "member1")
+            .times(1)
+            .returning(|_, _| {
+                Ok(Some(ActivityLogEntry {
+                    id: "entry1".to_string(),
+                    team_id: Some("team1".to_string()),
+                    project_id: Some("p1".to_string()),
+                    user_id: "member1".to_string(),
+                    item_id: "i1".to_string(),
+                    item_name: "Standup".to_string(),
+                    points_delta: 15,
+                    reversed: false,
+                    created_at: chrono::Utc::now(),
+                }))
+            });
+        activity_log_mock
+            .expect_mark_reversed()
+            .withf(|id| id == "entry1")
+            .times(1)
+            .returning(|_| Ok(()));
+        let activity_log: Arc<dyn ActivityLogRepo> = Arc::new(activity_log_mock);
+
+        let task_series = ItemSeries {
+            id: "s1".to_string(),
+            project_id: "p1".to_string(),
+            name: "Standup".to_string(),
+            description: None,
+            event_type: None,
+            recurrence: series_recurrence,
+            anchor_date: occurrence_date - chrono::Duration::days(7),
+            item_type: ItemKind::Task,
+            cursor_date: Some(occurrence_date),
+            basis: None,
+            template_item_id: None,
+            assigned_to_user_id: Some("member1".to_string()),
+            points: Some(15),
+        };
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock
+            .expect_find_occurrence_by_item_id()
+            .withf(|item_id: &str| item_id == "i1")
+            .times(2)
+            .returning(move |_| {
+                Ok(Some(ItemOccurrence {
+                    series_id: "s1".to_string(),
+                    occurrence_date,
+                    item_id: Some("i1".to_string()),
+                    is_exdate: false,
+                }))
+            });
+        series_mock
+            .expect_get_series()
+            .times(2)
+            .returning(move |_| Ok(task_series.clone()));
+        series_mock.expect_get_occurrence().returning(move |_, date| {
+            Ok(Some(ItemOccurrence {
+                series_id: "s1".to_string(),
+                occurrence_date: date,
+                item_id: Some("i1".to_string()),
+                is_exdate: false,
+            }))
+        });
+        series_mock
+            .expect_retreat_cursor()
+            .withf(move |series_id: &str, date: &DateTime<Utc>| {
+                series_id == "s1" && *date == expected_previous
+            })
+            .times(1)
+            .returning(|_, _| Ok(()));
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        update_project_item(
+            &repo,
+            &projects,
+            &teams,
+            &activity_log,
+            &event_series,
+            "member1",
+            UpdateProjectItemParams {
+                project_id: "p1".to_string(),
+                item_id: "i1".to_string(),
+                name: "Standup".to_string(),
+                complete: false,
+                assigned_to_user_id: Some("member1".to_string()),
+                points: Some(15),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("should reverse points and restore the series cursor together");
     }
 
     #[tokio::test]

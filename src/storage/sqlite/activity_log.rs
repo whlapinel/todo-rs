@@ -10,7 +10,7 @@ pub struct SqliteActivityLogRepo(pub SqlitePool);
 impl ActivityLogRepo for SqliteActivityLogRepo {
     async fn log_activity<'a>(
         &'a self,
-        team_id: &'a str,
+        team_id: Option<&'a str>,
         project_id: Option<&'a str>,
         user_id: &'a str,
         item_id: &'a str,
@@ -251,7 +251,7 @@ mod tests {
         let repo = SqliteActivityLogRepo(pool.clone());
 
         let id = repo
-            .log_activity("t1", Some("p1"), "u1", "i1", "Wash dishes", 5)
+            .log_activity(Some("t1"), Some("p1"), "u1", "i1", "Wash dishes", 5)
             .await
             .unwrap();
 

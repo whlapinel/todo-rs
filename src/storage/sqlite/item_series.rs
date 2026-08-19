@@ -114,7 +114,10 @@ impl ItemSeriesRepo for SqliteItemSeriesRepo {
         .ok_or_else(not_found)
     }
 
-    async fn list_series_for_project(&self, project_id: &str) -> Result<Vec<ItemSeries>, RepoError> {
+    async fn list_series_for_project(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<ItemSeries>, RepoError> {
         sqlx::query(
             "SELECT id, project_id, name, description, event_type, recurrence, anchor_date, item_type, cursor_date, basis, template_item_id, assigned_to_user_id, points \
              FROM item_series WHERE project_id = ? ORDER BY name ASC",
@@ -254,6 +257,41 @@ impl ItemSeriesRepo for SqliteItemSeriesRepo {
         if result.rows_affected() == 0 {
             return Err(not_found());
         }
+        Ok(())
+    }
+
+    async fn retreat_cursor(
+        &self,
+        series_id: &str,
+        occurrence_date: DateTime<Utc>,
+    ) -> Result<(), RepoError> {
+        let secs = to_secs(occurrence_date);
+        let result = sqlx::query(
+            "UPDATE item_series SET cursor_date = MIN(COALESCE(cursor_date, ?), ?) WHERE id = ?",
+        )
+        .bind(secs)
+        .bind(secs)
+        .bind(series_id)
+        .execute(&self.0)
+        .await
+        .map_err(db_err)?;
+        if result.rows_affected() == 0 {
+            return Err(not_found());
+        }
+        Ok(())
+    }
+
+    async fn clear_cursor(
+        &self,
+        series_id: &str,
+        expected_occurrence_date: DateTime<Utc>,
+    ) -> Result<(), RepoError> {
+        sqlx::query("UPDATE item_series SET cursor_date = NULL WHERE id = ? AND cursor_date = ?")
+            .bind(series_id)
+            .bind(to_secs(expected_occurrence_date))
+            .execute(&self.0)
+            .await
+            .map_err(db_err)?;
         Ok(())
     }
 
@@ -461,7 +499,10 @@ mod tests {
         let pool = test_pool().await;
         let repo = SqliteItemSeriesRepo(pool);
 
-        let err = repo.update_series("missing", &sample_series("p1")).await.unwrap_err();
+        let err = repo
+            .update_series("missing", &sample_series("p1"))
+            .await
+            .unwrap_err();
         assert!(matches!(err, RepoError::NotFound));
     }
 
@@ -513,7 +554,11 @@ mod tests {
             .await
             .unwrap();
 
-        let occurrence = repo.get_occurrence(&id, dt(2_000_000)).await.unwrap().unwrap();
+        let occurrence = repo
+            .get_occurrence(&id, dt(2_000_000))
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(occurrence.item_id, Some("item-1".to_string()));
         assert!(!occurrence.is_exdate);
     }
@@ -529,7 +574,11 @@ mod tests {
             .await
             .unwrap();
 
-        let occurrence = repo.get_occurrence(&id, dt(2_000_000)).await.unwrap().unwrap();
+        let occurrence = repo
+            .get_occurrence(&id, dt(2_000_000))
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(occurrence.item_id, Some("item-1".to_string()));
         assert!(!occurrence.is_exdate);
     }
@@ -542,7 +591,11 @@ mod tests {
 
         repo.mark_exdate(&id, dt(2_000_000)).await.unwrap();
 
-        let occurrence = repo.get_occurrence(&id, dt(2_000_000)).await.unwrap().unwrap();
+        let occurrence = repo
+            .get_occurrence(&id, dt(2_000_000))
+            .await
+            .unwrap()
+            .unwrap();
         assert!(occurrence.is_exdate);
         assert_eq!(occurrence.item_id, None);
     }
@@ -558,7 +611,11 @@ mod tests {
 
         repo.mark_exdate(&id, dt(2_000_000)).await.unwrap();
 
-        let occurrence = repo.get_occurrence(&id, dt(2_000_000)).await.unwrap().unwrap();
+        let occurrence = repo
+            .get_occurrence(&id, dt(2_000_000))
+            .await
+            .unwrap()
+            .unwrap();
         assert!(occurrence.is_exdate);
         assert_eq!(occurrence.item_id, None);
     }
@@ -610,7 +667,10 @@ mod tests {
             .await
             .unwrap();
 
-        let item_ids: Vec<_> = occurrences.iter().filter_map(|o| o.item_id.clone()).collect();
+        let item_ids: Vec<_> = occurrences
+            .iter()
+            .filter_map(|o| o.item_id.clone())
+            .collect();
         assert_eq!(item_ids, vec!["in-range-early", "in-range-late"]);
     }
 
@@ -640,7 +700,11 @@ mod tests {
             .await
             .unwrap();
 
-        let occurrence = repo.find_occurrence_by_item_id("item-1").await.unwrap().unwrap();
+        let occurrence = repo
+            .find_occurrence_by_item_id("item-1")
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(occurrence.series_id, id);
         assert_eq!(occurrence.occurrence_date, dt(2_000_000));
         assert!(!occurrence.is_exdate);
@@ -652,7 +716,10 @@ mod tests {
         let repo = SqliteItemSeriesRepo(pool);
         repo.create_series(&sample_series("p1")).await.unwrap();
 
-        let occurrence = repo.find_occurrence_by_item_id("some-unrelated-item").await.unwrap();
+        let occurrence = repo
+            .find_occurrence_by_item_id("some-unrelated-item")
+            .await
+            .unwrap();
         assert!(occurrence.is_none());
     }
 
@@ -665,7 +732,10 @@ mod tests {
 
         repo.advance_cursor(&id, dt(2_000_000)).await.unwrap();
 
-        assert_eq!(repo.get_series(&id).await.unwrap().cursor_date, Some(dt(2_000_000)));
+        assert_eq!(
+            repo.get_series(&id).await.unwrap().cursor_date,
+            Some(dt(2_000_000))
+        );
     }
 
     #[tokio::test]
@@ -677,7 +747,10 @@ mod tests {
 
         repo.advance_cursor(&id, dt(3_000_000)).await.unwrap();
 
-        assert_eq!(repo.get_series(&id).await.unwrap().cursor_date, Some(dt(3_000_000)));
+        assert_eq!(
+            repo.get_series(&id).await.unwrap().cursor_date,
+            Some(dt(3_000_000))
+        );
     }
 
     #[tokio::test]
@@ -689,7 +762,10 @@ mod tests {
 
         repo.advance_cursor(&id, dt(2_000_000)).await.unwrap();
 
-        assert_eq!(repo.get_series(&id).await.unwrap().cursor_date, Some(dt(3_000_000)));
+        assert_eq!(
+            repo.get_series(&id).await.unwrap().cursor_date,
+            Some(dt(3_000_000))
+        );
     }
 
     #[tokio::test]
@@ -697,8 +773,83 @@ mod tests {
         let pool = test_pool().await;
         let repo = SqliteItemSeriesRepo(pool);
 
-        let err = repo.advance_cursor("missing", dt(2_000_000)).await.unwrap_err();
+        let err = repo
+            .advance_cursor("missing", dt(2_000_000))
+            .await
+            .unwrap_err();
         assert!(matches!(err, RepoError::NotFound));
+    }
+
+    #[tokio::test]
+    async fn retreat_cursor_moves_backward() {
+        let pool = test_pool().await;
+        let repo = SqliteItemSeriesRepo(pool);
+        let id = repo.create_series(&sample_series("p1")).await.unwrap();
+        repo.advance_cursor(&id, dt(3_000_000)).await.unwrap();
+
+        repo.retreat_cursor(&id, dt(2_000_000)).await.unwrap();
+
+        assert_eq!(
+            repo.get_series(&id).await.unwrap().cursor_date,
+            Some(dt(2_000_000))
+        );
+    }
+
+    #[tokio::test]
+    async fn retreat_cursor_never_moves_forward() {
+        let pool = test_pool().await;
+        let repo = SqliteItemSeriesRepo(pool);
+        let id = repo.create_series(&sample_series("p1")).await.unwrap();
+        repo.advance_cursor(&id, dt(2_000_000)).await.unwrap();
+
+        repo.retreat_cursor(&id, dt(3_000_000)).await.unwrap();
+
+        assert_eq!(
+            repo.get_series(&id).await.unwrap().cursor_date,
+            Some(dt(2_000_000))
+        );
+    }
+
+    #[tokio::test]
+    async fn retreat_cursor_missing_series_returns_not_found() {
+        let pool = test_pool().await;
+        let repo = SqliteItemSeriesRepo(pool);
+
+        let err = repo
+            .retreat_cursor("missing", dt(2_000_000))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, RepoError::NotFound));
+    }
+
+    #[tokio::test]
+    async fn clear_cursor_clears_when_guard_matches() {
+        let pool = test_pool().await;
+        let repo = SqliteItemSeriesRepo(pool);
+        let id = repo.create_series(&sample_series("p1")).await.unwrap();
+        repo.advance_cursor(&id, dt(1_000_000)).await.unwrap();
+
+        repo.clear_cursor(&id, dt(1_000_000)).await.unwrap();
+
+        assert_eq!(repo.get_series(&id).await.unwrap().cursor_date, None);
+    }
+
+    #[tokio::test]
+    async fn clear_cursor_is_a_no_op_when_guard_does_not_match() {
+        let pool = test_pool().await;
+        let repo = SqliteItemSeriesRepo(pool);
+        let id = repo.create_series(&sample_series("p1")).await.unwrap();
+        repo.advance_cursor(&id, dt(2_000_000)).await.unwrap();
+
+        // Guard date doesn't match the real cursor_date (2_000_000) — a concurrent
+        // settlement moved it since this caller last read it, so the clear must not
+        // clobber that newer state.
+        repo.clear_cursor(&id, dt(1_000_000)).await.unwrap();
+
+        assert_eq!(
+            repo.get_series(&id).await.unwrap().cursor_date,
+            Some(dt(2_000_000))
+        );
     }
 
     #[tokio::test]
@@ -712,8 +863,14 @@ mod tests {
 
         repo.delete_series(&id).await.unwrap();
 
-        assert!(matches!(repo.get_series(&id).await, Err(RepoError::NotFound)));
-        let occurrences = repo.list_occurrences_between(&id, dt(0), dt(9_999_999)).await.unwrap();
+        assert!(matches!(
+            repo.get_series(&id).await,
+            Err(RepoError::NotFound)
+        ));
+        let occurrences = repo
+            .list_occurrences_between(&id, dt(0), dt(9_999_999))
+            .await
+            .unwrap();
         assert!(occurrences.is_empty());
     }
 

@@ -489,21 +489,25 @@ pub async fn update_team_item(
         }
     }
 
-    // Points award/reversal must run against `current`'s captured identity, strictly
-    // before the recurrence branch below deletes it and creates a successor under a
-    // fresh id — otherwise a recurring item's completion would silently never award
+    // Logging/reversal must run against `current`'s captured identity, strictly before
+    // the recurrence branch below deletes it and creates a successor under a fresh id
+    // — otherwise a recurring item's completion would silently never log/award
     // anything (see CLAUDE.md's Points plan, Stage 6, and its cross-stage risk #2).
-    if just_completed
-        && item.parent_item_id.is_none()
-        && let Some(points) = item.points()
-    {
+    //
+    // Every top-level team item completion is logged now, not just points-bearing
+    // ones (see docs/issues.md's "unify completion-undo" note) — logging and
+    // point-awarding are two separate steps, so a 0-point completion still creates an
+    // entry the activity feed's Undo button can act on, it just never touches the
+    // project's point balance.
+    if just_completed && item.parent_item_id.is_none() {
         // Guarded by the match above: a just-completed item always has an assignee.
         let assignee = item
             .assigned_to_user_id()
             .expect("just-completed team item must be assigned");
+        let points = item.points().unwrap_or(0);
         activity_log
             .log_activity(
-                team_id,
+                Some(team_id),
                 item.project_id.as_deref(),
                 &assignee,
                 &current.id,
@@ -511,15 +515,18 @@ pub async fn update_team_item(
                 points,
             )
             .await?;
-        // Points authority lives on `project_members` as of stage C1
-        // (docs/project-abstraction-plan.md). As of Stage 4 of
-        // docs/team-id-removal-plan.md, `params.project_id` is this update's own
-        // primary key — always known, no `get_by_team` fallback needed (this is the
-        // very bug docs/team-id-removal-plan.md exists to close: awarding against a
-        // project id that can never go stale when a team is attached/detached).
-        projects
-            .add_project_points(&params.project_id, &assignee, points)
-            .await?;
+        if points != 0 {
+            // Points authority lives on `project_members` as of stage C1
+            // (docs/project-abstraction-plan.md). As of Stage 4 of
+            // docs/team-id-removal-plan.md, `params.project_id` is this update's own
+            // primary key — always known, no `get_by_team` fallback needed (this is
+            // the very bug docs/team-id-removal-plan.md exists to close: awarding
+            // against a project id that can never go stale when a team is
+            // attached/detached).
+            projects
+                .add_project_points(&params.project_id, &assignee, points)
+                .await?;
+        }
     }
     if just_uncompleted
         && let Some(assignee) = current.assigned_to_user_id()
@@ -822,10 +829,22 @@ mod tests {
         let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
         let projects: Arc<dyn ProjectRepo> =
             Arc::new(project_with_role("p1", "t1", TeamRole::Member));
+        // A points-less completion still logs (see docs/issues.md's "unify
+        // completion-undo" note) — just never awards anything.
+        let mut activity_log = MockActivityLogRepo::new();
+        activity_log
+            .expect_log_activity()
+            .withf(|_, _, _, _, _, points_delta| *points_delta == 0)
+            .times(1)
+            .returning(|_, _, _, _, _, _| Ok("entry1".to_string()));
 
         update_team_item(
             &items,
-            &ctx_with(teams, projects),
+            &UpdateTeamItemContext {
+                teams,
+                projects,
+                activity_log: Arc::new(activity_log),
+            },
             "member1",
             "t1",
             UpdateTeamItemParams {
@@ -1006,7 +1025,7 @@ mod tests {
         activity_log
             .expect_log_activity()
             .withf(|team_id, _project_id, user_id, item_id, item_name, points_delta| {
-                team_id == "t1"
+                *team_id == Some("t1")
                     && user_id == "member1"
                     && item_id == "item1"
                     && item_name == "Mow the lawn"
@@ -1052,6 +1071,64 @@ mod tests {
         )
         .await
         .expect("should award points on a genuine completion");
+    }
+
+    #[tokio::test]
+    async fn update_team_item_logs_a_points_less_completion_without_awarding_anything() {
+        let mut items = MockItemRepo::new();
+        items.expect_get_by_project().returning(|_, _| {
+            Ok(team_item_with_points_and_assignee(
+                "item1",
+                None,
+                Some("member1"),
+            ))
+        });
+        items
+            .expect_update_by_project()
+            .times(1)
+            .returning(|_| Ok(()));
+        items.expect_list_children().returning(|_| Ok(vec![]));
+
+        let mut activity_log = MockActivityLogRepo::new();
+        activity_log
+            .expect_log_activity()
+            .withf(|team_id, _project_id, user_id, item_id, item_name, points_delta| {
+                *team_id == Some("t1")
+                    && user_id == "member1"
+                    && item_id == "item1"
+                    && item_name == "Mow the lawn"
+                    && *points_delta == 0
+            })
+            .times(1)
+            .returning(|_, _, _, _, _, _| Ok("entry1".to_string()));
+
+        let items: Arc<dyn ItemRepo> = Arc::new(items);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+        let mut projects_mock = project_with_role("p1", "t1", TeamRole::Member);
+        // Never called — a 0-point completion still logs, but there is nothing to
+        // award (see docs/issues.md's "unify completion-undo" note).
+        projects_mock.expect_add_project_points().times(0);
+
+        update_team_item(
+            &items,
+            &UpdateTeamItemContext {
+                teams,
+                projects: Arc::new(projects_mock),
+                activity_log: Arc::new(activity_log),
+            },
+            "member1",
+            "t1",
+            UpdateTeamItemParams {
+                project_id: "p1".to_string(),
+                item_id: "item1".to_string(),
+                name: "Mow the lawn".to_string(),
+                complete: true,
+                assigned_to_user_id: Some("member1".to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("should log the completion without awarding points");
     }
 
     #[tokio::test]
@@ -1122,7 +1199,7 @@ mod tests {
             .returning(|_, _| {
                 Ok(Some(ActivityLogEntry {
                     id: "entry1".to_string(),
-                    team_id: "t1".to_string(),
+                    team_id: Some("t1".to_string()),
                     project_id: Some("p1".to_string()),
                     user_id: "member1".to_string(),
                     item_id: "item1".to_string(),

@@ -3,7 +3,7 @@ use crate::auth::AuthUser;
 use crate::service::activity_log as activity_log_service;
 use crate::service::items::ItemError;
 use crate::service::team_items::require_active_member;
-use crate::storage::sqlite::{ActivityLogRepo, ProjectRepo, TeamRepo};
+use crate::storage::sqlite::{ActivityLogRepo, ItemRepo, ItemSeriesRepo, ProjectRepo, TeamRepo};
 use std::sync::Arc;
 use todo_server_sdk::{error, input, model, output, server, types::DateTime as SmithyDateTime};
 
@@ -48,18 +48,29 @@ pub async fn list_team_activity_log(
 
 pub async fn undo_activity_log_entry(
     input: input::UndoActivityLogEntryInput,
+    server::Extension(repo): server::Extension<Arc<dyn ItemRepo>>,
     server::Extension(teams): server::Extension<Arc<dyn TeamRepo>>,
     server::Extension(projects): server::Extension<Arc<dyn ProjectRepo>>,
     server::Extension(activity_log): server::Extension<Arc<dyn ActivityLogRepo>>,
+    server::Extension(event_series): server::Extension<Arc<dyn ItemSeriesRepo>>,
     server::Extension(auth): server::Extension<AuthUser>,
 ) -> Result<output::UndoActivityLogEntryOutput, error::UndoActivityLogEntryError> {
+    // No `timezoneOffsetMinutes` field on this legacy Smithy operation (see
+    // CLAUDE.md's Smithy section — kept alive only for `prl teams undo-activity`/its
+    // MCP tool, not worth extending its shape for) — 0 is the same fallback used
+    // throughout this codebase when a real per-request offset isn't available. This
+    // only affects the rare case of restoring an `item_series` cursor for a series
+    // whose recurrence rule has an explicit time-of-day override.
     activity_log_service::undo_activity_log_entry(
+        &repo,
         &teams,
         &projects,
         &activity_log,
+        &event_series,
         &input.team_id,
         &input.entry_id,
         &auth.user_id,
+        0,
     )
     .await
     .map_err(|e| error::UndoActivityLogEntryError::from(to_msg(e)))?;

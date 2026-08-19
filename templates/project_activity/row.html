@@ -5,7 +5,11 @@
   </span>
   <span class="flex items-center gap-x-3 shrink-0">
     {% if reversed %}<span class="text-xs text-gray-400 dark:text-gray-500">reversed</span>{% endif %}
+    {% if points_delta == 0 %}
+    <span class="text-sm font-medium {% if reversed %}text-gray-400 dark:text-gray-500 line-through{% else %}text-gray-500 dark:text-gray-400{% endif %}">completed</span>
+    {% else %}
     <span class="text-sm font-medium {% if reversed %}text-gray-400 dark:text-gray-500 line-through{% else %}text-green-600 dark:text-green-400{% endif %}">+{{ points_delta }} pts</span>
+    {% endif %}
     {% if can_undo %}
     <form hx-put="/web/projects/{{ project_id }}/activity/{{ entry_id }}/undo" hx-target="#page" hx-select="#page" hx-swap="innerHTML">
       <button type="submit" class="cursor-pointer text-xs text-indigo-600 hover:text-indigo-500 dark:text-indigo-400 dark:hover:text-indigo-300">Undo</button>

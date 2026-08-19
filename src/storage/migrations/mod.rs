@@ -1,4 +1,5 @@
 mod activity_log;
+mod activity_log_team_id_nullable;
 mod add_event_occurrences_item_id_index;
 mod add_event_series;
 mod add_item_description;
@@ -21,6 +22,7 @@ mod scheduled_end_date;
 mod team_member_points;
 
 use activity_log::ActivityLog;
+use activity_log_team_id_nullable::ActivityLogTeamIdNullable;
 use add_event_occurrences_item_id_index::AddEventOccurrencesItemIdIndex;
 use add_event_series::AddEventSeries;
 use add_item_description::AddItemDescription;
@@ -98,6 +100,7 @@ fn all_migrations() -> Vec<Box<dyn Migration>> {
         Box::new(AddItemSeriesTemplateItemId),
         Box::new(MigrateLegacyRecurringItems),
         Box::new(AddItemSeriesAssignment),
+        Box::new(ActivityLogTeamIdNullable),
     ]
 }
 
@@ -257,7 +260,7 @@ mod tests {
         sqlx::query(
             "CREATE TABLE activity_log (
                 id TEXT PRIMARY KEY,
-                team_id TEXT NOT NULL,
+                team_id TEXT,
                 user_id TEXT NOT NULL,
                 item_id TEXT NOT NULL,
                 item_name TEXT NOT NULL,
@@ -503,7 +506,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 21);
+        assert_eq!(applied_count, 22);
     }
 
     #[tokio::test]
@@ -516,7 +519,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 21);
+        assert_eq!(applied_count, 22);
     }
 
     #[tokio::test]
@@ -530,6 +533,6 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 21);
+        assert_eq!(applied_count, 22);
     }
 }

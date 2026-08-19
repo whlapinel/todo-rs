@@ -9,6 +9,7 @@ Ranked easiest → hardest (re-ranked 2026-08-15 after the item_series redesign 
 ## unsorted items (to be sorted into above)
 
 - In calendar views, show assigned user (First letter of first name) beside tasks and task series if assignment exists
+- Supersedes above but include above in this more broadly-encompassing feature: modify calendar to separate items to a per-day list below the month view instead of attempting to display items within the day. So within the month view, each day will show some kind of minimal count indicator and perhaps an abbreviated hint of what each item is, but clicking on the day will display the fuller list for that day.
 - Put delete button in all details pages
 - Series, Tasks, and Events list rows should have 'duplicate' action -- '<name>' => '<name> (copy)' -- folded into vertical elipses along with 'edit' and 'delete' and 'assign'
 - Need a pop-up dialog component for all of these.
@@ -27,3 +28,6 @@ Ranked easiest → hardest (re-ranked 2026-08-15 after the item_series redesign 
         - All tasks assigned to me for all projects + all tasks for personal projects (i.e. no team assigned)
             - (materialized and virtual occurrences of task series assigned to me)
 - Show assignee in tasks list as well
+- Add metadata fields to item: created_at, created_by, deleted_at, deleted_by (instead of actually deleting, we tag for deletion to allow for easily recovering deleted items) and have a TTL after tagging for deletion, after which the item is actually deleted from the DB.
+- Add priority to task items and task series - then modify sorting to sort first by priority, then by due date
+- Major change: I want virtual occurrences to look the same as materialized occurrences, except that I want to carry over the UI from virtual rows (e.g. display current if current, and skip action is available). This implies that skipping should be available for materialized occurrences, which means we need to essentially delete the occurrence and skip it in a single pass for that path. Additionally and more broadly, I want to materialize only when necessary, i.e. when marked complete, or when the occurrence is actually modified in some other way. So we need to have a way of viewing details for a virtual occurrence that looks the same as materialized occurrences - just use the series id and occurrence date instead of the item id for the URL. I want the distinction between virtual and materialized to be fully hidden from the user. The user should be able to see clearly when a task is from a series (again, I want a link to series from task details), but not whether it is materialized or not (unless they are observant enough to deduce from URL differences).

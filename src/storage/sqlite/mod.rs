@@ -1,12 +1,9 @@
 pub mod activity_log;
 pub mod item_series;
+pub mod items;
 pub mod projects;
 pub mod teams;
 pub mod users;
-pub mod items;
-use async_trait::async_trait;
-use chrono::{DateTime, Utc};
-use sqlx::{Row, SqlitePool};
 use crate::domain::{
     activity_log::ActivityLogEntry,
     item::{Item, ItemKind, ItemType, Recurrence, Schedule, TeamAssignment},
@@ -15,6 +12,9 @@ use crate::domain::{
     team::{Team, TeamRole},
     user::User,
 };
+use async_trait::async_trait;
+use chrono::{DateTime, Utc};
+use sqlx::{Row, SqlitePool};
 
 pub struct DueItem {
     pub item: Item,
@@ -223,7 +223,7 @@ pub trait ActivityLogRepo: Send + Sync {
     /// `#[async_trait]`'s desugaring can't elide a lifetime buried inside `Option<&str>`.
     async fn log_activity<'a>(
         &'a self,
-        team_id: &'a str,
+        team_id: Option<&'a str>,
         project_id: Option<&'a str>,
         user_id: &'a str,
         item_id: &'a str,
@@ -276,7 +276,8 @@ pub trait ItemSeriesRepo: Send + Sync {
     /// convention, extended to the one other identity-shaped field).
     async fn update_series(&self, series_id: &str, series: &ItemSeries) -> Result<(), RepoError>;
     async fn get_series(&self, series_id: &str) -> Result<ItemSeries, RepoError>;
-    async fn list_series_for_project(&self, project_id: &str) -> Result<Vec<ItemSeries>, RepoError>;
+    async fn list_series_for_project(&self, project_id: &str)
+    -> Result<Vec<ItemSeries>, RepoError>;
     async fn get_occurrence(
         &self,
         series_id: &str,
@@ -350,6 +351,29 @@ pub trait ItemSeriesRepo: Send + Sync {
         series_id: &str,
         occurrence_date: DateTime<Utc>,
     ) -> Result<(), RepoError>;
+
+    /// Un-settles a Task series' cursor back to one step before `occurrence_date` —
+    /// the counterpart un-completing an item calls (`service::item_series::record_task_uncompletion`)
+    /// after `advance_cursor` moved it forward. `MIN`-guarded like `advance_cursor` is
+    /// `MAX`-guarded, so it can only ever move the cursor backward.
+    async fn retreat_cursor(
+        &self,
+        series_id: &str,
+        occurrence_date: DateTime<Utc>,
+    ) -> Result<(), RepoError>;
+
+    /// Clears a Task series' cursor back to its pre-anything-settled `None` state —
+    /// used only when un-completing the series' very first (anchor) occurrence, since
+    /// there's no earlier occurrence for `retreat_cursor` to land on. Guarded on the
+    /// cursor still being exactly at `expected_occurrence_date`, so a concurrent
+    /// settlement that has since moved the cursor elsewhere is left untouched rather
+    /// than clobbered.
+    async fn clear_cursor(
+        &self,
+        series_id: &str,
+        expected_occurrence_date: DateTime<Utc>,
+    ) -> Result<(), RepoError>;
+
     /// Deletes the `item_series` row and all its `item_occurrences` rows. Orphan, not
     /// cascade — never touches `items`; every already-materialized occurrence survives
     /// as a plain standalone item. See item_series.smithy's `DeleteItemSeries` doc
@@ -456,7 +480,6 @@ fn row_to_item(row: &sqlx::sqlite::SqliteRow) -> Item {
     }
 }
 
-
 fn row_to_activity_log_entry(row: &sqlx::sqlite::SqliteRow) -> ActivityLogEntry {
     let created_at_secs: i64 = row.get("created_at");
     let reversed: i64 = row.get("reversed");
@@ -551,7 +574,7 @@ pub async fn create_pool(url: &str) -> Result<SqlitePool, sqlx::Error> {
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS activity_log (
             id TEXT PRIMARY KEY,
-            team_id TEXT NOT NULL,
+            team_id TEXT,
             user_id TEXT NOT NULL,
             item_id TEXT NOT NULL,
             item_name TEXT NOT NULL,
@@ -599,9 +622,11 @@ pub async fn create_pool(url: &str) -> Result<SqlitePool, sqlx::Error> {
     )
     .execute(&pool)
     .await?;
-    sqlx::query("CREATE INDEX IF NOT EXISTS idx_project_members_user_id ON project_members (user_id)")
-        .execute(&pool)
-        .await?;
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_project_members_user_id ON project_members (user_id)",
+    )
+    .execute(&pool)
+    .await?;
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS event_series (
@@ -616,9 +641,11 @@ pub async fn create_pool(url: &str) -> Result<SqlitePool, sqlx::Error> {
     )
     .execute(&pool)
     .await?;
-    sqlx::query("CREATE INDEX IF NOT EXISTS idx_event_series_project_id ON event_series (project_id)")
-        .execute(&pool)
-        .await?;
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_event_series_project_id ON event_series (project_id)",
+    )
+    .execute(&pool)
+    .await?;
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS event_occurrences (
             series_id TEXT NOT NULL,
@@ -630,9 +657,11 @@ pub async fn create_pool(url: &str) -> Result<SqlitePool, sqlx::Error> {
     )
     .execute(&pool)
     .await?;
-    sqlx::query("CREATE INDEX IF NOT EXISTS idx_event_occurrences_item_id ON event_occurrences (item_id)")
-        .execute(&pool)
-        .await?;
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_event_occurrences_item_id ON event_occurrences (item_id)",
+    )
+    .execute(&pool)
+    .await?;
 
     // Renamed/generalized from event_series/event_occurrences above at stage 7a of
     // docs/recurring-events-virtual-occurrences-rough-plan.md — the old tables are left
@@ -657,9 +686,11 @@ pub async fn create_pool(url: &str) -> Result<SqlitePool, sqlx::Error> {
     )
     .execute(&pool)
     .await?;
-    sqlx::query("CREATE INDEX IF NOT EXISTS idx_item_series_project_id ON item_series (project_id)")
-        .execute(&pool)
-        .await?;
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_item_series_project_id ON item_series (project_id)",
+    )
+    .execute(&pool)
+    .await?;
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS item_occurrences (
             series_id TEXT NOT NULL,
@@ -671,9 +702,11 @@ pub async fn create_pool(url: &str) -> Result<SqlitePool, sqlx::Error> {
     )
     .execute(&pool)
     .await?;
-    sqlx::query("CREATE INDEX IF NOT EXISTS idx_item_occurrences_item_id ON item_occurrences (item_id)")
-        .execute(&pool)
-        .await?;
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_item_occurrences_item_id ON item_occurrences (item_id)",
+    )
+    .execute(&pool)
+    .await?;
     // idx_items_project_id is deliberately NOT created here — see add_projects.rs's
     // doc comment: an index on a column added to an *existing* table via a migration
     // must live inside that migration, not the baseline, since baseline indexes run

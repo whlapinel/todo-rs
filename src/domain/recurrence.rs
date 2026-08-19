@@ -30,11 +30,19 @@ fn strip_time_suffix(s: &str) -> (&str, Option<(u8, u8)>) {
 }
 
 fn parse_time_str(s: &str) -> Option<(u8, u8)> {
-    if s == "noon" { return Some((12, 0)); }
-    if s == "midnight" { return Some((0, 0)); }
-    let (s, pm) = if let Some(t) = s.strip_suffix("pm") { (t, true) }
-                  else if let Some(t) = s.strip_suffix("am") { (t, false) }
-                  else { return None; };
+    if s == "noon" {
+        return Some((12, 0));
+    }
+    if s == "midnight" {
+        return Some((0, 0));
+    }
+    let (s, pm) = if let Some(t) = s.strip_suffix("pm") {
+        (t, true)
+    } else if let Some(t) = s.strip_suffix("am") {
+        (t, false)
+    } else {
+        return None;
+    };
     let (h_str, m_str) = if let Some(colon) = s.find(':') {
         (&s[..colon], &s[colon + 1..])
     } else {
@@ -42,8 +50,14 @@ fn parse_time_str(s: &str) -> Option<(u8, u8)> {
     };
     let h: u8 = h_str.parse().ok()?;
     let m: u8 = m_str.parse().ok()?;
-    if h > 12 || m > 59 { return None; }
-    let h24 = if pm { if h == 12 { 12 } else { h + 12 } } else { if h == 12 { 0 } else { h } };
+    if h > 12 || m > 59 {
+        return None;
+    }
+    let h24 = if pm {
+        if h == 12 { 12 } else { h + 12 }
+    } else {
+        if h == 12 { 0 } else { h }
+    };
     Some((h24, m))
 }
 
@@ -60,39 +74,92 @@ pub fn parse(s: &str) -> Result<RecurrenceRule, String> {
         if day < 1 || day > 31 {
             return Err(format!("day {day} out of range in \"{s}\""));
         }
-        return Ok(RecurrenceRule { unit: RecurrenceUnit::MonthlyDay(day), count: 1, raw: s, time_override });
+        return Ok(RecurrenceRule {
+            unit: RecurrenceUnit::MonthlyDay(day),
+            count: 1,
+            raw: s,
+            time_override,
+        });
     }
 
-    if let Some(weekday) = base.strip_prefix("every ").and_then(|w| parse_weekday(w.trim())) {
-        return Ok(RecurrenceRule { unit: RecurrenceUnit::WeeklyDay(weekday), count: 1, raw: s, time_override });
+    if let Some(weekday) = base
+        .strip_prefix("every ")
+        .and_then(|w| parse_weekday(w.trim()))
+    {
+        return Ok(RecurrenceRule {
+            unit: RecurrenceUnit::WeeklyDay(weekday),
+            count: 1,
+            raw: s,
+            time_override,
+        });
     }
 
     if base == "every day" || base == "daily" {
-        return Ok(RecurrenceRule { unit: RecurrenceUnit::Days, count: 1, raw: s, time_override });
+        return Ok(RecurrenceRule {
+            unit: RecurrenceUnit::Days,
+            count: 1,
+            raw: s,
+            time_override,
+        });
     }
     if let Some(n) = extract_n(base, "days") {
-        return Ok(RecurrenceRule { unit: RecurrenceUnit::Days, count: n, raw: s, time_override });
+        return Ok(RecurrenceRule {
+            unit: RecurrenceUnit::Days,
+            count: n,
+            raw: s,
+            time_override,
+        });
     }
 
     if base == "every week" || base == "weekly" {
-        return Ok(RecurrenceRule { unit: RecurrenceUnit::Weeks, count: 1, raw: s, time_override });
+        return Ok(RecurrenceRule {
+            unit: RecurrenceUnit::Weeks,
+            count: 1,
+            raw: s,
+            time_override,
+        });
     }
     if let Some(n) = extract_n(base, "weeks") {
-        return Ok(RecurrenceRule { unit: RecurrenceUnit::Weeks, count: n, raw: s, time_override });
+        return Ok(RecurrenceRule {
+            unit: RecurrenceUnit::Weeks,
+            count: n,
+            raw: s,
+            time_override,
+        });
     }
 
     if base == "every month" || base == "monthly" {
-        return Ok(RecurrenceRule { unit: RecurrenceUnit::Months, count: 1, raw: s, time_override });
+        return Ok(RecurrenceRule {
+            unit: RecurrenceUnit::Months,
+            count: 1,
+            raw: s,
+            time_override,
+        });
     }
     if let Some(n) = extract_n(base, "months") {
-        return Ok(RecurrenceRule { unit: RecurrenceUnit::Months, count: n, raw: s, time_override });
+        return Ok(RecurrenceRule {
+            unit: RecurrenceUnit::Months,
+            count: n,
+            raw: s,
+            time_override,
+        });
     }
 
     if base == "every year" || base == "yearly" || base == "annually" {
-        return Ok(RecurrenceRule { unit: RecurrenceUnit::Years, count: 1, raw: s, time_override });
+        return Ok(RecurrenceRule {
+            unit: RecurrenceUnit::Years,
+            count: 1,
+            raw: s,
+            time_override,
+        });
     }
     if let Some(n) = extract_n(base, "years") {
-        return Ok(RecurrenceRule { unit: RecurrenceUnit::Years, count: n, raw: s, time_override });
+        return Ok(RecurrenceRule {
+            unit: RecurrenceUnit::Years,
+            count: n,
+            raw: s,
+            time_override,
+        });
     }
 
     Err(format!(
@@ -140,8 +207,28 @@ fn parse_weekday(s: &str) -> Option<Weekday> {
 /// series needs its next unsettled occurrence to actually surface as "current," not be
 /// silently skipped past — the retired legacy single-row recurrence mechanism's own
 /// `next_date` used to do exactly that clamping/skipping, which is why this doesn't.
-pub fn advance_once(rule: &RecurrenceRule, reference: DateTime<Utc>, tz_offset_minutes: i32) -> DateTime<Utc> {
+pub fn advance_once(
+    rule: &RecurrenceRule,
+    reference: DateTime<Utc>,
+    tz_offset_minutes: i32,
+) -> DateTime<Utc> {
     advance(rule, reference, tz_offset_minutes)
+}
+
+/// One step backward from `reference`, per `rule` — `advance_once`'s mirror, used to
+/// restore a Task-typed `item_series`' cursor when uncompleting its most recently
+/// completed occurrence (`service::item_series::record_task_uncompletion`). An exact
+/// inverse of `advance_once` for `Days`/`Weeks`/`Months`/`Years`/`WeeklyDay`, but not
+/// guaranteed for `MonthlyDay` across months of different lengths (e.g. day 31: Jan →
+/// Feb clamps to 28, and Feb → Mar does not un-clamp back to 31) — a narrow,
+/// pre-existing limitation of this module's clamping semantics (see `to_rrule`'s doc
+/// comment), not something this function tries to solve.
+pub fn retreat_once(
+    rule: &RecurrenceRule,
+    reference: DateTime<Utc>,
+    tz_offset_minutes: i32,
+) -> DateTime<Utc> {
+    retreat(rule, reference, tz_offset_minutes)
 }
 
 fn advance(rule: &RecurrenceRule, from: DateTime<Utc>, tz_offset_minutes: i32) -> DateTime<Utc> {
@@ -156,9 +243,31 @@ fn advance(rule: &RecurrenceRule, from: DateTime<Utc>, tz_offset_minutes: i32) -
     };
     if let Some(time_override) = rule.time_override {
         let (utc_h, utc_m) = override_to_utc_hm(time_override, tz_offset_minutes);
-        next.with_hour(utc_h).and_then(|d| d.with_minute(utc_m)).unwrap_or(next)
+        next.with_hour(utc_h)
+            .and_then(|d| d.with_minute(utc_m))
+            .unwrap_or(next)
     } else {
         next
+    }
+}
+
+fn retreat(rule: &RecurrenceRule, from: DateTime<Utc>, tz_offset_minutes: i32) -> DateTime<Utc> {
+    use chrono::Timelike;
+    let prev = match &rule.unit {
+        RecurrenceUnit::Days => from - Duration::days(rule.count as i64),
+        RecurrenceUnit::Weeks => from - Duration::weeks(rule.count as i64),
+        RecurrenceUnit::Months => from - Months::new(rule.count),
+        RecurrenceUnit::Years => from - Months::new(rule.count * 12),
+        RecurrenceUnit::MonthlyDay(day) => prev_month_day(from, *day),
+        RecurrenceUnit::WeeklyDay(weekday) => prev_weekday(from, *weekday),
+    };
+    if let Some(time_override) = rule.time_override {
+        let (utc_h, utc_m) = override_to_utc_hm(time_override, tz_offset_minutes);
+        prev.with_hour(utc_h)
+            .and_then(|d| d.with_minute(utc_m))
+            .unwrap_or(prev)
+    } else {
+        prev
     }
 }
 
@@ -180,11 +289,18 @@ fn override_to_utc_hm(time_override: (u8, u8), tz_offset_minutes: i32) -> (u32, 
 /// semantics apply: a February that's too short for that day is skipped entirely, rather than
 /// clamped to Feb 28/29 the way `next_month_day` does. That's an intentional, narrow behavior
 /// difference from `next_date`/`advance` above (see docs/recurring-events-virtual-occurrences-rough-plan.md).
-fn to_rrule(rule: &RecurrenceRule, anchor: DateTime<Utc>, tz_offset_minutes: i32) -> Result<RRuleSet, String> {
+fn to_rrule(
+    rule: &RecurrenceRule,
+    anchor: DateTime<Utc>,
+    tz_offset_minutes: i32,
+) -> Result<RRuleSet, String> {
     use chrono::Timelike;
     let dt_start_utc = if let Some(time_override) = rule.time_override {
         let (utc_h, utc_m) = override_to_utc_hm(time_override, tz_offset_minutes);
-        anchor.with_hour(utc_h).and_then(|d| d.with_minute(utc_m)).unwrap_or(anchor)
+        anchor
+            .with_hour(utc_h)
+            .and_then(|d| d.with_minute(utc_m))
+            .unwrap_or(anchor)
     } else {
         anchor
     };
@@ -243,10 +359,25 @@ fn next_month_day(from: DateTime<Utc>, day: u32) -> DateTime<Utc> {
     next_month.with_day(clamped).unwrap_or(next_month)
 }
 
+fn prev_month_day(from: DateTime<Utc>, day: u32) -> DateTime<Utc> {
+    let prev_month = from - Months::new(1);
+    let days_in_month = days_in_month(prev_month.year(), prev_month.month());
+    let clamped = day.min(days_in_month);
+    prev_month.with_day(clamped).unwrap_or(prev_month)
+}
+
 fn next_weekday(from: DateTime<Utc>, weekday: Weekday) -> DateTime<Utc> {
     let mut d = from + Duration::days(1);
     while d.weekday() != weekday {
         d = d + Duration::days(1);
+    }
+    d
+}
+
+fn prev_weekday(from: DateTime<Utc>, weekday: Weekday) -> DateTime<Utc> {
+    let mut d = from - Duration::days(1);
+    while d.weekday() != weekday {
+        d = d - Duration::days(1);
     }
     d
 }
@@ -259,13 +390,19 @@ pub fn apply_end_of_day(dt: DateTime<Utc>, tz_offset_minutes: i32) -> DateTime<U
     let offset = Duration::minutes(tz_offset_minutes as i64);
     let local = dt - offset;
     let local_eod = local
-        .with_hour(23).and_then(|d| d.with_minute(59)).and_then(|d| d.with_second(59))
+        .with_hour(23)
+        .and_then(|d| d.with_minute(59))
+        .and_then(|d| d.with_second(59))
         .unwrap_or(local);
     local_eod + offset
 }
 
 fn days_in_month(year: i32, month: u32) -> u32 {
-    let (y, m) = if month == 12 { (year + 1, 1) } else { (year, month + 1) };
+    let (y, m) = if month == 12 {
+        (year + 1, 1)
+    } else {
+        (year, month + 1)
+    };
     chrono::NaiveDate::from_ymd_opt(y, m, 1)
         .and_then(|d| d.pred_opt())
         .map(|d| d.day())
@@ -317,10 +454,21 @@ mod tests {
     fn occurrences_every_3_days() {
         let rule = parse("every 3 days").unwrap();
         let anchor = dt(2026, 1, 1, 9, 0);
-        let result = occurrences_between(&rule, anchor, dt(2026, 1, 1, 0, 0), dt(2026, 1, 10, 23, 59), 0);
+        let result = occurrences_between(
+            &rule,
+            anchor,
+            dt(2026, 1, 1, 0, 0),
+            dt(2026, 1, 10, 23, 59),
+            0,
+        );
         assert_eq!(
             result,
-            vec![dt(2026, 1, 1, 9, 0), dt(2026, 1, 4, 9, 0), dt(2026, 1, 7, 9, 0), dt(2026, 1, 10, 9, 0)]
+            vec![
+                dt(2026, 1, 1, 9, 0),
+                dt(2026, 1, 4, 9, 0),
+                dt(2026, 1, 7, 9, 0),
+                dt(2026, 1, 10, 9, 0)
+            ]
         );
     }
 
@@ -347,7 +495,11 @@ mod tests {
         let result = occurrences_between(&rule, anchor, anchor, dt(2026, 4, 1, 0, 0), 0);
         assert_eq!(
             result,
-            vec![dt(2026, 1, 1, 9, 0), dt(2026, 2, 1, 9, 0), dt(2026, 3, 1, 9, 0)]
+            vec![
+                dt(2026, 1, 1, 9, 0),
+                dt(2026, 2, 1, 9, 0),
+                dt(2026, 3, 1, 9, 0)
+            ]
         );
     }
 
@@ -402,7 +554,11 @@ mod tests {
         let result = occurrences_between(&rule, anchor, anchor, dt(2028, 4, 1, 0, 0), 0);
         assert_eq!(
             result,
-            vec![dt(2028, 1, 29, 9, 0), dt(2028, 2, 29, 9, 0), dt(2028, 3, 29, 9, 0)]
+            vec![
+                dt(2028, 1, 29, 9, 0),
+                dt(2028, 2, 29, 9, 0),
+                dt(2028, 3, 29, 9, 0)
+            ]
         );
     }
 
@@ -466,7 +622,13 @@ mod tests {
     fn occurrences_empty_when_range_is_before_anchor() {
         let rule = parse("every day").unwrap();
         let anchor = dt(2026, 6, 1, 9, 0);
-        let result = occurrences_between(&rule, anchor, dt(2026, 1, 1, 0, 0), dt(2026, 1, 31, 0, 0), 0);
+        let result = occurrences_between(
+            &rule,
+            anchor,
+            dt(2026, 1, 1, 0, 0),
+            dt(2026, 1, 31, 0, 0),
+            0,
+        );
         assert_eq!(result, Vec::<DateTime<Utc>>::new());
     }
 
@@ -478,7 +640,11 @@ mod tests {
         let result = occurrences_between(&rule, anchor, anchor, dt(2026, 1, 3, 23, 59), 300);
         assert_eq!(
             result,
-            vec![dt(2026, 1, 1, 1, 0), dt(2026, 1, 2, 1, 0), dt(2026, 1, 3, 1, 0)]
+            vec![
+                dt(2026, 1, 1, 1, 0),
+                dt(2026, 1, 2, 1, 0),
+                dt(2026, 1, 3, 1, 0)
+            ]
         );
     }
 }

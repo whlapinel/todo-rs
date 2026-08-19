@@ -195,6 +195,48 @@ async fn require_current_occurrence(
     Ok(())
 }
 
+/// The Uncomplete-side counterpart to `require_current_occurrence`: `cursor_date`
+/// holds the most recently *settled* occurrence's own date directly (not one step
+/// past it — see `current_occurrence_date`), so uncompleting is only ever valid
+/// against `occurrence_date == series.cursor_date` exactly. Deliberately does not
+/// self-heal past an exdate the way `require_current_occurrence` does: if the
+/// cursor's own occurrence is exdate, the most recent settlement was a Skip, not a
+/// completion, so there's nothing here to uncomplete — the user needs to unskip that
+/// occurrence first (issues.md's still-open "unskip" item), not have this silently
+/// walk further back to some earlier completion instead.
+async fn require_cursor_occurrence(
+    event_series: &Arc<dyn ItemSeriesRepo>,
+    series: &ItemSeries,
+    occurrence_date: DateTime<Utc>,
+) -> Result<(), ItemError> {
+    if series.item_type != ItemKind::Task {
+        return Ok(());
+    }
+    let Some(cursor) = series.cursor_date else {
+        return Err(ItemError::Invalid(
+            "cannot uncomplete this occurrence — the series has no settled occurrence yet"
+                .to_string(),
+        ));
+    };
+    if let Some(occurrence) = event_series.get_occurrence(&series.id, cursor).await?
+        && occurrence.is_exdate
+    {
+        return Err(ItemError::Invalid(format!(
+            "cannot uncomplete this occurrence — the series' most recently settled \
+             occurrence ({cursor}) was skipped, not completed; unskip it before \
+             uncompleting an earlier occurrence"
+        )));
+    }
+    if occurrence_date != cursor {
+        return Err(ItemError::Invalid(format!(
+            "cannot uncomplete this occurrence out of order — the series' most recently \
+             completed occurrence is {cursor}; occurrences must be uncompleted one at a \
+             time, in order"
+        )));
+    }
+    Ok(())
+}
+
 /// Stage 10a: the Complete-side counterpart to `require_current_occurrence`, called
 /// from `project_items::update_project_item` *before* it persists a `complete: true`
 /// request — unlike `record_task_completion` below (a post-persistence cursor-advance
@@ -215,6 +257,22 @@ pub async fn validate_completable(
             tz_offset_minutes,
         )
         .await?;
+    }
+    Ok(())
+}
+
+/// The Uncomplete-side counterpart to `validate_completable`, called from
+/// `project_items::update_project_item` before it persists a `complete: false`
+/// request on an item that's currently complete — see `require_cursor_occurrence`'s
+/// doc comment for the rule it enforces. `record_task_uncompletion` below is this
+/// function's post-persistence counterpart, mirroring `record_task_completion`.
+pub async fn validate_uncompletable(
+    event_series: &Arc<dyn ItemSeriesRepo>,
+    item_id: &str,
+) -> Result<(), ItemError> {
+    if let Some(occurrence) = event_series.find_occurrence_by_item_id(item_id).await? {
+        let series = event_series.get_series(&occurrence.series_id).await?;
+        require_cursor_occurrence(event_series, &series, occurrence.occurrence_date).await?;
     }
     Ok(())
 }
@@ -323,6 +381,40 @@ pub async fn record_task_completion(
             event_series
                 .advance_cursor(&occurrence.series_id, cursor_value)
                 .await?;
+        }
+    }
+    Ok(())
+}
+
+/// Post-persistence counterpart to `record_task_completion`, called after a successful
+/// `complete: false` update. `validate_uncompletable` has already rejected anything but
+/// the series' most recently settled occurrence by the time this runs, so restoring the
+/// cursor is always exactly one step back: `retreat_once`, computed from the occurrence's
+/// own nominal date (not `cursor_value_for_settlement`/`Utc::now()` — a completion-basis
+/// series' cursor value at settlement time is unrecoverable, but it doesn't matter here,
+/// since any cursor value X with `advance_once(X) == occurrence_date` makes the just-
+/// uncompleted occurrence current again, and `retreat_once` gives exactly that X by
+/// construction). The one exception is uncompleting the series' very first (anchor)
+/// occurrence — there's no earlier occurrence for `retreat_once` to land on, so the
+/// cursor goes back to its pre-anything-settled `None` state instead.
+pub async fn record_task_uncompletion(
+    event_series: &Arc<dyn ItemSeriesRepo>,
+    item_id: &str,
+    tz_offset_minutes: i32,
+) -> Result<(), ItemError> {
+    if let Some(occurrence) = event_series.find_occurrence_by_item_id(item_id).await? {
+        let series = event_series.get_series(&occurrence.series_id).await?;
+        if series.item_type == ItemKind::Task {
+            if occurrence.occurrence_date == series.anchor_date {
+                event_series
+                    .clear_cursor(&series.id, occurrence.occurrence_date)
+                    .await?;
+            } else {
+                let rule = recurrence::parse(&series.recurrence).map_err(ItemError::Invalid)?;
+                let previous =
+                    recurrence::retreat_once(&rule, occurrence.occurrence_date, tz_offset_minutes);
+                event_series.retreat_cursor(&series.id, previous).await?;
+            }
         }
     }
     Ok(())
@@ -1646,6 +1738,177 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn validate_uncompletable_allows_the_most_recently_completed_task_series_occurrence()
+    {
+        let mut task_series = series("p1");
+        task_series.item_type = ItemKind::Task;
+        task_series.cursor_date = Some(occurrence_date());
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock
+            .expect_find_occurrence_by_item_id()
+            .returning(|_| {
+                Ok(Some(ItemOccurrence {
+                    series_id: "s1".to_string(),
+                    occurrence_date: occurrence_date(),
+                    item_id: Some("completed-item".to_string()),
+                    is_exdate: false,
+                }))
+            });
+        series_mock
+            .expect_get_series()
+            .returning(move |_| Ok(task_series.clone()));
+        series_mock.expect_get_occurrence().returning(|_, date| {
+            Ok(Some(ItemOccurrence {
+                series_id: "s1".to_string(),
+                occurrence_date: date,
+                item_id: Some("completed-item".to_string()),
+                is_exdate: false,
+            }))
+        });
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        validate_uncompletable(&event_series, "completed-item")
+            .await
+            .expect("the series' own most recently completed occurrence should be uncompletable");
+    }
+
+    #[tokio::test]
+    async fn validate_uncompletable_rejects_an_occurrence_earlier_than_the_cursor() {
+        let mut task_series = series("p1");
+        task_series.item_type = ItemKind::Task;
+        // The cursor has already moved past occurrence_date() — some later occurrence
+        // was completed/skipped after it.
+        let cursor = occurrence_date() + chrono::Duration::days(7);
+        task_series.cursor_date = Some(cursor);
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock
+            .expect_find_occurrence_by_item_id()
+            .returning(|_| {
+                Ok(Some(ItemOccurrence {
+                    series_id: "s1".to_string(),
+                    occurrence_date: occurrence_date(),
+                    item_id: Some("completed-item".to_string()),
+                    is_exdate: false,
+                }))
+            });
+        series_mock
+            .expect_get_series()
+            .returning(move |_| Ok(task_series.clone()));
+        series_mock.expect_get_occurrence().returning(move |_, date| {
+            Ok(Some(ItemOccurrence {
+                series_id: "s1".to_string(),
+                occurrence_date: date,
+                item_id: Some("later-item".to_string()),
+                is_exdate: false,
+            }))
+        });
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        let result = validate_uncompletable(&event_series, "completed-item").await;
+        assert!(matches!(result, Err(ItemError::Invalid(_))));
+    }
+
+    #[tokio::test]
+    async fn validate_uncompletable_rejects_when_the_cursor_occurrence_was_skipped_not_completed()
+    {
+        let mut task_series = series("p1");
+        task_series.item_type = ItemKind::Task;
+        task_series.cursor_date = Some(occurrence_date());
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock
+            .expect_find_occurrence_by_item_id()
+            .returning(|_| {
+                Ok(Some(ItemOccurrence {
+                    series_id: "s1".to_string(),
+                    // An earlier occurrence than the (skipped) cursor.
+                    occurrence_date: occurrence_date() - chrono::Duration::days(7),
+                    item_id: Some("completed-item".to_string()),
+                    is_exdate: false,
+                }))
+            });
+        series_mock
+            .expect_get_series()
+            .returning(move |_| Ok(task_series.clone()));
+        series_mock.expect_get_occurrence().returning(|_, date| {
+            Ok(Some(ItemOccurrence {
+                series_id: "s1".to_string(),
+                occurrence_date: date,
+                item_id: None,
+                is_exdate: true,
+            }))
+        });
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        let result = validate_uncompletable(&event_series, "completed-item").await;
+        assert!(matches!(result, Err(ItemError::Invalid(_))));
+    }
+
+    #[tokio::test]
+    async fn validate_uncompletable_rejects_when_series_has_no_settled_occurrence() {
+        let mut task_series = series("p1");
+        task_series.item_type = ItemKind::Task;
+        task_series.cursor_date = None;
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock
+            .expect_find_occurrence_by_item_id()
+            .returning(|_| {
+                Ok(Some(ItemOccurrence {
+                    series_id: "s1".to_string(),
+                    occurrence_date: occurrence_date(),
+                    item_id: Some("completed-item".to_string()),
+                    is_exdate: false,
+                }))
+            });
+        series_mock
+            .expect_get_series()
+            .returning(move |_| Ok(task_series.clone()));
+        series_mock.expect_get_occurrence().times(0);
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        let result = validate_uncompletable(&event_series, "completed-item").await;
+        assert!(matches!(result, Err(ItemError::Invalid(_))));
+    }
+
+    #[tokio::test]
+    async fn validate_uncompletable_allows_any_date_for_an_event_series() {
+        // series("p1") defaults to ItemKind::Event — no cursor/current concept, so
+        // any occurrence date is fine.
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock
+            .expect_find_occurrence_by_item_id()
+            .returning(|_| {
+                Ok(Some(ItemOccurrence {
+                    series_id: "s1".to_string(),
+                    occurrence_date: occurrence_date(),
+                    item_id: Some("some-item".to_string()),
+                    is_exdate: false,
+                }))
+            });
+        series_mock
+            .expect_get_series()
+            .returning(|_| Ok(series("p1")));
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        validate_uncompletable(&event_series, "some-item")
+            .await
+            .expect("an Event-typed series has no cursor-occurrence restriction");
+    }
+
+    #[tokio::test]
+    async fn validate_uncompletable_is_a_no_op_for_a_non_series_item() {
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock
+            .expect_find_occurrence_by_item_id()
+            .returning(|_| Ok(None));
+        series_mock.expect_get_series().times(0);
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        validate_uncompletable(&event_series, "some-task")
+            .await
+            .expect("should no-op for an item with no linked occurrence");
+    }
+
+    #[tokio::test]
     async fn unlink_deleted_item_occurrence_un_materializes_when_item_came_from_a_series() {
         let mut series_mock = MockItemSeriesRepo::new();
         series_mock
@@ -1830,6 +2093,117 @@ mod tests {
         let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         record_task_completion(&event_series, "some-event")
+            .await
+            .expect("should no-op for an Event-typed series");
+    }
+
+    #[tokio::test]
+    async fn record_task_uncompletion_retreats_cursor_to_the_previous_occurrence() {
+        let mut task_series = series("p1");
+        task_series.item_type = ItemKind::Task;
+        // occurrence_date() != task_series.anchor_date, so this isn't the
+        // uncomplete-the-anchor case.
+        let rule = recurrence::parse(&task_series.recurrence).unwrap();
+        let expected_previous = recurrence::retreat_once(&rule, occurrence_date(), 0);
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock
+            .expect_find_occurrence_by_item_id()
+            .returning(|item_id| {
+                assert_eq!(item_id, "uncompleted-item");
+                Ok(Some(ItemOccurrence {
+                    series_id: "s1".to_string(),
+                    occurrence_date: occurrence_date(),
+                    item_id: Some("uncompleted-item".to_string()),
+                    is_exdate: false,
+                }))
+            });
+        series_mock
+            .expect_get_series()
+            .returning(move |_| Ok(task_series.clone()));
+        series_mock
+            .expect_retreat_cursor()
+            .withf(move |series_id: &str, date: &DateTime<Utc>| {
+                series_id == "s1" && *date == expected_previous
+            })
+            .times(1)
+            .returning(|_, _| Ok(()));
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        record_task_uncompletion(&event_series, "uncompleted-item", 0)
+            .await
+            .expect("should retreat the cursor to the previous occurrence");
+    }
+
+    #[tokio::test]
+    async fn record_task_uncompletion_clears_cursor_when_uncompleting_the_anchor_occurrence() {
+        let mut task_series = series("p1");
+        task_series.item_type = ItemKind::Task;
+        task_series.anchor_date = occurrence_date();
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock
+            .expect_find_occurrence_by_item_id()
+            .returning(|_| {
+                Ok(Some(ItemOccurrence {
+                    series_id: "s1".to_string(),
+                    occurrence_date: occurrence_date(),
+                    item_id: Some("uncompleted-item".to_string()),
+                    is_exdate: false,
+                }))
+            });
+        series_mock
+            .expect_get_series()
+            .returning(move |_| Ok(task_series.clone()));
+        series_mock
+            .expect_clear_cursor()
+            .withf(|series_id: &str, date: &DateTime<Utc>| {
+                series_id == "s1" && *date == occurrence_date()
+            })
+            .times(1)
+            .returning(|_, _| Ok(()));
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        record_task_uncompletion(&event_series, "uncompleted-item", 0)
+            .await
+            .expect("should clear the cursor back to None");
+    }
+
+    #[tokio::test]
+    async fn record_task_uncompletion_is_a_no_op_for_a_non_series_item() {
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock
+            .expect_find_occurrence_by_item_id()
+            .returning(|_| Ok(None));
+        series_mock.expect_get_series().times(0);
+        series_mock.expect_retreat_cursor().times(0);
+        series_mock.expect_clear_cursor().times(0);
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        record_task_uncompletion(&event_series, "some-task", 0)
+            .await
+            .expect("should no-op for an item with no linked occurrence");
+    }
+
+    #[tokio::test]
+    async fn record_task_uncompletion_does_not_touch_cursor_for_an_event_typed_series() {
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock
+            .expect_find_occurrence_by_item_id()
+            .returning(|_| {
+                Ok(Some(ItemOccurrence {
+                    series_id: "s1".to_string(),
+                    occurrence_date: occurrence_date(),
+                    item_id: Some("some-event".to_string()),
+                    is_exdate: false,
+                }))
+            });
+        series_mock
+            .expect_get_series()
+            .returning(|_| Ok(series("p1")));
+        series_mock.expect_retreat_cursor().times(0);
+        series_mock.expect_clear_cursor().times(0);
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        record_task_uncompletion(&event_series, "some-event", 0)
             .await
             .expect("should no-op for an Event-typed series");
     }
