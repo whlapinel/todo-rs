@@ -341,7 +341,7 @@ pub(crate) fn build_calendar_days(
     month: u32,
     project_id: &str,
     items: &[Item],
-    virtual_occurrences: &[crate::service::item_series::VirtualOccurrence],
+    virtual_occurrences: &[crate::service::item_series::ProjectOccurrence],
     tz: i32,
     today: NaiveDate,
 ) -> Vec<CalendarDay> {
@@ -364,11 +364,20 @@ pub(crate) fn build_calendar_days(
                     materialize_url: None,
                     skip_url: None,
                     is_virtual: false,
+                    is_skipped: false,
+                    unskip_url: None,
                 });
         }
     }
+    // Stage B of docs/unify-virtual-materialized-occurrences-plan.md: callers are expected
+    // to have already filtered `virtual_occurrences` to `OccurrenceState::{Virtual, Skipped}`
+    // — a `Materialized` date already renders above via `items`.
     for occ in virtual_occurrences {
         let local = crate::web_ui::to_local(occ.occurrence_date, tz);
+        let is_skipped = matches!(
+            occ.state,
+            crate::service::item_series::OccurrenceState::Skipped
+        );
         by_date
             .entry(local.date_naive())
             .or_default()
@@ -388,6 +397,12 @@ pub(crate) fn build_calendar_days(
                     occ.occurrence_date.timestamp(),
                 )),
                 is_virtual: true,
+                is_skipped,
+                unskip_url: Some(format!(
+                    "/web/projects/{project_id}/series/{}/occurrences/{}/unskip",
+                    occ.series_id,
+                    occ.occurrence_date.timestamp(),
+                )),
             });
     }
 

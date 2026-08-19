@@ -113,8 +113,14 @@ pub async fn project_events_calendar_page(
     );
     // Filtered to Event-typed series only (Stage 8) — Task-typed series get their own
     // equivalent surface on the Tasks calendar instead of doubling up here.
+    //
+    // Stage B of docs/unify-virtual-materialized-occurrences-plan.md: switched from
+    // `list_virtual_occurrences_for_project_unchecked` to `list_occurrence_states_for_project`
+    // so a skipped occurrence stays visible (struck through, with an Unskip button) instead
+    // of disappearing outright — `Materialized` entries are excluded since those already
+    // render via `items` above.
     let virtual_occurrences: Vec<_> =
-        event_series_service::list_virtual_occurrences_for_project_unchecked(
+        event_series_service::list_occurrence_states_for_project(
             &event_series,
             &users,
             &project_id,
@@ -125,6 +131,12 @@ pub async fn project_events_calendar_page(
         .await?
         .into_iter()
         .filter(|occ| occ.item_type == ItemKind::Event)
+        .filter(|occ| {
+            !matches!(
+                occ.state,
+                event_series_service::OccurrenceState::Materialized { .. }
+            )
+        })
         .collect();
     let days = build_calendar_days(
         year,
@@ -167,6 +179,7 @@ pub async fn project_event_detail_page(
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(event_series): Extension<Arc<dyn ItemSeriesRepo>>,
     TzOffset(tz): TzOffset,
 ) -> Result<Html<String>, ItemError> {
     let item = project_item_service::get_project_item(
@@ -179,7 +192,13 @@ pub async fn project_event_detail_page(
     )
     .await?;
     let item = require_event(item)?;
-    let view = ProjectEventDetailView::from_item(&item, tz).render()?;
+    let series_link = crate::web_ui::project_events::templates::resolve_series_link(
+        &event_series,
+        &project_id,
+        &item,
+    )
+    .await?;
+    let view = ProjectEventDetailView::from_item(&item, tz, series_link).render()?;
     let nav_html = nav::build_nav_html(
         &projects,
         &auth_user.user_id,
@@ -386,8 +405,14 @@ pub async fn update_project_event_form(
 
     let updated =
         project_item_service::get_project_item_unchecked(&repo, &project_id, &item_id).await?;
+    let series_link = crate::web_ui::project_events::templates::resolve_series_link(
+        &event_series,
+        &project_id,
+        &updated,
+    )
+    .await?;
     if close {
-        let view = ProjectEventDetailView::from_item(&updated, tz).render()?;
+        let view = ProjectEventDetailView::from_item(&updated, tz, series_link.clone()).render()?;
         let nav_html = nav::build_nav_html(
             &projects,
             &auth_user.user_id,
@@ -406,7 +431,7 @@ pub async fn update_project_event_form(
     }
     let row = ProjectEventRow::from_item(&updated, &project_id, tz).render()?;
     let fields = ProjectEventDetailFields::from_item(&updated, &project_id, tz, true).render()?;
-    let view = ProjectEventDetailView::from_item(&updated, tz).render()?;
+    let view = ProjectEventDetailView::from_item(&updated, tz, series_link).render()?;
     Ok(Html(format!("{row}{fields}{view}")).into_response())
 }
 

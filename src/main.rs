@@ -239,6 +239,10 @@ fn build_web_router() -> Router {
             post(skip_project_item_series_occurrence_form),
         )
         .route(
+            "/projects/:project_id/series/:series_id/occurrences/:occurrence_ts/unskip",
+            post(unskip_project_item_series_occurrence_form),
+        )
+        .route(
             "/projects/:project_id/dashboard",
             get(project_dashboard_page),
         )

@@ -53,6 +53,19 @@
         <ol class="mt-1 space-y-1">
           {% for entry in day.entries %}
           <li id="{{ entry.entry_id }}" class="flex items-center gap-x-0.5">
+            {% if entry.is_skipped %}
+            <span class="group flex min-w-0 flex-1 items-center gap-x-1 opacity-70">
+              <span class="shrink-0 inline-flex size-3.5 items-center justify-center rounded-full bg-gray-200 text-[9px] font-semibold text-gray-600 dark:bg-white/10 dark:text-gray-300">{{ entry.type_symbol }}</span>
+              <p class="flex-auto truncate font-medium italic line-through text-gray-400 dark:text-gray-500">{{ entry.name }}</p>
+              {% if let Some(t) = entry.time_label %}<span class="ml-2 hidden flex-none text-gray-500 xl:block dark:text-gray-400">{{ t }}</span>{% endif %}
+              <span class="shrink-0 text-[9px] uppercase tracking-wide font-semibold text-gray-400 dark:text-gray-500">Skipped</span>
+            </span>
+            {% if let Some(uu) = entry.unskip_url %}
+            <button type="button" hx-post="{{ uu }}"
+              class="shrink-0 text-gray-400 hover:text-indigo-500 dark:text-gray-500 dark:hover:text-indigo-400"
+              title="Unskip occurrence">&#8635;</button>
+            {% endif %}
+            {% else %}
             <a href="{{ entry.detail_link }}"
                {% if let Some(post_url) = entry.materialize_url %}hx-post="{{ post_url }}"{% endif %}
                hx-target="#page" hx-select="#page" hx-swap="innerHTML"
@@ -63,10 +76,10 @@
               {% if let Some(t) = entry.time_label %}<span class="ml-2 hidden flex-none text-gray-500 group-hover:text-indigo-600 xl:block dark:text-gray-400 dark:group-hover:text-indigo-400 {% if entry.complete %}line-through{% endif %}">{{ t }}</span>{% endif %}
             </a>
             {% if let Some(su) = entry.skip_url %}
-            <button type="button" hx-post="{{ su }}" hx-confirm="Skip this occurrence?" hx-target="#{{ entry.entry_id }}"
-              hx-select="unset" hx-swap="outerHTML swap:200ms"
+            <button type="button" hx-post="{{ su }}" hx-confirm="Skip this occurrence?"
               class="shrink-0 text-gray-400 hover:text-red-500 dark:text-gray-500 dark:hover:text-red-400"
               title="Skip occurrence">&times;</button>
+            {% endif %}
             {% endif %}
           </li>
           {% endfor %}

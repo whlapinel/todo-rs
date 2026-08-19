@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use crate::domain::item::Item;
 use crate::service::error::ItemError;
-use crate::service::item_series::VirtualOccurrence;
+use crate::service::item_series::{OccurrenceState, ProjectOccurrence};
 use crate::storage::sqlite::ItemRepo;
 use crate::web_ui::components::row::Row;
 use crate::web_ui::to_local;
@@ -171,10 +171,16 @@ pub struct ProjectTaskVirtualRow {
     pub materialize_url: String,
     pub skip_url: String,
     pub is_current: bool,
+    /// Stage B of `docs/unify-virtual-materialized-occurrences-plan.md` — `true` when this
+    /// occurrence has been explicitly skipped (`OccurrenceState::Skipped`), in which case the
+    /// template shows a struck-through name + "Skipped" label + Unskip button instead of the
+    /// materialize link/Skip button.
+    pub is_skipped: bool,
+    pub unskip_url: String,
 }
 
 impl ProjectTaskVirtualRow {
-    pub fn from_occurrence(occ: &VirtualOccurrence, project_id: &str, tz: i32) -> Self {
+    pub fn from_occurrence(occ: &ProjectOccurrence, project_id: &str, tz: i32) -> Self {
         let local = to_local(occ.occurrence_date, tz);
         Self {
             series_id: occ.series_id.clone(),
@@ -192,6 +198,12 @@ impl ProjectTaskVirtualRow {
                 occ.occurrence_date.timestamp(),
             ),
             is_current: occ.is_current,
+            is_skipped: matches!(occ.state, OccurrenceState::Skipped),
+            unskip_url: format!(
+                "/web/projects/{project_id}/series/{}/occurrences/{}/unskip",
+                occ.series_id,
+                occ.occurrence_date.timestamp(),
+            ),
         }
     }
 }
@@ -320,9 +332,16 @@ pub struct ProjectTaskDetailView {
     pub assignee_name: Option<String>,
     /// See `tasks::TaskDetailView`'s identical field.
     pub linked_event: Option<(String, String)>,
+    /// Stage B of `docs/unify-virtual-materialized-occurrences-plan.md` — `Some((series_name,
+    /// edit_url))` when this item was materialized from a series (`item.series_id.is_some()`),
+    /// closing `docs/issues.md`'s ranked item 2(a) ("no link from a materialized item's detail
+    /// page back to its series"). `None` for every item never materialized from a series — the
+    /// overwhelmingly common case.
+    pub series_link: Option<(String, String)>,
 }
 
 impl ProjectTaskDetailView {
+    #[allow(clippy::too_many_arguments)]
     pub fn from_item(
         item: &Item,
         project_id: &str,
@@ -330,6 +349,7 @@ impl ProjectTaskDetailView {
         names: &HashMap<String, String>,
         tz: i32,
         linked_event: Option<(String, String)>,
+        series_link: Option<(String, String)>,
     ) -> Self {
         let due_date = item.due_date().map(|d| {
             let local = to_local(d, tz);
@@ -373,6 +393,7 @@ impl ProjectTaskDetailView {
                 .assigned_to_user_id()
                 .map(|id| names.get(&id).cloned().unwrap_or(id)),
             linked_event,
+            series_link,
         }
     }
 }
@@ -399,6 +420,26 @@ pub async fn resolve_linked_event(
     Ok(Some((
         event.name.clone(),
         format!("/web/projects/{project_id}/events/{}", event.id),
+    )))
+}
+
+/// Resolves the (series_name, edit-page URL) of the `ItemSeries` this item was materialized
+/// from, via `item.series_id` — see `ProjectTaskDetailView::series_link`'s doc comment.
+/// Links to the series' edit page (`/web/projects/{project_id}/series/{series_id}/edit`) —
+/// there's no dedicated series *detail* page (only the list and edit screens), and the edit
+/// page already shows every field a "view" would.
+pub async fn resolve_series_link(
+    event_series: &Arc<dyn crate::storage::sqlite::ItemSeriesRepo>,
+    project_id: &str,
+    item: &Item,
+) -> Result<Option<(String, String)>, ItemError> {
+    let Some(series_id) = &item.series_id else {
+        return Ok(None);
+    };
+    let series = event_series.get_series(series_id).await?;
+    Ok(Some((
+        series.name,
+        format!("/web/projects/{project_id}/series/{series_id}/edit"),
     )))
 }
 
@@ -490,6 +531,9 @@ pub struct CalendarVirtualTaskEntry {
     /// settleable occurrence a Task-typed series exposes, possibly backlogged into
     /// the past (see `service::item_series::current_occurrence_date`).
     pub is_current: bool,
+    /// See `ProjectTaskVirtualRow::is_skipped`'s identical rationale.
+    pub is_skipped: bool,
+    pub unskip_url: String,
 }
 
 pub struct CalendarDay {

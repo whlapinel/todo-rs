@@ -142,10 +142,13 @@ pub struct ProjectEventDetailView {
     pub due_date: Option<String>,
     pub overdue: bool,
     pub event_type: Option<String>,
+    /// See `project_tasks::templates::ProjectTaskDetailView::series_link`'s identical
+    /// rationale.
+    pub series_link: Option<(String, String)>,
 }
 
 impl ProjectEventDetailView {
-    pub fn from_item(item: &Item, tz: i32) -> Self {
+    pub fn from_item(item: &Item, tz: i32, series_link: Option<(String, String)>) -> Self {
         let scheduled_date = item.scheduled_date().map(|d| {
             let local = to_local(d, tz);
             if item.has_scheduled_time() {
@@ -178,8 +181,27 @@ impl ProjectEventDetailView {
             due_date,
             overdue: item.is_overdue(Utc::now()),
             event_type: item.event_type(),
+            series_link,
         }
     }
+}
+
+/// Resolves the (series_name, edit-page URL) of the `ItemSeries` this item was materialized
+/// from — the Events counterpart of
+/// `project_tasks::templates::resolve_series_link`, identical rationale.
+pub async fn resolve_series_link(
+    event_series: &std::sync::Arc<dyn crate::storage::sqlite::ItemSeriesRepo>,
+    project_id: &str,
+    item: &Item,
+) -> Result<Option<(String, String)>, crate::service::error::ItemError> {
+    let Some(series_id) = &item.series_id else {
+        return Ok(None);
+    };
+    let series = event_series.get_series(series_id).await?;
+    Ok(Some((
+        series.name,
+        format!("/web/projects/{project_id}/series/{series_id}/edit"),
+    )))
 }
 
 #[derive(Template)]
@@ -244,6 +266,10 @@ pub struct CalendarEventEntry {
     /// `project_dashboard::ProjectDashboardCalendarEntry::skip_url`'s identical rationale.
     pub skip_url: Option<String>,
     pub is_virtual: bool,
+    /// See `project_dashboard::ProjectDashboardCalendarEntry::is_skipped`'s identical
+    /// rationale.
+    pub is_skipped: bool,
+    pub unskip_url: Option<String>,
 }
 
 pub struct CalendarDay {

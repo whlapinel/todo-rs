@@ -3,7 +3,7 @@ pub mod handlers;
 
 use crate::domain::item::{Item, ItemKind};
 use crate::service::error::ItemError;
-use crate::service::item_series::VirtualOccurrence;
+use crate::service::item_series::ProjectOccurrence;
 use crate::service::project_items::list_project_items_unchecked;
 use crate::service::teams as team_service;
 use crate::storage::sqlite::{ItemRepo, TeamRepo};
@@ -350,7 +350,7 @@ pub(crate) fn render_rows(
 /// occurrences don't apply.
 pub(crate) fn render_rows_with_virtual(
     items: &[Item],
-    virtual_occurrences: &[VirtualOccurrence],
+    virtual_occurrences: &[ProjectOccurrence],
     project_id: &str,
     names: &HashMap<String, String>,
     show_complete: bool,
@@ -494,7 +494,7 @@ pub(crate) fn build_calendar_days(
     month: u32,
     project_id: &str,
     items: &[Item],
-    virtual_occurrences: &[VirtualOccurrence],
+    virtual_occurrences: &[ProjectOccurrence],
     tz: i32,
     today: NaiveDate,
 ) -> Vec<CalendarDay> {
@@ -578,6 +578,15 @@ pub(crate) fn build_calendar_days(
                     occ.occurrence_date.timestamp(),
                 ),
                 is_current: occ.is_current,
+                is_skipped: matches!(
+                    occ.state,
+                    crate::service::item_series::OccurrenceState::Skipped
+                ),
+                unskip_url: format!(
+                    "/web/projects/{project_id}/series/{}/occurrences/{}/unskip",
+                    occ.series_id,
+                    occ.occurrence_date.timestamp(),
+                ),
             });
     }
 

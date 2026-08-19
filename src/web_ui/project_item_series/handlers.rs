@@ -16,6 +16,7 @@ use crate::web_ui::project_tasks::{active_member_options, names_for};
 use crate::web_ui::{TzOffset, hx_redirect, to_local};
 use askama::Template;
 use axum::extract::{Extension, Form, Path};
+use axum::http::HeaderMap;
 use axum::http::header::HeaderName;
 use axum::response::{Html, IntoResponse, Response};
 use chrono::{DateTime, Utc};
@@ -24,6 +25,23 @@ use std::sync::Arc;
 
 fn active_context(project_id: &str) -> ActiveContext {
     ActiveContext::Project(project_id.to_string())
+}
+
+/// Stage B of `docs/unify-virtual-materialized-occurrences-plan.md` — Skip/Unskip act on a
+/// single occurrence but are wired identically onto five different screens (Tasks list/
+/// calendar, Dashboard list/calendar, Events calendar), each showing a different slice of
+/// the project. Rather than teaching this generic series-scoped route how to render a
+/// fragment matching whichever screen the request came from, this redirects back to
+/// `HX-Current-URL` — the URL htmx automatically sends on every request — so the origin
+/// screen simply re-renders itself with the mutation already applied. Falls back to the
+/// series list if the header is somehow absent (a non-htmx request).
+fn redirect_to_current_page(headers: &HeaderMap, project_id: &str) -> Response {
+    let location = headers
+        .get("hx-current-url")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("/web/projects/{project_id}/series"));
+    hx_redirect(location)
 }
 
 pub async fn project_item_series_page(
@@ -291,19 +309,25 @@ pub async fn materialize_project_item_series_occurrence_form(
 }
 
 /// Stage 6 of docs/recurring-events-virtual-occurrences-rough-plan.md — the "Skip" button
-/// wired onto virtual occurrences (dashboard list, dashboard calendar, events calendar; see
-/// each screen's own row/entry template). Unlike materialize above, this never redirects —
-/// callers target the occurrence's own row/entry element directly with `hx-swap="outerHTML"`
-/// and an empty response removes it in place, since there's no detail page to send anyone to.
+/// wired onto occurrences (Tasks list/calendar, Dashboard list/calendar, Events calendar; see
+/// each screen's own row/entry template). As of Stage B of
+/// `docs/unify-virtual-materialized-occurrences-plan.md`, this works whether the occurrence
+/// is still virtual or already materialized (`skip_or_delete_series_occurrence` deletes the
+/// materialized item first, if there is one) and redirects back to the calling screen
+/// (`redirect_to_current_page`) instead of returning an empty in-place-removal response, since
+/// a skipped occurrence now stays visible (struck through, with an Unskip button) rather than
+/// disappearing.
 ///
 /// Same defense-in-depth project_id/series match check as materialize, for the same reason.
 pub async fn skip_project_item_series_occurrence_form(
     Path((project_id, series_id, occurrence_ts)): Path<(String, String, i64)>,
     Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(item_series): Extension<Arc<dyn ItemSeriesRepo>>,
     TzOffset(tz): TzOffset,
+    headers: HeaderMap,
 ) -> Result<Response, ItemError> {
     let series = item_series_service::get_series(
         &projects,
@@ -320,9 +344,55 @@ pub async fn skip_project_item_series_occurrence_form(
     let occurrence_date = DateTime::<Utc>::from_timestamp(occurrence_ts, 0)
         .ok_or_else(|| ItemError::Invalid("invalid occurrence timestamp".to_string()))?;
 
-    item_series_service::skip_occurrence(&item_series, &series_id, occurrence_date, tz).await?;
+    item_series_service::skip_or_delete_series_occurrence(
+        &repo,
+        &projects,
+        &teams,
+        &item_series,
+        &auth_user.user_id,
+        &series_id,
+        occurrence_date,
+        tz,
+    )
+    .await?;
 
-    Ok(Html(String::new()).into_response())
+    Ok(redirect_to_current_page(&headers, &project_id))
+}
+
+/// Stage B of `docs/unify-virtual-materialized-occurrences-plan.md` — the "Unskip" button
+/// wired onto skipped occurrences everywhere `skip_project_item_series_occurrence_form`'s
+/// Skip button is (see that handler's doc comment for the redirect rationale, which this
+/// mirrors exactly). Un-materializing was never part of Skip's un-doing here — Skip already
+/// leaves a materialized occurrence un-materialized before marking it exdate, so there's
+/// nothing for Unskip to re-materialize; it only clears the exdate marker (and, for a
+/// Task-typed series, restores the cursor) via `item_series_service::unskip_occurrence`.
+pub async fn unskip_project_item_series_occurrence_form(
+    Path((project_id, series_id, occurrence_ts)): Path<(String, String, i64)>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(item_series): Extension<Arc<dyn ItemSeriesRepo>>,
+    TzOffset(tz): TzOffset,
+    headers: HeaderMap,
+) -> Result<Response, ItemError> {
+    let series = item_series_service::get_series(
+        &projects,
+        &teams,
+        &item_series,
+        &auth_user.user_id,
+        &series_id,
+    )
+    .await?;
+    if series.project_id != project_id {
+        return Err(ItemError::NotFound);
+    }
+
+    let occurrence_date = DateTime::<Utc>::from_timestamp(occurrence_ts, 0)
+        .ok_or_else(|| ItemError::Invalid("invalid occurrence timestamp".to_string()))?;
+
+    item_series_service::unskip_occurrence(&item_series, &series_id, occurrence_date, tz).await?;
+
+    Ok(redirect_to_current_page(&headers, &project_id))
 }
 
 pub async fn edit_project_item_series_page(

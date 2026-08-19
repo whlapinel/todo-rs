@@ -8,7 +8,7 @@ use crate::service::projects::{
 };
 use crate::storage::sqlite::{ItemRepo, ItemSeriesRepo, ProjectRepo, TeamRepo, UserRepo};
 use chrono::{DateTime, Utc};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Stage 3 of docs/recurring-events-virtual-occurrences-rough-plan.md's staged
@@ -112,15 +112,16 @@ pub async fn get_or_materialize_occurrence(
     project_items::get_project_item_unchecked(repo, &series.project_id, &item_id).await
 }
 
-/// Marks `occurrence_date` as skipped (the EXDATE-equivalent) for `series_id`. This is
-/// the web UI's explicit "Skip" action, wired only onto genuinely virtual occurrences
-/// (see `list_virtual_occurrences_for_project_unchecked` — the only source the skip
-/// button's URL is ever built from), so `occurrence_date` never already has a
-/// materialized `item_id` behind it in practice; deleting a *materialized* occurrence's
-/// item goes through `unlink_deleted_item_occurrence` below instead, called from the
-/// item's own delete path. `mark_exdate` clears `item_id` unconditionally, so even a
-/// (deliberately unhandled) direct call against an already-materialized date would just
-/// orphan that item rather than corrupt the occurrence row.
+/// Marks `occurrence_date` as skipped (the EXDATE-equivalent) for `series_id`. Historically
+/// (Stage 6) this was wired only onto genuinely virtual occurrences, so `occurrence_date`
+/// never already had a materialized `item_id` behind it in practice; as of Stage B of
+/// `docs/unify-virtual-materialized-occurrences-plan.md`, the web UI's Skip button calls
+/// `skip_or_delete_series_occurrence` below instead, which deletes a materialized
+/// occurrence's item first — so by the time this function itself runs, `occurrence_date`
+/// is still guaranteed not to have a materialized `item_id` behind it, just via composition
+/// rather than by construction. `mark_exdate` clears `item_id` unconditionally regardless,
+/// so even a direct call against an already-materialized date would just orphan that item
+/// rather than corrupt the occurrence row.
 ///
 /// Stage 10a: rejects (via `require_current_occurrence`) skipping anything but a
 /// Task-typed series' current occurrence, before either write below runs — see that
@@ -143,6 +144,91 @@ pub async fn skip_occurrence(
         let cursor_value = cursor_value_for_settlement(&series, occurrence_date);
         event_series.advance_cursor(series_id, cursor_value).await?;
     }
+    Ok(())
+}
+
+/// Stage B of `docs/unify-virtual-materialized-occurrences-plan.md` — the unified Skip
+/// action, wired onto the one Skip button/route regardless of whether `occurrence_date`
+/// is still virtual or already materialized. For a materialized occurrence, deletes its
+/// item first via the existing `project_items::delete_project_item` (whose own
+/// `unlink_deleted_item_occurrence` hook un-materializes the occurrence — deletes its
+/// `item_occurrences` row rather than marking it excluded), then runs `skip_occurrence`
+/// unchanged. This is a composition of two already-correct primitives, not new mutation
+/// logic: a materialized occurrence ends up in exactly the state a virtual one would after
+/// the same call — un-materialized, then marked exdate.
+pub async fn skip_or_delete_series_occurrence(
+    repo: &Arc<dyn ItemRepo>,
+    projects: &Arc<dyn ProjectRepo>,
+    teams: &Arc<dyn TeamRepo>,
+    event_series: &Arc<dyn ItemSeriesRepo>,
+    requester_user_id: &str,
+    series_id: &str,
+    occurrence_date: DateTime<Utc>,
+    tz_offset_minutes: i32,
+) -> Result<(), ItemError> {
+    let series = event_series.get_series(series_id).await?;
+    if let Some(occurrence) = event_series
+        .get_occurrence(series_id, occurrence_date)
+        .await?
+        && let Some(item_id) = occurrence.item_id
+    {
+        project_items::delete_project_item(
+            repo,
+            projects,
+            teams,
+            event_series,
+            requester_user_id,
+            &series.project_id,
+            &item_id,
+        )
+        .await?;
+    }
+    skip_occurrence(event_series, series_id, occurrence_date, tz_offset_minutes).await
+}
+
+/// The counterpart to Skip — reverses an exdate-marked occurrence back to virtual. Mirrors
+/// `record_task_uncompletion`'s cursor-safety rigor for a Task-typed series: only the
+/// occurrence at `cursor_date` (the series' most recently settled one) can be unskipped, the
+/// same "one at a time, in order" rule `require_cursor_occurrence` enforces for uncompleting
+/// — deliberately does not self-heal past an out-of-order request the way
+/// `require_current_occurrence` does for settling, since un-settling has no forward direction
+/// to self-heal toward. An Event-typed series has no cursor/current concept, so any
+/// exdate-marked occurrence may be unskipped unconditionally. Rejects outright if
+/// `occurrence_date` isn't actually marked exdate — nothing to unskip.
+pub async fn unskip_occurrence(
+    event_series: &Arc<dyn ItemSeriesRepo>,
+    series_id: &str,
+    occurrence_date: DateTime<Utc>,
+    tz_offset_minutes: i32,
+) -> Result<(), ItemError> {
+    let series = event_series.get_series(series_id).await?;
+    let occurrence = event_series.get_occurrence(series_id, occurrence_date).await?;
+    if !occurrence.map(|o| o.is_exdate).unwrap_or(false) {
+        return Err(ItemError::Invalid(
+            "this occurrence is not skipped".to_string(),
+        ));
+    }
+    if series.item_type == ItemKind::Task {
+        if series.cursor_date != Some(occurrence_date) {
+            return Err(ItemError::Invalid(format!(
+                "cannot unskip this occurrence out of order — only the series' most \
+                 recently settled occurrence ({:?}) can be unskipped",
+                series.cursor_date
+            )));
+        }
+        // Same shape as record_task_uncompletion's cursor restore: retreat one step, or
+        // clear back to the pre-anything-settled None state if this was the anchor.
+        if occurrence_date == series.anchor_date {
+            event_series
+                .clear_cursor(series_id, occurrence_date)
+                .await?;
+        } else {
+            let rule = recurrence::parse(&series.recurrence).map_err(ItemError::Invalid)?;
+            let previous = recurrence::retreat_once(&rule, occurrence_date, tz_offset_minutes);
+            event_series.retreat_cursor(series_id, previous).await?;
+        }
+    }
+    event_series.delete_occurrence(series_id, occurrence_date).await?;
     Ok(())
 }
 
@@ -821,181 +907,13 @@ pub async fn list_series_for_project(
     Ok(event_series.list_series_for_project(project_id).await?)
 }
 
-/// Stage 5 of docs/recurring-events-virtual-occurrences-rough-plan.md. A series occurrence
-/// date with no `event_occurrences` row at all — i.e. neither materialized nor skipped.
-/// Never overlaps with what the normal item queries (`list_due_by_project`,
-/// `list_project_events`, ...) return: a materialized date always has a row (excluded here),
-/// and a real `items` row is what those queries read from directly.
-///
-/// `item_type` (added Stage 8) is the series' own kind, carried through so callers can
-/// filter/label by it — before this field existed, every caller of
-/// `list_virtual_occurrences_for_project_unchecked` implicitly assumed Event, so a
-/// `TASK`-typed series (possible since Stage 7b) silently leaked its occurrences into
-/// every Stage 5 surface unfiltered and unlabeled. Stage 8 is what fixes that.
-///
-/// `is_current` (added Stage 9) marks the one occurrence, per Task-typed series, that
-/// equals `current_occurrence_date` — meaningless (`false`) for Event-typed series, which
-/// have no cursor. See this function's own doc comment for how it interacts with the
-/// past-date clamp.
-#[derive(Debug, Clone, PartialEq)]
-pub struct VirtualOccurrence {
-    pub series_id: String,
-    pub series_name: String,
-    pub item_type: ItemKind,
-    pub event_type: Option<String>,
-    pub occurrence_date: DateTime<Utc>,
-    pub is_current: bool,
-    pub assigned_to_user_id: Option<String>,
-    pub assigned_to_user_name: Option<String>,
-}
-
-/// Unchecked, matching `list_due_project_items_unchecked`'s naming precedent — every caller
-/// (the project dashboard's list/calendar views, the Events month-grid view) already resolves
-/// project membership earlier in the same handler.
-///
-/// A series whose `recurrence` string fails to parse is skipped silently, not propagated as
-/// an error — there is no server-side validation guaranteeing `ItemSeries.recurrence` always
-/// parses, and `occurrences_between` itself already set this "empty, not an error" precedent;
-/// one malformed series must not blank out an entire project's dashboard.
-///
-/// A date is dropped from the result if `event_occurrences` has *any* row for it, materialized
-/// or exdate — the only two writes into that table (`record_materialized_occurrence`,
-/// `mark_exdate`) never produce an `(item_id: None, is_exdate: false)` row, so "a row exists"
-/// and "not virtual" are the same predicate. This is also what makes a future skip-UI (Stage
-/// 6) correctly exclude skipped occurrences from this list today, with no exdate-specific
-/// code here at all.
-///
-/// Stage 8 clamped every Task-typed virtual occurrence to `occurrence_date >= now`,
-/// deferring backlog to Stage 9. Stage 9 now lives here: the clamp still applies, with one
-/// exemption — a series' own `current_occurrence_date` (see that function's doc comment)
-/// is let through even when it's in the past, so a backlogged Task series' one settleable
-/// occurrence actually surfaces instead of vanishing. This subsumes the near-identical
-/// filter that used to be duplicated in three separate `web_ui` call sites (the dashboard's
-/// list/calendar views, the Tasks month-grid) — moved here since only this function has
-/// the series' `cursor_date` needed to compute the exemption.
-///
-/// The current occurrence is also injected outright when it falls *outside*
-/// `[range_start, range_end]` entirely, not just when it's merely past-dated within an
-/// otherwise-generated candidate list — caught by manual smoke testing of this stage: every
-/// caller's own default window starts at `now` (a virtual occurrence was never "missed" in
-/// any actionable sense before this stage existed), so a genuinely backlogged current
-/// occurrence would otherwise never appear in the one range a caller actually queries by
-/// default. A day-bucketing caller (a calendar month-grid) still only renders it if the
-/// injected date happens to land within its own visible grid — this only guarantees the date
-/// is present in this function's *return value*, not that every caller visualizes it.
-pub async fn list_virtual_occurrences_for_project_unchecked(
-    event_series: &Arc<dyn ItemSeriesRepo>,
-    users: &Arc<dyn UserRepo>,
-    project_id: &str,
-    range_start: DateTime<Utc>,
-    range_end: DateTime<Utc>,
-    tz_offset_minutes: i32,
-) -> Result<Vec<VirtualOccurrence>, ItemError> {
-    let now = Utc::now();
-    let all_series = event_series.list_series_for_project(project_id).await?;
-    let mut result = Vec::new();
-    let mut names: HashMap<String, String> = HashMap::new();
-    for series in &all_series {
-        let Ok(rule) = recurrence::parse(&series.recurrence) else {
-            continue;
-        };
-        let mut assigned_user_name: Option<String> = None;
-        if let Some(user_id) = &series.assigned_to_user_id {
-            if let Some(name) = names.get(&user_id.clone()) {
-                assigned_user_name = Some(name.clone());
-            } else {
-                let res = users.get(&user_id).await;
-                if res.is_err() {
-                    return Err(ItemError::Internal("error fetching user".to_string()));
-                } else {
-                    let user = res.unwrap();
-                    let first_name = user.first_name;
-                    names.insert(user_id.clone(), first_name.clone());
-                    assigned_user_name = Some(first_name);
-                }
-            }
-        }
-
-        // Stage 10 gap 1: the predicted list is normally rooted at the series' own
-        // anchor_date, but for a completion-basis Task series that drifts silently wrong
-        // after the first off-schedule settlement (the fixed anchor-rooted sequence and
-        // the real cursor-chained trajectory permanently diverge). Rooting at
-        // current_occurrence_date instead self-corrects every render, since nothing here
-        // is cached. When cursor_date is None this is identical to anchor_date, so a
-        // fresh series behaves the same as before. current_date must be computed before
-        // candidates below, since it's now also the root, not only the injected-extra date.
-        let current_date = current_occurrence_date(series, &rule, tz_offset_minutes);
-        let root_date = if series.item_type == ItemKind::Task && is_completion_basis(series) {
-            current_date
-        } else {
-            series.anchor_date
-        };
-        let mut candidates = recurrence::occurrences_between(
-            &rule,
-            root_date,
-            range_start,
-            range_end,
-            tz_offset_minutes,
-        );
-        // A Task series' current occurrence must surface regardless of the caller's window —
-        // callers (the dashboard's default "Today"/preset windows especially) default their
-        // own range to start at `now`, since a virtual occurrence was never "missed" in any
-        // actionable sense before Stage 9 existed (see `virtual_occurrence_window`'s own doc
-        // comment in `project_dashboard.rs`). That reasoning no longer holds for a Task series:
-        // its current occurrence can genuinely be backlogged into the past, and if it isn't
-        // injected here, it silently never renders on the one view (the dashboard list) users
-        // actually look at by default — the whole point of this stage's backlog design would be
-        // unreachable in practice. `occurrences_between` only generates dates inside
-        // `[range_start, range_end]`, so a current_date outside that window needs adding by hand.
-        let current_outside_window = series.item_type == ItemKind::Task
-            && !(range_start..=range_end).contains(&current_date);
-        if current_outside_window {
-            candidates.push(current_date);
-        }
-        if candidates.is_empty() {
-            continue;
-        }
-        // Widened to cover an injected current_date too, so an already-settled (materialized
-        // or skipped) one outside the caller's window is still correctly excluded below rather
-        // than reappearing as virtual.
-        let query_start = range_start.min(current_date);
-        let query_end = range_end.max(current_date);
-        let existing = event_series
-            .list_occurrences_between(&series.id, query_start, query_end)
-            .await?;
-        let taken: HashSet<i64> = existing
-            .iter()
-            .map(|o| o.occurrence_date.timestamp())
-            .collect();
-        for date in candidates {
-            if taken.contains(&date.timestamp()) {
-                continue;
-            }
-            let is_current = series.item_type == ItemKind::Task && date == current_date;
-            if series.item_type == ItemKind::Task && date < now && !is_current {
-                continue;
-            }
-            result.push(VirtualOccurrence {
-                series_id: series.id.clone(),
-                series_name: series.name.clone(),
-                item_type: series.item_type,
-                event_type: series.event_type.clone(),
-                occurrence_date: date,
-                is_current,
-                assigned_to_user_id: series.assigned_to_user_id.clone(),
-                assigned_to_user_name: assigned_user_name.clone(),
-            });
-        }
-    }
-    Ok(result)
-}
-
-/// Stage A of `docs/unify-virtual-materialized-occurrences-plan.md`. Unlike
-/// `list_virtual_occurrences_for_project_unchecked` above (which drops any date that
-/// already has an `item_occurrences` row), this classifies *every* candidate date into
-/// exactly one of `OccurrenceState::{Materialized, Skipped, Virtual}` — the single data
-/// source later stages build unified (virtual-looks-like-materialized) row/calendar
-/// rendering on top of, replacing the current per-screen pattern of querying materialized
+/// Stage 5 of docs/recurring-events-virtual-occurrences-rough-plan.md, superseded by Stage B
+/// of `docs/unify-virtual-materialized-occurrences-plan.md` — every `web_ui` call site that
+/// used to call a since-removed `list_virtual_occurrences_for_project_unchecked` (which
+/// dropped any date that already had an `item_occurrences` row, materialized or exdate) now
+/// calls this instead, so a `Materialized`/`Skipped` date is classified rather than silently
+/// excluded. This is the single data source unified (virtual-looks-like-materialized) row/
+/// calendar rendering builds on, replacing the old per-screen pattern of querying materialized
 /// items and virtual occurrences separately and merging them by hand.
 ///
 /// Returns only `item_id` for a materialized date, not a full `Item` — callers batch-fetch
@@ -1057,9 +975,10 @@ pub async fn list_occurrence_states_for_project(
             }
         }
 
-        // Mirrors list_virtual_occurrences_for_project_unchecked's rooting/injection
-        // logic exactly (see that function's doc comment for why) — only what happens
-        // per-candidate-date below differs.
+        // Stage 10 gap 1: the predicted list is normally rooted at the series' own
+        // anchor_date, but for a completion-basis Task series that drifts silently wrong
+        // after the first off-schedule settlement — rooting at current_occurrence_date
+        // instead self-corrects every render, since nothing here is cached.
         let current_date = current_occurrence_date(series, &rule, tz_offset_minutes);
         let root_date = if series.item_type == ItemKind::Task && is_completion_basis(series) {
             current_date
@@ -1093,10 +1012,11 @@ pub async fn list_occurrence_states_for_project(
         for date in candidates {
             let is_current = series.item_type == ItemKind::Task && date == current_date;
             let existing_occ = existing_by_ts.get(&date.timestamp());
-            // Same past-date clamp as list_virtual_occurrences_for_project_unchecked, with
-            // one difference: a past date that's already settled (materialized or skipped)
-            // is real state and still surfaces — only a purely virtual past date (nothing
-            // ever happened) is dropped, since it was never actionable and is not history.
+            // The same past-date clamp Stage 9 introduced (Task-typed occurrences before
+            // `now` are dropped, with the series' own current occurrence exempted), but a
+            // past date that's already settled (materialized or skipped) is real state and
+            // still surfaces — only a purely virtual past date (nothing ever happened) is
+            // dropped, since it was never actionable and is not history.
             if series.item_type == ItemKind::Task
                 && date < now
                 && !is_current
@@ -1728,6 +1648,247 @@ mod tests {
 
         let result = skip_occurrence(&event_series, "s1", occurrence_date(), 0).await;
         assert!(matches!(result, Err(ItemError::Invalid(_))));
+    }
+
+    #[tokio::test]
+    async fn skip_or_delete_series_occurrence_deletes_materialized_item_before_marking_exdate() {
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock
+            .expect_get_series()
+            .returning(|_| Ok(series("p1")));
+        series_mock.expect_get_occurrence().returning(|_, date| {
+            Ok(Some(ItemOccurrence {
+                series_id: "s1".to_string(),
+                occurrence_date: date,
+                item_id: Some("materialized-item".to_string()),
+                is_exdate: false,
+            }))
+        });
+        series_mock.expect_mark_exdate().times(1).returning(|_, _| Ok(()));
+        // Event-typed series (default from `series()`) — no cursor to advance.
+        series_mock.expect_advance_cursor().times(0);
+        // `unlink_deleted_item_occurrence`, called from inside `delete_project_item`.
+        series_mock
+            .expect_find_occurrence_by_item_id()
+            .returning(|item_id| {
+                Ok(Some(ItemOccurrence {
+                    series_id: "s1".to_string(),
+                    occurrence_date: occurrence_date(),
+                    item_id: Some(item_id.to_string()),
+                    is_exdate: false,
+                }))
+            });
+        series_mock
+            .expect_delete_occurrence()
+            .times(1)
+            .returning(|_, _| Ok(()));
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        let mut projects_mock = MockProjectRepo::new();
+        projects_mock
+            .expect_get()
+            .returning(|_| Ok(personal_project()));
+        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
+
+        let mut items_mock = MockItemRepo::new();
+        items_mock
+            .expect_get()
+            .returning(|_, _| Ok(Item::new_user_item("owner1", "Standup")));
+        items_mock.expect_list_children().returning(|_| Ok(vec![]));
+        items_mock
+            .expect_list_by_source_event()
+            .returning(|_| Ok(vec![]));
+        items_mock.expect_delete().times(1).returning(|_| Ok(()));
+        let repo: Arc<dyn ItemRepo> = Arc::new(items_mock);
+
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+
+        skip_or_delete_series_occurrence(
+            &repo,
+            &projects,
+            &teams,
+            &event_series,
+            "owner1",
+            "s1",
+            occurrence_date(),
+            0,
+        )
+        .await
+        .expect("should delete the materialized item, then mark exdate");
+    }
+
+    #[tokio::test]
+    async fn skip_or_delete_series_occurrence_skips_delete_when_still_virtual() {
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock
+            .expect_get_series()
+            .returning(|_| Ok(series("p1")));
+        series_mock.expect_get_occurrence().returning(|_, _| Ok(None));
+        series_mock.expect_mark_exdate().times(1).returning(|_, _| Ok(()));
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        // No expectations set on these mocks at all — mockall panics on any unmocked
+        // call, so this asserts `delete_project_item`'s machinery is never reached when
+        // the occurrence has no materialized item behind it.
+        let projects: Arc<dyn ProjectRepo> = Arc::new(MockProjectRepo::new());
+        let repo: Arc<dyn ItemRepo> = Arc::new(MockItemRepo::new());
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+
+        skip_or_delete_series_occurrence(
+            &repo,
+            &projects,
+            &teams,
+            &event_series,
+            "owner1",
+            "s1",
+            occurrence_date(),
+            0,
+        )
+        .await
+        .expect("should mark exdate without touching the delete path");
+    }
+
+    #[tokio::test]
+    async fn unskip_occurrence_rejects_when_not_marked_exdate() {
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock
+            .expect_get_series()
+            .returning(|_| Ok(series("p1")));
+        series_mock.expect_get_occurrence().returning(|_, _| Ok(None));
+        series_mock.expect_delete_occurrence().times(0);
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        let result = unskip_occurrence(&event_series, "s1", occurrence_date(), 0).await;
+        assert!(matches!(result, Err(ItemError::Invalid(_))));
+    }
+
+    #[tokio::test]
+    async fn unskip_occurrence_is_unconditional_for_an_event_typed_series() {
+        // `series("p1")` defaults to ItemKind::Event — no cursor concept.
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock
+            .expect_get_series()
+            .returning(|_| Ok(series("p1")));
+        series_mock.expect_get_occurrence().returning(|_, date| {
+            Ok(Some(ItemOccurrence {
+                series_id: "s1".to_string(),
+                occurrence_date: date,
+                item_id: None,
+                is_exdate: true,
+            }))
+        });
+        series_mock.expect_retreat_cursor().times(0);
+        series_mock.expect_clear_cursor().times(0);
+        series_mock
+            .expect_delete_occurrence()
+            .times(1)
+            .returning(|_, _| Ok(()));
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        unskip_occurrence(&event_series, "s1", occurrence_date(), 0)
+            .await
+            .expect("should unskip unconditionally for an Event-typed series");
+    }
+
+    #[tokio::test]
+    async fn unskip_occurrence_rejects_out_of_order_for_a_task_series() {
+        let mut task_series = series("p1");
+        task_series.item_type = ItemKind::Task;
+        // cursor_date left at None (nothing settled yet) — occurrence_date() can never
+        // equal it, so this is out of order regardless of what settled it.
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock
+            .expect_get_series()
+            .returning(move |_| Ok(task_series.clone()));
+        series_mock.expect_get_occurrence().returning(|_, date| {
+            Ok(Some(ItemOccurrence {
+                series_id: "s1".to_string(),
+                occurrence_date: date,
+                item_id: None,
+                is_exdate: true,
+            }))
+        });
+        series_mock.expect_delete_occurrence().times(0);
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        let result = unskip_occurrence(&event_series, "s1", occurrence_date(), 0).await;
+        assert!(matches!(result, Err(ItemError::Invalid(_))));
+    }
+
+    #[tokio::test]
+    async fn unskip_occurrence_retreats_cursor_for_a_non_anchor_task_occurrence() {
+        let mut task_series = series("p1");
+        task_series.item_type = ItemKind::Task;
+        task_series.cursor_date = Some(occurrence_date());
+        // anchor_date differs from occurrence_date(), so this isn't the anchor case.
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock
+            .expect_get_series()
+            .returning(move |_| Ok(task_series.clone()));
+        series_mock.expect_get_occurrence().returning(|_, date| {
+            Ok(Some(ItemOccurrence {
+                series_id: "s1".to_string(),
+                occurrence_date: date,
+                item_id: None,
+                is_exdate: true,
+            }))
+        });
+        let rule = recurrence::parse(&series("p1").recurrence).unwrap();
+        let expected_previous = recurrence::retreat_once(&rule, occurrence_date(), 0);
+        series_mock
+            .expect_retreat_cursor()
+            .withf(move |series_id: &str, date: &DateTime<Utc>| {
+                series_id == "s1" && *date == expected_previous
+            })
+            .times(1)
+            .returning(|_, _| Ok(()));
+        series_mock.expect_clear_cursor().times(0);
+        series_mock
+            .expect_delete_occurrence()
+            .times(1)
+            .returning(|_, _| Ok(()));
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        unskip_occurrence(&event_series, "s1", occurrence_date(), 0)
+            .await
+            .expect("should retreat the cursor and delete the exdate row");
+    }
+
+    #[tokio::test]
+    async fn unskip_occurrence_clears_cursor_when_unskipping_the_anchor_occurrence() {
+        let mut task_series = series("p1");
+        task_series.item_type = ItemKind::Task;
+        task_series.anchor_date = occurrence_date();
+        task_series.cursor_date = Some(occurrence_date());
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock
+            .expect_get_series()
+            .returning(move |_| Ok(task_series.clone()));
+        series_mock.expect_get_occurrence().returning(|_, date| {
+            Ok(Some(ItemOccurrence {
+                series_id: "s1".to_string(),
+                occurrence_date: date,
+                item_id: None,
+                is_exdate: true,
+            }))
+        });
+        series_mock
+            .expect_clear_cursor()
+            .withf(|series_id: &str, date: &DateTime<Utc>| {
+                series_id == "s1" && *date == occurrence_date()
+            })
+            .times(1)
+            .returning(|_, _| Ok(()));
+        series_mock.expect_retreat_cursor().times(0);
+        series_mock
+            .expect_delete_occurrence()
+            .times(1)
+            .returning(|_, _| Ok(()));
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        unskip_occurrence(&event_series, "s1", occurrence_date(), 0)
+            .await
+            .expect("should clear the cursor and delete the exdate row");
     }
 
     #[tokio::test]

@@ -50,6 +50,18 @@
         <ol class="mt-1 space-y-1">
           {% for ev in day.events %}
           <li id="{{ ev.entry_id }}" class="flex items-center gap-x-0.5">
+            {% if ev.is_skipped %}
+            <span class="group flex min-w-0 flex-1">
+              <p class="flex-auto truncate font-medium italic line-through text-gray-400 dark:text-gray-500">{{ ev.name }}</p>
+              {% if let Some(t) = ev.time_label %}<span class="ml-2 hidden flex-none text-gray-500 xl:block dark:text-gray-400">{{ t }}</span>{% endif %}
+              <span class="shrink-0 text-[10px] uppercase tracking-wide font-semibold text-gray-400 dark:text-gray-500">Skipped</span>
+            </span>
+            {% if let Some(uu) = ev.unskip_url %}
+            <button type="button" hx-post="{{ uu }}"
+              class="shrink-0 text-gray-400 hover:text-indigo-500 dark:text-gray-500 dark:hover:text-indigo-400"
+              title="Unskip occurrence">&#8635;</button>
+            {% endif %}
+            {% else %}
             <a href="{{ ev.href }}"
                {% if let Some(post_url) = ev.materialize_url %}hx-post="{{ post_url }}"{% endif %}
                hx-target="#page" hx-select="#page" hx-swap="innerHTML"
@@ -58,10 +70,10 @@
               {% if let Some(t) = ev.time_label %}<span class="ml-2 hidden flex-none text-gray-500 group-hover:text-indigo-600 xl:block dark:text-gray-400 dark:group-hover:text-indigo-400">{{ t }}</span>{% endif %}
             </a>
             {% if let Some(su) = ev.skip_url %}
-            <button type="button" hx-post="{{ su }}" hx-confirm="Skip this occurrence?" hx-target="#{{ ev.entry_id }}"
-              hx-select="unset" hx-swap="outerHTML swap:200ms"
+            <button type="button" hx-post="{{ su }}" hx-confirm="Skip this occurrence?"
               class="shrink-0 text-gray-400 hover:text-red-500 dark:text-gray-500 dark:hover:text-red-400"
               title="Skip occurrence">&times;</button>
+            {% endif %}
             {% endif %}
           </li>
           {% endfor %}

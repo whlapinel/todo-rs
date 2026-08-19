@@ -64,9 +64,21 @@ pub async fn project_tasks_page(
     };
     // Stage 10 gap 2: a Task series' current occurrence is range-independent (a pure
     // function of the cursor), so any degenerate range surfaces it — see
-    // `list_virtual_occurrences_for_project_unchecked`'s backlog-exemption logic.
+    // `list_virtual_occurrences_for_project_unchecked`'s backlog-exemption logic (which
+    // `list_occurrence_states_for_project` mirrors — see its own doc comment).
+    //
+    // Stage B of docs/unify-virtual-materialized-occurrences-plan.md switched this from
+    // `list_virtual_occurrences_for_project_unchecked` to `list_occurrence_states_for_project`
+    // purely for the shared `ProjectOccurrence` type `ProjectTaskVirtualRow` now takes — the
+    // `is_current` filter below means this view's actual visible behavior is unchanged: by
+    // construction (`require_current_occurrence`'s self-heal, see `service::item_series`) the
+    // series' current occurrence is never itself materialized or skipped, so the trailing
+    // `!Materialized` filter never has anything to exclude here in practice. A just-skipped
+    // occurrence stops being current the instant it's settled, so it (correctly) has nothing
+    // to show in this current-only view — see the calendar/dashboard views for where a
+    // skipped occurrence's struck-through Unskip row actually appears.
     let virtual_occurrences: Vec<_> =
-        item_series_service::list_virtual_occurrences_for_project_unchecked(
+        item_series_service::list_occurrence_states_for_project(
             &event_series,
             &users,
             &project_id,
@@ -77,6 +89,7 @@ pub async fn project_tasks_page(
         .await?
         .into_iter()
         .filter(|occ| occ.item_type == ItemKind::Task && occ.is_current)
+        .filter(|occ| !matches!(occ.state, item_series_service::OccurrenceState::Materialized { .. }))
         .collect();
     let rows = super::render_rows_with_virtual(
         &items,
@@ -187,9 +200,17 @@ pub async fn project_tasks_calendar_page(
     );
     // Filtered to Task-typed series only (Event-typed have their own home on the Events
     // calendar) — the past-date clamp (Stage 8) and `is_current` computation (Stage 9) now
-    // live inside `list_virtual_occurrences_for_project_unchecked` itself.
+    // live inside `list_occurrence_states_for_project` itself (mirroring
+    // `list_virtual_occurrences_for_project_unchecked`'s own logic — see its doc comment).
+    //
+    // Stage B of docs/unify-virtual-materialized-occurrences-plan.md: unlike the flat list
+    // above, the calendar shows a real date range, so a skipped occurrence within it stays
+    // visible (struck through, with an Unskip button) rather than disappearing — hence the
+    // switch from `list_virtual_occurrences_for_project_unchecked` (which drops any already-
+    // settled date outright). Materialized dates are excluded — those already render via
+    // `items` above.
     let virtual_occurrences: Vec<_> =
-        item_series_service::list_virtual_occurrences_for_project_unchecked(
+        item_series_service::list_occurrence_states_for_project(
             &event_series,
             &users,
             &project_id,
@@ -200,6 +221,7 @@ pub async fn project_tasks_calendar_page(
         .await?
         .into_iter()
         .filter(|occ| occ.item_type == ItemKind::Task)
+        .filter(|occ| !matches!(occ.state, item_series_service::OccurrenceState::Materialized { .. }))
         .collect();
     let days = build_calendar_days(
         year,
@@ -242,6 +264,7 @@ pub async fn project_task_detail_page(
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(event_series): Extension<Arc<dyn ItemSeriesRepo>>,
     TzOffset(tz): TzOffset,
 ) -> Result<Html<String>, ItemError> {
     let project =
@@ -254,6 +277,7 @@ pub async fn project_task_detail_page(
         None => HashMap::new(),
     };
     let linked_event = resolve_linked_event(&repo, &project_id, &item).await?;
+    let series_link = resolve_series_link(&event_series, &project_id, &item).await?;
     let view = ProjectTaskDetailView::from_item(
         &item,
         &project_id,
@@ -261,6 +285,7 @@ pub async fn project_task_detail_page(
         &names,
         tz,
         linked_event,
+        series_link,
     )
     .render()?;
     let nav_html = nav::build_nav_html(
@@ -561,6 +586,7 @@ pub async fn update_project_task_form(
                 None => HashMap::new(),
             };
             let linked_event = resolve_linked_event(&repo, &project_id, &updated).await?;
+            let series_link = resolve_series_link(&event_series, &project_id, &updated).await?;
             let view = ProjectTaskDetailView::from_item(
                 &updated,
                 &project_id,
@@ -568,6 +594,7 @@ pub async fn update_project_task_form(
                 &names,
                 tz,
                 linked_event,
+                series_link,
             )
             .render()?;
             let nav_html = nav::build_nav_html(
@@ -621,6 +648,7 @@ pub async fn update_project_task_form(
             )
             .render()?;
             let linked_event = resolve_linked_event(&repo, &project_id, &updated).await?;
+            let series_link = resolve_series_link(&event_series, &project_id, &updated).await?;
             let view = ProjectTaskDetailView::from_item(
                 &updated,
                 &project_id,
@@ -628,6 +656,7 @@ pub async fn update_project_task_form(
                 &names,
                 tz,
                 linked_event,
+                series_link,
             )
             .render()?;
             Ok(Html(format!("{row}{fields}{view}")).into_response())

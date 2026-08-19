@@ -87,6 +87,17 @@
         <ol class="mt-1 space-y-1">
           {% for v in day.virtual_tasks %}
           <li id="{{ v.entry_id }}" class="flex items-center gap-x-0.5">
+            {% if v.is_skipped %}
+            <span class="group flex min-w-0 flex-1 items-center gap-x-1 opacity-70">
+              <p class="flex-auto truncate font-medium italic line-through text-gray-400 dark:text-gray-500">{{ v.name }}</p>
+              {% if let Some(tl) = v.time_label %}<span
+                class="ml-2 hidden flex-none text-gray-500 xl:block dark:text-gray-400">{{ tl }}</span>{% endif %}
+              <span class="shrink-0 text-[10px] uppercase tracking-wide font-semibold text-gray-400 dark:text-gray-500">Skipped</span>
+            </span>
+            <button type="button" hx-post="{{ v.unskip_url }}"
+              class="shrink-0 cursor-pointer text-gray-400 hover:text-indigo-500 dark:text-gray-500 dark:hover:text-indigo-400"
+              title="Unskip occurrence">&#8635;</button>
+            {% else %}
             <a href="#" hx-post="{{ v.materialize_url }}" hx-target="#page" hx-select="#page" hx-swap="innerHTML"
               class="group flex min-w-0 flex-1 items-center gap-x-1 opacity-70">
               <p class="flex-auto truncate font-medium italic text-gray-500 dark:text-gray-400">{{ v.name }}</p>
@@ -99,9 +110,9 @@
               {% endif %}
             </a>
             <button type="button" hx-post="{{ v.skip_url }}" hx-confirm="Skip this occurrence?"
-              hx-target="#{{ v.entry_id }}" hx-select="unset" hx-swap="outerHTML swap:200ms"
               class="shrink-0 cursor-pointer text-gray-400 hover:text-red-500 dark:text-gray-500 dark:hover:text-red-400"
               title="Skip occurrence">&times;</button>
+            {% endif %}
           </li>
           {% endfor %}
         </ol>

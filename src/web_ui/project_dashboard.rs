@@ -3,7 +3,7 @@ use super::{TzOffset, to_local};
 use crate::auth::AuthUser;
 use crate::domain::item::{Item, ItemKind};
 use crate::service::error::ItemError;
-use crate::service::item_series::{self as event_series_service, VirtualOccurrence};
+use crate::service::item_series::{self as event_series_service, OccurrenceState, ProjectOccurrence};
 use crate::service::project_items::{self as project_item_service, UpdateProjectItemParams};
 use crate::service::projects::{self as project_service};
 use crate::service::teams as team_service;
@@ -127,6 +127,16 @@ fn skip_url(project_id: &str, series_id: &str, occurrence_date: DateTime<Utc>) -
     )
 }
 
+/// Stage B of `docs/unify-virtual-materialized-occurrences-plan.md` — the "Unskip" button's
+/// POST target, a sibling route to `skip_url` above. See
+/// `web_ui::project_item_series::handlers::unskip_project_item_series_occurrence_form`.
+fn unskip_url(project_id: &str, series_id: &str, occurrence_date: DateTime<Utc>) -> String {
+    format!(
+        "/web/projects/{project_id}/series/{series_id}/occurrences/{}/unskip",
+        occurrence_date.timestamp()
+    )
+}
+
 async fn names_for(
     teams: &Arc<dyn TeamRepo>,
     team_id: &str,
@@ -232,10 +242,14 @@ struct ProjectDashboardVirtualRow {
     /// `service::item_series::current_occurrence_date`'s doc comment.
     is_current: bool,
     assignee_name: Option<String>,
+    /// See `project_tasks::templates::ProjectTaskVirtualRow::is_skipped`'s identical
+    /// rationale.
+    is_skipped: bool,
+    unskip_url: String,
 }
 
 impl ProjectDashboardVirtualRow {
-    fn from_occurrence(occ: &VirtualOccurrence, project_id: &str, tz: i32) -> Self {
+    fn from_occurrence(occ: &ProjectOccurrence, project_id: &str, tz: i32) -> Self {
         let local = to_local(occ.occurrence_date, tz);
         let kind_name = if occ.item_type == ItemKind::Event {
             "Event"
@@ -258,6 +272,8 @@ impl ProjectDashboardVirtualRow {
             skip_url: skip_url(project_id, &occ.series_id, occ.occurrence_date),
             is_current: occ.is_current,
             assignee_name: occ.assigned_to_user_name.clone(),
+            is_skipped: matches!(occ.state, OccurrenceState::Skipped),
+            unskip_url: unskip_url(project_id, &occ.series_id, occ.occurrence_date),
         }
     }
 }
@@ -288,7 +304,7 @@ pub struct DashboardQuery {
 fn render_rows(
     user_id: &str,
     items: &[DueItem],
-    virtual_occurrences: &[VirtualOccurrence],
+    virtual_occurrences: &[ProjectOccurrence],
     project_id: &str,
     names: &HashMap<String, String>,
     is_team_project: bool,
@@ -333,11 +349,19 @@ fn render_rows(
     // here is always dated and always incomplete in effect.
     //
     // The Task-typed past-date clamp (Stage 8) and `is_current` computation (Stage 9) now
-    // live inside `item_series::list_virtual_occurrences_for_project_unchecked` itself — a
-    // backlogged Task series' one settleable occurrence surfaces here like any other entry,
-    // just marked `is_current` for the template to badge.
-    let filtered_occurrences: Vec<&VirtualOccurrence> = virtual_occurrences
+    // live inside `item_series::list_occurrence_states_for_project` itself (mirroring
+    // `list_virtual_occurrences_for_project_unchecked`'s own logic) — a backlogged Task
+    // series' one settleable occurrence surfaces here like any other entry, just marked
+    // `is_current` for the template to badge.
+    //
+    // Stage B of docs/unify-virtual-materialized-occurrences-plan.md: `virtual_occurrences`
+    // now also carries already-settled dates (materialized or skipped) — materialized ones
+    // are excluded here since they already render via `items` above (a real `DueItem` row),
+    // leaving Virtual and Skipped to render as before, the latter now struck through with
+    // an Unskip button rather than simply never appearing.
+    let filtered_occurrences: Vec<&ProjectOccurrence> = virtual_occurrences
         .iter()
+        .filter(|occ| !matches!(occ.state, OccurrenceState::Materialized { .. }))
         .filter(|occ| assigned_to_any || occ.assigned_to_user_id == Some(user_id.to_string()))
         .collect();
     for occ in filtered_occurrences {
@@ -396,8 +420,13 @@ pub async fn project_dashboard_page(
         project_item_service::list_due_project_items_unchecked(&repo, &project_id, None, None)
             .await?;
     let (virtual_after, virtual_before) = virtual_occurrence_window(after, before, Utc::now());
+    // Stage B of docs/unify-virtual-materialized-occurrences-plan.md: switched from
+    // `list_virtual_occurrences_for_project_unchecked` to `list_occurrence_states_for_project`
+    // so a skipped occurrence within this window stays visible (struck through, with an
+    // Unskip button — see `render_rows`'s `filtered_occurrences`, which excludes only
+    // `Materialized` entries) instead of disappearing outright.
     let virtual_occurrences = if virtual_after <= virtual_before {
-        event_series_service::list_virtual_occurrences_for_project_unchecked(
+        event_series_service::list_occurrence_states_for_project(
             &event_series,
             &users,
             &project_id,
@@ -475,6 +504,11 @@ struct ProjectDashboardCalendarEntry {
     /// `show_complete` filter, which this calendar route never applied), so without this the
     /// grid silently rendered completed items identically to incomplete ones.
     complete: bool,
+    /// See `ProjectDashboardVirtualRow::is_skipped`'s identical rationale — always `false`
+    /// for a materialized entry.
+    is_skipped: bool,
+    /// `Some(...)` only for a skipped occurrence — mirrors `skip_url`'s `Option` shape.
+    unskip_url: Option<String>,
 }
 
 struct ProjectDashboardCalendarDay {
@@ -562,7 +596,7 @@ fn build_calendar_days(
     month: u32,
     project_id: &str,
     due_items: &[DueItem],
-    virtual_occurrences: &[VirtualOccurrence],
+    virtual_occurrences: &[ProjectOccurrence],
     tz: i32,
     today: NaiveDate,
 ) -> Vec<ProjectDashboardCalendarDay> {
@@ -592,11 +626,16 @@ fn build_calendar_days(
                     is_virtual: false,
                     is_current: false,
                     complete: item.complete,
+                    is_skipped: false,
+                    unskip_url: None,
                 });
         }
     }
     // The Task-typed past-date clamp (Stage 8) and `is_current` computation (Stage 9) now
-    // live inside `item_series::list_virtual_occurrences_for_project_unchecked` itself.
+    // live inside `item_series::list_occurrence_states_for_project` itself (mirroring
+    // `list_virtual_occurrences_for_project_unchecked`'s own logic). `virtual_occurrences`
+    // is expected to already have `OccurrenceState::Materialized` entries filtered out by
+    // the caller — those already appear above via `due_items`.
     for occ in virtual_occurrences {
         let local = to_local(occ.occurrence_date, tz);
         by_date
@@ -621,6 +660,8 @@ fn build_calendar_days(
                 is_virtual: true,
                 is_current: occ.is_current,
                 complete: false,
+                is_skipped: matches!(occ.state, OccurrenceState::Skipped),
+                unskip_url: Some(unskip_url(project_id, &occ.series_id, occ.occurrence_date)),
             });
     }
 
@@ -677,7 +718,11 @@ pub async fn project_dashboard_calendar_page(
     let grid_start = grid_start_for(year, month);
     let range_start = local_date_to_utc(grid_start, start_of_day(), tz);
     let range_end = local_date_to_utc(grid_start + Duration::days(41), end_of_day(), tz);
-    let virtual_occurrences = event_series_service::list_virtual_occurrences_for_project_unchecked(
+    // Stage B of docs/unify-virtual-materialized-occurrences-plan.md: see the list view's
+    // identical rationale above — `Materialized` entries are filtered out here (those already
+    // render via `due_items`, fed into `build_calendar_days` separately), leaving Virtual and
+    // Skipped visible.
+    let virtual_occurrences = event_series_service::list_occurrence_states_for_project(
         &event_series,
         &users,
         &project_id,
@@ -685,7 +730,10 @@ pub async fn project_dashboard_calendar_page(
         range_end,
         tz,
     )
-    .await?;
+    .await?
+    .into_iter()
+    .filter(|occ| !matches!(occ.state, OccurrenceState::Materialized { .. }))
+    .collect::<Vec<_>>();
     let days = build_calendar_days(
         year,
         month,
