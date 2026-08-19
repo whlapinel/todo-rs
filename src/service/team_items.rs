@@ -181,7 +181,19 @@ pub async fn create_team_item(
         // `project_members.role`. A non-admin's requested value is silently
         // dropped rather than rejecting the whole create — the rest of the
         // request (name, dates, etc.) is still perfectly valid.
-        let points = if params.points.is_some()
+        //
+        // Exception: `params.series_id.is_some()` means `params.points` isn't a
+        // fresh user-supplied value at all — it's `get_or_materialize_occurrence`
+        // carrying forward `series.points`, which `resolve_series_assignment`
+        // already gated on admin authority at series create/update time. Re-checking
+        // admin authority here against `requester_user_id` (whoever happens to be
+        // the one viewing/completing the occurrence — often the assignee, not the
+        // admin who authorized the points) would silently zero out already-valid
+        // points on every materialization triggered by a non-admin. See
+        // docs/issues.md's virtual-occurrence-completion-doesn't-award-points bug.
+        let points = if params.series_id.is_some() {
+            params.points
+        } else if params.points.is_some()
             && require_project_admin(projects, teams, &params.project_id, requester_user_id)
                 .await
                 .is_ok()
@@ -624,6 +636,45 @@ mod tests {
                 project_id: "p1".to_string(),
                 name: "Mow the lawn".to_string(),
                 points: Some(50),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("should create item");
+    }
+
+    #[tokio::test]
+    async fn create_team_item_honors_series_carried_points_for_non_admin() {
+        // Regression test for docs/issues.md's "virtual occurrence completion doesn't
+        // award points" bug: get_or_materialize_occurrence carries series.points
+        // forward as params.points with series_id set, having already had that value
+        // vetted by resolve_series_assignment at series create/update time. The
+        // materializing requester (e.g. the assignee viewing/completing their own
+        // occurrence) is usually not the project admin, and must not have that
+        // already-authorized value stripped the way a fresh non-admin points request
+        // correctly would be.
+        let mut items = MockItemRepo::new();
+        items
+            .expect_create()
+            .withf(|item: &Item| item.points() == Some(50))
+            .times(1)
+            .returning(|_| Ok("new-item-id".to_string()));
+
+        let items: Arc<dyn ItemRepo> = Arc::new(items);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+        let projects: Arc<dyn ProjectRepo> =
+            Arc::new(project_with_role("p1", "t1", TeamRole::Member));
+
+        create_team_item(
+            &items,
+            &teams,
+            &projects,
+            "member1",
+            CreateTeamItemParams {
+                project_id: "p1".to_string(),
+                name: "Standup".to_string(),
+                points: Some(50),
+                series_id: Some("s1".to_string()),
                 ..Default::default()
             },
         )
