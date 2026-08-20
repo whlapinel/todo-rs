@@ -1,8 +1,9 @@
-# Assignment rotation for item series — design sketch (WIP, Stages 1-2 done)
+# Assignment rotation for item series — design sketch (WIP, Stages 1-3 done)
 
-Status: **Stage 1 (storage layer) and Stage 2 (service layer) implemented and
-tested.** Stage 3 (Smithy + codegen + json_api wiring) is next — see "Suggested
-staged rollout" at the bottom. Not yet linked from `docs/issues_and_features.md`.
+Status: **Stage 1 (storage layer), Stage 2 (service layer), and Stage 3
+(Smithy + codegen + json_api wiring) implemented and tested.** Stage 4 (web
+UI) is next — see "Suggested staged rollout" at the bottom. Not yet linked
+from `docs/issues_and_features.md`.
 
 ## Implementation status
 
@@ -19,9 +20,24 @@ staged rollout" at the bottom. Not yet linked from `docs/issues_and_features.md`
   membership via `set_rotation_members`; `duplicate_series` copies rotation
   membership onto the new series; `list_occurrence_states_for_project` resolves
   each occurrence's assignee individually for a rotating series instead of once
-  per series. All call sites outside the service layer (json_api, web UI forms)
-  currently pass `rotation_user_ids: None` — no wire/form support yet, that's
-  Stage 3/4.
+  per series.
+- **Stage 3 (`model/src/main/smithy/item_series.smithy`,
+  `src/json_api/item_series.rs`)**: added a `StringList` shape and a
+  `rotationUserIds: StringList` field (optional, `@notProperty` on the
+  input/output structures) to `ItemSeriesSummary`, `CreateItemSeries` input,
+  `GetItemSeries` output, and `UpdateItemSeries` input — both
+  `assignedToUserId` and `rotationUserIds` stay present on the wire
+  simultaneously, per the plan. `task codegen` run after. `json_api`'s
+  `create_item_series`/`update_item_series` now forward `input.rotation_user_ids`
+  straight through to the service layer instead of hardcoding `None`.
+  `get_item_series`/`list_item_series_for_project`/`to_summary` now call
+  `ItemSeriesRepo::list_rotation_members` (the domain `ItemSeries` struct
+  itself still doesn't carry rotation membership, per Stage 2's design) and
+  populate `rotationUserIds` on the response, using `None` (not `Some(vec![])`)
+  when the list is empty so a non-rotating series's wire shape is unchanged
+  from before this stage. Web UI forms still don't expose the field yet —
+  that's Stage 4 — so they still construct `rotation_user_ids: None` in their
+  own `Create/UpdateItemSeriesParams` literals for now.
 
 ## Motivation
 

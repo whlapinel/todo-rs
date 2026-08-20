@@ -19,7 +19,7 @@ fn anchor_from_input(dt: &SmithyDateTime) -> chrono::DateTime<chrono::Utc> {
     chrono::DateTime::from_timestamp(dt.secs(), 0).unwrap_or_default()
 }
 
-fn to_summary(series: ItemSeries) -> model::ItemSeriesSummary {
+fn to_summary(series: ItemSeries, rotation_user_ids: Vec<String>) -> model::ItemSeriesSummary {
     model::ItemSeriesSummary {
         series_id: series.id,
         project_id: series.project_id,
@@ -32,6 +32,7 @@ fn to_summary(series: ItemSeries) -> model::ItemSeriesSummary {
         basis: series.basis,
         template_item_id: series.template_item_id,
         assigned_to_user_id: series.assigned_to_user_id,
+        rotation_user_ids: (!rotation_user_ids.is_empty()).then_some(rotation_user_ids),
         points: series.points,
     }
 }
@@ -61,9 +62,7 @@ pub async fn create_item_series(
             basis: input.basis,
             template_item_id: input.template_item_id,
             assigned_to_user_id: input.assigned_to_user_id,
-            // Smithy/wire wiring is docs/assignment-rotation-plan.md's Stage 3 —
-            // this API has no rotationUserIds field yet.
-            rotation_user_ids: None,
+            rotation_user_ids: input.rotation_user_ids,
             points: input.points,
         },
     )
@@ -88,6 +87,10 @@ pub async fn get_item_series(
     )
     .await
     .map_err(|e| error::GetItemSeriesError::from(to_msg(e)))?;
+    let rotation_user_ids = item_series
+        .list_rotation_members(&series.id)
+        .await
+        .map_err(|e| error::GetItemSeriesError::from(to_msg(e.into())))?;
     Ok(output::GetItemSeriesOutput {
         series_id: series.id,
         project_id: series.project_id,
@@ -100,6 +103,7 @@ pub async fn get_item_series(
         basis: series.basis,
         template_item_id: series.template_item_id,
         assigned_to_user_id: series.assigned_to_user_id,
+        rotation_user_ids: (!rotation_user_ids.is_empty()).then_some(rotation_user_ids),
         points: series.points,
     })
 }
@@ -129,9 +133,7 @@ pub async fn update_item_series(
             basis: input.basis,
             template_item_id: input.template_item_id,
             assigned_to_user_id: input.assigned_to_user_id,
-            // Smithy/wire wiring is docs/assignment-rotation-plan.md's Stage 3 —
-            // this API has no rotationUserIds field yet.
-            rotation_user_ids: None,
+            rotation_user_ids: input.rotation_user_ids,
             points: input.points,
         },
     )
@@ -166,7 +168,7 @@ pub async fn list_item_series_for_project(
     server::Extension(item_series): server::Extension<Arc<dyn ItemSeriesRepo>>,
     server::Extension(auth): server::Extension<AuthUser>,
 ) -> Result<output::ListItemSeriesForProjectOutput, error::ListItemSeriesForProjectError> {
-    let series = item_series_service::list_series_for_project(
+    let series_list = item_series_service::list_series_for_project(
         &projects,
         &teams,
         &item_series,
@@ -174,9 +176,14 @@ pub async fn list_item_series_for_project(
         &input.project_id,
     )
     .await
-    .map_err(|e| error::ListItemSeriesForProjectError::from(to_msg(e)))?
-    .into_iter()
-    .map(to_summary)
-    .collect();
+    .map_err(|e| error::ListItemSeriesForProjectError::from(to_msg(e)))?;
+    let mut series = Vec::with_capacity(series_list.len());
+    for s in series_list {
+        let rotation_user_ids = item_series
+            .list_rotation_members(&s.id)
+            .await
+            .map_err(|e| error::ListItemSeriesForProjectError::from(to_msg(e.into())))?;
+        series.push(to_summary(s, rotation_user_ids));
+    }
     Ok(output::ListItemSeriesForProjectOutput { series })
 }

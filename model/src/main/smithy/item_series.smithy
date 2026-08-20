@@ -56,11 +56,21 @@ structure ItemSeriesSummary {
 
     assignedToUserId: String
 
+    rotationUserIds: StringList
+
     points: Integer
 }
 
 list ItemSeriesList {
     member: ItemSeriesSummary
+}
+
+// docs/assignment-rotation-plan.md's rotating-assignee feature: `assignedToUserId` and
+// `rotationUserIds` are mutually exclusive per series (enforced service-side, not here —
+// Smithy has no clean "exactly one of" constraint), and stay present on the wire
+// simultaneously so a client always sees which mode is active by which one is populated.
+list StringList {
+    member: String
 }
 
 @http(method: "POST", uri: "/projects/{projectId}/series")
@@ -100,6 +110,9 @@ operation CreateItemSeries {
 
         @notProperty
         assignedToUserId: String
+
+        @notProperty
+        rotationUserIds: StringList
 
         @notProperty
         points: Integer
@@ -171,6 +184,9 @@ operation GetItemSeries {
         assignedToUserId: String
 
         @notProperty
+        rotationUserIds: StringList
+
+        @notProperty
         points: Integer
     }
 
@@ -222,6 +238,9 @@ operation UpdateItemSeries {
 
         @notProperty
         assignedToUserId: String
+
+        @notProperty
+        rotationUserIds: StringList
 
         @notProperty
         points: Integer
