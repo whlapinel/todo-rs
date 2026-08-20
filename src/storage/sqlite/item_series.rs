@@ -316,6 +316,43 @@ impl ItemSeriesRepo for SqliteItemSeriesRepo {
         tx.commit().await.map_err(db_err)?;
         Ok(())
     }
+
+    async fn list_rotation_members(&self, series_id: &str) -> Result<Vec<String>, RepoError> {
+        sqlx::query(
+            "SELECT user_id FROM item_series_rotation_members \
+             WHERE series_id = ? ORDER BY user_id ASC",
+        )
+        .bind(series_id)
+        .fetch_all(&self.0)
+        .await
+        .map_err(db_err)
+        .map(|rows| rows.iter().map(|row| row.get("user_id")).collect())
+    }
+
+    async fn set_rotation_members(
+        &self,
+        series_id: &str,
+        user_ids: &[String],
+    ) -> Result<(), RepoError> {
+        let mut tx = self.0.begin().await.map_err(db_err)?;
+        sqlx::query("DELETE FROM item_series_rotation_members WHERE series_id = ?")
+            .bind(series_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(db_err)?;
+        for user_id in user_ids {
+            sqlx::query(
+                "INSERT INTO item_series_rotation_members (series_id, user_id) VALUES (?, ?)",
+            )
+            .bind(series_id)
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(db_err)?;
+        }
+        tx.commit().await.map_err(db_err)?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -356,6 +393,16 @@ mod tests {
                 item_id TEXT,
                 is_exdate INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (series_id, occurrence_date)
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE item_series_rotation_members (
+                series_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                PRIMARY KEY (series_id, user_id)
             )",
         )
         .execute(&pool)
@@ -881,5 +928,95 @@ mod tests {
 
         let err = repo.delete_series("missing").await.unwrap_err();
         assert!(matches!(err, RepoError::NotFound));
+    }
+
+    #[tokio::test]
+    async fn list_rotation_members_returns_empty_for_a_series_with_none_set() {
+        let pool = test_pool().await;
+        let repo = SqliteItemSeriesRepo(pool);
+        let id = repo.create_series(&sample_series("p1")).await.unwrap();
+
+        let members = repo.list_rotation_members(&id).await.unwrap();
+
+        assert!(members.is_empty());
+    }
+
+    #[tokio::test]
+    async fn set_rotation_members_then_list_round_trips_sorted_by_user_id() {
+        let pool = test_pool().await;
+        let repo = SqliteItemSeriesRepo(pool);
+        let id = repo.create_series(&sample_series("p1")).await.unwrap();
+
+        // Deliberately unsorted input — list_rotation_members' sort is what defines
+        // the cycle order, not insertion order.
+        repo.set_rotation_members(
+            &id,
+            &[
+                "carol".to_string(),
+                "alice".to_string(),
+                "bob".to_string(),
+            ],
+        )
+        .await
+        .unwrap();
+
+        let members = repo.list_rotation_members(&id).await.unwrap();
+
+        assert_eq!(members, vec!["alice", "bob", "carol"]);
+    }
+
+    #[tokio::test]
+    async fn set_rotation_members_replaces_the_prior_set() {
+        let pool = test_pool().await;
+        let repo = SqliteItemSeriesRepo(pool);
+        let id = repo.create_series(&sample_series("p1")).await.unwrap();
+        repo.set_rotation_members(&id, &["alice".to_string(), "bob".to_string()])
+            .await
+            .unwrap();
+
+        repo.set_rotation_members(&id, &["carol".to_string()])
+            .await
+            .unwrap();
+
+        let members = repo.list_rotation_members(&id).await.unwrap();
+        assert_eq!(members, vec!["carol"]);
+    }
+
+    #[tokio::test]
+    async fn set_rotation_members_with_an_empty_slice_clears_the_rotation() {
+        let pool = test_pool().await;
+        let repo = SqliteItemSeriesRepo(pool);
+        let id = repo.create_series(&sample_series("p1")).await.unwrap();
+        repo.set_rotation_members(&id, &["alice".to_string()])
+            .await
+            .unwrap();
+
+        repo.set_rotation_members(&id, &[]).await.unwrap();
+
+        let members = repo.list_rotation_members(&id).await.unwrap();
+        assert!(members.is_empty());
+    }
+
+    #[tokio::test]
+    async fn rotation_members_are_scoped_to_their_own_series() {
+        let pool = test_pool().await;
+        let repo = SqliteItemSeriesRepo(pool);
+        let id1 = repo.create_series(&sample_series("p1")).await.unwrap();
+        let id2 = repo.create_series(&sample_series("p1")).await.unwrap();
+        repo.set_rotation_members(&id1, &["alice".to_string()])
+            .await
+            .unwrap();
+        repo.set_rotation_members(&id2, &["bob".to_string()])
+            .await
+            .unwrap();
+
+        assert_eq!(
+            repo.list_rotation_members(&id1).await.unwrap(),
+            vec!["alice"]
+        );
+        assert_eq!(
+            repo.list_rotation_members(&id2).await.unwrap(),
+            vec!["bob"]
+        );
     }
 }

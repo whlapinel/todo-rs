@@ -9,6 +9,7 @@ mod add_item_series_assignment;
 mod add_item_series_basis;
 mod add_item_series_cursor_date;
 mod add_item_series_id;
+mod add_item_series_rotation_members;
 mod add_item_series_template_item_id;
 mod add_item_source_event_id;
 mod add_projects;
@@ -33,6 +34,7 @@ use add_item_series_assignment::AddItemSeriesAssignment;
 use add_item_series_basis::AddItemSeriesBasis;
 use add_item_series_cursor_date::AddItemSeriesCursorDate;
 use add_item_series_id::AddItemSeriesId;
+use add_item_series_rotation_members::AddItemSeriesRotationMembers;
 use add_item_series_template_item_id::AddItemSeriesTemplateItemId;
 use add_item_source_event_id::AddItemSourceEventId;
 use add_projects::AddProjects;
@@ -104,6 +106,7 @@ fn all_migrations() -> Vec<Box<dyn Migration>> {
         Box::new(AddItemSeriesAssignment),
         Box::new(ActivityLogTeamIdNullable),
         Box::new(AddItemSeriesId),
+        Box::new(AddItemSeriesRotationMembers),
     ]
 }
 
@@ -528,7 +531,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 23);
+        assert_eq!(applied_count, 24);
     }
 
     #[tokio::test]
@@ -541,7 +544,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 23);
+        assert_eq!(applied_count, 24);
     }
 
     #[tokio::test]
@@ -555,6 +558,6 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 23);
+        assert_eq!(applied_count, 24);
     }
 }

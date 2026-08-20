@@ -379,6 +379,26 @@ pub trait ItemSeriesRepo: Send + Sync {
     /// as a plain standalone item. See item_series.smithy's `DeleteItemSeries` doc
     /// comment for the rationale.
     async fn delete_series(&self, series_id: &str) -> Result<(), RepoError>;
+
+    /// The series' rotation membership, sorted by `user_id` — this sort order *is* the
+    /// cycle order (docs/assignment-rotation-plan.md's "unordered set, stable derived
+    /// order" decision), not just a display nicety, so callers computing
+    /// `rotation[index % len]` must use this method rather than re-sorting themselves.
+    /// Empty `Vec` (not an error) for a series with no rotation configured, same
+    /// not-found-is-empty convention `list_occurrences_between` already follows.
+    async fn list_rotation_members(&self, series_id: &str) -> Result<Vec<String>, RepoError>;
+    /// Full-replace of `series_id`'s rotation membership — deletes every existing row
+    /// for this series and reinserts `user_ids`, in one transaction so a reader never
+    /// observes a partial set. Passing an empty slice clears the rotation entirely
+    /// (the service layer, not this method, is what rejects an ambiguous "empty but
+    /// explicitly rotating" request — see resolve_series_assignment). Does not validate
+    /// `user_ids` against project membership; that's the service layer's job, same
+    /// division `create_series`/`update_series` already follow for `assigned_to_user_id`.
+    async fn set_rotation_members(
+        &self,
+        series_id: &str,
+        user_ids: &[String],
+    ) -> Result<(), RepoError>;
 }
 
 fn db_err(e: sqlx::Error) -> RepoError {
@@ -714,6 +734,22 @@ pub async fn create_pool(url: &str) -> Result<SqlitePool, sqlx::Error> {
     .await?;
     sqlx::query(
         "CREATE INDEX IF NOT EXISTS idx_item_occurrences_item_id ON item_occurrences (item_id)",
+    )
+    .execute(&pool)
+    .await?;
+    // Assignment rotation (docs/assignment-rotation-plan.md) — an unordered set of
+    // project-member user ids a Task-typed series rotates its materialized occurrences'
+    // assignee across. No `position` column: cycle order is derived at read time via
+    // `ORDER BY user_id ASC` (see ItemSeriesRepo::list_rotation_members), not
+    // separately authored — deliberately simpler than a position-tracked ordered list
+    // per that plan's decision. Mutually exclusive with `item_series.assigned_to_user_id`
+    // (enforced at the service layer, not here).
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS item_series_rotation_members (
+            series_id TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            PRIMARY KEY (series_id, user_id)
+        )",
     )
     .execute(&pool)
     .await?;
