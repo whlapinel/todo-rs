@@ -1,5 +1,5 @@
 use crate::domain::item::{Item, ItemType, Recurrence, Schedule};
-use crate::service::items::{copy_children_as_template, ItemError};
+use crate::service::items::{ItemError, copy_children_as_template};
 use crate::service::projects::require_project_member;
 use crate::storage::sqlite::{ItemRepo, ProjectRepo, TeamRepo};
 use std::sync::Arc;
@@ -129,7 +129,13 @@ pub async fn create_team_template(
     projects: &Arc<dyn ProjectRepo>,
     params: CreateTeamTemplateParams,
 ) -> Result<String, ItemError> {
-    require_project_member(projects, teams, &params.project_id, &params.requester_user_id).await?;
+    require_project_member(
+        projects,
+        teams,
+        &params.project_id,
+        &params.requester_user_id,
+    )
+    .await?;
 
     let mut item = Item::new_project_item(&params.project_id, &params.name);
     let mut schedule = Schedule::default();
@@ -199,9 +205,17 @@ pub async fn update_team_template(
     projects: &Arc<dyn ProjectRepo>,
     params: UpdateTeamTemplateParams,
 ) -> Result<(), ItemError> {
-    require_project_member(projects, teams, &params.project_id, &params.requester_user_id).await?;
+    require_project_member(
+        projects,
+        teams,
+        &params.project_id,
+        &params.requester_user_id,
+    )
+    .await?;
 
-    let current = repo.get_by_project(&params.project_id, &params.template_id).await?;
+    let current = repo
+        .get_by_project(&params.project_id, &params.template_id)
+        .await?;
     if !matches!(current.item_type, ItemType::Template { .. }) {
         return Err(ItemError::Invalid("item is not a template".to_string()));
     }
@@ -680,7 +694,9 @@ mod tests {
     #[tokio::test]
     async fn list_project_templates_calls_list_templates_by_project_on_personal_project() {
         let mut projects_mock = MockProjectRepo::new();
-        projects_mock.expect_get().returning(|_| Ok(personal_project()));
+        projects_mock
+            .expect_get()
+            .returning(|_| Ok(personal_project()));
         let mut items_mock = MockItemRepo::new();
         items_mock
             .expect_list_templates_by_project()
@@ -700,7 +716,9 @@ mod tests {
     #[tokio::test]
     async fn list_project_templates_calls_list_templates_by_project_on_shared_project() {
         let mut projects_mock = MockProjectRepo::new();
-        projects_mock.expect_get().returning(|_| Ok(shared_project()));
+        projects_mock
+            .expect_get()
+            .returning(|_| Ok(shared_project()));
         projects_mock
             .expect_member_role()
             .returning(|_, _| Ok(Some(TeamRole::Member)));
@@ -723,7 +741,9 @@ mod tests {
     #[tokio::test]
     async fn list_project_templates_rejects_non_member() {
         let mut projects_mock = MockProjectRepo::new();
-        projects_mock.expect_get().returning(|_| Ok(personal_project()));
+        projects_mock
+            .expect_get()
+            .returning(|_| Ok(personal_project()));
         let repo: Arc<dyn ItemRepo> = Arc::new(MockItemRepo::new());
         let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
         let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
@@ -735,7 +755,9 @@ mod tests {
     #[tokio::test]
     async fn create_project_template_delegates_to_personal_creation() {
         let mut projects_mock = MockProjectRepo::new();
-        projects_mock.expect_get().returning(|_| Ok(personal_project()));
+        projects_mock
+            .expect_get()
+            .returning(|_| Ok(personal_project()));
         let mut items_mock = MockItemRepo::new();
         items_mock
             .expect_create()
@@ -771,7 +793,9 @@ mod tests {
     #[tokio::test]
     async fn create_project_template_delegates_to_team_creation() {
         let mut projects_mock = MockProjectRepo::new();
-        projects_mock.expect_get().returning(|_| Ok(shared_project()));
+        projects_mock
+            .expect_get()
+            .returning(|_| Ok(shared_project()));
         projects_mock
             .expect_member_role()
             .returning(|_, _| Ok(Some(TeamRole::Member)));
@@ -809,7 +833,9 @@ mod tests {
     #[tokio::test]
     async fn update_project_template_delegates_to_personal_update() {
         let mut projects_mock = MockProjectRepo::new();
-        projects_mock.expect_get().returning(|_| Ok(personal_project()));
+        projects_mock
+            .expect_get()
+            .returning(|_| Ok(personal_project()));
         let mut items_mock = MockItemRepo::new();
         items_mock.expect_get().returning(|_, _| {
             Ok(Item {
@@ -849,7 +875,9 @@ mod tests {
     #[tokio::test]
     async fn update_project_template_delegates_to_team_update() {
         let mut projects_mock = MockProjectRepo::new();
-        projects_mock.expect_get().returning(|_| Ok(shared_project()));
+        projects_mock
+            .expect_get()
+            .returning(|_| Ok(shared_project()));
         projects_mock
             .expect_member_role()
             .returning(|_, _| Ok(Some(TeamRole::Member)));
@@ -867,7 +895,10 @@ mod tests {
                 ..Item::default()
             })
         });
-        items_mock.expect_update_by_project().times(1).returning(|_| Ok(()));
+        items_mock
+            .expect_update_by_project()
+            .times(1)
+            .returning(|_| Ok(()));
 
         let repo: Arc<dyn ItemRepo> = Arc::new(items_mock);
         let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);

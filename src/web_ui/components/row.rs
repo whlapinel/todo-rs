@@ -32,6 +32,9 @@ pub struct Row {
     pub complete_url: Option<String>,
     pub duplicate_url: Option<String>,
     pub reschedule_url: Option<String>,
+    /// `Some(...)` only on a team-backed project (assignment has no meaning on a personal
+    /// one) — opens the quick-assign dialog, mirroring `reschedule_url`'s dialog pattern.
+    pub assign_url: Option<String>,
     /// `Some(...)` when this item was materialized from an `item_series` occurrence — see
     /// `service::item_series::skip_url_for_item`. Lets a materialized row's own Skip action
     /// reach the same unified Skip route a still-virtual occurrence's row already uses, so the

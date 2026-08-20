@@ -54,6 +54,7 @@ impl ProjectEventRow {
                 "/web/projects/{project_id}/events/{}/reschedule",
                 item.id
             )),
+            assign_url: None,
             skip_url,
             toggle_complete_json: String::new(),
             siblings: Vec::new(),
@@ -397,7 +398,11 @@ impl ProjectEventSeriesOccurrenceFields {
             } else {
                 String::new()
             },
-            due_time_input: if is_due_date_basis { time_input } else { String::new() },
+            due_time_input: if is_due_date_basis {
+                time_input
+            } else {
+                String::new()
+            },
             event_type_input: series.event_type.clone().unwrap_or_default(),
             update_url: format!(
                 "/web/projects/{project_id}/series/{}/occurrences/{occurrence_ts}/event",

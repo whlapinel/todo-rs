@@ -224,8 +224,8 @@ impl Migration for BackfillProjects {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use sqlx::SqlitePool;
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use std::str::FromStr;
 
     async fn empty_pool() -> SqlitePool {
@@ -313,14 +313,12 @@ mod tests {
     }
 
     async fn project_row(pool: &SqlitePool, owner: &str, team: Option<&str>) -> Option<String> {
-        sqlx::query_scalar(
-            "SELECT id FROM projects WHERE owner_user_id = ? AND team_id IS ?",
-        )
-        .bind(owner)
-        .bind(team)
-        .fetch_optional(pool)
-        .await
-        .unwrap()
+        sqlx::query_scalar("SELECT id FROM projects WHERE owner_user_id = ? AND team_id IS ?")
+            .bind(owner)
+            .bind(team)
+            .fetch_optional(pool)
+            .await
+            .unwrap()
     }
 
     #[tokio::test]
@@ -552,7 +550,11 @@ mod tests {
 
         BackfillProjects.up(&mut conn).await.unwrap();
 
-        assert!(column_exists(&mut conn, "activity_log", "project_id").await.unwrap());
+        assert!(
+            column_exists(&mut conn, "activity_log", "project_id")
+                .await
+                .unwrap()
+        );
         let team_project_id = project_row(&pool, "u1", Some("t1")).await.unwrap();
         let log_project: Option<String> =
             sqlx::query_scalar("SELECT project_id FROM activity_log WHERE id = 'a1'")

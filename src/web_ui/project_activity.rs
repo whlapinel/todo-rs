@@ -1,7 +1,7 @@
+use super::nav::{self, ActiveContext, SidebarSection};
+use super::{TzOffset, to_local};
 use crate::auth::AuthUser;
 use crate::domain::activity_log::ActivityLogEntry;
-use super::nav::{self, ActiveContext, SidebarSection};
-use super::{to_local, TzOffset};
 use crate::service::activity_log as activity_log_service;
 use crate::service::error::ItemError;
 use crate::service::projects::get_project;
@@ -113,10 +113,13 @@ async fn render_activity_page(
     };
     let rows = entries
         .iter()
-        .map(|e| ProjectActivityRow::from_entry(e, project_id, &names, requester_user_id, tz).render())
+        .map(|e| {
+            ProjectActivityRow::from_entry(e, project_id, &names, requester_user_id, tz).render()
+        })
         .collect::<Result<Vec<_>, _>>()?;
     let active = ActiveContext::Project(project_id.to_string());
-    let nav_html = nav::build_nav_html(projects, requester_user_id, active, SidebarSection::None).await?;
+    let nav_html =
+        nav::build_nav_html(projects, requester_user_id, active, SidebarSection::None).await?;
     render(ProjectActivityPageTemplate {
         project_id: project_id.to_string(),
         rows,
@@ -132,7 +135,15 @@ pub async fn project_activity_page(
     Extension(activity_log): Extension<Arc<dyn ActivityLogRepo>>,
     TzOffset(tz): TzOffset,
 ) -> Result<Html<String>, ItemError> {
-    render_activity_page(&projects, &teams, &activity_log, &project_id, &auth_user.user_id, tz).await
+    render_activity_page(
+        &projects,
+        &teams,
+        &activity_log,
+        &project_id,
+        &auth_user.user_id,
+        tz,
+    )
+    .await
 }
 
 pub async fn undo_project_activity_log_entry_form(
@@ -160,5 +171,13 @@ pub async fn undo_project_activity_log_entry_form(
         tz,
     )
     .await?;
-    render_activity_page(&projects, &teams, &activity_log, &project_id, &auth_user.user_id, tz).await
+    render_activity_page(
+        &projects,
+        &teams,
+        &activity_log,
+        &project_id,
+        &auth_user.user_id,
+        tz,
+    )
+    .await
 }

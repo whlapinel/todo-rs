@@ -45,6 +45,7 @@ impl ProjectTaskRow {
         siblings: &[&Item],
         tz: i32,
         skip_url: Option<String>,
+        is_team_project: bool,
     ) -> Row {
         let offset_label = offset_label_for(item);
         let assignee_name = item
@@ -97,6 +98,8 @@ impl ProjectTaskRow {
                 "/web/projects/{project_id}/tasks/{}/reschedule",
                 item.id
             )),
+            assign_url: is_team_project
+                .then(|| format!("/web/projects/{project_id}/tasks/{}/assign", item.id)),
             skip_url,
             toggle_complete_json: (!item.complete).to_string(),
             siblings: siblings
@@ -168,6 +171,37 @@ impl RescheduleDialog {
             } else {
                 String::new()
             },
+        }
+    }
+}
+
+/// A lightweight assignee-only editor, opened from a task row's person-icon button — mirrors
+/// `RescheduleDialog` exactly (see its doc comment for the rationale): reuses the same PUT
+/// `/web/projects/:project_id/tasks/:item_id` endpoint (`handlers::update_project_task_form`),
+/// so every field this dialog omits round-trips from `current` unchanged via that handler's
+/// existing overlay helpers. Only ever built for a team-backed project — `assign_url` (see
+/// `components::row::Row`) is `None` on a personal project, so this dialog's route is never
+/// reached without one.
+#[derive(Template)]
+#[template(path = "components/quick_assign_dialog.html")]
+pub struct QuickAssignDialog {
+    pub item_id: String,
+    pub post_assign_url: String,
+    pub assignee_options: Vec<(String, String)>,
+    pub assigned_to_user_id: Option<String>,
+}
+
+impl QuickAssignDialog {
+    pub fn from_task(
+        task: &Item,
+        project_id: &str,
+        assignee_options: Vec<(String, String)>,
+    ) -> Self {
+        QuickAssignDialog {
+            item_id: task.id.clone(),
+            post_assign_url: format!("/web/projects/{project_id}/tasks/{}", task.id),
+            assignee_options,
+            assigned_to_user_id: task.assigned_to_user_id(),
         }
     }
 }

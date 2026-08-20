@@ -18,7 +18,8 @@ pub async fn list_items_due(
 
     let mut team_id_by_project: HashMap<String, Option<String>> = HashMap::new();
     for project_id in due_items.iter().filter_map(|di| di.item.project_id.clone()) {
-        if let std::collections::hash_map::Entry::Vacant(entry) = team_id_by_project.entry(project_id.clone())
+        if let std::collections::hash_map::Entry::Vacant(entry) =
+            team_id_by_project.entry(project_id.clone())
         {
             let project = projects
                 .get(&project_id)
@@ -71,7 +72,8 @@ pub async fn list_assigned_items(
 
     let mut team_id_by_project: HashMap<String, Option<String>> = HashMap::new();
     for project_id in items.iter().filter_map(|i| i.project_id.clone()) {
-        if let std::collections::hash_map::Entry::Vacant(entry) = team_id_by_project.entry(project_id.clone())
+        if let std::collections::hash_map::Entry::Vacant(entry) =
+            team_id_by_project.entry(project_id.clone())
         {
             let project = projects
                 .get(&project_id)
@@ -181,7 +183,11 @@ mod tests {
         .await
         .unwrap();
 
-        let personal = output.items.iter().find(|i| i.item_id == "i-personal").unwrap();
+        let personal = output
+            .items
+            .iter()
+            .find(|i| i.item_id == "i-personal")
+            .unwrap();
         assert_eq!(personal.team_id, None);
         let team = output.items.iter().find(|i| i.item_id == "i-team").unwrap();
         assert_eq!(team.team_id, Some("team1".to_string()));
@@ -230,7 +236,11 @@ mod tests {
         .await
         .unwrap();
 
-        let personal = output.items.iter().find(|i| i.item_id == "i-personal").unwrap();
+        let personal = output
+            .items
+            .iter()
+            .find(|i| i.item_id == "i-personal")
+            .unwrap();
         assert_eq!(personal.owner_user_id, "owner1");
         let team = output.items.iter().find(|i| i.item_id == "i-team").unwrap();
         assert_eq!(team.owner_user_id, "team1");

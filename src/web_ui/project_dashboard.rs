@@ -3,7 +3,9 @@ use super::{TzOffset, to_local};
 use crate::auth::AuthUser;
 use crate::domain::item::{Item, ItemKind};
 use crate::service::error::ItemError;
-use crate::service::item_series::{self as event_series_service, OccurrenceState, ProjectOccurrence};
+use crate::service::item_series::{
+    self as event_series_service, OccurrenceState, ProjectOccurrence,
+};
 use crate::service::project_items::{self as project_item_service, UpdateProjectItemParams};
 use crate::service::projects::{self as project_service};
 use crate::service::teams as team_service;

@@ -67,8 +67,8 @@ impl Migration for AddProjects {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use sqlx::SqlitePool;
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use std::str::FromStr;
 
     async fn empty_pool() -> SqlitePool {
@@ -90,12 +90,10 @@ mod tests {
         AddProjects.up(&mut conn).await.unwrap();
         AddProjects.up(&mut conn).await.unwrap();
 
-        sqlx::query(
-            "INSERT INTO projects (id, name, owner_user_id) VALUES ('p1', 'Home', 'u1')",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
+        sqlx::query("INSERT INTO projects (id, name, owner_user_id) VALUES ('p1', 'Home', 'u1')")
+            .execute(&pool)
+            .await
+            .unwrap();
         sqlx::query(
             "INSERT INTO project_members (project_id, user_id, role, points) \
              VALUES ('p1', 'u1', 'admin', 0)",
@@ -120,6 +118,10 @@ mod tests {
             .unwrap();
         assert_eq!(member_count, 1);
 
-        assert!(column_exists(&mut conn, "items", "project_id").await.unwrap());
+        assert!(
+            column_exists(&mut conn, "items", "project_id")
+                .await
+                .unwrap()
+        );
     }
 }

@@ -226,14 +226,18 @@ impl ItemType {
 
     pub fn team_assignment(&self) -> Option<&TeamAssignment> {
         match self {
-            ItemType::Task { team_assignment, .. } => team_assignment.as_ref(),
+            ItemType::Task {
+                team_assignment, ..
+            } => team_assignment.as_ref(),
             _ => None,
         }
     }
 
     pub fn source_event_id(&self) -> Option<&str> {
         match self {
-            ItemType::Task { source_event_id, .. } => source_event_id.as_deref(),
+            ItemType::Task {
+                source_event_id, ..
+            } => source_event_id.as_deref(),
             _ => None,
         }
     }
@@ -342,9 +346,7 @@ impl Item {
     }
 
     pub fn scheduled_end_date(&self) -> Option<DateTime<Utc>> {
-        self.item_type
-            .schedule()
-            .and_then(|s| s.scheduled_end_date)
+        self.item_type.schedule().and_then(|s| s.scheduled_end_date)
     }
 
     pub fn has_end_time(&self) -> bool {
@@ -403,7 +405,9 @@ impl Item {
             return Err("child items cannot have points".to_string());
         }
         if self.name.chars().count() > MAX_NAME_LENGTH {
-            return Err(format!("name must be {MAX_NAME_LENGTH} characters or fewer"));
+            return Err(format!(
+                "name must be {MAX_NAME_LENGTH} characters or fewer"
+            ));
         }
         if self
             .description
@@ -431,9 +435,7 @@ impl Item {
         // A task either nests under a parent or references an event, never both —
         // keeps "offset-driven" unambiguous: exactly one anchor source.
         if self.source_event_id().is_some() && self.parent_item_id.is_some() {
-            return Err(
-                "an item cannot both have a parent and reference an event".to_string(),
-            );
+            return Err("an item cannot both have a parent and reference an event".to_string());
         }
         // Offset-driven items (children and event-linked tasks) get their due date
         // computed from the offset (see service::items::resolve_offset_anchor) —
@@ -443,8 +445,7 @@ impl Item {
             && (self.scheduled_date().is_some() || self.scheduled_end_date().is_some())
         {
             return Err(
-                "scheduled dates are not allowed on child or event-linked items"
-                    .to_string(),
+                "scheduled dates are not allowed on child or event-linked items".to_string(),
             );
         }
         Ok(())
@@ -481,7 +482,10 @@ mod tests {
     use super::*;
 
     fn set_due_date(item: &mut Item, dt: DateTime<Utc>) {
-        item.item_type.schedule_mut().expect("has schedule").due_date = Some(dt);
+        item.item_type
+            .schedule_mut()
+            .expect("has schedule")
+            .due_date = Some(dt);
     }
 
     fn set_scheduled_date(item: &mut Item, dt: DateTime<Utc>) {
@@ -507,14 +511,18 @@ mod tests {
 
     fn set_source_event_id(item: &mut Item, event_id: &str) {
         match &mut item.item_type {
-            ItemType::Task { source_event_id, .. } => *source_event_id = Some(event_id.to_string()),
+            ItemType::Task {
+                source_event_id, ..
+            } => *source_event_id = Some(event_id.to_string()),
             _ => panic!("source_event_id only settable on Task"),
         }
     }
 
     fn set_points(item: &mut Item, points: i32) {
         match &mut item.item_type {
-            ItemType::Task { team_assignment, .. } => {
+            ItemType::Task {
+                team_assignment, ..
+            } => {
                 *team_assignment = Some(TeamAssignment {
                     points: Some(points),
                     ..team_assignment.clone().unwrap_or_default()

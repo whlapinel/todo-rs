@@ -32,8 +32,8 @@ impl Migration for AddEventOccurrencesItemIdIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use sqlx::SqlitePool;
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use std::str::FromStr;
 
     async fn pool_with_event_occurrences() -> SqlitePool {

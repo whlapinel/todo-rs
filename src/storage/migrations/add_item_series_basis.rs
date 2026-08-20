@@ -32,8 +32,8 @@ impl Migration for AddItemSeriesBasis {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use sqlx::SqlitePool;
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use std::str::FromStr;
 
     async fn old_schema_pool() -> SqlitePool {
@@ -64,11 +64,19 @@ mod tests {
     async fn adds_basis_column_when_missing() {
         let pool = old_schema_pool().await;
         let mut conn = pool.acquire().await.unwrap();
-        assert!(!column_exists(&mut conn, "item_series", "basis").await.unwrap());
+        assert!(
+            !column_exists(&mut conn, "item_series", "basis")
+                .await
+                .unwrap()
+        );
 
         AddItemSeriesBasis.up(&mut conn).await.unwrap();
 
-        assert!(column_exists(&mut conn, "item_series", "basis").await.unwrap());
+        assert!(
+            column_exists(&mut conn, "item_series", "basis")
+                .await
+                .unwrap()
+        );
     }
 
     #[tokio::test]
@@ -79,6 +87,10 @@ mod tests {
         AddItemSeriesBasis.up(&mut conn).await.unwrap();
         AddItemSeriesBasis.up(&mut conn).await.unwrap();
 
-        assert!(column_exists(&mut conn, "item_series", "basis").await.unwrap());
+        assert!(
+            column_exists(&mut conn, "item_series", "basis")
+                .await
+                .unwrap()
+        );
     }
 }

@@ -1,9 +1,9 @@
 use crate::domain::item::{Item, ItemKind, ItemType, Recurrence, Schedule};
+#[cfg(test)]
+use crate::domain::recurrence;
 use crate::service::activity_log::reverse_entry;
 use crate::service::item_series;
 use crate::storage::sqlite::{ActivityLogRepo, ItemRepo, ItemSeriesRepo, ProjectRepo, RepoError};
-#[cfg(test)]
-use crate::domain::recurrence;
 use chrono::{DateTime, Utc};
 use std::future::Future;
 use std::pin::Pin;
@@ -79,8 +79,7 @@ pub async fn create_item(
 ) -> Result<String, ItemError> {
     if params.item_type == Some(ItemKind::Template) {
         return Err(ItemError::Invalid(
-            "item_type Template can only be set via the template creation flow"
-                .to_string(),
+            "item_type Template can only be set via the template creation flow".to_string(),
         ));
     }
     if let (Some(start), Some(end)) = (params.scheduled_date, params.scheduled_end_date)
@@ -176,8 +175,7 @@ pub async fn create_item(
             .iter()
             .filter(|t| t.event_type().as_deref() == Some(event_type.as_str()))
         {
-            copy_template_children_to_event(repo, &tpl.id, &item_id, root_date, tz_offset)
-                .await?;
+            copy_template_children_to_event(repo, &tpl.id, &item_id, root_date, tz_offset).await?;
         }
     }
     Ok(item_id)
@@ -222,8 +220,7 @@ pub async fn update_item(
 ) -> Result<(), ItemError> {
     if params.item_type == Some(ItemKind::Template) {
         return Err(ItemError::Invalid(
-            "item_type Template can only be set via the template creation flow"
-                .to_string(),
+            "item_type Template can only be set via the template creation flow".to_string(),
         ));
     }
     if let (Some(start), Some(end)) = (params.scheduled_date, params.scheduled_end_date)
@@ -252,8 +249,7 @@ pub async fn update_item(
         && parent.kind() == ItemKind::Event
     {
         return Err(ItemError::Invalid(
-            "Events cannot have children; link a task to it via sourceEventId instead"
-                .to_string(),
+            "Events cannot have children; link a task to it via sourceEventId instead".to_string(),
         ));
     }
 
@@ -627,8 +623,8 @@ pub(crate) fn copy_template_children_to_event<'a>(
             new_child.parent_item_id = None;
             new_child.complete = false;
             let mut schedule = child.item_type.schedule().cloned().unwrap_or_default();
-            schedule.due_date = event_anchor
-                .and_then(|root| child.deadline_from_offset(root, tz_offset_minutes));
+            schedule.due_date =
+                event_anchor.and_then(|root| child.deadline_from_offset(root, tz_offset_minutes));
             schedule.has_due_time = false;
             let recurrence = child.item_type.recurrence().cloned().unwrap_or_default();
             new_child.item_type = ItemType::Task {
@@ -965,16 +961,18 @@ mod tests {
         mock.expect_get()
             .withf(|user_id: &str, item_id: &str| user_id == "u1" && item_id == "event1")
             .times(1)
-            .returning(|_, _| Ok(Item {
-                id: "event1".to_string(),
-                user_id: Some("u1".to_string()),
-                item_type: ItemType::Event {
-                    schedule: Schedule::default(),
-                    recurrence: Recurrence::default(),
-                    event_type: None,
-                },
-                ..Item::default()
-            }));
+            .returning(|_, _| {
+                Ok(Item {
+                    id: "event1".to_string(),
+                    user_id: Some("u1".to_string()),
+                    item_type: ItemType::Event {
+                        schedule: Schedule::default(),
+                        recurrence: Recurrence::default(),
+                        event_type: None,
+                    },
+                    ..Item::default()
+                })
+            });
 
         mock.expect_list_children()
             .withf(|parent_id: &str| parent_id == "event1")
@@ -988,7 +986,10 @@ mod tests {
                 .with_timezone(&Utc),
         );
         linked_task.user_id = Some("u1".to_string());
-        if let ItemType::Task { source_event_id, .. } = &mut linked_task.item_type {
+        if let ItemType::Task {
+            source_event_id, ..
+        } = &mut linked_task.item_type
+        {
             *source_event_id = Some("event1".to_string());
         }
         let returned_task = linked_task.clone();
@@ -1106,7 +1107,8 @@ mod tests {
             .unwrap()
             .with_timezone(&Utc);
 
-        mock.expect_get().returning(move |_, _| Ok(task_with_due_date("item1", old_due)));
+        mock.expect_get()
+            .returning(move |_, _| Ok(task_with_due_date("item1", old_due)));
 
         mock.expect_update()
             .withf(move |item: &Item| item.id == "item1" && item.due_date() == Some(new_due))
@@ -1169,7 +1171,8 @@ mod tests {
             .unwrap()
             .with_timezone(&Utc);
 
-        mock.expect_get().returning(move |_, _| Ok(task_with_due_date("item1", due)));
+        mock.expect_get()
+            .returning(move |_, _| Ok(task_with_due_date("item1", due)));
 
         mock.expect_update()
             .withf(move |item: &Item| item.id == "item1" && item.due_date() == Some(due))
@@ -1271,13 +1274,15 @@ mod tests {
         let mut activity_log = MockActivityLogRepo::new();
         activity_log
             .expect_log_activity()
-            .withf(|team_id, _project_id, user_id, item_id, item_name, points_delta| {
-                team_id.is_none()
-                    && user_id == "u1"
-                    && item_id == "item1"
-                    && item_name == "Parent"
-                    && *points_delta == 0
-            })
+            .withf(
+                |team_id, _project_id, user_id, item_id, item_name, points_delta| {
+                    team_id.is_none()
+                        && user_id == "u1"
+                        && item_id == "item1"
+                        && item_name == "Parent"
+                        && *points_delta == 0
+                },
+            )
             .times(1)
             .returning(|_, _, _, _, _, _| Ok("entry1".to_string()));
 

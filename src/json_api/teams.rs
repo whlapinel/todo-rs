@@ -4,8 +4,8 @@ use crate::domain::team::TeamRole;
 use crate::service::items::ItemError;
 use crate::service::teams as team_service;
 use crate::storage::sqlite::{ProjectRepo, TeamRepo, UserRepo};
-use std::sync::Arc;
 use std::str::FromStr;
+use std::sync::Arc;
 use todo_server_sdk::{error, input, model, output, server};
 
 fn to_msg(e: ItemError) -> error::PeoplesRepublicOfListsError {
@@ -34,7 +34,8 @@ pub async fn create_team(
     server::Extension(projects): server::Extension<Arc<dyn ProjectRepo>>,
     server::Extension(auth): server::Extension<AuthUser>,
 ) -> Result<output::CreateTeamOutput, error::CreateTeamError> {
-    require_matching_user(&auth, &input.user_id).map_err(|e| error::CreateTeamError::from(to_msg(e)))?;
+    require_matching_user(&auth, &input.user_id)
+        .map_err(|e| error::CreateTeamError::from(to_msg(e)))?;
     let team_id = team_service::create_team(&teams, &projects, &input.name, &auth.user_id)
         .await
         .map_err(|e| error::CreateTeamError::from(to_msg(e)))?;
@@ -46,7 +47,8 @@ pub async fn get_team(
     server::Extension(teams): server::Extension<Arc<dyn TeamRepo>>,
     server::Extension(auth): server::Extension<AuthUser>,
 ) -> Result<output::GetTeamOutput, error::GetTeamError> {
-    require_matching_user(&auth, &input.user_id).map_err(|e| error::GetTeamError::from(to_msg(e)))?;
+    require_matching_user(&auth, &input.user_id)
+        .map_err(|e| error::GetTeamError::from(to_msg(e)))?;
     let team = team_service::get_team(&teams, &input.team_id)
         .await
         .map_err(|e| error::GetTeamError::from(to_msg(e)))?;
@@ -61,7 +63,8 @@ pub async fn update_team(
     server::Extension(teams): server::Extension<Arc<dyn TeamRepo>>,
     server::Extension(auth): server::Extension<AuthUser>,
 ) -> Result<output::UpdateTeamOutput, error::UpdateTeamError> {
-    require_matching_user(&auth, &input.user_id).map_err(|e| error::UpdateTeamError::from(to_msg(e)))?;
+    require_matching_user(&auth, &input.user_id)
+        .map_err(|e| error::UpdateTeamError::from(to_msg(e)))?;
     team_service::update_team(&teams, &input.team_id, &auth.user_id, &input.name)
         .await
         .map_err(|e| error::UpdateTeamError::from(to_msg(e)))?;
@@ -73,7 +76,8 @@ pub async fn list_teams(
     server::Extension(teams): server::Extension<Arc<dyn TeamRepo>>,
     server::Extension(auth): server::Extension<AuthUser>,
 ) -> Result<output::ListTeamsOutput, error::ListTeamsError> {
-    require_matching_user(&auth, &input.user_id).map_err(|e| error::ListTeamsError::from(to_msg(e)))?;
+    require_matching_user(&auth, &input.user_id)
+        .map_err(|e| error::ListTeamsError::from(to_msg(e)))?;
     let memberships = team_service::list_teams(&teams, &auth.user_id)
         .await
         .map_err(|e| error::ListTeamsError::from(to_msg(e)))?;
@@ -174,7 +178,8 @@ pub async fn leave_team(
     server::Extension(teams): server::Extension<Arc<dyn TeamRepo>>,
     server::Extension(auth): server::Extension<AuthUser>,
 ) -> Result<output::LeaveTeamOutput, error::LeaveTeamError> {
-    require_matching_user(&auth, &input.user_id).map_err(|e| error::LeaveTeamError::from(to_msg(e)))?;
+    require_matching_user(&auth, &input.user_id)
+        .map_err(|e| error::LeaveTeamError::from(to_msg(e)))?;
     team_service::leave_team(&teams, &input.team_id, &auth.user_id)
         .await
         .map_err(|e| error::LeaveTeamError::from(to_msg(e)))?;

@@ -87,12 +87,17 @@ mod tests {
         let mut conn = pool.acquire().await.unwrap();
         DropTeamMemberPoints.up(&mut conn).await.unwrap();
 
-        assert!(!column_exists(&mut conn, "team_members", "points").await.unwrap());
-        let role: String = sqlx::query("SELECT role FROM team_members WHERE team_id = 't1' AND user_id = 'u1'")
-            .fetch_one(&pool)
-            .await
-            .unwrap()
-            .get("role");
+        assert!(
+            !column_exists(&mut conn, "team_members", "points")
+                .await
+                .unwrap()
+        );
+        let role: String =
+            sqlx::query("SELECT role FROM team_members WHERE team_id = 't1' AND user_id = 'u1'")
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+                .get("role");
         assert_eq!(role, "admin");
     }
 
@@ -117,6 +122,10 @@ mod tests {
         DropTeamMemberPoints.up(&mut conn).await.unwrap();
         DropTeamMemberPoints.up(&mut conn).await.unwrap();
 
-        assert!(!column_exists(&mut conn, "team_members", "points").await.unwrap());
+        assert!(
+            !column_exists(&mut conn, "team_members", "points")
+                .await
+                .unwrap()
+        );
     }
 }

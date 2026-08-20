@@ -87,13 +87,8 @@ pub async fn project_events_page(
             skip_urls.insert(item.id.clone(), url);
         }
     }
-    let rows = super::render_rows_with_virtual(
-        &items,
-        &virtual_occurrences,
-        &project_id,
-        tz,
-        &skip_urls,
-    )?;
+    let rows =
+        super::render_rows_with_virtual(&items, &virtual_occurrences, &project_id, tz, &skip_urls)?;
     let nav_html = nav::build_nav_html(
         &projects,
         &auth_user.user_id,
@@ -176,25 +171,24 @@ pub async fn project_events_calendar_page(
     // so a skipped occurrence stays visible (struck through, with an Unskip button) instead
     // of disappearing outright — `Materialized` entries are excluded since those already
     // render via `items` above.
-    let virtual_occurrences: Vec<_> =
-        event_series_service::list_occurrence_states_for_project(
-            &event_series,
-            &users,
-            &project_id,
-            range_start,
-            range_end,
-            tz,
+    let virtual_occurrences: Vec<_> = event_series_service::list_occurrence_states_for_project(
+        &event_series,
+        &users,
+        &project_id,
+        range_start,
+        range_end,
+        tz,
+    )
+    .await?
+    .into_iter()
+    .filter(|occ| occ.item_type == ItemKind::Event)
+    .filter(|occ| {
+        !matches!(
+            occ.state,
+            event_series_service::OccurrenceState::Materialized { .. }
         )
-        .await?
-        .into_iter()
-        .filter(|occ| occ.item_type == ItemKind::Event)
-        .filter(|occ| {
-            !matches!(
-                occ.state,
-                event_series_service::OccurrenceState::Materialized { .. }
-            )
-        })
-        .collect();
+    })
+    .collect();
     let days = build_calendar_days(
         year,
         month,
@@ -320,9 +314,14 @@ pub(crate) async fn render_series_occurrence_detail_page(
     is_skipped: bool,
     tz: i32,
 ) -> Result<Html<String>, ItemError> {
-    let view =
-        ProjectEventSeriesOccurrenceView::from_series(series, occurrence_date, project_id, is_skipped, tz)
-            .render()?;
+    let view = ProjectEventSeriesOccurrenceView::from_series(
+        series,
+        occurrence_date,
+        project_id,
+        is_skipped,
+        tz,
+    )
+    .render()?;
     let occurrence_ts = occurrence_date.timestamp();
     let nav_html = nav::build_nav_html(
         projects,

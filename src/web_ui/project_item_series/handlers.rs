@@ -75,14 +75,13 @@ pub async fn project_item_series_occurrence_detail_page(
     }
     let occurrence_date = DateTime::<Utc>::from_timestamp(occurrence_ts, 0)
         .ok_or_else(|| ItemError::Invalid("invalid occurrence timestamp".to_string()))?;
-    let occurrence = item_series.get_occurrence(&series_id, occurrence_date).await?;
-    if let Some(item_id) = occurrence.as_ref().and_then(|o| o.item_id.clone()) {
-        let item = crate::service::project_items::get_project_item_unchecked(
-            &repo,
-            &project_id,
-            &item_id,
-        )
+    let occurrence = item_series
+        .get_occurrence(&series_id, occurrence_date)
         .await?;
+    if let Some(item_id) = occurrence.as_ref().and_then(|o| o.item_id.clone()) {
+        let item =
+            crate::service::project_items::get_project_item_unchecked(&repo, &project_id, &item_id)
+                .await?;
         return Ok(Redirect::to(&crate::web_ui::project_dashboard::detail_url(
             &item,
             &project_id,
@@ -91,29 +90,33 @@ pub async fn project_item_series_occurrence_detail_page(
     }
     let is_skipped = occurrence.map(|o| o.is_exdate).unwrap_or(false);
     match series.item_type {
-        ItemKind::Task => Ok(crate::web_ui::project_tasks::handlers::render_series_occurrence_detail_page(
-            &projects,
-            &teams,
-            &auth_user,
-            &project_id,
-            &series,
-            occurrence_date,
-            is_skipped,
-            tz,
-        )
-        .await?
-        .into_response()),
-        ItemKind::Event => Ok(crate::web_ui::project_events::handlers::render_series_occurrence_detail_page(
-            &projects,
-            &auth_user,
-            &project_id,
-            &series,
-            occurrence_date,
-            is_skipped,
-            tz,
-        )
-        .await?
-        .into_response()),
+        ItemKind::Task => Ok(
+            crate::web_ui::project_tasks::handlers::render_series_occurrence_detail_page(
+                &projects,
+                &teams,
+                &auth_user,
+                &project_id,
+                &series,
+                occurrence_date,
+                is_skipped,
+                tz,
+            )
+            .await?
+            .into_response(),
+        ),
+        ItemKind::Event => Ok(
+            crate::web_ui::project_events::handlers::render_series_occurrence_detail_page(
+                &projects,
+                &auth_user,
+                &project_id,
+                &series,
+                occurrence_date,
+                is_skipped,
+                tz,
+            )
+            .await?
+            .into_response(),
+        ),
         _ => Err(ItemError::NotFound),
     }
 }
@@ -144,18 +147,17 @@ pub async fn project_item_series_occurrence_edit_page(
     }
     let occurrence_date = DateTime::<Utc>::from_timestamp(occurrence_ts, 0)
         .ok_or_else(|| ItemError::Invalid("invalid occurrence timestamp".to_string()))?;
-    let occurrence = item_series.get_occurrence(&series_id, occurrence_date).await?;
-    if let Some(item_id) = occurrence.as_ref().and_then(|o| o.item_id.clone()) {
-        let item = crate::service::project_items::get_project_item_unchecked(
-            &repo,
-            &project_id,
-            &item_id,
-        )
+    let occurrence = item_series
+        .get_occurrence(&series_id, occurrence_date)
         .await?;
-        let edit_url = format!("{}/edit", crate::web_ui::project_dashboard::detail_url(
-            &item,
-            &project_id,
-        ));
+    if let Some(item_id) = occurrence.as_ref().and_then(|o| o.item_id.clone()) {
+        let item =
+            crate::service::project_items::get_project_item_unchecked(&repo, &project_id, &item_id)
+                .await?;
+        let edit_url = format!(
+            "{}/edit",
+            crate::web_ui::project_dashboard::detail_url(&item, &project_id,)
+        );
         return Ok(Redirect::to(&edit_url).into_response());
     }
     if occurrence.map(|o| o.is_exdate).unwrap_or(false) {
@@ -164,27 +166,31 @@ pub async fn project_item_series_occurrence_edit_page(
         return Err(ItemError::NotFound);
     }
     match series.item_type {
-        ItemKind::Task => Ok(crate::web_ui::project_tasks::handlers::render_series_occurrence_edit_page(
-            &projects,
-            &teams,
-            &auth_user,
-            &project_id,
-            &series,
-            occurrence_date,
-            tz,
-        )
-        .await?
-        .into_response()),
-        ItemKind::Event => Ok(crate::web_ui::project_events::handlers::render_series_occurrence_edit_page(
-            &projects,
-            &auth_user,
-            &project_id,
-            &series,
-            occurrence_date,
-            tz,
-        )
-        .await?
-        .into_response()),
+        ItemKind::Task => Ok(
+            crate::web_ui::project_tasks::handlers::render_series_occurrence_edit_page(
+                &projects,
+                &teams,
+                &auth_user,
+                &project_id,
+                &series,
+                occurrence_date,
+                tz,
+            )
+            .await?
+            .into_response(),
+        ),
+        ItemKind::Event => Ok(
+            crate::web_ui::project_events::handlers::render_series_occurrence_edit_page(
+                &projects,
+                &auth_user,
+                &project_id,
+                &series,
+                occurrence_date,
+                tz,
+            )
+            .await?
+            .into_response(),
+        ),
         _ => Err(ItemError::NotFound),
     }
 }

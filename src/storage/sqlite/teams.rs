@@ -1,7 +1,9 @@
 use async_trait::async_trait;
 use std::str::FromStr;
 
-use crate::storage::sqlite::{TeamRepo, TeamMemberInfo, TeamWithStatus, RepoError, db_err, not_found, row_to_user};
+use crate::storage::sqlite::{
+    RepoError, TeamMemberInfo, TeamRepo, TeamWithStatus, db_err, not_found, row_to_user,
+};
 use sqlx::{Row, SqlitePool};
 
 use crate::domain::team::{Team, TeamRole};
@@ -185,16 +187,15 @@ impl TeamRepo for SqliteTeamRepo {
         user_id: &str,
         role: TeamRole,
     ) -> Result<(), RepoError> {
-        let rows = sqlx::query(
-            "UPDATE team_members SET role = ? WHERE team_id = ? AND user_id = ?",
-        )
-        .bind(role.as_str())
-        .bind(team_id)
-        .bind(user_id)
-        .execute(&self.0)
-        .await
-        .map_err(db_err)?
-        .rows_affected();
+        let rows =
+            sqlx::query("UPDATE team_members SET role = ? WHERE team_id = ? AND user_id = ?")
+                .bind(role.as_str())
+                .bind(team_id)
+                .bind(user_id)
+                .execute(&self.0)
+                .await
+                .map_err(db_err)?
+                .rows_affected();
         if rows == 0 { Err(not_found()) } else { Ok(()) }
     }
 
@@ -383,7 +384,11 @@ mod tests {
             .unwrap();
     }
 
-    async fn project_member_role(pool: &SqlitePool, project_id: &str, user_id: &str) -> Option<String> {
+    async fn project_member_role(
+        pool: &SqlitePool,
+        project_id: &str,
+        user_id: &str,
+    ) -> Option<String> {
         sqlx::query("SELECT role FROM project_members WHERE project_id = ? AND user_id = ?")
             .bind(project_id)
             .bind(user_id)

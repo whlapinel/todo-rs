@@ -2,10 +2,12 @@ use crate::domain::item::{Item, ItemKind, ItemType, Recurrence, Schedule, TeamAs
 use crate::service::activity_log::reverse_entry;
 use crate::service::item_series;
 use crate::service::items::{
-    copy_template_children_to_event, has_incomplete_children, is_pure_complete_toggle, item_anchor,
-    sync_offset_children, sync_source_event_tasks, unlink_source_event_tasks, ItemError,
+    ItemError, copy_template_children_to_event, has_incomplete_children, is_pure_complete_toggle,
+    item_anchor, sync_offset_children, sync_source_event_tasks, unlink_source_event_tasks,
 };
-use crate::service::projects::{require_project_admin, require_project_member, resolve_project_assignee};
+use crate::service::projects::{
+    require_project_admin, require_project_member, resolve_project_assignee,
+};
 use crate::storage::sqlite::{ActivityLogRepo, ItemRepo, ItemSeriesRepo, ProjectRepo, TeamRepo};
 use chrono::{DateTime, Utc};
 use std::sync::Arc;
@@ -150,8 +152,7 @@ pub async fn create_team_item(
         && parent.kind() == ItemKind::Event
     {
         return Err(ItemError::Invalid(
-            "Events cannot have children; link a task to it via sourceEventId instead"
-                .to_string(),
+            "Events cannot have children; link a task to it via sourceEventId instead".to_string(),
         ));
     }
 
@@ -174,9 +175,12 @@ pub async fn create_team_item(
     };
 
     let team_assignment = if kind == ItemKind::Task {
-        let assigned_to_user_id =
-            resolve_project_assignee(projects, &params.project_id, params.assigned_to_user_id.clone())
-                .await?;
+        let assigned_to_user_id = resolve_project_assignee(
+            projects,
+            &params.project_id,
+            params.assigned_to_user_id.clone(),
+        )
+        .await?;
         // Points authority is project-admin-only as of stage C1
         // (docs/project-abstraction-plan.md) — moved off `team_members.role` onto
         // `project_members.role`. A non-admin's requested value is silently
@@ -255,8 +259,7 @@ pub async fn create_team_item(
             .iter()
             .filter(|t| t.event_type().as_deref() == Some(event_type.as_str()))
         {
-            copy_template_children_to_event(repo, &tpl.id, &item_id, root_date, tz_offset)
-                .await?;
+            copy_template_children_to_event(repo, &tpl.id, &item_id, root_date, tz_offset).await?;
         }
     }
     Ok(item_id)
@@ -321,7 +324,9 @@ pub(crate) async fn require_active_member(
         .map_err(|e| ItemError::Internal(format!("{e:?}")))?;
     match status.as_deref() {
         Some("ACTIVE") => Ok(()),
-        Some(_) => Err(ItemError::Invalid("team invite not yet accepted".to_string())),
+        Some(_) => Err(ItemError::Invalid(
+            "team invite not yet accepted".to_string(),
+        )),
         None => Err(ItemError::Invalid(format!(
             "user id: {user_id} is not a member of team id: {team_id}"
         ))),
@@ -386,7 +391,9 @@ pub async fn update_team_item(
             "scheduledEndDate cannot be before scheduledDate".to_string(),
         ));
     }
-    let current = repo.get_by_project(&params.project_id, &params.item_id).await?;
+    let current = repo
+        .get_by_project(&params.project_id, &params.item_id)
+        .await?;
 
     if params.complete
         && !current.complete
@@ -404,8 +411,7 @@ pub async fn update_team_item(
         && parent.kind() == ItemKind::Event
     {
         return Err(ItemError::Invalid(
-            "Events cannot have children; link a task to it via sourceEventId instead"
-                .to_string(),
+            "Events cannot have children; link a task to it via sourceEventId instead".to_string(),
         ));
     }
 
@@ -430,8 +436,12 @@ pub async fn update_team_item(
         let assigned_to_user_id = if params.assigned_to_user_id == current.assigned_to_user_id() {
             current.assigned_to_user_id()
         } else {
-            resolve_project_assignee(projects, &params.project_id, params.assigned_to_user_id.clone())
-                .await?
+            resolve_project_assignee(
+                projects,
+                &params.project_id,
+                params.assigned_to_user_id.clone(),
+            )
+            .await?
         };
         // Points authority is project-admin-only as of stage C1
         // (docs/project-abstraction-plan.md) — moved off `team_members.role` onto
@@ -441,14 +451,15 @@ pub async fn update_team_item(
         // check this replaced, `params.project_id` is always known (it's the
         // primary key this whole update is scoped by), so there's no longer an
         // "unresolvable backing project" case to fall back on.
-        let points = if require_project_admin(projects, teams, &params.project_id, requester_user_id)
-            .await
-            .is_ok()
-        {
-            params.points
-        } else {
-            current.points()
-        };
+        let points =
+            if require_project_admin(projects, teams, &params.project_id, requester_user_id)
+                .await
+                .is_ok()
+            {
+                params.points
+            } else {
+                current.points()
+            };
         Some(TeamAssignment {
             assigned_to_user_id,
             points,
@@ -607,7 +618,8 @@ mod tests {
                 })
             });
         }
-        mock.expect_member_role().returning(move |_, _| Ok(Some(role)));
+        mock.expect_member_role()
+            .returning(move |_, _| Ok(Some(role)));
         mock
     }
 
@@ -1088,13 +1100,15 @@ mod tests {
         let mut activity_log = MockActivityLogRepo::new();
         activity_log
             .expect_log_activity()
-            .withf(|team_id, _project_id, user_id, item_id, item_name, points_delta| {
-                *team_id == Some("t1")
-                    && user_id == "member1"
-                    && item_id == "item1"
-                    && item_name == "Mow the lawn"
-                    && *points_delta == 20
-            })
+            .withf(
+                |team_id, _project_id, user_id, item_id, item_name, points_delta| {
+                    *team_id == Some("t1")
+                        && user_id == "member1"
+                        && item_id == "item1"
+                        && item_name == "Mow the lawn"
+                        && *points_delta == 20
+                },
+            )
             .times(1)
             .returning(|_, _, _, _, _, _| Ok("entry1".to_string()));
 
@@ -1156,13 +1170,15 @@ mod tests {
         let mut activity_log = MockActivityLogRepo::new();
         activity_log
             .expect_log_activity()
-            .withf(|team_id, _project_id, user_id, item_id, item_name, points_delta| {
-                *team_id == Some("t1")
-                    && user_id == "member1"
-                    && item_id == "item1"
-                    && item_name == "Mow the lawn"
-                    && *points_delta == 0
-            })
+            .withf(
+                |team_id, _project_id, user_id, item_id, item_name, points_delta| {
+                    *team_id == Some("t1")
+                        && user_id == "member1"
+                        && item_id == "item1"
+                        && item_name == "Mow the lawn"
+                        && *points_delta == 0
+                },
+            )
             .times(1)
             .returning(|_, _, _, _, _, _| Ok("entry1".to_string()));
 

@@ -40,7 +40,11 @@ fn err_result(row_number: i32, error: String) -> ImportItemResult {
 /// `X-Tz-Offset-Minutes`/JS-`getTimezoneOffset()` convention used everywhere else: minutes to
 /// *add* to local time to get UTC), not literal UTC midnight — otherwise a date near a
 /// timezone's midnight boundary lands on the wrong calendar day once displayed locally again.
-fn parse_csv_date(s: &str, tz_offset_minutes: i32, default_time: NaiveTime) -> Result<DateTime<Utc>, String> {
+fn parse_csv_date(
+    s: &str,
+    tz_offset_minutes: i32,
+    default_time: NaiveTime,
+) -> Result<DateTime<Utc>, String> {
     if let Ok(secs) = s.parse::<i64>() {
         return DateTime::from_timestamp(secs, 0).ok_or_else(|| format!("invalid timestamp '{s}'"));
     }
@@ -63,7 +67,11 @@ fn parse_csv_bool(s: &str) -> Result<bool, String> {
     }
 }
 
-fn cell<'a>(record: &'a csv::StringRecord, headers: &HashMap<String, usize>, name: &str) -> Option<&'a str> {
+fn cell<'a>(
+    record: &'a csv::StringRecord,
+    headers: &HashMap<String, usize>,
+    name: &str,
+) -> Option<&'a str> {
     headers
         .get(name)
         .and_then(|&idx| record.get(idx))
@@ -111,7 +119,9 @@ fn build_row_params(
         .map(|s| parse_csv_date(s, tz_offset_minutes, end_of_day()))
         .transpose()?;
 
-    let complete = cell(record, headers, "complete").map(parse_csv_bool).transpose()?;
+    let complete = cell(record, headers, "complete")
+        .map(parse_csv_bool)
+        .transpose()?;
     let has_due_time = cell(record, headers, "hasDueTime")
         .map(parse_csv_bool)
         .transpose()?;
@@ -225,7 +235,9 @@ pub async fn import_project_items(
         };
         params.timezone_offset_minutes = timezone_offset_minutes;
 
-        match project_items::create_project_item(repo, projects, teams, requester_user_id, params).await {
+        match project_items::create_project_item(repo, projects, teams, requester_user_id, params)
+            .await
+        {
             Ok(item_id) => results.push(ok_result(row_number, item_id)),
             Err(e) => results.push(err_result(row_number, e.to_string())),
         }
@@ -296,11 +308,13 @@ mod tests {
         assert!(results[0].success);
         assert!(!results[1].success);
         assert_eq!(results[1].row_number, 3);
-        assert!(results[1]
-            .error
-            .as_deref()
-            .unwrap()
-            .contains("missing required column 'name'"));
+        assert!(
+            results[1]
+                .error
+                .as_deref()
+                .unwrap()
+                .contains("missing required column 'name'")
+        );
         assert!(results[2].success);
     }
 
@@ -476,8 +490,7 @@ mod tests {
 
         let teams = MockTeamRepo::new();
 
-        let csv_text =
-            "name,scheduledDate,scheduledEndDate\nBad window,2026-09-10,2026-09-01\n";
+        let csv_text = "name,scheduledDate,scheduledEndDate\nBad window,2026-09-10,2026-09-01\n";
         let results = import_project_items(
             &(Arc::new(repo) as Arc<dyn ItemRepo>),
             &(Arc::new(projects) as Arc<dyn ProjectRepo>),
@@ -530,11 +543,13 @@ mod tests {
 
         assert_eq!(results.len(), 1);
         assert!(!results[0].success);
-        assert!(results[0]
-            .error
-            .as_deref()
-            .unwrap()
-            .contains("no longer supported"));
+        assert!(
+            results[0]
+                .error
+                .as_deref()
+                .unwrap()
+                .contains("no longer supported")
+        );
     }
 
     #[tokio::test]
@@ -594,7 +609,12 @@ mod tests {
     fn item_import_template_has_three_rows_matching_prl_header_columns() {
         let template = item_import_template();
         let mut reader = csv::Reader::from_reader(template.as_bytes());
-        let headers: Vec<String> = reader.headers().unwrap().iter().map(str::to_string).collect();
+        let headers: Vec<String> = reader
+            .headers()
+            .unwrap()
+            .iter()
+            .map(str::to_string)
+            .collect();
         assert_eq!(
             headers,
             vec![
@@ -620,7 +640,10 @@ mod tests {
         let records: Vec<csv::StringRecord> = reader.records().collect::<Result<_, _>>().unwrap();
         assert_eq!(records.len(), 3);
         let item_type_idx = headers.iter().position(|h| h == "itemType").unwrap();
-        let types: Vec<&str> = records.iter().map(|r| r.get(item_type_idx).unwrap()).collect();
+        let types: Vec<&str> = records
+            .iter()
+            .map(|r| r.get(item_type_idx).unwrap())
+            .collect();
         assert_eq!(types, vec!["TASK", "EVENT", "SIMPLE"]);
     }
 }

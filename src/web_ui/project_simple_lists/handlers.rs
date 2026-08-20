@@ -8,8 +8,8 @@ use crate::storage::sqlite::{ItemRepo, ItemSeriesRepo, ProjectRepo, TeamRepo};
 use crate::web_ui::nav::{self, ActiveContext, SidebarSection};
 use crate::web_ui::project_simple_lists::templates::*;
 use crate::web_ui::project_simple_lists::{
-    create_params_from_form, list_project_simple_items, non_empty, render, render_scope_fragment,
-    require_simple, sibling_group, update_params_from_form, ProjectSimpleItemForm,
+    ProjectSimpleItemForm, create_params_from_form, list_project_simple_items, non_empty, render,
+    render_scope_fragment, require_simple, sibling_group, update_params_from_form,
 };
 use askama::Template;
 use axum::extract::{Extension, Form, Path};
@@ -74,7 +74,10 @@ pub async fn new_project_simple_item_page(
         SidebarSection::SimpleLists,
     )
     .await?;
-    render(NewProjectSimpleItemPageTemplate { project_id, nav_html })
+    render(NewProjectSimpleItemPageTemplate {
+        project_id,
+        nav_html,
+    })
 }
 
 pub async fn project_simple_item_detail_page(
@@ -235,8 +238,14 @@ pub async fn create_project_simple_items_batch(
             item_type: Some(crate::domain::item::ItemKind::Simple),
             ..Default::default()
         };
-        project_item_service::create_project_item(&repo, &projects, &teams, &auth_user.user_id, params)
-            .await?;
+        project_item_service::create_project_item(
+            &repo,
+            &projects,
+            &teams,
+            &auth_user.user_id,
+            params,
+        )
+        .await?;
     }
     if form.redirect.is_some() {
         return Ok(redirect_to_project_simple_lists(&project_id));

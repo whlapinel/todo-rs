@@ -4,7 +4,9 @@ use super::{TzOffset, to_local};
 use crate::auth::AuthUser;
 use crate::domain::item::{Item, ItemKind};
 use crate::service::error::ItemError;
-use crate::service::item_series::{self as event_series_service, OccurrenceState, ProjectOccurrence};
+use crate::service::item_series::{
+    self as event_series_service, OccurrenceState, ProjectOccurrence,
+};
 use crate::service::project_items::{self as project_item_service, UpdateProjectItemParams};
 use crate::service::projects::{self as project_service};
 use crate::service::teams as team_service;
@@ -110,7 +112,12 @@ async fn names_for(
 /// project" purpose. Simple/Template items never carry a due/scheduled date worth showing
 /// here at all (mirrors `project_dashboard::render_rows`'s own `ItemKind::Simple` exclusion,
 /// widened to also exclude Template).
-fn is_included(kind: ItemKind, is_team_project: bool, assigned_to: Option<&str>, user_id: &str) -> bool {
+fn is_included(
+    kind: ItemKind,
+    is_team_project: bool,
+    assigned_to: Option<&str>,
+    user_id: &str,
+) -> bool {
     match kind {
         ItemKind::Event => true,
         ItemKind::Task => !is_team_project || assigned_to == Some(user_id),
@@ -218,7 +225,12 @@ struct MainDashboardVirtualRow {
 }
 
 impl MainDashboardVirtualRow {
-    fn from_occurrence(occ: &ProjectOccurrence, project_id: &str, project_name: &str, tz: i32) -> Self {
+    fn from_occurrence(
+        occ: &ProjectOccurrence,
+        project_id: &str,
+        project_name: &str,
+        tz: i32,
+    ) -> Self {
         let local = to_local(occ.occurrence_date, tz);
         let kind_name = if occ.item_type == ItemKind::Event {
             "Event"
@@ -330,8 +342,9 @@ pub async fn main_dashboard_page(
                 continue;
             }
             let ts = d.map(|d| d.timestamp()).unwrap_or(i64::MAX);
-            let html = MainDashboardRow::from_due_item(di, &project.id, &project.name, &names, tz_offset)
-                .render()?;
+            let html =
+                MainDashboardRow::from_due_item(di, &project.id, &project.name, &names, tz_offset)
+                    .render()?;
             entries.push((ts, html));
         }
 
@@ -349,8 +362,13 @@ pub async fn main_dashboard_page(
             }
             entries.push((
                 occ.occurrence_date.timestamp(),
-                MainDashboardVirtualRow::from_occurrence(occ, &project.id, &project.name, tz_offset)
-                    .render()?,
+                MainDashboardVirtualRow::from_occurrence(
+                    occ,
+                    &project.id,
+                    &project.name,
+                    tz_offset,
+                )
+                .render()?,
             ));
         }
     }
@@ -359,9 +377,13 @@ pub async fn main_dashboard_page(
     let rows = entries.into_iter().map(|(_, html)| html).collect();
 
     let presets = PRESETS.iter().map(|&p| (p, p == preset)).collect();
-    let nav_html =
-        nav::build_nav_html(&projects, &auth_user.user_id, ActiveContext::None, SidebarSection::None)
-            .await?;
+    let nav_html = nav::build_nav_html(
+        &projects,
+        &auth_user.user_id,
+        ActiveContext::None,
+        SidebarSection::None,
+    )
+    .await?;
     render(MainDashboardPageTemplate {
         rows,
         show_complete,
@@ -597,9 +619,13 @@ pub async fn main_dashboard_calendar_page(
     let days = build_calendar_days(year, month, &due_bucket, &occ_bucket, tz, today);
     let (prev_year, prev_month) = prev_month(year, month);
     let (next_year, next_month) = next_month(year, month);
-    let nav_html =
-        nav::build_nav_html(&projects, &auth_user.user_id, ActiveContext::None, SidebarSection::None)
-            .await?;
+    let nav_html = nav::build_nav_html(
+        &projects,
+        &auth_user.user_id,
+        ActiveContext::None,
+        SidebarSection::None,
+    )
+    .await?;
 
     render(MainDashboardCalendarPageTemplate {
         month_label: NaiveDate::from_ymd_opt(year, month, 1)

@@ -36,8 +36,8 @@ impl Migration for AddItemSeriesAssignment {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use sqlx::SqlitePool;
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use std::str::FromStr;
 
     async fn old_schema_pool() -> SqlitePool {
@@ -70,13 +70,29 @@ mod tests {
     async fn adds_assignment_columns_when_missing() {
         let pool = old_schema_pool().await;
         let mut conn = pool.acquire().await.unwrap();
-        assert!(!column_exists(&mut conn, "item_series", "assigned_to_user_id").await.unwrap());
-        assert!(!column_exists(&mut conn, "item_series", "points").await.unwrap());
+        assert!(
+            !column_exists(&mut conn, "item_series", "assigned_to_user_id")
+                .await
+                .unwrap()
+        );
+        assert!(
+            !column_exists(&mut conn, "item_series", "points")
+                .await
+                .unwrap()
+        );
 
         AddItemSeriesAssignment.up(&mut conn).await.unwrap();
 
-        assert!(column_exists(&mut conn, "item_series", "assigned_to_user_id").await.unwrap());
-        assert!(column_exists(&mut conn, "item_series", "points").await.unwrap());
+        assert!(
+            column_exists(&mut conn, "item_series", "assigned_to_user_id")
+                .await
+                .unwrap()
+        );
+        assert!(
+            column_exists(&mut conn, "item_series", "points")
+                .await
+                .unwrap()
+        );
     }
 
     #[tokio::test]
@@ -87,7 +103,15 @@ mod tests {
         AddItemSeriesAssignment.up(&mut conn).await.unwrap();
         AddItemSeriesAssignment.up(&mut conn).await.unwrap();
 
-        assert!(column_exists(&mut conn, "item_series", "assigned_to_user_id").await.unwrap());
-        assert!(column_exists(&mut conn, "item_series", "points").await.unwrap());
+        assert!(
+            column_exists(&mut conn, "item_series", "assigned_to_user_id")
+                .await
+                .unwrap()
+        );
+        assert!(
+            column_exists(&mut conn, "item_series", "points")
+                .await
+                .unwrap()
+        );
     }
 }

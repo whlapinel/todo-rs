@@ -78,20 +78,24 @@ pub async fn project_tasks_page(
     // occurrence stops being current the instant it's settled, so it (correctly) has nothing
     // to show in this current-only view — see the calendar/dashboard views for where a
     // skipped occurrence's struck-through Unskip row actually appears.
-    let virtual_occurrences: Vec<_> =
-        item_series_service::list_occurrence_states_for_project(
-            &event_series,
-            &users,
-            &project_id,
-            Utc::now(),
-            Utc::now(),
-            tz,
+    let virtual_occurrences: Vec<_> = item_series_service::list_occurrence_states_for_project(
+        &event_series,
+        &users,
+        &project_id,
+        Utc::now(),
+        Utc::now(),
+        tz,
+    )
+    .await?
+    .into_iter()
+    .filter(|occ| occ.item_type == ItemKind::Task && occ.is_current)
+    .filter(|occ| {
+        !matches!(
+            occ.state,
+            item_series_service::OccurrenceState::Materialized { .. }
         )
-        .await?
-        .into_iter()
-        .filter(|occ| occ.item_type == ItemKind::Task && occ.is_current)
-        .filter(|occ| !matches!(occ.state, item_series_service::OccurrenceState::Materialized { .. }))
-        .collect();
+    })
+    .collect();
     let mut skip_urls: HashMap<String, String> = HashMap::new();
     for item in &items {
         if let Some(url) =
@@ -108,6 +112,7 @@ pub async fn project_tasks_page(
         show_complete,
         tz,
         &skip_urls,
+        project.team_id.as_deref(),
     )?;
     let points_label = match &project.team_id {
         Some(team_id) => {
@@ -219,20 +224,24 @@ pub async fn project_tasks_calendar_page(
     // switch from `list_virtual_occurrences_for_project_unchecked` (which drops any already-
     // settled date outright). Materialized dates are excluded — those already render via
     // `items` above.
-    let virtual_occurrences: Vec<_> =
-        item_series_service::list_occurrence_states_for_project(
-            &event_series,
-            &users,
-            &project_id,
-            range_start,
-            range_end,
-            tz,
+    let virtual_occurrences: Vec<_> = item_series_service::list_occurrence_states_for_project(
+        &event_series,
+        &users,
+        &project_id,
+        range_start,
+        range_end,
+        tz,
+    )
+    .await?
+    .into_iter()
+    .filter(|occ| occ.item_type == ItemKind::Task)
+    .filter(|occ| {
+        !matches!(
+            occ.state,
+            item_series_service::OccurrenceState::Materialized { .. }
         )
-        .await?
-        .into_iter()
-        .filter(|occ| occ.item_type == ItemKind::Task)
-        .filter(|occ| !matches!(occ.state, item_series_service::OccurrenceState::Materialized { .. }))
-        .collect();
+    })
+    .collect();
     let days = build_calendar_days(
         year,
         month,
@@ -379,7 +388,8 @@ pub(crate) async fn render_series_occurrence_detail_page(
     is_skipped: bool,
     tz: i32,
 ) -> Result<Html<String>, ItemError> {
-    let project = project_service::get_project(projects, teams, project_id, &auth_user.user_id).await?;
+    let project =
+        project_service::get_project(projects, teams, project_id, &auth_user.user_id).await?;
     let names = match &project.team_id {
         Some(team_id) => names_for(teams, team_id, &auth_user.user_id).await?,
         None => HashMap::new(),
@@ -433,7 +443,8 @@ pub(crate) async fn render_series_occurrence_edit_page(
     occurrence_date: DateTime<Utc>,
     tz: i32,
 ) -> Result<Html<String>, ItemError> {
-    let project = project_service::get_project(projects, teams, project_id, &auth_user.user_id).await?;
+    let project =
+        project_service::get_project(projects, teams, project_id, &auth_user.user_id).await?;
     let (assignee_options, is_team_admin) = match &project.team_id {
         Some(team_id) => (
             active_member_options(teams, team_id, &auth_user.user_id).await?,
@@ -482,7 +493,10 @@ fn current_occurrence_is(
     tz_offset_minutes: i32,
 ) -> Result<bool, ItemError> {
     let rule = crate::domain::recurrence::parse(&series.recurrence).map_err(ItemError::Invalid)?;
-    Ok(item_series_service::current_occurrence_date(series, &rule, tz_offset_minutes) == occurrence_date)
+    Ok(
+        item_series_service::current_occurrence_date(series, &rule, tz_offset_minutes)
+            == occurrence_date,
+    )
 }
 
 /// Stage C — materializes the occurrence (if not already) and applies the edit in one step,
@@ -702,7 +716,15 @@ pub(crate) async fn render_children_fragment(
         Some(team_id) => names_for(teams, team_id, requester_user_id).await?,
         None => HashMap::new(),
     };
-    let rows = super::render_rows(&children, project_id, &names, true, tz, &HashMap::new())?;
+    let rows = super::render_rows(
+        &children,
+        project_id,
+        &names,
+        true,
+        tz,
+        &HashMap::new(),
+        team_id,
+    )?;
     render(ProjectTaskRowsFragmentTemplate {
         rows,
         empty_message: "No sub-items yet.".to_string(),
@@ -730,7 +752,15 @@ pub(crate) async fn render_source_event_fragment(
         Some(team_id) => names_for(teams, team_id, requester_user_id).await?,
         None => HashMap::new(),
     };
-    let rows = super::render_rows(&tasks, project_id, &names, true, tz, &HashMap::new())?;
+    let rows = super::render_rows(
+        &tasks,
+        project_id,
+        &names,
+        true,
+        tz,
+        &HashMap::new(),
+        team_id,
+    )?;
     render(ProjectTaskRowsFragmentTemplate {
         rows,
         empty_message: "No linked tasks yet.".to_string(),
@@ -960,6 +990,7 @@ pub async fn update_project_task_form(
                 &siblings_ref,
                 tz,
                 skip_url,
+                project.team_id.is_some(),
             )
             .render()?;
             let (assignee_options, is_team_admin) = match &project.team_id {
@@ -1284,4 +1315,34 @@ pub async fn get_reschedule_task(
     .await?;
     let task = require_task(task)?;
     render(RescheduleDialog::from_task(&task, &project_id, tz))
+}
+
+pub async fn get_quick_assign_task(
+    Path((project_id, item_id)): Path<(String, String)>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+) -> Result<Html<String>, ItemError> {
+    let project =
+        project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
+    let task = project_item_service::get_project_item(
+        &repo,
+        &projects,
+        &teams,
+        &project_id,
+        &auth_user.user_id,
+        &item_id,
+    )
+    .await?;
+    let task = require_task(task)?;
+    let assignee_options = match &project.team_id {
+        Some(team_id) => active_member_options(&teams, team_id, &auth_user.user_id).await?,
+        None => Vec::new(),
+    };
+    render(QuickAssignDialog::from_task(
+        &task,
+        &project_id,
+        assignee_options,
+    ))
 }

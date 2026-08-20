@@ -373,7 +373,10 @@ pub async fn caddy_auth_me(
         }
     };
 
-    let user = match repo.get_or_create_by_email(&email, header_username.as_deref()).await {
+    let user = match repo
+        .get_or_create_by_email(&email, header_username.as_deref())
+        .await
+    {
         Ok(user) => user,
         Err(e) => {
             tracing::error!("caddy /auth/me: failed to resolve user for {email}: {e:?}");
@@ -426,7 +429,10 @@ pub async fn caddy_auth_token(
         }
     };
 
-    let user = match repo.get_or_create_by_email(&email, header_username.as_deref()).await {
+    let user = match repo
+        .get_or_create_by_email(&email, header_username.as_deref())
+        .await
+    {
         Ok(u) => u,
         Err(e) => {
             tracing::error!("caddy /auth/token: failed to resolve user for {email}: {e:?}");
@@ -497,29 +503,24 @@ pub async fn caddy_header_middleware(
     // are exempted from the portal at the edge — see the Caddyfile). For those, we
     // fall back to verifying the token the same way jwt_auth_middleware does.
     let auth_user = if let Some(email) = email {
-        let repo = match req
-            .extensions()
-            .get::<Arc<dyn UserRepo>>()
-            .cloned()
-        {
+        let repo = match req.extensions().get::<Arc<dyn UserRepo>>().cloned() {
             Some(r) => r,
             None => {
                 tracing::error!("UserRepo not found in extensions for caddy middleware");
                 return StatusCode::INTERNAL_SERVER_ERROR.into_response();
             }
         };
-        let projects = match req
-            .extensions()
-            .get::<Arc<dyn ProjectRepo>>()
-            .cloned()
-        {
+        let projects = match req.extensions().get::<Arc<dyn ProjectRepo>>().cloned() {
             Some(r) => r,
             None => {
                 tracing::error!("ProjectRepo not found in extensions for caddy middleware");
                 return StatusCode::INTERNAL_SERVER_ERROR.into_response();
             }
         };
-        let user = match repo.get_or_create_by_email(&email, header_username.as_deref()).await {
+        let user = match repo
+            .get_or_create_by_email(&email, header_username.as_deref())
+            .await
+        {
             Ok(user) => user,
             Err(e) => {
                 tracing::error!("Failed to resolve user for email {email}: {e:?}");
@@ -615,10 +616,7 @@ async fn sync_bootstrap_project_admin(
         .ok()
         .flatten()
         .is_some();
-    let admin_count = projects
-        .count_active_admins(&project.id)
-        .await
-        .unwrap_or(0);
+    let admin_count = projects.count_active_admins(&project.id).await.unwrap_or(0);
     if !is_member || admin_count != 0 {
         // Not a member of the backing project, or it already has an admin —
         // nothing to do. This sync never creates membership or errors the

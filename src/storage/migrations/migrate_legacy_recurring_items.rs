@@ -250,8 +250,8 @@ fn copy_children_as_template<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use sqlx::SqlitePool;
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use std::str::FromStr;
 
     async fn test_pool() -> SqlitePool {
@@ -358,15 +358,27 @@ mod tests {
     async fn migrates_a_due_date_basis_task_with_no_basis_set() {
         let pool = test_pool().await;
         insert_item(
-            &pool, "t1", "p1", None, "Water plants", "TASK",
-            Some(1_000), None, Some("every 2 days"), None, None,
+            &pool,
+            "t1",
+            "p1",
+            None,
+            "Water plants",
+            "TASK",
+            Some(1_000),
+            None,
+            Some("every 2 days"),
+            None,
+            None,
         )
         .await;
 
         let mut conn = pool.acquire().await.unwrap();
         MigrateLegacyRecurringItems.up(&mut conn).await.unwrap();
 
-        let series = sqlx::query("SELECT * FROM item_series").fetch_one(&pool).await.unwrap();
+        let series = sqlx::query("SELECT * FROM item_series")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         assert_eq!(series.get::<String, _>("project_id"), "p1");
         assert_eq!(series.get::<String, _>("name"), "Water plants");
         assert_eq!(series.get::<i64, _>("anchor_date"), 1_000);
@@ -381,7 +393,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(occ.get::<i64, _>("occurrence_date"), 1_000);
-        assert_eq!(occ.get::<Option<String>, _>("item_id"), Some("t1".to_string()));
+        assert_eq!(
+            occ.get::<Option<String>, _>("item_id"),
+            Some("t1".to_string())
+        );
         assert_eq!(occ.get::<i64, _>("is_exdate"), 0);
 
         let item = sqlx::query("SELECT recurrence, recurrence_basis FROM items WHERE id = 't1'")
@@ -396,15 +411,27 @@ mod tests {
     async fn scheduled_date_basis_anchors_at_scheduled_date() {
         let pool = test_pool().await;
         insert_item(
-            &pool, "t1", "p1", None, "Standup", "EVENT",
-            None, Some(2_000), Some("every week"), Some("SCHEDULED_DATE"), None,
+            &pool,
+            "t1",
+            "p1",
+            None,
+            "Standup",
+            "EVENT",
+            None,
+            Some(2_000),
+            Some("every week"),
+            Some("SCHEDULED_DATE"),
+            None,
         )
         .await;
 
         let mut conn = pool.acquire().await.unwrap();
         MigrateLegacyRecurringItems.up(&mut conn).await.unwrap();
 
-        let series = sqlx::query("SELECT anchor_date, basis FROM item_series").fetch_one(&pool).await.unwrap();
+        let series = sqlx::query("SELECT anchor_date, basis FROM item_series")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         assert_eq!(series.get::<i64, _>("anchor_date"), 2_000);
         assert_eq!(series.get::<Option<String>, _>("basis"), None);
     }
@@ -413,31 +440,58 @@ mod tests {
     async fn eligible_completion_basis_task_gets_completion_basis() {
         let pool = test_pool().await;
         insert_item(
-            &pool, "t1", "p1", None, "Refill water filter", "TASK",
-            None, Some(3_000), Some("every 3 days"), Some("COMPLETION_DATE"), None,
+            &pool,
+            "t1",
+            "p1",
+            None,
+            "Refill water filter",
+            "TASK",
+            None,
+            Some(3_000),
+            Some("every 3 days"),
+            Some("COMPLETION_DATE"),
+            None,
         )
         .await;
 
         let mut conn = pool.acquire().await.unwrap();
         MigrateLegacyRecurringItems.up(&mut conn).await.unwrap();
 
-        let series = sqlx::query("SELECT basis FROM item_series").fetch_one(&pool).await.unwrap();
-        assert_eq!(series.get::<Option<String>, _>("basis"), Some("COMPLETION".to_string()));
+        let series = sqlx::query("SELECT basis FROM item_series")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            series.get::<Option<String>, _>("basis"),
+            Some("COMPLETION".to_string())
+        );
     }
 
     #[tokio::test]
     async fn ineligible_pattern_downgrades_completion_basis() {
         let pool = test_pool().await;
         insert_item(
-            &pool, "t1", "p1", None, "Pay rent", "TASK",
-            None, Some(3_000), Some("every month on the 3rd"), Some("COMPLETION_DATE"), None,
+            &pool,
+            "t1",
+            "p1",
+            None,
+            "Pay rent",
+            "TASK",
+            None,
+            Some(3_000),
+            Some("every month on the 3rd"),
+            Some("COMPLETION_DATE"),
+            None,
         )
         .await;
 
         let mut conn = pool.acquire().await.unwrap();
         MigrateLegacyRecurringItems.up(&mut conn).await.unwrap();
 
-        let series = sqlx::query("SELECT basis FROM item_series").fetch_one(&pool).await.unwrap();
+        let series = sqlx::query("SELECT basis FROM item_series")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         assert_eq!(series.get::<Option<String>, _>("basis"), None);
     }
 
@@ -445,15 +499,27 @@ mod tests {
     async fn completion_basis_event_downgrades_to_schedule_basis() {
         let pool = test_pool().await;
         insert_item(
-            &pool, "e1", "p1", None, "Weekly sync", "EVENT",
-            None, Some(3_000), Some("every 7 days"), Some("COMPLETION_DATE"), None,
+            &pool,
+            "e1",
+            "p1",
+            None,
+            "Weekly sync",
+            "EVENT",
+            None,
+            Some(3_000),
+            Some("every 7 days"),
+            Some("COMPLETION_DATE"),
+            None,
         )
         .await;
 
         let mut conn = pool.acquire().await.unwrap();
         MigrateLegacyRecurringItems.up(&mut conn).await.unwrap();
 
-        let series = sqlx::query("SELECT item_type, basis FROM item_series").fetch_one(&pool).await.unwrap();
+        let series = sqlx::query("SELECT item_type, basis FROM item_series")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         assert_eq!(series.get::<String, _>("item_type"), "EVENT");
         assert_eq!(series.get::<Option<String>, _>("basis"), None);
     }
@@ -462,25 +528,55 @@ mod tests {
     async fn synthesizes_a_template_from_a_two_level_child_subtree() {
         let pool = test_pool().await;
         insert_item(
-            &pool, "t1", "p1", None, "Move house", "TASK",
-            Some(5_000), None, Some("every year"), None, None,
+            &pool,
+            "t1",
+            "p1",
+            None,
+            "Move house",
+            "TASK",
+            Some(5_000),
+            None,
+            Some("every year"),
+            None,
+            None,
         )
         .await;
         insert_item(
-            &pool, "c1", "p1", Some("t1"), "Pack boxes", "TASK",
-            None, None, None, None, Some(-3),
+            &pool,
+            "c1",
+            "p1",
+            Some("t1"),
+            "Pack boxes",
+            "TASK",
+            None,
+            None,
+            None,
+            None,
+            Some(-3),
         )
         .await;
         insert_item(
-            &pool, "g1", "p1", Some("c1"), "Label boxes", "TASK",
-            None, None, None, None, Some(-2),
+            &pool,
+            "g1",
+            "p1",
+            Some("c1"),
+            "Label boxes",
+            "TASK",
+            None,
+            None,
+            None,
+            None,
+            Some(-2),
         )
         .await;
 
         let mut conn = pool.acquire().await.unwrap();
         MigrateLegacyRecurringItems.up(&mut conn).await.unwrap();
 
-        let series = sqlx::query("SELECT template_item_id FROM item_series").fetch_one(&pool).await.unwrap();
+        let series = sqlx::query("SELECT template_item_id FROM item_series")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         let template_id: String = series.get("template_item_id");
 
         let template = sqlx::query("SELECT item_type, parent_item_id FROM items WHERE id = ?")
@@ -516,7 +612,10 @@ mod tests {
         .unwrap();
         assert_eq!(grandchild.get::<String, _>("item_type"), "TEMPLATE");
         assert_eq!(grandchild.get::<String, _>("name"), "Label boxes");
-        assert_eq!(grandchild.get::<Option<i32>, _>("due_offset_days"), Some(-2));
+        assert_eq!(
+            grandchild.get::<Option<i32>, _>("due_offset_days"),
+            Some(-2)
+        );
 
         // The original subtree is untouched (non-destructive, unlike legacy `clone_children`).
         let original_children: i64 =
@@ -531,15 +630,27 @@ mod tests {
     async fn task_with_no_children_gets_no_template() {
         let pool = test_pool().await;
         insert_item(
-            &pool, "t1", "p1", None, "Water plants", "TASK",
-            Some(1_000), None, Some("every 2 days"), None, None,
+            &pool,
+            "t1",
+            "p1",
+            None,
+            "Water plants",
+            "TASK",
+            Some(1_000),
+            None,
+            Some("every 2 days"),
+            None,
+            None,
         )
         .await;
 
         let mut conn = pool.acquire().await.unwrap();
         MigrateLegacyRecurringItems.up(&mut conn).await.unwrap();
 
-        let series = sqlx::query("SELECT template_item_id FROM item_series").fetch_one(&pool).await.unwrap();
+        let series = sqlx::query("SELECT template_item_id FROM item_series")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         assert_eq!(series.get::<Option<String>, _>("template_item_id"), None);
     }
 
@@ -547,15 +658,27 @@ mod tests {
     async fn events_never_attempt_template_synthesis() {
         let pool = test_pool().await;
         insert_item(
-            &pool, "e1", "p1", None, "Weekly sync", "EVENT",
-            None, Some(3_000), Some("every week"), None, None,
+            &pool,
+            "e1",
+            "p1",
+            None,
+            "Weekly sync",
+            "EVENT",
+            None,
+            Some(3_000),
+            Some("every week"),
+            None,
+            None,
         )
         .await;
 
         let mut conn = pool.acquire().await.unwrap();
         MigrateLegacyRecurringItems.up(&mut conn).await.unwrap();
 
-        let series = sqlx::query("SELECT template_item_id FROM item_series").fetch_one(&pool).await.unwrap();
+        let series = sqlx::query("SELECT template_item_id FROM item_series")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         assert_eq!(series.get::<Option<String>, _>("template_item_id"), None);
     }
 
@@ -563,8 +686,17 @@ mod tests {
     async fn template_kind_items_with_inert_recurrence_are_skipped() {
         let pool = test_pool().await;
         insert_item(
-            &pool, "tpl1", "p1", None, "Move house template", "TEMPLATE",
-            None, None, Some("every year"), None, None,
+            &pool,
+            "tpl1",
+            "p1",
+            None,
+            "Move house template",
+            "TEMPLATE",
+            None,
+            None,
+            Some("every year"),
+            None,
+            None,
         )
         .await;
 
@@ -582,8 +714,17 @@ mod tests {
     async fn running_twice_is_idempotent() {
         let pool = test_pool().await;
         insert_item(
-            &pool, "t1", "p1", None, "Water plants", "TASK",
-            Some(1_000), None, Some("every 2 days"), None, None,
+            &pool,
+            "t1",
+            "p1",
+            None,
+            "Water plants",
+            "TASK",
+            Some(1_000),
+            None,
+            Some("every 2 days"),
+            None,
+            None,
         )
         .await;
 

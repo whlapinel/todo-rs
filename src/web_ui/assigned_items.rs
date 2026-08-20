@@ -1,7 +1,7 @@
-use crate::auth::AuthUser;
-use crate::domain::item::{Item, ItemKind};
 use super::nav::{self, ActiveContext, SidebarSection};
 use super::to_local;
+use crate::auth::AuthUser;
+use crate::domain::item::{Item, ItemKind};
 use crate::service::error::ItemError;
 use crate::storage::sqlite::{ItemRepo, ProjectRepo};
 use askama::Template;

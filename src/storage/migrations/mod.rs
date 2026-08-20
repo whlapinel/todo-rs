@@ -27,13 +27,13 @@ use activity_log_team_id_nullable::ActivityLogTeamIdNullable;
 use add_event_occurrences_item_id_index::AddEventOccurrencesItemIdIndex;
 use add_event_series::AddEventSeries;
 use add_item_description::AddItemDescription;
+use add_item_points::AddItemPoints;
 use add_item_series::AddItemSeries;
 use add_item_series_assignment::AddItemSeriesAssignment;
 use add_item_series_basis::AddItemSeriesBasis;
 use add_item_series_cursor_date::AddItemSeriesCursorDate;
 use add_item_series_id::AddItemSeriesId;
 use add_item_series_template_item_id::AddItemSeriesTemplateItemId;
-use add_item_points::AddItemPoints;
 use add_item_source_event_id::AddItemSourceEventId;
 use add_projects::AddProjects;
 use add_team_member_role::AddTeamMemberRole;
@@ -45,8 +45,8 @@ use has_tasks_to_simple::HasTasksToSimple;
 use item_type_event_type::ItemTypeEventType;
 use migrate_legacy_recurring_items::MigrateLegacyRecurringItems;
 use scheduled_end_date::ScheduledEndDate;
+use sqlx::{Row, SqliteConnection, SqlitePool};
 use team_member_points::TeamMemberPoints;
-use sqlx::{Row, SqlitePool, SqliteConnection};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -426,12 +426,11 @@ mod tests {
 
         run_migrations(&pool).await.unwrap();
 
-        let (source_event_id, parent_item_id): (Option<String>, Option<String>) = sqlx::query_as(
-            "SELECT source_event_id, parent_item_id FROM items WHERE id = 'child1'",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let (source_event_id, parent_item_id): (Option<String>, Option<String>) =
+            sqlx::query_as("SELECT source_event_id, parent_item_id FROM items WHERE id = 'child1'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(source_event_id.as_deref(), Some("event1"));
         assert_eq!(parent_item_id, None);
 
@@ -480,7 +479,11 @@ mod tests {
         assert_eq!(item_type_3, "TEMPLATE");
 
         let mut conn = pool.acquire().await.unwrap();
-        assert!(!column_exists(&mut conn, "items", "has_tasks").await.unwrap());
+        assert!(
+            !column_exists(&mut conn, "items", "has_tasks")
+                .await
+                .unwrap()
+        );
     }
 
     #[tokio::test]
@@ -500,10 +503,26 @@ mod tests {
         assert_eq!(item_type, "TEMPLATE");
 
         let mut conn = pool.acquire().await.unwrap();
-        assert!(!column_exists(&mut conn, "items", "is_template").await.unwrap());
-        assert!(column_exists(&mut conn, "items", "scheduled_end_date").await.unwrap());
-        assert!(column_exists(&mut conn, "items", "has_scheduled_time").await.unwrap());
-        assert!(column_exists(&mut conn, "items", "has_end_time").await.unwrap());
+        assert!(
+            !column_exists(&mut conn, "items", "is_template")
+                .await
+                .unwrap()
+        );
+        assert!(
+            column_exists(&mut conn, "items", "scheduled_end_date")
+                .await
+                .unwrap()
+        );
+        assert!(
+            column_exists(&mut conn, "items", "has_scheduled_time")
+                .await
+                .unwrap()
+        );
+        assert!(
+            column_exists(&mut conn, "items", "has_end_time")
+                .await
+                .unwrap()
+        );
 
         let applied_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM _migrations")
             .fetch_one(&pool)

@@ -1,6 +1,6 @@
+use super::nav::{self, ActiveContext, SidebarSection};
 use crate::auth::AuthUser;
 use crate::domain::team::TeamRole;
-use super::nav::{self, ActiveContext, SidebarSection};
 use crate::service::error::ItemError;
 use crate::service::teams as team_service;
 use crate::storage::sqlite::{ProjectRepo, TeamRepo, UserRepo};
@@ -201,7 +201,11 @@ async fn render_team_detail(
                 points: is_active.then_some(m.points),
                 show_role_toggle: viewer_is_admin && is_active,
                 toggle_target_role: if is_role_admin { "member" } else { "admin" },
-                toggle_label: if is_role_admin { "Remove admin" } else { "Make admin" },
+                toggle_label: if is_role_admin {
+                    "Remove admin"
+                } else {
+                    "Make admin"
+                },
             }
             .render()
         })
@@ -214,7 +218,10 @@ async fn render_team_detail(
         .map(|u| (u.id, format!("{} {}", u.first_name, u.last_name)))
         .collect();
 
-    let backing_project = projects.get_by_team(team_id).await.map_err(ItemError::from)?;
+    let backing_project = projects
+        .get_by_team(team_id)
+        .await
+        .map_err(ItemError::from)?;
     let (view_items_href, dashboard_href, activity_href, active) = match &backing_project {
         Some(project) => (
             format!("/web/projects/{}/tasks", project.id),
@@ -230,13 +237,8 @@ async fn render_team_detail(
         ),
     };
 
-    let nav_html = nav::build_nav_html(
-        projects,
-        requester_user_id,
-        active,
-        SidebarSection::None,
-    )
-    .await?;
+    let nav_html =
+        nav::build_nav_html(projects, requester_user_id, active, SidebarSection::None).await?;
 
     render(TeamDetailPageTemplate {
         id: team.id,

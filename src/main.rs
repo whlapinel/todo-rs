@@ -96,6 +96,10 @@ fn build_web_router() -> Router {
             get(get_reschedule_task),
         )
         .route(
+            "/projects/:project_id/tasks/:task_id/assign",
+            get(get_quick_assign_task),
+        )
+        .route(
             "/projects/:project_id/tasks/:item_id/edit",
             get(project_task_edit_page),
         )

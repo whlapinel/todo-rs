@@ -212,10 +212,13 @@ pub async fn undo_activity_log_entry(
     tz_offset_minutes: i32,
 ) -> Result<(), ItemError> {
     require_active_member(teams, team_id, requester_user_id).await?;
-    let entry = activity_log.get_entry(entry_id).await.map_err(|e| match e {
-        RepoError::NotFound => ItemError::NotFound,
-        _ => ItemError::Internal(format!("{e:?}")),
-    })?;
+    let entry = activity_log
+        .get_entry(entry_id)
+        .await
+        .map_err(|e| match e {
+            RepoError::NotFound => ItemError::NotFound,
+            _ => ItemError::Internal(format!("{e:?}")),
+        })?;
     if entry.team_id.as_deref() != Some(team_id) {
         return Err(ItemError::NotFound);
     }
@@ -249,10 +252,13 @@ pub async fn undo_project_activity_log_entry(
     tz_offset_minutes: i32,
 ) -> Result<(), ItemError> {
     require_project_member(projects, teams, project_id, requester_user_id).await?;
-    let entry = activity_log.get_entry(entry_id).await.map_err(|e| match e {
-        RepoError::NotFound => ItemError::NotFound,
-        _ => ItemError::Internal(format!("{e:?}")),
-    })?;
+    let entry = activity_log
+        .get_entry(entry_id)
+        .await
+        .map_err(|e| match e {
+            RepoError::NotFound => ItemError::NotFound,
+            _ => ItemError::Internal(format!("{e:?}")),
+        })?;
     if entry.project_id.as_deref() != Some(project_id) {
         return Err(ItemError::NotFound);
     }
@@ -444,8 +450,8 @@ mod tests {
         use crate::storage::sqlite::activity_log::SqliteActivityLogRepo;
         use crate::storage::sqlite::projects::SqliteProjectRepo;
         use crate::storage::sqlite::teams::SqliteTeamRepo;
-        use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
         use sqlx::SqlitePool;
+        use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
         use std::str::FromStr;
 
         async fn test_pool() -> SqlitePool {
@@ -670,14 +676,14 @@ mod tests {
         let repo: Arc<dyn ItemRepo> = Arc::new(items);
 
         let mut projects_mock = MockProjectRepo::new();
-        projects_mock
-            .expect_get()
-            .returning(|_| Ok(crate::domain::project::Project {
+        projects_mock.expect_get().returning(|_| {
+            Ok(crate::domain::project::Project {
                 id: "p1".to_string(),
                 name: "Personal".to_string(),
                 owner_user_id: "u1".to_string(),
                 team_id: None,
-            }));
+            })
+        });
         projects_mock
             .expect_add_project_points()
             .withf(|project_id, user_id, delta| {
@@ -848,14 +854,14 @@ mod tests {
     async fn undo_project_activity_log_entry_rejects_entry_from_a_different_project() {
         let repo = no_item_to_reopen();
         let mut projects_mock = MockProjectRepo::new();
-        projects_mock
-            .expect_get()
-            .returning(|_| Ok(crate::domain::project::Project {
+        projects_mock.expect_get().returning(|_| {
+            Ok(crate::domain::project::Project {
                 id: "p1".to_string(),
                 name: "Personal".to_string(),
                 owner_user_id: "u1".to_string(),
                 team_id: None,
-            }));
+            })
+        });
         let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
         let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
         let event_series = no_op_event_series();

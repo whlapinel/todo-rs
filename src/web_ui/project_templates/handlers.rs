@@ -3,17 +3,19 @@ use crate::domain::item::{Item, ItemKind};
 use crate::domain::recurrence;
 use crate::service::error::ItemError;
 use crate::service::items as item_service;
-use crate::service::project_items::{self as project_item_service, CreateProjectItemParams, UpdateProjectItemParams};
+use crate::service::project_items::{
+    self as project_item_service, CreateProjectItemParams, UpdateProjectItemParams,
+};
 use crate::service::projects::{self as project_service};
 use crate::service::templates::{
     self as template_service, CreateProjectTemplateParams, UpdateProjectTemplateParams,
 };
 use crate::storage::sqlite::{ItemRepo, ItemSeriesRepo, ProjectRepo, TeamRepo};
+use crate::web_ui::TzOffset;
 use crate::web_ui::nav::{self, ActiveContext, SidebarSection};
 use crate::web_ui::project_tasks::active_member_options;
-use crate::web_ui::project_templates::{non_empty, parse_offset, render, require_project_template};
 use crate::web_ui::project_templates::templates::*;
-use crate::web_ui::TzOffset;
+use crate::web_ui::project_templates::{non_empty, parse_offset, render, require_project_template};
 use askama::Template;
 use axum::extract::{Extension, Form, Path};
 use axum::response::{Html, IntoResponse, Response};
@@ -48,7 +50,8 @@ fn render_rows(
     templates
         .iter()
         .map(|i| {
-            ProjectTemplateRow::from_item(i, project_id, is_team_project, assignee_options.to_vec()).render()
+            ProjectTemplateRow::from_item(i, project_id, is_team_project, assignee_options.to_vec())
+                .render()
         })
         .collect::<Result<Vec<_>, _>>()
         .map_err(ItemError::from)
@@ -61,10 +64,16 @@ async fn render_templates_rows_fragment(
     project_id: &str,
     requester_user_id: &str,
 ) -> Result<Html<String>, ItemError> {
-    let project = project_service::get_project(projects, teams, project_id, requester_user_id).await?;
-    let templates =
-        template_service::list_project_templates(repo, projects, teams, project_id, requester_user_id)
-            .await?;
+    let project =
+        project_service::get_project(projects, teams, project_id, requester_user_id).await?;
+    let templates = template_service::list_project_templates(
+        repo,
+        projects,
+        teams,
+        project_id,
+        requester_user_id,
+    )
+    .await?;
     let (is_team_project, assignee_options) = match &project.team_id {
         Some(team_id) => (
             true,
@@ -76,7 +85,11 @@ async fn render_templates_rows_fragment(
     render(ProjectTemplatesRowsFragmentTemplate { rows })
 }
 
-fn render_children_rows(project_id: &str, template_id: &str, children: &[Item]) -> Result<Vec<String>, ItemError> {
+fn render_children_rows(
+    project_id: &str,
+    template_id: &str,
+    children: &[Item],
+) -> Result<Vec<String>, ItemError> {
     children
         .iter()
         .map(|i| ProjectTemplateChildRow::from_item(project_id, template_id, i).render())
@@ -414,8 +427,9 @@ pub async fn project_template_child_edit_page(
         &item_id,
     )
     .await?;
-    let fields = ProjectTemplateChildDetailFields::from_item(&project_id, &template_id, &item, false)
-        .render()?;
+    let fields =
+        ProjectTemplateChildDetailFields::from_item(&project_id, &template_id, &item, false)
+            .render()?;
     let nav_html = nav::build_nav_html(
         &projects,
         &auth_user.user_id,
@@ -582,18 +596,29 @@ pub async fn use_project_template_form(
         timezone_offset_minutes: Some(tz),
         ..Default::default()
     };
-    let new_item_id =
-        project_item_service::create_project_item(&repo, &projects, &teams, &auth_user.user_id, params)
-            .await?;
+    let new_item_id = project_item_service::create_project_item(
+        &repo,
+        &projects,
+        &teams,
+        &auth_user.user_id,
+        params,
+    )
+    .await?;
 
     // Re-fetch the created item so the offset root for copied children reflects its actual
     // persisted due date, not just the raw form input (e.g. `has_due_time` normalization).
     let new_item =
         project_item_service::get_project_item_unchecked(&repo, &project_id, &new_item_id).await?;
 
-    item_service::copy_template_children(&repo, &template_id, &new_item_id, new_item.due_date(), tz)
-        .await
-        .map_err(ItemError::from)?;
+    item_service::copy_template_children(
+        &repo,
+        &template_id,
+        &new_item_id,
+        new_item.due_date(),
+        tz,
+    )
+    .await
+    .map_err(ItemError::from)?;
 
     Ok((
         [(

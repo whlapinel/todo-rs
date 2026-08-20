@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use sqlx::{Row, SqlitePool};
 
-use crate::domain::{item::Item};
+use crate::domain::item::Item;
 use crate::storage::sqlite::{DueItem, ItemRepo, RepoError, db_err, not_found, row_to_item};
 
 pub struct SqliteItemRepo(pub SqlitePool);
@@ -436,8 +436,12 @@ mod tests {
     async fn list_by_project_returns_only_top_level_items_in_that_project() {
         let pool = test_pool().await;
         let repo = SqliteItemRepo(pool);
-        repo.create(&item_in_project("p1", "In project")).await.unwrap();
-        repo.create(&item_in_project("p2", "Other project")).await.unwrap();
+        repo.create(&item_in_project("p1", "In project"))
+            .await
+            .unwrap();
+        repo.create(&item_in_project("p2", "Other project"))
+            .await
+            .unwrap();
 
         let items = repo.list_by_project("p1", None).await.unwrap();
         assert_eq!(items.len(), 1);
@@ -457,10 +461,7 @@ mod tests {
         assert_eq!(top_level.len(), 1);
         assert_eq!(top_level[0].name, "Parent");
 
-        let children = repo
-            .list_by_project("p1", Some(parent_id))
-            .await
-            .unwrap();
+        let children = repo.list_by_project("p1", Some(parent_id)).await.unwrap();
         assert_eq!(children.len(), 1);
         assert_eq!(children[0].name, "Child");
     }
@@ -478,7 +479,9 @@ mod tests {
         };
         repo.create(&template).await.unwrap();
 
-        repo.create(&item_in_project("p1", "Not a template")).await.unwrap();
+        repo.create(&item_in_project("p1", "Not a template"))
+            .await
+            .unwrap();
 
         let mut other_project_template = item_in_project("p2", "Other project template");
         other_project_template.item_type = ItemType::Template {

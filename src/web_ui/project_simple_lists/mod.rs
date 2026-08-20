@@ -1,5 +1,5 @@
-pub mod templates;
 pub mod handlers;
+pub mod templates;
 
 use crate::domain::item::{Item, ItemKind};
 use crate::service::error::ItemError;
@@ -132,9 +132,7 @@ pub(crate) async fn sibling_group(
     parent_item_id: Option<&str>,
 ) -> Result<Vec<Item>, ItemError> {
     match parent_item_id {
-        Some(pid) => {
-            list_project_items_unchecked(repo, project_id, Some(pid.to_string())).await
-        }
+        Some(pid) => list_project_items_unchecked(repo, project_id, Some(pid.to_string())).await,
         None => list_project_simple_items(repo, project_id).await,
     }
 }

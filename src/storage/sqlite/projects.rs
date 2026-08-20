@@ -74,19 +74,21 @@ impl ProjectRepo for SqliteProjectRepo {
     }
 
     async fn get_by_team(&self, team_id: &str) -> Result<Option<Project>, RepoError> {
-        sqlx::query("SELECT id, name, owner_user_id, team_id FROM projects WHERE team_id = ? LIMIT 1")
-            .bind(team_id)
-            .fetch_optional(&self.0)
-            .await
-            .map_err(db_err)
-            .map(|row| {
-                row.map(|row| Project {
-                    id: row.get("id"),
-                    name: row.get("name"),
-                    owner_user_id: row.get("owner_user_id"),
-                    team_id: row.get("team_id"),
-                })
+        sqlx::query(
+            "SELECT id, name, owner_user_id, team_id FROM projects WHERE team_id = ? LIMIT 1",
+        )
+        .bind(team_id)
+        .fetch_optional(&self.0)
+        .await
+        .map_err(db_err)
+        .map(|row| {
+            row.map(|row| Project {
+                id: row.get("id"),
+                name: row.get("name"),
+                owner_user_id: row.get("owner_user_id"),
+                team_id: row.get("team_id"),
             })
+        })
     }
 
     async fn update_name(&self, project_id: &str, name: &str) -> Result<(), RepoError> {
@@ -254,16 +256,15 @@ impl ProjectRepo for SqliteProjectRepo {
         user_id: &str,
         role: TeamRole,
     ) -> Result<(), RepoError> {
-        let rows = sqlx::query(
-            "UPDATE project_members SET role = ? WHERE project_id = ? AND user_id = ?",
-        )
-        .bind(role.as_str())
-        .bind(project_id)
-        .bind(user_id)
-        .execute(&self.0)
-        .await
-        .map_err(db_err)?
-        .rows_affected();
+        let rows =
+            sqlx::query("UPDATE project_members SET role = ? WHERE project_id = ? AND user_id = ?")
+                .bind(role.as_str())
+                .bind(project_id)
+                .bind(user_id)
+                .execute(&self.0)
+                .await
+                .map_err(db_err)?
+                .rows_affected();
         if rows == 0 { Err(not_found()) } else { Ok(()) }
     }
 
@@ -510,7 +511,10 @@ mod tests {
 
         repo.attach_team(&id, "t1").await.unwrap();
 
-        assert_eq!(repo.member_role(&id, "u2").await.unwrap(), Some(TeamRole::Member));
+        assert_eq!(
+            repo.member_role(&id, "u2").await.unwrap(),
+            Some(TeamRole::Member)
+        );
         // u3 is only PENDING on the team, so no row was seeded for them.
         assert_eq!(repo.member_role(&id, "u3").await.unwrap(), None);
     }
@@ -526,7 +530,10 @@ mod tests {
 
         repo.attach_team(&id, "t1").await.unwrap();
 
-        assert_eq!(repo.member_role(&id, "u1").await.unwrap(), Some(TeamRole::Admin));
+        assert_eq!(
+            repo.member_role(&id, "u1").await.unwrap(),
+            Some(TeamRole::Admin)
+        );
     }
 
     #[tokio::test]
@@ -538,12 +545,18 @@ mod tests {
         let id = repo.create("Home", "u1", None).await.unwrap();
         insert_team_member(&pool, "t1", "u2", "ACTIVE").await;
         repo.attach_team(&id, "t1").await.unwrap();
-        assert_eq!(repo.member_role(&id, "u2").await.unwrap(), Some(TeamRole::Member));
+        assert_eq!(
+            repo.member_role(&id, "u2").await.unwrap(),
+            Some(TeamRole::Member)
+        );
 
         repo.detach_team(&id).await.unwrap();
 
         assert_eq!(repo.member_role(&id, "u2").await.unwrap(), None);
-        assert_eq!(repo.member_role(&id, "u1").await.unwrap(), Some(TeamRole::Admin));
+        assert_eq!(
+            repo.member_role(&id, "u1").await.unwrap(),
+            Some(TeamRole::Admin)
+        );
     }
 
     #[tokio::test]
@@ -561,7 +574,10 @@ mod tests {
         repo.detach_team(&id1).await.unwrap();
 
         assert_eq!(repo.member_role(&id1, "u2").await.unwrap(), None);
-        assert_eq!(repo.member_role(&id2, "u2").await.unwrap(), Some(TeamRole::Member));
+        assert_eq!(
+            repo.member_role(&id2, "u2").await.unwrap(),
+            Some(TeamRole::Member)
+        );
     }
 
     #[tokio::test]

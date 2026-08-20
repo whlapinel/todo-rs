@@ -1,5 +1,5 @@
-pub mod templates;
 pub mod handlers;
+pub mod templates;
 
 use crate::domain::item::{Item, ItemKind};
 use crate::service::error::ItemError;
@@ -111,7 +111,11 @@ fn start_of_day() -> chrono::NaiveTime {
 /// Converts a local calendar date + time-of-day into the UTC instant it represents, given
 /// `tz_offset_minutes` — same `local + offset = utc` convention as `combine_local_to_utc`
 /// above, just taking a `NaiveDate` directly instead of parsing one from a form string.
-pub(crate) fn local_date_to_utc(date: NaiveDate, time: chrono::NaiveTime, tz_offset_minutes: i32) -> DateTime<Utc> {
+pub(crate) fn local_date_to_utc(
+    date: NaiveDate,
+    time: chrono::NaiveTime,
+    tz_offset_minutes: i32,
+) -> DateTime<Utc> {
     DateTime::<Utc>::from_naive_utc_and_offset(date.and_time(time), Utc)
         + chrono::Duration::minutes(tz_offset_minutes as i64)
 }
@@ -283,7 +287,10 @@ pub(crate) fn render_rows(
 const VIRTUAL_OCCURRENCE_WINDOW_DAYS: i64 = 90;
 
 pub(crate) fn virtual_occurrence_window(now: DateTime<Utc>) -> (DateTime<Utc>, DateTime<Utc>) {
-    (now, now + chrono::Duration::days(VIRTUAL_OCCURRENCE_WINDOW_DAYS))
+    (
+        now,
+        now + chrono::Duration::days(VIRTUAL_OCCURRENCE_WINDOW_DAYS),
+    )
 }
 
 /// The Events list-view counterpart to `project_tasks::render_rows_with_virtual` — merges
@@ -336,8 +343,7 @@ pub(crate) async fn list_project_events(
     project_id: &str,
 ) -> Result<Vec<Item>, ItemError> {
     let mut items =
-        crate::service::project_items::list_project_items_unchecked(repo, project_id, None)
-            .await?;
+        crate::service::project_items::list_project_items_unchecked(repo, project_id, None).await?;
     items.retain(|i| i.kind() == ItemKind::Event);
     items.sort_by_key(sort_key);
     Ok(items)
@@ -434,7 +440,11 @@ pub(crate) fn build_calendar_days(
             .entry(local.date_naive())
             .or_default()
             .push(CalendarEventEntry {
-                entry_id: format!("cal-virtual-{}-{}", occ.series_id, occ.occurrence_date.timestamp()),
+                entry_id: format!(
+                    "cal-virtual-{}-{}",
+                    occ.series_id,
+                    occ.occurrence_date.timestamp()
+                ),
                 href: "#".to_string(),
                 name: occ.series_name.clone(),
                 time_label: Some(local.format("%H:%M").to_string()),

@@ -46,9 +46,11 @@ impl Migration for ActivityLog {
         )
         .execute(&mut *conn)
         .await?;
-        sqlx::query("CREATE INDEX IF NOT EXISTS idx_activity_log_item_id ON activity_log (item_id)")
-            .execute(&mut *conn)
-            .await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_activity_log_item_id ON activity_log (item_id)",
+        )
+        .execute(&mut *conn)
+        .await?;
         Ok(())
     }
 }
@@ -56,8 +58,8 @@ impl Migration for ActivityLog {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use sqlx::SqlitePool;
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use std::str::FromStr;
 
     async fn empty_pool() -> SqlitePool {

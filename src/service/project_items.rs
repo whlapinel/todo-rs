@@ -563,9 +563,7 @@ pub async fn delete_project_item(
             )
             .await?;
         }
-        None => {
-            items::delete_item(repo, event_series, &project.owner_user_id, item_id).await?
-        }
+        None => items::delete_item(repo, event_series, &project.owner_user_id, item_id).await?,
     }
     item_series::unlink_deleted_item_occurrence(event_series, item_id).await
 }
@@ -902,13 +900,15 @@ mod tests {
         // completion-undo" note) — 0 points, no team.
         activity_log_mock
             .expect_log_activity()
-            .withf(|team_id, _project_id, user_id, item_id, item_name, points_delta| {
-                team_id.is_none()
-                    && user_id == "owner1"
-                    && item_id == "i1"
-                    && item_name == "Old name"
-                    && *points_delta == 0
-            })
+            .withf(
+                |team_id, _project_id, user_id, item_id, item_name, points_delta| {
+                    team_id.is_none()
+                        && user_id == "owner1"
+                        && item_id == "i1"
+                        && item_name == "Old name"
+                        && *points_delta == 0
+                },
+            )
             .times(1)
             .returning(|_, _, _, _, _, _| Ok("entry1".to_string()));
         let activity_log: Arc<dyn ActivityLogRepo> = Arc::new(activity_log_mock);
@@ -1163,14 +1163,16 @@ mod tests {
             .expect_get_series()
             .times(2)
             .returning(move |_| Ok(task_series.clone()));
-        series_mock.expect_get_occurrence().returning(move |_, date| {
-            Ok(Some(ItemOccurrence {
-                series_id: "s1".to_string(),
-                occurrence_date: date,
-                item_id: Some("i1".to_string()),
-                is_exdate: false,
-            }))
-        });
+        series_mock
+            .expect_get_occurrence()
+            .returning(move |_, date| {
+                Ok(Some(ItemOccurrence {
+                    series_id: "s1".to_string(),
+                    occurrence_date: date,
+                    item_id: Some("i1".to_string()),
+                    is_exdate: false,
+                }))
+            });
         series_mock
             .expect_retreat_cursor()
             .withf(move |series_id: &str, date: &DateTime<Utc>| {
@@ -1518,6 +1520,8 @@ mod tests {
             "i1",
         )
         .await
-        .expect("should delete the whole tree and un-materialize the reparented child's occurrence");
+        .expect(
+            "should delete the whole tree and un-materialize the reparented child's occurrence",
+        );
     }
 }

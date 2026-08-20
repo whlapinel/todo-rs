@@ -351,7 +351,9 @@ mod tests {
     async fn resolve_project_assignee_returns_none_when_unset() {
         let mock = MockProjectRepo::new();
         let projects: Arc<dyn ProjectRepo> = Arc::new(mock);
-        let result = resolve_project_assignee(&projects, "p1", None).await.unwrap();
+        let result = resolve_project_assignee(&projects, "p1", None)
+            .await
+            .unwrap();
         assert_eq!(result, None);
     }
 
@@ -418,9 +420,16 @@ mod tests {
 
         let projects: Arc<dyn ProjectRepo> = Arc::new(mock);
         let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
-        let err = set_project_member_role(&projects, &teams, "p1", "owner1", "member1", TeamRole::Admin)
-            .await
-            .unwrap_err();
+        let err = set_project_member_role(
+            &projects,
+            &teams,
+            "p1",
+            "owner1",
+            "member1",
+            TeamRole::Admin,
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, ItemError::Invalid(_)));
     }
 
@@ -434,9 +443,16 @@ mod tests {
 
         let projects: Arc<dyn ProjectRepo> = Arc::new(mock);
         let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
-        set_project_member_role(&projects, &teams, "p1", "owner1", "member1", TeamRole::Member)
-            .await
-            .unwrap();
+        set_project_member_role(
+            &projects,
+            &teams,
+            "p1",
+            "owner1",
+            "member1",
+            TeamRole::Member,
+        )
+        .await
+        .unwrap();
     }
 
     #[tokio::test]
@@ -447,7 +463,9 @@ mod tests {
             .returning(|_, _, _| Ok("p1".to_string()));
 
         let projects: Arc<dyn ProjectRepo> = Arc::new(mock);
-        let id = create_project(&projects, "My Project", "owner1").await.unwrap();
+        let id = create_project(&projects, "My Project", "owner1")
+            .await
+            .unwrap();
         assert_eq!(id, "p1");
     }
 
@@ -614,7 +632,9 @@ mod tests {
 
         let projects: Arc<dyn ProjectRepo> = Arc::new(mock);
         let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
-        let project = get_project(&projects, &teams, "p1", "owner1").await.unwrap();
+        let project = get_project(&projects, &teams, "p1", "owner1")
+            .await
+            .unwrap();
         assert_eq!(project.id, "p1");
     }
 
@@ -677,6 +697,8 @@ mod tests {
 
         let projects: Arc<dyn ProjectRepo> = Arc::new(mock);
         let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
-        delete_project(&projects, &teams, "p1", "owner1").await.unwrap();
+        delete_project(&projects, &teams, "p1", "owner1")
+            .await
+            .unwrap();
     }
 }

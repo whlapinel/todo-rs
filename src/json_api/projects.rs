@@ -66,9 +66,15 @@ pub async fn update_project(
 ) -> Result<output::UpdateProjectOutput, error::UpdateProjectError> {
     require_matching_user(&auth, &input.user_id)
         .map_err(|e| error::UpdateProjectError::from(to_msg(e)))?;
-    project_service::update_project(&projects, &teams, &input.project_id, &auth.user_id, &input.name)
-        .await
-        .map_err(|e| error::UpdateProjectError::from(to_msg(e)))?;
+    project_service::update_project(
+        &projects,
+        &teams,
+        &input.project_id,
+        &auth.user_id,
+        &input.name,
+    )
+    .await
+    .map_err(|e| error::UpdateProjectError::from(to_msg(e)))?;
     Ok(output::UpdateProjectOutput {})
 }
 
@@ -113,23 +119,19 @@ pub async fn list_project_members(
     server::Extension(teams): server::Extension<Arc<dyn TeamRepo>>,
     server::Extension(auth): server::Extension<AuthUser>,
 ) -> Result<output::ListProjectMembersOutput, error::ListProjectMembersError> {
-    let members = project_service::list_project_members(
-        &projects,
-        &teams,
-        &input.project_id,
-        &auth.user_id,
-    )
-    .await
-    .map_err(|e| error::ListProjectMembersError::from(to_msg(e)))?
-    .into_iter()
-    .map(|m| model::ProjectMemberSummary {
-        user_id: m.user.id,
-        first_name: m.user.first_name,
-        last_name: m.user.last_name,
-        role: m.role.as_str().to_string(),
-        points: m.points,
-    })
-    .collect();
+    let members =
+        project_service::list_project_members(&projects, &teams, &input.project_id, &auth.user_id)
+            .await
+            .map_err(|e| error::ListProjectMembersError::from(to_msg(e)))?
+            .into_iter()
+            .map(|m| model::ProjectMemberSummary {
+                user_id: m.user.id,
+                first_name: m.user.first_name,
+                last_name: m.user.last_name,
+                role: m.role.as_str().to_string(),
+                points: m.points,
+            })
+            .collect();
     Ok(output::ListProjectMembersOutput { members })
 }
 

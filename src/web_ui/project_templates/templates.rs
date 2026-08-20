@@ -117,7 +117,12 @@ pub struct ProjectTemplateEditPageTemplate {
 pub struct ProjectTemplateChildDetailFields;
 
 impl ProjectTemplateChildDetailFields {
-    pub fn from_item(project_id: &str, template_id: &str, item: &Item, just_saved: bool) -> ChildDetailFields {
+    pub fn from_item(
+        project_id: &str,
+        template_id: &str,
+        item: &Item,
+        just_saved: bool,
+    ) -> ChildDetailFields {
         ChildDetailFields {
             project_id: project_id.to_string(),
             template_id: template_id.to_string(),

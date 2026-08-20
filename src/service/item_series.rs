@@ -202,7 +202,9 @@ pub async fn unskip_occurrence(
     tz_offset_minutes: i32,
 ) -> Result<(), ItemError> {
     let series = event_series.get_series(series_id).await?;
-    let occurrence = event_series.get_occurrence(series_id, occurrence_date).await?;
+    let occurrence = event_series
+        .get_occurrence(series_id, occurrence_date)
+        .await?;
     if !occurrence.map(|o| o.is_exdate).unwrap_or(false) {
         return Err(ItemError::Invalid(
             "this occurrence is not skipped".to_string(),
@@ -228,7 +230,9 @@ pub async fn unskip_occurrence(
             event_series.retreat_cursor(series_id, previous).await?;
         }
     }
-    event_series.delete_occurrence(series_id, occurrence_date).await?;
+    event_series
+        .delete_occurrence(series_id, occurrence_date)
+        .await?;
     Ok(())
 }
 
@@ -1743,7 +1747,10 @@ mod tests {
                 is_exdate: false,
             }))
         });
-        series_mock.expect_mark_exdate().times(1).returning(|_, _| Ok(()));
+        series_mock
+            .expect_mark_exdate()
+            .times(1)
+            .returning(|_, _| Ok(()));
         // Event-typed series (default from `series()`) — no cursor to advance.
         series_mock.expect_advance_cursor().times(0);
         // `unlink_deleted_item_occurrence`, called from inside `delete_project_item`.
@@ -1802,8 +1809,13 @@ mod tests {
         series_mock
             .expect_get_series()
             .returning(|_| Ok(series("p1")));
-        series_mock.expect_get_occurrence().returning(|_, _| Ok(None));
-        series_mock.expect_mark_exdate().times(1).returning(|_, _| Ok(()));
+        series_mock
+            .expect_get_occurrence()
+            .returning(|_, _| Ok(None));
+        series_mock
+            .expect_mark_exdate()
+            .times(1)
+            .returning(|_, _| Ok(()));
         let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         // No expectations set on these mocks at all — mockall panics on any unmocked
@@ -1833,7 +1845,9 @@ mod tests {
         series_mock
             .expect_get_series()
             .returning(|_| Ok(series("p1")));
-        series_mock.expect_get_occurrence().returning(|_, _| Ok(None));
+        series_mock
+            .expect_get_occurrence()
+            .returning(|_, _| Ok(None));
         series_mock.expect_delete_occurrence().times(0);
         let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
@@ -2121,8 +2135,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn validate_uncompletable_allows_the_most_recently_completed_task_series_occurrence()
-    {
+    async fn validate_uncompletable_allows_the_most_recently_completed_task_series_occurrence() {
         let mut task_series = series("p1");
         task_series.item_type = ItemKind::Task;
         task_series.cursor_date = Some(occurrence_date());
@@ -2177,14 +2190,16 @@ mod tests {
         series_mock
             .expect_get_series()
             .returning(move |_| Ok(task_series.clone()));
-        series_mock.expect_get_occurrence().returning(move |_, date| {
-            Ok(Some(ItemOccurrence {
-                series_id: "s1".to_string(),
-                occurrence_date: date,
-                item_id: Some("later-item".to_string()),
-                is_exdate: false,
-            }))
-        });
+        series_mock
+            .expect_get_occurrence()
+            .returning(move |_, date| {
+                Ok(Some(ItemOccurrence {
+                    series_id: "s1".to_string(),
+                    occurrence_date: date,
+                    item_id: Some("later-item".to_string()),
+                    is_exdate: false,
+                }))
+            });
         let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let result = validate_uncompletable(&event_series, "completed-item").await;
@@ -2192,8 +2207,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn validate_uncompletable_rejects_when_the_cursor_occurrence_was_skipped_not_completed()
-    {
+    async fn validate_uncompletable_rejects_when_the_cursor_occurrence_was_skipped_not_completed() {
         let mut task_series = series("p1");
         task_series.item_type = ItemKind::Task;
         task_series.cursor_date = Some(occurrence_date());
@@ -3656,22 +3670,24 @@ mod tests {
         series_mock
             .expect_list_series_for_project()
             .returning(move |_| Ok(vec![s.clone()]));
-        series_mock.expect_list_occurrences_between().returning(|_, _, _| {
-            Ok(vec![
-                ItemOccurrence {
-                    series_id: "s1".to_string(),
-                    occurrence_date: anchor(),
-                    item_id: Some("item-a".to_string()),
-                    is_exdate: false,
-                },
-                ItemOccurrence {
-                    series_id: "s1".to_string(),
-                    occurrence_date: anchor() + chrono::Duration::days(7),
-                    item_id: None,
-                    is_exdate: true,
-                },
-            ])
-        });
+        series_mock
+            .expect_list_occurrences_between()
+            .returning(|_, _, _| {
+                Ok(vec![
+                    ItemOccurrence {
+                        series_id: "s1".to_string(),
+                        occurrence_date: anchor(),
+                        item_id: Some("item-a".to_string()),
+                        is_exdate: false,
+                    },
+                    ItemOccurrence {
+                        series_id: "s1".to_string(),
+                        occurrence_date: anchor() + chrono::Duration::days(7),
+                        item_id: None,
+                        is_exdate: true,
+                    },
+                ])
+            });
         let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
         let users: Arc<dyn UserRepo> = Arc::new(MockUserRepo::new());
 
@@ -3697,9 +3713,15 @@ mod tests {
                 item_id: "item-a".to_string()
             }
         );
-        assert_eq!(result[1].occurrence_date, anchor() + chrono::Duration::days(7));
+        assert_eq!(
+            result[1].occurrence_date,
+            anchor() + chrono::Duration::days(7)
+        );
         assert_eq!(result[1].state, OccurrenceState::Skipped);
-        assert_eq!(result[2].occurrence_date, anchor() + chrono::Duration::days(14));
+        assert_eq!(
+            result[2].occurrence_date,
+            anchor() + chrono::Duration::days(14)
+        );
         assert_eq!(result[2].state, OccurrenceState::Virtual);
     }
 

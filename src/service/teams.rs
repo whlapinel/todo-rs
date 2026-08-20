@@ -1,7 +1,9 @@
 use crate::domain::team::{Team, TeamRole};
 use crate::service::items::ItemError;
 use crate::service::projects::ensure_team_project;
-use crate::storage::sqlite::{ProjectRepo, RepoError, TeamMemberInfo, TeamRepo, TeamWithStatus, UserRepo};
+use crate::storage::sqlite::{
+    ProjectRepo, RepoError, TeamMemberInfo, TeamRepo, TeamWithStatus, UserRepo,
+};
 use std::sync::Arc;
 
 /// Checks that `user_id` is an `ACTIVE` member of `team_id` **and** holds `admin`
@@ -105,7 +107,10 @@ pub async fn update_team(
 }
 
 /// Moved from `json_api::teams::list_teams`.
-pub async fn list_teams(teams: &Arc<dyn TeamRepo>, user_id: &str) -> Result<Vec<TeamWithStatus>, ItemError> {
+pub async fn list_teams(
+    teams: &Arc<dyn TeamRepo>,
+    user_id: &str,
+) -> Result<Vec<TeamWithStatus>, ItemError> {
     Ok(teams.list_for_user(user_id).await?)
 }
 
@@ -164,12 +169,18 @@ pub async fn invite_team_member(
             "user is already a member or has a pending invite".to_string(),
         ));
     }
-    teams.invite(team_id, invitee_user_id, inviter_user_id).await?;
+    teams
+        .invite(team_id, invitee_user_id, inviter_user_id)
+        .await?;
     Ok(())
 }
 
 /// Moved from `json_api::teams::accept_team_invite`.
-pub async fn accept_team_invite(teams: &Arc<dyn TeamRepo>, team_id: &str, user_id: &str) -> Result<(), ItemError> {
+pub async fn accept_team_invite(
+    teams: &Arc<dyn TeamRepo>,
+    team_id: &str,
+    user_id: &str,
+) -> Result<(), ItemError> {
     teams.accept(team_id, user_id).await.map_err(|e| match e {
         RepoError::NotFound => ItemError::Invalid("no pending invite found".to_string()),
         _ => ItemError::Internal(format!("{e:?}")),
@@ -177,11 +188,18 @@ pub async fn accept_team_invite(teams: &Arc<dyn TeamRepo>, team_id: &str, user_i
 }
 
 /// Moved from `json_api::teams::leave_team`.
-pub async fn leave_team(teams: &Arc<dyn TeamRepo>, team_id: &str, user_id: &str) -> Result<(), ItemError> {
-    teams.remove_member(team_id, user_id).await.map_err(|e| match e {
-        RepoError::NotFound => ItemError::Invalid("not a member of this team".to_string()),
-        _ => ItemError::Internal(format!("{e:?}")),
-    })
+pub async fn leave_team(
+    teams: &Arc<dyn TeamRepo>,
+    team_id: &str,
+    user_id: &str,
+) -> Result<(), ItemError> {
+    teams
+        .remove_member(team_id, user_id)
+        .await
+        .map_err(|e| match e {
+            RepoError::NotFound => ItemError::Invalid("not a member of this team".to_string()),
+            _ => ItemError::Internal(format!("{e:?}")),
+        })
 }
 
 #[cfg(test)]
@@ -192,8 +210,7 @@ mod tests {
     #[tokio::test]
     async fn require_team_admin_rejects_non_member() {
         let mut mock = MockTeamRepo::new();
-        mock.expect_member_status()
-            .returning(|_, _| Ok(None));
+        mock.expect_member_status().returning(|_, _| Ok(None));
 
         let teams: Arc<dyn TeamRepo> = Arc::new(mock);
         let err = require_team_admin(&teams, "t1", "u1").await.unwrap_err();

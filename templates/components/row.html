@@ -16,6 +16,12 @@
             {% include "icons/calendar.html" %}
         </button>
         {% endif %}
+        {% if let Some(url) = assign_url %}
+        <button hx-get="{{ url }}" hx-target="#action-dialog" hx-select="unset" hx-swap="innerHTML"
+            class="shrink-0 cursor-pointer text-red-600 hover:text-red-500 dark:text-red-400 dark:hover:text-red-300">
+            {% include "icons/assign.html" %}
+        </button>
+        {% endif %}
         {% if let Some(url) = duplicate_url %}
         <button hx-post="{{ url }}" hx-confirm="Copy {{ name }}{% if has_children %} and all its sub-items{% endif %}?"
             hx-target="#page" hx-select="#page" hx-swap="outerHTML"

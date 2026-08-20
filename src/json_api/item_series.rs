@@ -1,9 +1,9 @@
 use super::{internal, not_found, to_domain_item_type, to_sdk_item_type};
 use crate::auth::AuthUser;
 use crate::domain::item_series::ItemSeries;
-use crate::service::items::ItemError;
 use crate::service::item_series as item_series_service;
 use crate::service::item_series::{CreateItemSeriesParams, UpdateItemSeriesParams};
+use crate::service::items::ItemError;
 use crate::storage::sqlite::{ItemRepo, ItemSeriesRepo, ProjectRepo, TeamRepo};
 use std::sync::Arc;
 use todo_server_sdk::{error, input, model, output, server, types::DateTime as SmithyDateTime};
@@ -141,9 +141,15 @@ pub async fn delete_item_series(
     server::Extension(item_series): server::Extension<Arc<dyn ItemSeriesRepo>>,
     server::Extension(auth): server::Extension<AuthUser>,
 ) -> Result<output::DeleteItemSeriesOutput, error::DeleteItemSeriesError> {
-    item_series_service::delete_series(&projects, &teams, &item_series, &auth.user_id, &input.series_id)
-        .await
-        .map_err(|e| error::DeleteItemSeriesError::from(to_msg(e)))?;
+    item_series_service::delete_series(
+        &projects,
+        &teams,
+        &item_series,
+        &auth.user_id,
+        &input.series_id,
+    )
+    .await
+    .map_err(|e| error::DeleteItemSeriesError::from(to_msg(e)))?;
     Ok(output::DeleteItemSeriesOutput {})
 }
 

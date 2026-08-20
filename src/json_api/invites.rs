@@ -15,7 +15,10 @@ pub async fn send_app_invite(
     })?;
 
     let user = user_repo.get(&auth.user_id).await.map_err(|e| {
-        tracing::error!("send_app_invite: failed to fetch inviter {}: {e:?}", auth.user_id);
+        tracing::error!(
+            "send_app_invite: failed to fetch inviter {}: {e:?}",
+            auth.user_id
+        );
         error::SendAppInviteError::from(error::PeoplesRepublicOfListsError {
             message: "internal error".to_string(),
         })

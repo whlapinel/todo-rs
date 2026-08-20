@@ -22,9 +22,9 @@ async fn team_id_is_not_null(conn: &mut SqliteConnection) -> Result<bool, Migrat
     let rows = sqlx::query("PRAGMA table_info(activity_log)")
         .fetch_all(&mut *conn)
         .await?;
-    Ok(rows.iter().any(|row| {
-        row.get::<String, _>("name") == "team_id" && row.get::<i64, _>("notnull") != 0
-    }))
+    Ok(rows
+        .iter()
+        .any(|row| row.get::<String, _>("name") == "team_id" && row.get::<i64, _>("notnull") != 0))
 }
 
 #[async_trait]
@@ -74,9 +74,11 @@ impl Migration for ActivityLogTeamIdNullable {
         )
         .execute(&mut *conn)
         .await?;
-        sqlx::query("CREATE INDEX IF NOT EXISTS idx_activity_log_item_id ON activity_log (item_id)")
-            .execute(&mut *conn)
-            .await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_activity_log_item_id ON activity_log (item_id)",
+        )
+        .execute(&mut *conn)
+        .await?;
         sqlx::query(
             "CREATE INDEX IF NOT EXISTS idx_activity_log_project_id ON activity_log (project_id)",
         )
@@ -89,8 +91,8 @@ impl Migration for ActivityLogTeamIdNullable {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use sqlx::SqlitePool;
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use std::str::FromStr;
 
     async fn test_pool() -> SqlitePool {

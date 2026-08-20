@@ -2,7 +2,9 @@ use async_trait::async_trait;
 use sqlx::SqlitePool;
 
 use crate::domain::activity_log::ActivityLogEntry;
-use crate::storage::sqlite::{ActivityLogRepo, RepoError, db_err, not_found, row_to_activity_log_entry};
+use crate::storage::sqlite::{
+    ActivityLogRepo, RepoError, db_err, not_found, row_to_activity_log_entry,
+};
 
 pub struct SqliteActivityLogRepo(pub SqlitePool);
 
@@ -113,12 +115,13 @@ impl ActivityLogRepo for SqliteActivityLogRepo {
     }
 
     async fn mark_reversed(&self, entry_id: &str) -> Result<(), RepoError> {
-        let rows = sqlx::query("UPDATE activity_log SET reversed = 1 WHERE id = ? AND reversed = 0")
-            .bind(entry_id)
-            .execute(&self.0)
-            .await
-            .map_err(db_err)?
-            .rows_affected();
+        let rows =
+            sqlx::query("UPDATE activity_log SET reversed = 1 WHERE id = ? AND reversed = 0")
+                .bind(entry_id)
+                .execute(&self.0)
+                .await
+                .map_err(db_err)?
+                .rows_affected();
         if rows == 0 { Err(not_found()) } else { Ok(()) }
     }
 }

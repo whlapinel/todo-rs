@@ -1,5 +1,5 @@
-pub mod templates;
 pub mod handlers;
+pub mod templates;
 
 use crate::domain::item::{Item, ItemKind};
 use crate::service::error::ItemError;
@@ -330,6 +330,7 @@ pub(crate) fn render_rows(
     show_complete: bool,
     tz: i32,
     skip_urls: &HashMap<String, String>,
+    team_id: Option<&str>,
 ) -> Result<Vec<String>, ItemError> {
     let visible: Vec<&Item> = items
         .iter()
@@ -338,8 +339,16 @@ pub(crate) fn render_rows(
     visible
         .iter()
         .map(|i| {
-            ProjectTaskRow::from_item(i, project_id, names, &visible, tz, skip_urls.get(&i.id).cloned())
-                .render()
+            ProjectTaskRow::from_item(
+                i,
+                project_id,
+                names,
+                &visible,
+                tz,
+                skip_urls.get(&i.id).cloned(),
+                team_id.is_some(),
+            )
+            .render()
         })
         .collect::<Result<Vec<_>, _>>()
         .map_err(ItemError::from)
@@ -361,6 +370,7 @@ pub(crate) fn render_rows_with_virtual(
     show_complete: bool,
     tz: i32,
     skip_urls: &HashMap<String, String>,
+    team_id: Option<&str>,
 ) -> Result<Vec<String>, ItemError> {
     let visible: Vec<&Item> = items
         .iter()
@@ -369,9 +379,17 @@ pub(crate) fn render_rows_with_virtual(
     let mut entries: Vec<(i64, String)> = visible
         .iter()
         .map(|i| {
-            ProjectTaskRow::from_item(i, project_id, names, &visible, tz, skip_urls.get(&i.id).cloned())
-                .render()
-                .map(|html| (sort_key(i), html))
+            ProjectTaskRow::from_item(
+                i,
+                project_id,
+                names,
+                &visible,
+                tz,
+                skip_urls.get(&i.id).cloned(),
+                team_id.is_some(),
+            )
+            .render()
+            .map(|html| (sort_key(i), html))
         })
         .collect::<Result<Vec<_>, _>>()?;
     for occ in virtual_occurrences {
@@ -409,9 +427,7 @@ pub(crate) async fn sibling_group(
     parent_item_id: Option<&str>,
 ) -> Result<Vec<Item>, ItemError> {
     match parent_item_id {
-        Some(pid) => {
-            list_project_items_unchecked(repo, project_id, Some(pid.to_string())).await
-        }
+        Some(pid) => list_project_items_unchecked(repo, project_id, Some(pid.to_string())).await,
         None => list_project_tasks(repo, project_id).await,
     }
 }
@@ -445,6 +461,7 @@ pub(crate) async fn render_scope_fragment(
         parent_item_id.is_some() || show_complete,
         tz,
         &HashMap::new(),
+        team_id,
     )?;
     render(ProjectTaskRowsFragmentTemplate {
         rows,
@@ -480,7 +497,11 @@ pub(crate) fn grid_start_for(year: i32, month: u32) -> NaiveDate {
 
 /// Converts a local calendar date + time-of-day into the UTC instant it represents, given
 /// `tz_offset_minutes` — same convention as `project_events::local_date_to_utc`.
-pub(crate) fn local_date_to_utc(date: NaiveDate, time: chrono::NaiveTime, tz_offset_minutes: i32) -> DateTime<Utc> {
+pub(crate) fn local_date_to_utc(
+    date: NaiveDate,
+    time: chrono::NaiveTime,
+    tz_offset_minutes: i32,
+) -> DateTime<Utc> {
     DateTime::<Utc>::from_naive_utc_and_offset(date.and_time(time), Utc)
         + chrono::Duration::minutes(tz_offset_minutes as i64)
 }
