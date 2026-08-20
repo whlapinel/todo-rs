@@ -732,3 +732,24 @@ pub async fn save_project_event_as_template(
         r#"<span class="text-xs text-green-600">Saved</span>"#.to_string(),
     ))
 }
+
+pub async fn get_reschedule_event(
+    Path((project_id, item_id)): Path<(String, String)>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    TzOffset(tz): TzOffset,
+) -> Result<Html<String>, ItemError> {
+    let event = project_item_service::get_project_item(
+        &repo,
+        &projects,
+        &teams,
+        &project_id,
+        &auth_user.user_id,
+        &item_id,
+    )
+    .await?;
+    let event = require_event(event)?;
+    render(RescheduleDialog::from_event(&event, &project_id, tz))
+}

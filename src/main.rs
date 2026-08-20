@@ -135,6 +135,10 @@ fn build_web_router() -> Router {
             get(project_event_edit_page),
         )
         .route(
+            "/projects/:project_id/events/:item_id/reschedule",
+            get(get_reschedule_event),
+        )
+        .route(
             "/projects/:project_id/events/:item_id/children",
             get(project_event_children_fragment).post(create_project_event_child_form),
         )

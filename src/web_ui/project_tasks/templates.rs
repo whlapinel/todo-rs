@@ -106,52 +106,65 @@ impl ProjectTaskRow {
     }
 }
 
+/// A lightweight date/schedule-only editor, opened from a task row's calendar-icon button —
+/// see `docs/features.md`'s "quick reschedule" entry. Deliberately reuses the same PUT
+/// `/web/projects/:project_id/tasks/:item_id` endpoint (`handlers::update_project_task_form`)
+/// the full edit form already saves to, rather than introducing a second save path: the field
+/// names below (`dueDate`/`dueTime`/`scheduledDate`/... via `macros::due_date_fields`/
+/// `scheduled_fields`) match `ProjectTaskForm` exactly, so every field this dialog omits
+/// (name, assignment, points, ...) round-trips from `current` unchanged via that handler's
+/// existing overlay helpers — no separate validation/side-effect logic to duplicate.
 #[derive(Template)]
 #[template(path = "components/reschedule_dialog.html")]
 pub struct RescheduleDialog {
+    pub item_id: String,
     pub post_reschedule_url: String,
-    pub scheduled_start_date: Option<String>,
-    pub scheduled_start_time: Option<String>,
-    pub scheduled_end_date: Option<String>,
-    pub scheduled_end_time: Option<String>,
-    pub due_date: Option<String>,
-    pub due_time: Option<String>,
+    pub scheduled_start_date: String,
+    pub scheduled_start_time: String,
+    pub scheduled_end_date: String,
+    pub scheduled_end_time: String,
+    pub due_date: String,
+    pub due_time: String,
 }
 
 impl RescheduleDialog {
-    pub fn from_task(task: Item, project_id: &str) -> Self {
+    pub fn from_task(task: &Item, project_id: &str, tz: i32) -> Self {
+        let local_due_date = task.due_date().map(|d| to_local(d, tz));
+        let local_scheduled_date = task.scheduled_date().map(|d| to_local(d, tz));
+        let local_scheduled_end_date = task.scheduled_end_date().map(|d| to_local(d, tz));
         RescheduleDialog {
-            post_reschedule_url: format!("/web/projects/{}/tasks/{}/", project_id, task.id),
-            scheduled_start_date: task
-                .scheduled_date()
-                .map(|date| date.format(&"%Y-%m-%d").to_string()),
-            scheduled_start_time: task
-                .has_scheduled_time()
-                .then(|| {
-                    task.scheduled_date()
-                        .map(|date| date.format(&"%Y-%m-%d").to_string())
-                })
-                .flatten(),
-            scheduled_end_date: task
-                .scheduled_end_date()
-                .map(|date| date.format("%Y-%m-%d").to_string()),
-            scheduled_end_time: task
-                .has_end_time()
-                .then(|| {
-                    task.scheduled_end_date()
-                        .map(|date| date.format(&"%Y-%m-%d").to_string())
-                })
-                .flatten(),
-            due_date: task
-                .due_date()
-                .map(|date| date.format("%Y-%m-%d").to_string()),
-            due_time: task
-                .has_due_time()
-                .then(|| {
-                    task.scheduled_end_date()
-                        .map(|date| date.format(&"%Y-%m-%d").to_string())
-                })
-                .flatten(),
+            item_id: task.id.clone(),
+            post_reschedule_url: format!("/web/projects/{project_id}/tasks/{}", task.id),
+            due_date: local_due_date
+                .map(|d| d.format("%Y-%m-%d").to_string())
+                .unwrap_or_default(),
+            due_time: if task.has_due_time() {
+                local_due_date
+                    .map(|d| d.format("%H:%M").to_string())
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            },
+            scheduled_start_date: local_scheduled_date
+                .map(|d| d.format("%Y-%m-%d").to_string())
+                .unwrap_or_default(),
+            scheduled_start_time: if task.has_scheduled_time() {
+                local_scheduled_date
+                    .map(|d| d.format("%H:%M").to_string())
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            },
+            scheduled_end_date: local_scheduled_end_date
+                .map(|d| d.format("%Y-%m-%d").to_string())
+                .unwrap_or_default(),
+            scheduled_end_time: if task.has_end_time() {
+                local_scheduled_end_date
+                    .map(|d| d.format("%H:%M").to_string())
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            },
         }
     }
 }

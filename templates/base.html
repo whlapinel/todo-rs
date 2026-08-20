@@ -23,7 +23,6 @@
     // load, before this has ever run once, is truly unavoidable (no cookie yet either).
     document.cookie = "tz_offset=" + new Date().getTimezoneOffset() + "; path=/; max-age=31536000; samesite=lax";
   </script>
-  <script src="https://cdn.jsdelivr.net/npm/@tailwindplus/elements@1" type="module"></script>
 </head>
 
 <body class="bg-gray-50 text-gray-900 dark:bg-gray-900 dark:text-white" hx-boost="true" hx-target="#page"
@@ -87,11 +86,17 @@
       localStorage.setItem("sidebarCollapsed", collapsed ? "1" : "0");
     }
 
+    // #action-dialog (below) is a persistent <dialog> — only its innerHTML is swapped by
+    // hx-get requests (row action buttons like the reschedule calendar icon), so the
+    // element's own id survives across opens rather than being replaced by a fresh
+    // response's root element. Guard on `!dialog.open` since showModal() throws if called
+    // on an already-open dialog.
     document.addEventListener('htmx:afterSwap', (e) => {
-      // Automatically find and open any native dialog freshly swapped by HTMX
-      e.detail.target.querySelector('dialog')?.showModal();
+      const dialog = e.detail.target.matches?.('dialog')
+        ? e.detail.target
+        : e.detail.target.querySelector?.('dialog');
+      if (dialog && !dialog.open) dialog.showModal();
     });
-
 
     // Mirrors #sidebar-mobile's backdrop-click-to-close: clicking anywhere outside the
     // expanded desktop sidebar (and outside its own toggle button, so that click doesn't
@@ -106,9 +111,12 @@
       toggleSidebar();
     });
   </script>
-  <dialog id="action-dialog" class="dialog"></dialog>
-  <dialog id="error-msg" class="dialog"></dialog>
-  <dialog id="confirm-msg" class="dialog"></dialog>
+  <!-- Persistent action dialog — row action buttons (e.g. the reschedule calendar icon)
+       hx-get into this via hx-swap="innerHTML" so the element's own id (and the open/close
+       wiring below) survives across opens; only its content changes per action. -->
+  <dialog id="action-dialog"
+    class="group/dialog fixed inset-0 size-auto max-h-none max-w-none overflow-y-auto bg-transparent backdrop:bg-transparent">
+  </dialog>
 </body>
 
 </html>

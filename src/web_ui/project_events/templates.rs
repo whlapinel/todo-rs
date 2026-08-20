@@ -50,7 +50,10 @@ impl ProjectEventRow {
             assignee_name: None,
             complete_url: None,
             duplicate_url: None,
-            reschedule_url: None,
+            reschedule_url: Some(format!(
+                "/web/projects/{project_id}/events/{}/reschedule",
+                item.id
+            )),
             toggle_complete_json: String::new(),
             siblings: Vec::new(),
             is_source_event_linked: false,
@@ -221,6 +224,64 @@ impl ProjectEventDetailView {
             overdue: item.is_overdue(Utc::now()),
             event_type: item.event_type(),
             series_link,
+        }
+    }
+}
+
+/// The Event-flavored twin of `project_tasks::templates::RescheduleDialog` — see that struct's
+/// doc comment for the shared-save-endpoint rationale (reuses `PUT
+/// /web/projects/:project_id/events/:item_id`, i.e. `handlers::update_project_event_form`).
+#[derive(Template)]
+#[template(path = "components/reschedule_dialog.html")]
+pub struct RescheduleDialog {
+    pub item_id: String,
+    pub post_reschedule_url: String,
+    pub scheduled_start_date: String,
+    pub scheduled_start_time: String,
+    pub scheduled_end_date: String,
+    pub scheduled_end_time: String,
+    pub due_date: String,
+    pub due_time: String,
+}
+
+impl RescheduleDialog {
+    pub fn from_event(event: &Item, project_id: &str, tz: i32) -> Self {
+        let local_due_date = event.due_date().map(|d| to_local(d, tz));
+        let local_scheduled_date = event.scheduled_date().map(|d| to_local(d, tz));
+        let local_scheduled_end_date = event.scheduled_end_date().map(|d| to_local(d, tz));
+        RescheduleDialog {
+            item_id: event.id.clone(),
+            post_reschedule_url: format!("/web/projects/{project_id}/events/{}", event.id),
+            due_date: local_due_date
+                .map(|d| d.format("%Y-%m-%d").to_string())
+                .unwrap_or_default(),
+            due_time: if event.has_due_time() {
+                local_due_date
+                    .map(|d| d.format("%H:%M").to_string())
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            },
+            scheduled_start_date: local_scheduled_date
+                .map(|d| d.format("%Y-%m-%d").to_string())
+                .unwrap_or_default(),
+            scheduled_start_time: if event.has_scheduled_time() {
+                local_scheduled_date
+                    .map(|d| d.format("%H:%M").to_string())
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            },
+            scheduled_end_date: local_scheduled_end_date
+                .map(|d| d.format("%Y-%m-%d").to_string())
+                .unwrap_or_default(),
+            scheduled_end_time: if event.has_end_time() {
+                local_scheduled_end_date
+                    .map(|d| d.format("%H:%M").to_string())
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            },
         }
     }
 }
