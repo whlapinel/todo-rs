@@ -94,6 +94,7 @@ pub async fn project_item_series_occurrence_detail_page(
             crate::web_ui::project_tasks::handlers::render_series_occurrence_detail_page(
                 &projects,
                 &teams,
+                &item_series,
                 &auth_user,
                 &project_id,
                 &series,
@@ -170,6 +171,7 @@ pub async fn project_item_series_occurrence_edit_page(
             crate::web_ui::project_tasks::handlers::render_series_occurrence_edit_page(
                 &projects,
                 &teams,
+                &item_series,
                 &auth_user,
                 &project_id,
                 &series,
@@ -224,21 +226,24 @@ pub async fn project_item_series_page(
         Some(team_id) => names_for(&teams, team_id, &auth_user.user_id).await?,
         None => HashMap::new(),
     };
-    let rows = series
-        .iter()
-        .map(|s| {
-            let template_name = s
-                .template_item_id
-                .as_ref()
-                .and_then(|id| template_names.get(id).cloned());
-            let assignee_name = s
-                .assigned_to_user_id
-                .as_ref()
-                .and_then(|id| member_names.get(id).cloned());
-            ProjectItemSeriesRow::from_series(s, tz, template_name, assignee_name).render()
-        })
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(ItemError::from)?;
+    let mut rows = Vec::with_capacity(series.len());
+    for s in &series {
+        let template_name = s
+            .template_item_id
+            .as_ref()
+            .and_then(|id| template_names.get(id).cloned());
+        // Stage 4 of docs/assignment-rotation-plan.md: resolves to the series' fixed
+        // assignee, or — for a rotating series — the current occurrence's computed
+        // rotation assignee (open question 4).
+        let assignee_id =
+            item_series_service::current_series_assignee(&item_series, s, tz).await?;
+        let assignee_name = assignee_id.and_then(|id| member_names.get(&id).cloned());
+        rows.push(
+            ProjectItemSeriesRow::from_series(s, tz, template_name, assignee_name)
+                .render()
+                .map_err(ItemError::from)?,
+        );
+    }
     let nav_html = nav::build_nav_html(
         &projects,
         &auth_user.user_id,
@@ -315,9 +320,47 @@ pub struct CreateItemSeriesForm {
     /// Only present/honored server-side on a team-backed project, Task-typed series —
     /// see `service::item_series::resolve_series_assignment`'s own gate.
     assigned_to_user_id: Option<String>,
+    /// Stage 4 of docs/assignment-rotation-plan.md — the Fixed/Rotate radio toggle.
+    /// `"rotate"` selects the checkbox group below; anything else (including absent,
+    /// which can't actually happen since one radio is always `checked`) is treated as
+    /// Fixed, matching this module's other liberal-parsing form fields.
+    assignment_mode: Option<String>,
+    /// The checkbox group's real submission — a comma-joined string of member ids, kept
+    /// in sync with the (unnamed) checkboxes by this form's own `<script>`. Not a
+    /// repeatable `<input name="rotationUserIds">` per box: axum 0.6's `Form` extractor
+    /// (`serde_urlencoded`) can't deserialize repeated same-named keys into a `Vec` —
+    /// confirmed via a live smoke test, a duplicate-key POST still 422s "expected a
+    /// sequence." Only read when `assignment_mode == "rotate"`. An empty string while in
+    /// Rotate mode (hidden field present but blank) becomes `Some(vec![])` below, which
+    /// `resolve_series_assignment` rejects as ambiguous with "clear the rotation,"
+    /// rather than silently doing nothing.
+    rotation_user_ids: Option<String>,
     /// Same team-project/Task-series-only caveat as `assigned_to_user_id`; additionally
     /// silently dropped server-side unless the requester is that project's admin.
     points: Option<String>,
+}
+
+/// Stage 4 of docs/assignment-rotation-plan.md — turns the form's `assignmentMode`
+/// radio + the two candidate field groups into the `(assigned_to_user_id,
+/// rotation_user_ids)` pair `Create/UpdateItemSeriesParams` expects. Shared by the
+/// create and update handlers below.
+fn resolve_assignment_mode_fields(
+    form: &CreateItemSeriesForm,
+) -> (Option<String>, Option<Vec<String>>) {
+    if form.assignment_mode.as_deref() == Some("rotate") {
+        let ids = form
+            .rotation_user_ids
+            .as_deref()
+            .unwrap_or("")
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect();
+        (None, Some(ids))
+    } else {
+        (non_empty(&form.assigned_to_user_id), None)
+    }
 }
 
 fn parse_item_type(raw: &str) -> Result<ItemKind, ItemError> {
@@ -361,6 +404,7 @@ pub async fn create_project_item_series_form(
     )
     .ok_or_else(|| ItemError::Invalid("anchor date is required".to_string()))?;
     let item_type = parse_item_type(&form.item_type)?;
+    let (assigned_to_user_id, rotation_user_ids) = resolve_assignment_mode_fields(&form);
 
     item_series_service::create_series(
         &repo,
@@ -378,10 +422,8 @@ pub async fn create_project_item_series_form(
             item_type,
             basis,
             template_item_id: non_empty(&form.template_item_id),
-            assigned_to_user_id: non_empty(&form.assigned_to_user_id),
-            // Web UI form wiring is docs/assignment-rotation-plan.md's Stage 4 — no
-            // rotation checkbox group exists on this form yet.
-            rotation_user_ids: None,
+            assigned_to_user_id,
+            rotation_user_ids,
             points: form
                 .points
                 .as_deref()
@@ -587,6 +629,10 @@ pub async fn edit_project_item_series_page(
         None => (Vec::new(), false),
     };
     let local_anchor = to_local(series.anchor_date, tz);
+    // Stage 4 of docs/assignment-rotation-plan.md — pre-populates the checkbox group and
+    // decides which of the Fixed/Rotate radio buttons starts checked.
+    let rotation_user_ids = item_series.list_rotation_members(&series_id).await?;
+    let is_rotating = !rotation_user_ids.is_empty();
     let nav_html = nav::build_nav_html(
         &projects,
         &auth_user.user_id,
@@ -610,6 +656,8 @@ pub async fn edit_project_item_series_page(
         is_team_project,
         assignee_options,
         assigned_to_user_id: series.assigned_to_user_id,
+        is_rotating,
+        rotation_user_ids,
         is_team_admin,
         points: series.points,
     })
@@ -634,6 +682,7 @@ pub async fn update_project_item_series_form(
     )
     .ok_or_else(|| ItemError::Invalid("anchor date is required".to_string()))?;
     let item_type = parse_item_type(&form.item_type)?;
+    let (assigned_to_user_id, rotation_user_ids) = resolve_assignment_mode_fields(&form);
 
     item_series_service::update_series(
         &repo,
@@ -651,10 +700,8 @@ pub async fn update_project_item_series_form(
             item_type,
             basis,
             template_item_id: non_empty(&form.template_item_id),
-            assigned_to_user_id: non_empty(&form.assigned_to_user_id),
-            // Web UI form wiring is docs/assignment-rotation-plan.md's Stage 4 — no
-            // rotation checkbox group exists on this form yet.
-            rotation_user_ids: None,
+            assigned_to_user_id,
+            rotation_user_ids,
             points: form
                 .points
                 .as_deref()

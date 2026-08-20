@@ -469,7 +469,12 @@ fn rotation_assignee(rotation: &[String], index: usize) -> Option<&String> {
 /// `rotation_assignee`. The rotation-membership query only runs on the "series has no
 /// fixed assignee" path, since a fixed-assignee series never has rotation members to
 /// begin with (`resolve_series_assignment` enforces the two are mutually exclusive).
-async fn resolve_occurrence_assignee(
+///
+/// `pub(crate)` as of Stage 4 (`docs/assignment-rotation-plan.md`) — also called
+/// directly by `project_tasks::handlers` to resolve a still-virtual occurrence's
+/// preview/edit-form assignee before it's materialized, not just at materialization
+/// time itself.
+pub(crate) async fn resolve_occurrence_assignee(
     event_series: &Arc<dyn ItemSeriesRepo>,
     series: &ItemSeries,
     occurrence_date: DateTime<Utc>,
@@ -490,6 +495,27 @@ async fn resolve_occurrence_assignee(
         tz_offset_minutes,
     );
     Ok(rotation_assignee(&rotation, index).cloned())
+}
+
+/// Stage 4 of docs/assignment-rotation-plan.md — resolves the series row/list view's
+/// "who's up now" display (open question 4, resolved 2026-08-20): the series' fixed
+/// assignee if any, otherwise (for a rotating Task series) the *current* occurrence's
+/// resolved rotation assignee — the same "next thing to work on" occurrence
+/// `current_occurrence_date` already surfaces elsewhere, not the whole rotation set and
+/// not the next occurrence. An Event-typed series can never rotate (`resolve_series_
+/// assignment`'s Task-only gate), so this falls straight through to the plain
+/// `assigned_to_user_id` for anything but a Task series, identical to today's display.
+pub async fn current_series_assignee(
+    event_series: &Arc<dyn ItemSeriesRepo>,
+    series: &ItemSeries,
+    tz_offset_minutes: i32,
+) -> Result<Option<String>, ItemError> {
+    if series.item_type != ItemKind::Task || series.assigned_to_user_id.is_some() {
+        return Ok(series.assigned_to_user_id.clone());
+    }
+    let rule = recurrence::parse(&series.recurrence).map_err(ItemError::Invalid)?;
+    let occurrence_date = current_occurrence_date(series, &rule, tz_offset_minutes);
+    resolve_occurrence_assignee(event_series, series, occurrence_date, tz_offset_minutes).await
 }
 
 /// Stage 10 gap 1: the date to advance a Task-typed series' cursor to when settling

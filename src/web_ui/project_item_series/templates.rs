@@ -95,6 +95,11 @@ pub struct EditProjectItemSeriesPageTemplate {
     pub is_team_project: bool,
     pub assignee_options: Vec<(String, String)>,
     pub assigned_to_user_id: Option<String>,
+    /// Stage 4 of docs/assignment-rotation-plan.md — whether the Fixed/Rotate toggle
+    /// starts on Rotate (non-empty rotation membership) or Fixed.
+    pub is_rotating: bool,
+    /// Which project members' checkboxes start checked when `is_rotating`.
+    pub rotation_user_ids: Vec<String>,
     pub is_team_admin: bool,
     pub points: Option<i32>,
 }

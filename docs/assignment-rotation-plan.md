@@ -1,9 +1,9 @@
-# Assignment rotation for item series — design sketch (WIP, Stages 1-3 done)
+# Assignment rotation for item series — design sketch (WIP, Stages 1-4 done)
 
-Status: **Stage 1 (storage layer), Stage 2 (service layer), and Stage 3
-(Smithy + codegen + json_api wiring) implemented and tested.** Stage 4 (web
-UI) is next — see "Suggested staged rollout" at the bottom. Not yet linked
-from `docs/issues_and_features.md`.
+Status: **Stages 1-4 (storage, service, Smithy/codegen/json_api, web UI)
+implemented and tested.** Stage 5 (CLI + MCP + user guide) is next — see
+"Suggested staged rollout" at the bottom. Not yet linked from
+`docs/issues_and_features.md`.
 
 ## Implementation status
 
@@ -35,9 +35,15 @@ from `docs/issues_and_features.md`.
   itself still doesn't carry rotation membership, per Stage 2's design) and
   populate `rotationUserIds` on the response, using `None` (not `Some(vec![])`)
   when the list is empty so a non-rotating series's wire shape is unchanged
-  from before this stage. Web UI forms still don't expose the field yet —
-  that's Stage 4 — so they still construct `rotation_user_ids: None` in their
-  own `Create/UpdateItemSeriesParams` literals for now.
+  from before this stage.
+- **Stage 4 (web UI, `templates/project_item_series/{new,edit}_page.html`,
+  `src/web_ui/project_item_series/{handlers,templates}.rs`,
+  `src/web_ui/project_tasks/{handlers,templates}.rs`,
+  `src/service/item_series.rs`)**: implemented and manually smoke-tested
+  end-to-end against a live local server (create rotating series, list-page
+  display, edit-page round-trip, mode switch, empty-rotation validation —
+  see "Web UI implementation notes" below for what differed from the
+  original sketch and why).
 
 ## Motivation
 
@@ -216,6 +222,13 @@ show/hide JS already in these two templates (`form.querySelectorAll(...)`).
 and — where a specific occurrence is being shown (calendar day, occurrence
 detail) — the actually-resolved-for-that-date assignee, not the whole set.
 
+**Superseded by open question 4's resolution below** (dated the same day,
+after this section was drafted): the list row instead reuses the existing
+`Assigned to: {name}` line unchanged, populated with the *current*
+occurrence's resolved assignee for a rotating series — no separate "Rotating:
+..." display was built. See "Web UI implementation notes" below for what was
+actually implemented.
+
 ## CLI (`todo-cli/src/`) / MCP (`mcp-server/src/index.ts`)
 
 - `prl series create`/`update` gain a repeatable `--rotate <user-id>` flag
@@ -277,16 +290,79 @@ rather than by new design; none of them require new mechanism.
    *next* occurrence. Keeps the rotating case visually consistent with the
    fixed case rather than introducing a new display concept.
 
+## Web UI implementation notes (Stage 4, 2026-08-20)
+
+Three things came up during implementation that the sketch above didn't
+anticipate:
+
+1. **Checkbox group can't use a repeated `name` — axum 0.6's `Form`
+   extractor can't deserialize it.** The original sketch's `<input
+   type="checkbox" name="rotationUserIds" value="{id}">` per member (a
+   repeated same-named key, the standard HTML multi-value-checkbox pattern)
+   was tried first and confirmed broken via a live smoke test: axum 0.6 is
+   backed by `serde_urlencoded`, which cannot deserialize repeated
+   same-named form keys into a `Vec` — every submission 422s with `"invalid
+   type: string ..., expected a sequence"`, even with the key repeated.
+   Fixed by giving the checkboxes no `name` at all (just a
+   `.rotation-member-checkbox` class) and adding one real `<input
+   type="hidden" name="rotationUserIds">` per form, kept in sync with
+   whichever boxes are checked (comma-joined) by each page's own `<script>`
+   on every checkbox `change` and on the existing TASK/EVENT and Fixed/Rotate
+   toggle re-renders. The Rust-side form field is `Option<String>`
+   (comma-joined), not `Option<Vec<String>>` — split/trimmed/filtered into
+   the `Vec<String>` `Create/UpdateItemSeriesParams` expects in
+   `resolve_assignment_mode_fields` (`src/web_ui/project_item_series/
+   handlers.rs`). This makes the checkbox group JS-dependent for submission,
+   same as the pre-existing TASK/EVENT toggle it sits inside of — not a new
+   class of degradation for this form.
+2. **A rotating occurrence's own detail/edit page needed threading through,
+   not just the series list.** `project_tasks::handlers::
+   render_series_occurrence_detail_page`/`render_series_occurrence_edit_page`
+   (the still-virtual-occurrence preview/edit-form pair) were reading
+   `series.assigned_to_user_id` directly, which is always `None` for a
+   rotating series — the detail page would've shown "unassigned" for an
+   occurrence that actually has a computed rotation assignee, and worse, the
+   edit form's `<select>` would've pre-selected "Unassigned," so saving it
+   *unmodified* would have silently overwritten the just-materialized
+   correct assignee with `None` (`overlay_str` in `project_tasks/mod.rs`
+   always applies whatever the select submits). Fixed by making
+   `resolve_occurrence_assignee` (`src/service/item_series.rs`) `pub(crate)`
+   and calling it from both handlers before building
+   `ProjectTaskSeriesOccurrenceView`/`Fields`, which now take a
+   `resolved_assignee_id: Option<String>` parameter instead of reading
+   `series.assigned_to_user_id` themselves. This required adding an
+   `item_series: &Arc<dyn ItemSeriesRepo>` parameter to both handler
+   functions and threading it from their one caller,
+   `project_item_series::handlers`'s occurrence detail/edit dispatch.
+3. **List-page "who's up now" needed a new service function, not reuse of
+   `resolve_occurrence_assignee` directly** — the series list shows one row
+   per series, not per occurrence, so there's no `occurrence_date` on hand.
+   Added `current_series_assignee` (`src/service/item_series.rs`, `pub`):
+   fixed assignee if set, else — for a rotating Task series — resolves
+   `current_occurrence_date` and delegates to `resolve_occurrence_assignee`.
+   Used by `project_item_series::handlers::project_item_series_page` (looped
+   with `.await` per row instead of the prior synchronous `.iter().map`,
+   since resolving now needs a repo call per series).
+
+Manually verified end-to-end against a live local server (`TODO_AUTH_MODE=
+caddy` + `TODO_DEV_EMAIL`, throwaway SQLite DB): created a rotating series,
+confirmed the list row showed the resolved current assignee, confirmed the
+edit page pre-selected Rotate mode with the right member checked, round-tripped
+an unmodified save, switched Rotate→Fixed and back, and confirmed submitting
+Rotate mode with nothing checked 422s (the "explicitly empty rotation" guard).
+
 ## Suggested staged rollout
 
 Design is now complete enough to implement — no open questions block
 starting. Rough shape, to be refined into actual numbered stages (matching
 this project's `docs/*-plan.md` convention) once implementation begins:
 
-1. Storage: migration + `ItemSeriesRepo` rotation methods + tests.
+1. Storage: migration + `ItemSeriesRepo` rotation methods + tests. **Done.**
 2. Service: `resolve_series_assignment` rotation branch,
    `resolve_occurrence_assignee`/`occurrence_index`, wire into
    `get_or_materialize_occurrence` and `list_occurrence_states_for_project`.
-3. Smithy + codegen + json_api wiring.
-4. Web UI: create/edit forms, row/detail/calendar display.
-5. CLI + MCP + user guide.
+   **Done.**
+3. Smithy + codegen + json_api wiring. **Done.**
+4. Web UI: create/edit forms, row/detail/calendar display. **Done** — see
+   "Web UI implementation notes" above.
+5. CLI + MCP + user guide. **Next.**

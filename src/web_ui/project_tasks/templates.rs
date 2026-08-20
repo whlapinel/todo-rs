@@ -489,6 +489,11 @@ impl ProjectTaskSeriesOccurrenceView {
         project_id: &str,
         is_team_project: bool,
         names: &HashMap<String, String>,
+        // Stage 4 of docs/assignment-rotation-plan.md — this occurrence's own resolved
+        // assignee (`item_series_service::resolve_occurrence_assignee`), not
+        // `series.assigned_to_user_id` directly, which is always `None` for a rotating
+        // series.
+        resolved_assignee_id: Option<String>,
         is_skipped: bool,
         is_current: bool,
         tz: i32,
@@ -509,8 +514,7 @@ impl ProjectTaskSeriesOccurrenceView {
             due_date,
             scheduled_date,
             is_team_project,
-            assignee_name: series
-                .assigned_to_user_id
+            assignee_name: resolved_assignee_id
                 .as_ref()
                 .map(|id| names.get(id).cloned().unwrap_or_else(|| id.clone())),
             update_url: format!(
@@ -563,6 +567,9 @@ impl ProjectTaskSeriesOccurrenceFields {
         project_id: &str,
         is_team_project: bool,
         assignee_options: Vec<(String, String)>,
+        // Stage 4 of docs/assignment-rotation-plan.md — same resolved-not-raw rationale
+        // as `ProjectTaskSeriesOccurrenceView::from_series`.
+        resolved_assignee_id: Option<String>,
         is_team_admin: bool,
         tz: i32,
     ) -> Self {
@@ -600,7 +607,7 @@ impl ProjectTaskSeriesOccurrenceFields {
             scheduled_end_time_input: String::new(),
             is_team_project,
             assignee_options,
-            assigned_to_user_id: series.assigned_to_user_id.clone(),
+            assigned_to_user_id: resolved_assignee_id,
             is_team_admin,
             points_input: format_points_input(series.points),
             update_url: format!(

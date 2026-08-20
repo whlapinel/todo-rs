@@ -72,7 +72,19 @@
       <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">If set, this template's children are copied onto every occurrence when it's materialized. Manage the template's children from the Templates screen.</p>
     </div>
     {% if is_team_project %}
-    <div class="assignment-field flex items-center gap-x-4">
+    <div class="assignment-field">
+      <span class="mt-2 flex gap-4">
+        <label class="inline-flex items-center gap-1.5 text-sm font-normal text-gray-900 dark:text-white">
+          <input type="radio" name="assignmentMode" value="fixed" checked
+                 class="size-4 border-gray-300 text-indigo-600 focus:ring-indigo-600 dark:border-white/20 dark:bg-white/5" /> Fixed
+        </label>
+        <label class="inline-flex items-center gap-1.5 text-sm font-normal text-gray-900 dark:text-white">
+          <input type="radio" name="assignmentMode" value="rotate"
+                 class="size-4 border-gray-300 text-indigo-600 focus:ring-indigo-600 dark:border-white/20 dark:bg-white/5" /> Rotate among
+        </label>
+      </span>
+    </div>
+    <div class="assignment-field assignment-fixed-field flex items-center gap-x-4">
       <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Assign to
         <div class="mt-2 grid grid-cols-1">
           <select name="assignedToUserId"
@@ -84,6 +96,23 @@
           </select>
         </div>
       </label>
+    </div>
+    <div class="assignment-field assignment-rotate-field" hidden>
+      <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Rotate among</label>
+      <div class="mt-2 space-y-1">
+        {% for opt in assignee_options %}
+        <label class="flex items-center gap-1.5 text-sm font-normal text-gray-900 dark:text-white">
+          <!-- No `name` here — axum 0.6's Form extractor (serde_urlencoded) can't
+               deserialize repeated same-named keys into a Vec (confirmed via a live
+               smoke test: a duplicate-key POST still 422s "expected a sequence"). The
+               `rotationUserIds` hidden input below carries the actual comma-joined
+               submission instead; see this page's script. -->
+          <input type="checkbox" class="rotation-member-checkbox size-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-600 dark:border-white/20 dark:bg-white/5" value="{{ opt.0 }}" /> {{ opt.1 }}
+        </label>
+        {% endfor %}
+      </div>
+      <input type="hidden" name="rotationUserIds" value="" />
+      <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">Cycles through the checked members, in name order, one per occurrence.</p>
     </div>
     {% if is_team_admin %}
     <div class="assignment-field">
@@ -101,6 +130,42 @@
     (function() {
       var form = document.currentScript.closest("form");
       if (!form) return;
+      // Stage 4 of docs/assignment-rotation-plan.md — within the (already Task-gated)
+      // assignment fields, a second toggle between the Fixed <select> and the Rotate
+      // checkbox group, mirroring the outer TASK/EVENT toggle's own show/hide-and-disable
+      // shape so a hidden mode's fields never get submitted.
+      //
+      // The checkbox group itself carries no `name` (see the checkboxes' own comment) —
+      // `updateRotationHiddenField` keeps the real `rotationUserIds` hidden input synced
+      // to whichever boxes are checked, as a comma-joined string.
+      function updateRotationHiddenField() {
+        var hidden = form.querySelector('input[name="rotationUserIds"]');
+        if (!hidden) return;
+        var ids = Array.prototype.slice
+          .call(form.querySelectorAll(".rotation-member-checkbox:checked"))
+          .map(function (cb) { return cb.value; });
+        hidden.value = ids.join(",");
+      }
+      function updateAssignmentMode() {
+        var isTask = form.querySelector('input[name="itemType"][value="TASK"]').checked;
+        var modeRadio = form.querySelector('input[name="assignmentMode"]:checked');
+        var isRotate = isTask && !!modeRadio && modeRadio.value === "rotate";
+        var fixedField = form.querySelector(".assignment-fixed-field");
+        var rotateField = form.querySelector(".assignment-rotate-field");
+        if (fixedField) {
+          fixedField.hidden = !isTask || isRotate;
+          fixedField.querySelectorAll("input, select").forEach(function (field) {
+            field.disabled = !isTask || isRotate;
+          });
+        }
+        if (rotateField) {
+          rotateField.hidden = !isTask || !isRotate;
+          rotateField.querySelectorAll("input, select").forEach(function (field) {
+            field.disabled = !isTask || !isRotate;
+          });
+        }
+        updateRotationHiddenField();
+      }
       function toggle() {
         var isTask = form.querySelector('input[name="itemType"][value="TASK"]').checked;
         form.querySelectorAll(".completion-basis-field, .template-field, .assignment-field").forEach(function (el) {
@@ -109,9 +174,16 @@
             field.disabled = !isTask;
           });
         });
+        updateAssignmentMode();
       }
+      form.querySelectorAll(".rotation-member-checkbox").forEach(function (cb) {
+        cb.addEventListener("change", updateRotationHiddenField);
+      });
       form.querySelectorAll('input[name="itemType"]').forEach(function (radio) {
         radio.addEventListener("change", toggle);
+      });
+      form.querySelectorAll('input[name="assignmentMode"]').forEach(function (radio) {
+        radio.addEventListener("change", updateAssignmentMode);
       });
       toggle();
     })();

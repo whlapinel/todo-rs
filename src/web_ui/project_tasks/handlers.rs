@@ -381,6 +381,7 @@ pub async fn project_task_edit_page(
 pub(crate) async fn render_series_occurrence_detail_page(
     projects: &Arc<dyn ProjectRepo>,
     teams: &Arc<dyn TeamRepo>,
+    item_series: &Arc<dyn ItemSeriesRepo>,
     auth_user: &AuthUser,
     project_id: &str,
     series: &crate::domain::item_series::ItemSeries,
@@ -395,12 +396,19 @@ pub(crate) async fn render_series_occurrence_detail_page(
         None => HashMap::new(),
     };
     let is_current = current_occurrence_is(series, occurrence_date, tz)?;
+    // Stage 4 of docs/assignment-rotation-plan.md: this occurrence's own resolved
+    // assignee (fixed, or this calendar position's rotation member) — not the series'
+    // raw `assigned_to_user_id`, which is `None` for a rotating series.
+    let resolved_assignee_id =
+        item_series_service::resolve_occurrence_assignee(item_series, series, occurrence_date, tz)
+            .await?;
     let view = ProjectTaskSeriesOccurrenceView::from_series(
         series,
         occurrence_date,
         project_id,
         project.team_id.is_some(),
         &names,
+        resolved_assignee_id,
         is_skipped,
         is_current,
         tz,
@@ -437,6 +445,7 @@ pub(crate) async fn render_series_occurrence_detail_page(
 pub(crate) async fn render_series_occurrence_edit_page(
     projects: &Arc<dyn ProjectRepo>,
     teams: &Arc<dyn TeamRepo>,
+    item_series: &Arc<dyn ItemSeriesRepo>,
     auth_user: &AuthUser,
     project_id: &str,
     series: &crate::domain::item_series::ItemSeries,
@@ -453,12 +462,22 @@ pub(crate) async fn render_series_occurrence_edit_page(
         ),
         None => (Vec::new(), false),
     };
+    // Stage 4 of docs/assignment-rotation-plan.md — prefill the select with this
+    // occurrence's actually-resolved assignee (fixed, or this calendar position's
+    // rotation member), not the series' raw `assigned_to_user_id`. Without this, an
+    // unmodified Save on a rotating occurrence's edit form would silently overwrite the
+    // just-materialized correct assignee with "Unassigned" (`overlay_str` always applies
+    // whatever the select submits — see `update_params_from_form`).
+    let resolved_assignee_id =
+        item_series_service::resolve_occurrence_assignee(item_series, series, occurrence_date, tz)
+            .await?;
     let fields = ProjectTaskSeriesOccurrenceFields::from_series(
         series,
         occurrence_date,
         project_id,
         project.team_id.is_some(),
         assignee_options,
+        resolved_assignee_id,
         is_team_admin,
         tz,
     )
