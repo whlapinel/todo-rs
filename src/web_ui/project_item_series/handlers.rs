@@ -379,6 +379,9 @@ pub async fn create_project_item_series_form(
             basis,
             template_item_id: non_empty(&form.template_item_id),
             assigned_to_user_id: non_empty(&form.assigned_to_user_id),
+            // Web UI form wiring is docs/assignment-rotation-plan.md's Stage 4 — no
+            // rotation checkbox group exists on this form yet.
+            rotation_user_ids: None,
             points: form
                 .points
                 .as_deref()
@@ -649,6 +652,9 @@ pub async fn update_project_item_series_form(
             basis,
             template_item_id: non_empty(&form.template_item_id),
             assigned_to_user_id: non_empty(&form.assigned_to_user_id),
+            // Web UI form wiring is docs/assignment-rotation-plan.md's Stage 4 — no
+            // rotation checkbox group exists on this form yet.
+            rotation_user_ids: None,
             points: form
                 .points
                 .as_deref()

@@ -55,6 +55,13 @@ pub async fn get_or_materialize_occurrence(
         )
         .await;
     }
+    // Only ever Some on a Task-typed series on a team-backed project —
+    // resolve_series_assignment already enforced that at create/update time, so this
+    // is a plain resolve, not a re-validation. Fixed assignee or rotation member,
+    // whichever the series is set up for (docs/assignment-rotation-plan.md, Stage 2).
+    let occurrence_assignee =
+        resolve_occurrence_assignee(event_series, &series, occurrence_date, tz_offset_minutes)
+            .await?;
     // Due-date-basis materializes onto due_date instead of scheduled_date (see
     // ItemSeries::basis's doc comment) — everything else about the created item is
     // identical between the two branches.
@@ -67,10 +74,7 @@ pub async fn get_or_materialize_occurrence(
             event_type: series.event_type.clone(),
             due_date: Some(occurrence_date),
             has_due_time: Some(true),
-            // Only ever Some on a Task-typed series on a team-backed project —
-            // resolve_series_assignment already enforced that at create/update time,
-            // so this is a plain carry-forward, not a re-validation.
-            assigned_to_user_id: series.assigned_to_user_id.clone(),
+            assigned_to_user_id: occurrence_assignee,
             points: series.points,
             series_id: Some(series.id.clone()),
             ..Default::default()
@@ -84,7 +88,7 @@ pub async fn get_or_materialize_occurrence(
             event_type: series.event_type.clone(),
             scheduled_date: Some(occurrence_date),
             has_scheduled_time: Some(true),
-            assigned_to_user_id: series.assigned_to_user_id.clone(),
+            assigned_to_user_id: occurrence_assignee,
             points: series.points,
             series_id: Some(series.id.clone()),
             ..Default::default()
@@ -432,6 +436,62 @@ pub fn is_due_date_basis(series: &ItemSeries) -> bool {
     series.basis.as_deref() == Some("DUE_DATE")
 }
 
+/// Stage 2 of docs/assignment-rotation-plan.md: index of `occurrence_date` within
+/// `rule`'s sequence starting at `anchor`, 0-based. `occurrence_date` is always itself
+/// a member of that sequence (every caller derives it from the same rule/anchor), so
+/// the `occurrences_between` count this reads is never empty in practice. O(occurrences
+/// so far) rather than O(1) — accepted tradeoff, see the design doc's "Known accepted
+/// tradeoff" note.
+fn occurrence_index(
+    rule: &recurrence::RecurrenceRule,
+    anchor: DateTime<Utc>,
+    occurrence_date: DateTime<Utc>,
+    tz_offset_minutes: i32,
+) -> usize {
+    recurrence::occurrences_between(rule, anchor, anchor, occurrence_date, tz_offset_minutes).len()
+        - 1
+}
+
+/// Pure: same inputs always produce the same assignee, regardless of materialization
+/// order, skip history, or which occurrence is touched first — no stored "whose turn"
+/// cursor, per docs/assignment-rotation-plan.md's stateless-rotation decision.
+fn rotation_assignee(rotation: &[String], index: usize) -> Option<&String> {
+    if rotation.is_empty() {
+        None
+    } else {
+        Some(&rotation[index % rotation.len()])
+    }
+}
+
+/// Stage 2: resolves a materializing occurrence's assignee — the series' fixed
+/// `assigned_to_user_id` if set, otherwise (when the series is rotating) whichever
+/// rotation member is up for `occurrence_date`, computed fresh via `occurrence_index`/
+/// `rotation_assignee`. The rotation-membership query only runs on the "series has no
+/// fixed assignee" path, since a fixed-assignee series never has rotation members to
+/// begin with (`resolve_series_assignment` enforces the two are mutually exclusive).
+async fn resolve_occurrence_assignee(
+    event_series: &Arc<dyn ItemSeriesRepo>,
+    series: &ItemSeries,
+    occurrence_date: DateTime<Utc>,
+    tz_offset_minutes: i32,
+) -> Result<Option<String>, ItemError> {
+    if series.assigned_to_user_id.is_some() {
+        return Ok(series.assigned_to_user_id.clone());
+    }
+    let rotation = event_series.list_rotation_members(&series.id).await?;
+    if rotation.is_empty() {
+        return Ok(None);
+    }
+    let rule = recurrence::parse(&series.recurrence).map_err(ItemError::Invalid)?;
+    let index = occurrence_index(
+        &rule,
+        series.anchor_date,
+        occurrence_date,
+        tz_offset_minutes,
+    );
+    Ok(rotation_assignee(&rotation, index).cloned())
+}
+
 /// Stage 10 gap 1: the date to advance a Task-typed series' cursor to when settling
 /// (completing or skipping) `occurrence_date` — `Utc::now()` for a completion-basis
 /// series (measuring the next occurrence from when it was actually settled, not its
@@ -552,6 +612,9 @@ pub struct CreateItemSeriesParams {
     pub basis: Option<String>,
     pub template_item_id: Option<String>,
     pub assigned_to_user_id: Option<String>,
+    /// Stage 2 of docs/assignment-rotation-plan.md — mutually exclusive with
+    /// `assigned_to_user_id`, validated in `resolve_series_assignment`.
+    pub rotation_user_ids: Option<Vec<String>>,
     pub points: Option<i32>,
 }
 
@@ -687,6 +750,16 @@ async fn validate_series_template_item(
 /// a series' occurrences go to — but is validated via `resolve_project_assignee` the
 /// same way an item's own `assignedToUserId` is, so it must actually be a member of
 /// the series' project.
+///
+/// Stage 2 of docs/assignment-rotation-plan.md: `rotation_user_ids` is the rotating
+/// alternative to `assigned_to_user_id` — the two are mutually exclusive (setting one
+/// clears the other), validated here rather than schema-side (Smithy has no clean
+/// "exactly one of" constraint). Each rotation member is validated via
+/// `resolve_project_assignee` exactly like the fixed case, one at a time (there's no
+/// bulk variant — a rotation is realistically a handful of people, not worth a new
+/// query shape). An explicitly-provided but empty list is rejected rather than treated
+/// as "no rotation" — ambiguous with "clear it", same precedent as the item_type/
+/// event_type either-or checks elsewhere in this file.
 async fn resolve_series_assignment(
     projects: &Arc<dyn ProjectRepo>,
     teams: &Arc<dyn TeamRepo>,
@@ -694,24 +767,48 @@ async fn resolve_series_assignment(
     requester_user_id: &str,
     item_type: ItemKind,
     assigned_to_user_id: Option<String>,
+    rotation_user_ids: Option<Vec<String>>,
     points: Option<i32>,
-) -> Result<(Option<String>, Option<i32>), ItemError> {
-    if assigned_to_user_id.is_none() && points.is_none() {
-        return Ok((None, None));
+) -> Result<(Option<String>, Vec<String>, Option<i32>), ItemError> {
+    if assigned_to_user_id.is_some() && rotation_user_ids.is_some() {
+        return Err(ItemError::Invalid(
+            "assignedToUserId and rotationUserIds are mutually exclusive".to_string(),
+        ));
+    }
+    if let Some(ids) = &rotation_user_ids
+        && ids.is_empty()
+    {
+        return Err(ItemError::Invalid(
+            "rotationUserIds cannot be explicitly empty — omit it to clear the rotation"
+                .to_string(),
+        ));
+    }
+    if assigned_to_user_id.is_none() && rotation_user_ids.is_none() && points.is_none() {
+        return Ok((None, Vec::new(), None));
     }
     if item_type != ItemKind::Task {
         return Err(ItemError::Invalid(
-            "assignedToUserId/points are only valid on a TASK series".to_string(),
+            "assignedToUserId/rotationUserIds/points are only valid on a TASK series".to_string(),
         ));
     }
     let project = projects.get(project_id).await?;
     if project.team_id.is_none() {
         return Err(ItemError::Invalid(
-            "assignedToUserId/points require a team-backed project".to_string(),
+            "assignedToUserId/rotationUserIds/points require a team-backed project".to_string(),
         ));
     }
     let resolved_assignee =
         resolve_project_assignee(projects, project_id, assigned_to_user_id).await?;
+    let mut resolved_rotation = Vec::new();
+    for user_id in rotation_user_ids.into_iter().flatten() {
+        // `resolve_project_assignee` only returns `None` when given `None` — we always
+        // pass `Some`, so the result is always `Some` too.
+        if let Some(resolved) =
+            resolve_project_assignee(projects, project_id, Some(user_id)).await?
+        {
+            resolved_rotation.push(resolved);
+        }
+    }
     let resolved_points = if points.is_some()
         && require_project_admin(projects, teams, project_id, requester_user_id)
             .await
@@ -721,7 +818,7 @@ async fn resolve_series_assignment(
     } else {
         None
     };
-    Ok((resolved_assignee, resolved_points))
+    Ok((resolved_assignee, resolved_rotation, resolved_points))
 }
 
 pub async fn create_series(
@@ -743,17 +840,18 @@ pub async fn create_series(
         &params.template_item_id,
     )
     .await?;
-    let (assigned_to_user_id, points) = resolve_series_assignment(
+    let (assigned_to_user_id, rotation_user_ids, points) = resolve_series_assignment(
         projects,
         teams,
         &params.project_id,
         requester_user_id,
         params.item_type,
         params.assigned_to_user_id,
+        params.rotation_user_ids,
         params.points,
     )
     .await?;
-    Ok(event_series
+    let series_id = event_series
         .create_series(&ItemSeries {
             id: String::new(),
             project_id: params.project_id,
@@ -771,7 +869,13 @@ pub async fn create_series(
             assigned_to_user_id,
             points,
         })
-        .await?)
+        .await?;
+    if !rotation_user_ids.is_empty() {
+        event_series
+            .set_rotation_members(&series_id, &rotation_user_ids)
+            .await?;
+    }
+    Ok(series_id)
 }
 
 pub async fn get_series(
@@ -796,7 +900,13 @@ pub async fn duplicate_series(
     let mut series = item_series.get_series(series_id).await?;
     require_project_member(projects, teams, &series.project_id, requester_user_id).await?;
     series.name = format!("{} (copy)", series.name);
-    item_series.create_series(&series).await?;
+    let new_series_id = item_series.create_series(&series).await?;
+    let rotation = item_series.list_rotation_members(series_id).await?;
+    if !rotation.is_empty() {
+        item_series
+            .set_rotation_members(&new_series_id, &rotation)
+            .await?;
+    }
     Ok(())
 }
 
@@ -830,6 +940,9 @@ pub struct UpdateItemSeriesParams {
     pub basis: Option<String>,
     pub template_item_id: Option<String>,
     pub assigned_to_user_id: Option<String>,
+    /// Stage 2 of docs/assignment-rotation-plan.md — mutually exclusive with
+    /// `assigned_to_user_id`, validated in `resolve_series_assignment`.
+    pub rotation_user_ids: Option<Vec<String>>,
     pub points: Option<i32>,
 }
 
@@ -854,13 +967,14 @@ pub async fn update_series(
         &params.template_item_id,
     )
     .await?;
-    let (assigned_to_user_id, points) = resolve_series_assignment(
+    let (assigned_to_user_id, rotation_user_ids, points) = resolve_series_assignment(
         projects,
         teams,
         &current.project_id,
         requester_user_id,
         params.item_type,
         params.assigned_to_user_id,
+        params.rotation_user_ids,
         params.points,
     )
     .await?;
@@ -896,6 +1010,13 @@ pub async fn update_series(
                 points,
             },
         )
+        .await?;
+    // Same round-trip convention as assigned_to_user_id/points above — a full-replace
+    // write regardless of whether rotation_user_ids is empty, so switching a series
+    // from rotating back to fixed (or to neither) actually clears its prior members
+    // rather than leaving them stranded in the join table.
+    event_series
+        .set_rotation_members(series_id, &rotation_user_ids)
         .await?;
     Ok(())
 }
@@ -1040,22 +1161,17 @@ pub async fn list_occurrence_states_for_project(
         let Ok(rule) = recurrence::parse(&series.recurrence) else {
             continue;
         };
-        let mut assigned_user_name: Option<String> = None;
-        if let Some(user_id) = &series.assigned_to_user_id {
-            if let Some(name) = names.get(&user_id.clone()) {
-                assigned_user_name = Some(name.clone());
-            } else {
-                let res = users.get(user_id).await;
-                if res.is_err() {
-                    return Err(ItemError::Internal("error fetching user".to_string()));
-                } else {
-                    let user = res.unwrap();
-                    let first_name = user.first_name;
-                    names.insert(user_id.clone(), first_name.clone());
-                    assigned_user_name = Some(first_name);
-                }
-            }
-        }
+        // Stage 2 of docs/assignment-rotation-plan.md: a rotating series (no fixed
+        // assignee, but has rotation members) can't resolve one assignee/name for the
+        // whole series up front — each occurrence's assignee depends on its own
+        // calendar position, so that resolution moves inside the per-date loop below.
+        // Only queried on the "no fixed assignee" path, same as
+        // `resolve_occurrence_assignee`.
+        let rotation_members = if series.assigned_to_user_id.is_none() {
+            event_series.list_rotation_members(&series.id).await?
+        } else {
+            Vec::new()
+        };
 
         // Stage 10 gap 1: the predicted list is normally rooted at the series' own
         // anchor_date, but for a completion-basis Task series that drifts silently wrong
@@ -1116,6 +1232,33 @@ pub async fn list_occurrence_states_for_project(
                 },
                 None => OccurrenceState::Virtual,
             };
+            // Fixed assignee if the series has one; otherwise, for a rotating series,
+            // whichever member is up for this occurrence's own calendar position — the
+            // index is always measured from `series.anchor_date`, per
+            // `resolve_occurrence_assignee`, not `root_date` (which can be
+            // `current_date` for a completion-basis series).
+            let occurrence_assignee = if let Some(user_id) = &series.assigned_to_user_id {
+                Some(user_id.clone())
+            } else if !rotation_members.is_empty() {
+                let index = occurrence_index(&rule, series.anchor_date, date, tz_offset_minutes);
+                rotation_assignee(&rotation_members, index).cloned()
+            } else {
+                None
+            };
+            let occurrence_assignee_name = match &occurrence_assignee {
+                None => None,
+                Some(user_id) => match names.get(user_id) {
+                    Some(name) => Some(name.clone()),
+                    None => {
+                        let user = users
+                            .get(user_id)
+                            .await
+                            .map_err(|_| ItemError::Internal("error fetching user".to_string()))?;
+                        names.insert(user_id.clone(), user.first_name.clone());
+                        Some(user.first_name)
+                    }
+                },
+            };
             result.push(ProjectOccurrence {
                 series_id: series.id.clone(),
                 series_name: series.name.clone(),
@@ -1123,8 +1266,8 @@ pub async fn list_occurrence_states_for_project(
                 event_type: series.event_type.clone(),
                 occurrence_date: date,
                 is_current,
-                assigned_to_user_id: series.assigned_to_user_id.clone(),
-                assigned_to_user_name: assigned_user_name.clone(),
+                assigned_to_user_id: occurrence_assignee,
+                assigned_to_user_name: occurrence_assignee_name,
                 state,
                 is_due_date_basis: is_due_date_basis(series),
             });
@@ -1183,6 +1326,37 @@ mod tests {
 
     fn occurrence_date() -> DateTime<Utc> {
         DateTime::from_timestamp(1_700_500_000, 0).unwrap()
+    }
+
+    #[test]
+    fn occurrence_index_computes_zero_based_position_in_the_sequence() {
+        let rule = recurrence::parse("every 7 days").unwrap();
+        let anchor = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        assert_eq!(occurrence_index(&rule, anchor, anchor, 0), 0);
+        assert_eq!(
+            occurrence_index(&rule, anchor, anchor + chrono::Duration::days(7), 0),
+            1
+        );
+        assert_eq!(
+            occurrence_index(&rule, anchor, anchor + chrono::Duration::days(21), 0),
+            3
+        );
+    }
+
+    #[test]
+    fn rotation_assignee_cycles_through_the_list() {
+        let rotation = vec!["alice".to_string(), "bob".to_string(), "carol".to_string()];
+        assert_eq!(rotation_assignee(&rotation, 0), Some(&"alice".to_string()));
+        assert_eq!(rotation_assignee(&rotation, 1), Some(&"bob".to_string()));
+        assert_eq!(rotation_assignee(&rotation, 2), Some(&"carol".to_string()));
+        // Wraps back around past the end of the list.
+        assert_eq!(rotation_assignee(&rotation, 3), Some(&"alice".to_string()));
+        assert_eq!(rotation_assignee(&rotation, 4), Some(&"bob".to_string()));
+    }
+
+    #[test]
+    fn rotation_assignee_is_none_for_an_empty_rotation() {
+        assert_eq!(rotation_assignee(&[], 0), None);
     }
 
     #[tokio::test]
@@ -1245,6 +1419,9 @@ mod tests {
         series_mock
             .expect_get_occurrence()
             .returning(|_, _| Ok(None));
+        series_mock
+            .expect_list_rotation_members()
+            .returning(|_| Ok(Vec::new()));
         series_mock
             .expect_record_materialized_occurrence()
             .withf(|series_id: &str, _date, item_id: &str| {
@@ -1311,6 +1488,9 @@ mod tests {
             .expect_get_occurrence()
             .returning(|_, _| Ok(None));
         series_mock
+            .expect_list_rotation_members()
+            .returning(|_| Ok(Vec::new()));
+        series_mock
             .expect_record_materialized_occurrence()
             .times(1)
             .returning(|_, _, _| Ok(()));
@@ -1370,6 +1550,9 @@ mod tests {
             .expect_get_occurrence()
             .returning(|_, _| Ok(None));
         series_mock
+            .expect_list_rotation_members()
+            .returning(|_| Ok(Vec::new()));
+        series_mock
             .expect_record_materialized_occurrence()
             .times(1)
             .returning(|_, _, _| Ok(()));
@@ -1425,6 +1608,9 @@ mod tests {
         series_mock
             .expect_get_occurrence()
             .returning(|_, _| Ok(None));
+        series_mock
+            .expect_list_rotation_members()
+            .returning(|_| Ok(Vec::new()));
         series_mock
             .expect_record_materialized_occurrence()
             .times(1)
@@ -1535,6 +1721,9 @@ mod tests {
         series_mock
             .expect_get_occurrence()
             .returning(|_, _| Ok(None));
+        series_mock
+            .expect_list_rotation_members()
+            .returning(|_| Ok(Vec::new()));
         let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let mut projects_mock = MockProjectRepo::new();
@@ -1570,6 +1759,9 @@ mod tests {
         series_mock
             .expect_get_occurrence()
             .returning(|_, _| Ok(None));
+        series_mock
+            .expect_list_rotation_members()
+            .returning(|_| Ok(Vec::new()));
         series_mock
             .expect_record_materialized_occurrence()
             .times(1)
@@ -2666,6 +2858,7 @@ mod tests {
             basis: None,
             template_item_id: None,
             assigned_to_user_id: None,
+            rotation_user_ids: None,
             points: None,
         }
     }
@@ -2684,6 +2877,7 @@ mod tests {
             basis: None,
             template_item_id: None,
             assigned_to_user_id: None,
+            rotation_user_ids: None,
             points: None,
         }
     }
@@ -2904,6 +3098,145 @@ mod tests {
         )
         .await
         .expect("non-admin member should still be able to set assignment");
+        assert_eq!(id, "new-series-id");
+    }
+
+    #[tokio::test]
+    async fn create_series_rejects_both_fixed_assignee_and_rotation() {
+        let mut projects_mock = MockProjectRepo::new();
+        projects_mock
+            .expect_get()
+            .returning(|_| Ok(shared_project()));
+        projects_mock
+            .expect_member_role()
+            .returning(|_, _| Ok(Some(crate::domain::team::TeamRole::Member)));
+        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock.expect_create_series().times(0);
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        let mut params = create_params("p1");
+        params.item_type = ItemKind::Task;
+        params.assigned_to_user_id = Some("member1".to_string());
+        params.rotation_user_ids = Some(vec!["member1".to_string(), "member2".to_string()]);
+        let result = create_series(
+            &no_template_repo(),
+            &projects,
+            &teams,
+            &event_series,
+            "member1",
+            params,
+        )
+        .await;
+        assert!(matches!(result, Err(ItemError::Invalid(_))));
+    }
+
+    #[tokio::test]
+    async fn create_series_rejects_an_explicitly_empty_rotation_list() {
+        let mut projects_mock = MockProjectRepo::new();
+        projects_mock
+            .expect_get()
+            .returning(|_| Ok(shared_project()));
+        projects_mock
+            .expect_member_role()
+            .returning(|_, _| Ok(Some(crate::domain::team::TeamRole::Member)));
+        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock.expect_create_series().times(0);
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        let mut params = create_params("p1");
+        params.item_type = ItemKind::Task;
+        params.rotation_user_ids = Some(vec![]);
+        let result = create_series(
+            &no_template_repo(),
+            &projects,
+            &teams,
+            &event_series,
+            "member1",
+            params,
+        )
+        .await;
+        assert!(matches!(result, Err(ItemError::Invalid(_))));
+    }
+
+    #[tokio::test]
+    async fn create_series_rejects_a_rotation_member_who_is_not_a_project_member() {
+        let mut projects_mock = MockProjectRepo::new();
+        projects_mock
+            .expect_get()
+            .returning(|_| Ok(shared_project()));
+        projects_mock.expect_member_role().returning(|_, user_id| {
+            if user_id == "member1" {
+                Ok(Some(crate::domain::team::TeamRole::Member))
+            } else {
+                Ok(None)
+            }
+        });
+        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock.expect_create_series().times(0);
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        let mut params = create_params("p1");
+        params.item_type = ItemKind::Task;
+        params.rotation_user_ids = Some(vec!["member1".to_string(), "stranger".to_string()]);
+        let result = create_series(
+            &no_template_repo(),
+            &projects,
+            &teams,
+            &event_series,
+            "member1",
+            params,
+        )
+        .await;
+        assert!(matches!(result, Err(ItemError::Invalid(_))));
+    }
+
+    #[tokio::test]
+    async fn create_series_sets_rotation_members_and_clears_fixed_assignee() {
+        let mut projects_mock = MockProjectRepo::new();
+        projects_mock
+            .expect_get()
+            .returning(|_| Ok(shared_project()));
+        projects_mock
+            .expect_member_role()
+            .returning(|_, _| Ok(Some(crate::domain::team::TeamRole::Member)));
+        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock
+            .expect_create_series()
+            .withf(|s: &ItemSeries| s.assigned_to_user_id.is_none())
+            .times(1)
+            .returning(|_| Ok("new-series-id".to_string()));
+        series_mock
+            .expect_set_rotation_members()
+            .withf(|series_id: &str, ids: &[String]| {
+                series_id == "new-series-id"
+                    && ids == ["member1".to_string(), "member2".to_string()]
+            })
+            .times(1)
+            .returning(|_, _| Ok(()));
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        let mut params = create_params("p1");
+        params.item_type = ItemKind::Task;
+        params.rotation_user_ids = Some(vec!["member1".to_string(), "member2".to_string()]);
+        let id = create_series(
+            &no_template_repo(),
+            &projects,
+            &teams,
+            &event_series,
+            "member1",
+            params,
+        )
+        .await
+        .expect("member should be able to set up a rotation");
         assert_eq!(id, "new-series-id");
     }
 
@@ -3408,6 +3741,10 @@ mod tests {
             .withf(|_, s: &ItemSeries| s.template_item_id.as_deref() == Some("template-1"))
             .times(1)
             .returning(|_, _| Ok(()));
+        series_mock
+            .expect_set_rotation_members()
+            .withf(|_, ids: &[String]| ids.is_empty())
+            .returning(|_, _| Ok(()));
         let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let mut projects_mock = MockProjectRepo::new();
@@ -3548,6 +3885,10 @@ mod tests {
             })
             .times(1)
             .returning(|_, _| Ok(()));
+        series_mock
+            .expect_set_rotation_members()
+            .withf(|_, ids: &[String]| ids.is_empty())
+            .returning(|_, _| Ok(()));
         let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let mut projects_mock = MockProjectRepo::new();
@@ -3671,6 +4012,9 @@ mod tests {
             .expect_list_series_for_project()
             .returning(move |_| Ok(vec![s.clone()]));
         series_mock
+            .expect_list_rotation_members()
+            .returning(|_| Ok(Vec::new()));
+        series_mock
             .expect_list_occurrences_between()
             .returning(|_, _, _| {
                 Ok(vec![
@@ -3734,6 +4078,9 @@ mod tests {
             .expect_list_series_for_project()
             .returning(move |_| Ok(vec![s.clone()]));
         series_mock
+            .expect_list_rotation_members()
+            .returning(|_| Ok(Vec::new()));
+        series_mock
             .expect_list_occurrences_between()
             .returning(|_, _, _| Ok(vec![]));
         let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
@@ -3760,5 +4107,117 @@ mod tests {
         assert_eq!(result[0].occurrence_date, anchor());
         assert!(result[0].is_current);
         assert_eq!(result[0].state, OccurrenceState::Virtual);
+    }
+
+    #[tokio::test]
+    async fn list_occurrence_states_rotates_assignee_by_occurrence_position() {
+        let s = series_ex("s1", "p1", "Trash day", "every 7 days", anchor());
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock
+            .expect_list_series_for_project()
+            .returning(move |_| Ok(vec![s.clone()]));
+        series_mock
+            .expect_list_rotation_members()
+            .returning(|_| Ok(vec!["alice".to_string(), "bob".to_string()]));
+        series_mock
+            .expect_list_occurrences_between()
+            .returning(|_, _, _| Ok(vec![]));
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        let mut users_mock = MockUserRepo::new();
+        users_mock.expect_get().returning(|user_id| {
+            let first_name = match user_id {
+                "alice" => "Alice",
+                "bob" => "Bob",
+                other => panic!("unexpected user id {other}"),
+            };
+            Ok(crate::domain::user::User::new(first_name, "Doe"))
+        });
+        let users: Arc<dyn UserRepo> = Arc::new(users_mock);
+
+        let range_start = anchor() - chrono::Duration::days(1);
+        let range_end = anchor() + chrono::Duration::days(20);
+        let mut result = list_occurrence_states_for_project(
+            &event_series,
+            &users,
+            "p1",
+            range_start,
+            range_end,
+            0,
+        )
+        .await
+        .unwrap();
+        result.sort_by_key(|o| o.occurrence_date);
+
+        // Index 0 (anchor), 1 (anchor+7d), 2 (anchor+14d) — alternates alice/bob/alice,
+        // matching rotation_assignee's `index % rotation.len()`.
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0].assigned_to_user_id.as_deref(), Some("alice"));
+        assert_eq!(result[0].assigned_to_user_name.as_deref(), Some("Alice"));
+        assert_eq!(result[1].assigned_to_user_id.as_deref(), Some("bob"));
+        assert_eq!(result[1].assigned_to_user_name.as_deref(), Some("Bob"));
+        assert_eq!(result[2].assigned_to_user_id.as_deref(), Some("alice"));
+        assert_eq!(result[2].assigned_to_user_name.as_deref(), Some("Alice"));
+    }
+
+    #[tokio::test]
+    async fn materializes_a_task_with_the_rotation_members_turn_as_assignee() {
+        let mut task_series = series("p1");
+        task_series.item_type = ItemKind::Task;
+        // Third occurrence (index 2) after the anchor, on a two-person rotation —
+        // 2 % 2 == 0, so it's the first member's ("alice") turn again.
+        let occurrence = task_series.anchor_date + chrono::Duration::days(14);
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock
+            .expect_get_series()
+            .returning(move |_| Ok(task_series.clone()));
+        series_mock
+            .expect_get_occurrence()
+            .returning(|_, _| Ok(None));
+        series_mock
+            .expect_list_rotation_members()
+            .returning(|_| Ok(vec!["alice".to_string(), "bob".to_string()]));
+        series_mock
+            .expect_record_materialized_occurrence()
+            .times(1)
+            .returning(|_, _, _| Ok(()));
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        let mut projects_mock = MockProjectRepo::new();
+        projects_mock
+            .expect_get()
+            .returning(|_| Ok(shared_project()));
+        projects_mock
+            .expect_member_role()
+            .returning(|_, _| Ok(Some(crate::domain::team::TeamRole::Member)));
+        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
+
+        let mut items_mock = MockItemRepo::new();
+        items_mock
+            .expect_create()
+            .withf(|item: &Item| item.assigned_to_user_id().as_deref() == Some("alice"))
+            .times(1)
+            .returning(|_| Ok("new-item-id".to_string()));
+        items_mock
+            .expect_get_by_project()
+            .returning(|_, _| Ok(Item::new_project_item("p1", "Trash day")));
+        let repo: Arc<dyn ItemRepo> = Arc::new(items_mock);
+
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+
+        let item = get_or_materialize_occurrence(
+            &repo,
+            &projects,
+            &teams,
+            &event_series,
+            "owner1",
+            "s1",
+            occurrence,
+            0,
+        )
+        .await
+        .expect("should materialize with the rotation's computed assignee");
+
+        assert_eq!(item.name, "Trash day");
     }
 }

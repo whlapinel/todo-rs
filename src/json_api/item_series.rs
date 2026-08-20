@@ -61,6 +61,9 @@ pub async fn create_item_series(
             basis: input.basis,
             template_item_id: input.template_item_id,
             assigned_to_user_id: input.assigned_to_user_id,
+            // Smithy/wire wiring is docs/assignment-rotation-plan.md's Stage 3 —
+            // this API has no rotationUserIds field yet.
+            rotation_user_ids: None,
             points: input.points,
         },
     )
@@ -126,6 +129,9 @@ pub async fn update_item_series(
             basis: input.basis,
             template_item_id: input.template_item_id,
             assigned_to_user_id: input.assigned_to_user_id,
+            // Smithy/wire wiring is docs/assignment-rotation-plan.md's Stage 3 —
+            // this API has no rotationUserIds field yet.
+            rotation_user_ids: None,
             points: input.points,
         },
     )

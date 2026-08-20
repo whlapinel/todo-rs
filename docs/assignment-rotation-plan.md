@@ -1,9 +1,27 @@
-# Assignment rotation for item series — design sketch (WIP, not started)
+# Assignment rotation for item series — design sketch (WIP, Stages 1-2 done)
 
-Status: **design only, no code written yet.** This doc exists so implementation
-can pick up from an agreed design rather than re-deriving it. Not yet linked from
-`docs/issues_and_features.md` — add it there (or promote straight to an
-implementation stage doc) once the open questions below are resolved.
+Status: **Stage 1 (storage layer) and Stage 2 (service layer) implemented and
+tested.** Stage 3 (Smithy + codegen + json_api wiring) is next — see "Suggested
+staged rollout" at the bottom. Not yet linked from `docs/issues_and_features.md`.
+
+## Implementation status
+
+- **Stage 1 (storage)**: `item_series_rotation_members` table (baseline +
+  migration 24), `ItemSeriesRepo::list_rotation_members`/`set_rotation_members`,
+  fully tested.
+- **Stage 2 (service, `src/service/item_series.rs`)**: `occurrence_index`/
+  `rotation_assignee` pure functions; `resolve_occurrence_assignee` (fixed
+  assignee or rotation-computed, used by `get_or_materialize_occurrence`);
+  `resolve_series_assignment` grows a `rotation_user_ids` parameter with the
+  mutual-exclusion/empty-list/membership validation described below;
+  `CreateItemSeriesParams`/`UpdateItemSeriesParams` gain `rotation_user_ids:
+  Option<Vec<String>>`; `create_series`/`update_series` persist rotation
+  membership via `set_rotation_members`; `duplicate_series` copies rotation
+  membership onto the new series; `list_occurrence_states_for_project` resolves
+  each occurrence's assignee individually for a rotating series instead of once
+  per series. All call sites outside the service layer (json_api, web UI forms)
+  currently pass `rotation_user_ids: None` — no wire/form support yet, that's
+  Stage 3/4.
 
 ## Motivation
 

@@ -951,11 +951,7 @@ mod tests {
         // the cycle order, not insertion order.
         repo.set_rotation_members(
             &id,
-            &[
-                "carol".to_string(),
-                "alice".to_string(),
-                "bob".to_string(),
-            ],
+            &["carol".to_string(), "alice".to_string(), "bob".to_string()],
         )
         .await
         .unwrap();
@@ -1014,9 +1010,6 @@ mod tests {
             repo.list_rotation_members(&id1).await.unwrap(),
             vec!["alice"]
         );
-        assert_eq!(
-            repo.list_rotation_members(&id2).await.unwrap(),
-            vec!["bob"]
-        );
+        assert_eq!(repo.list_rotation_members(&id2).await.unwrap(), vec!["bob"]);
     }
 }
