@@ -15,7 +15,16 @@
     {% endif %}
   </div>
   <div class="mt-1 flex items-center gap-x-3 pl-7 text-xs text-gray-500 dark:text-gray-400">
-    <span class="flex-1">Due: {{ date_label }}</span>
+    <div class="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1">
+      {% if let Some(assignee) = assignee_name %}
+      <span class="text-indigo-600 dark:text-indigo-400">[{{ assignee }}]</span>
+      {% endif %}
+      {% if is_due_date_basis %}
+      <span class="{% if overdue %}text-red-600 dark:text-red-400{% endif %}">💀 {{ date_label }}</span>
+      {% else %}
+      <span>📅 {{ date_label }}</span>
+      {% endif %}
+    </div>
     {% if is_skipped %}
     <button hx-post="{{ unskip_url }}"
       class="shrink-0 cursor-pointer text-gray-400 hover:text-indigo-500 dark:text-gray-500 dark:hover:text-indigo-400">Unskip</button>

@@ -1,6 +1,7 @@
 use crate::domain::item::{Item, ItemKind, ItemType, Recurrence, Schedule};
 use crate::service::activity_log::reverse_entry;
-use crate::storage::sqlite::{ActivityLogRepo, ItemRepo, ProjectRepo, RepoError};
+use crate::service::item_series;
+use crate::storage::sqlite::{ActivityLogRepo, ItemRepo, ItemSeriesRepo, ProjectRepo, RepoError};
 #[cfg(test)]
 use crate::domain::recurrence;
 use chrono::{DateTime, Utc};
@@ -354,8 +355,19 @@ pub async fn update_item(
 /// unlike `team_items`'s `delete_team_item` (which checks `require_active_member` first).
 /// `repo.get` below is scoped to `user_id`, so a non-owned `item_id` now surfaces as
 /// `ItemError::NotFound` instead of being silently deleted.
+///
+/// Calls `item_series::unlink_deleted_item_occurrence` for every recursively-deleted child, not
+/// just `item_id` itself (its caller, `project_items::delete_project_item`, already does that for
+/// the top-level id after this returns) — a series-materialized item can end up as a *descendant*
+/// of another item via the "Subordinate" reparenting feature, and before this fix the BFS loop's
+/// raw `repo.delete(&child.id)` bypassed that unlink entirely, leaving such a child's
+/// `item_occurrences` row pointing at a deleted `item_id` forever. See
+/// docs/issues_and_features.md's "materialized occurrences are not properly deleted upon
+/// skipping" item — this is the fix for that (skipping a *different* series' occurrence whose
+/// item happened to have a reparented series-materialized descendant).
 pub async fn delete_item(
     repo: &Arc<dyn ItemRepo>,
+    event_series: &Arc<dyn ItemSeriesRepo>,
     user_id: &str,
     item_id: &str,
 ) -> Result<(), ItemError> {
@@ -368,6 +380,7 @@ pub async fn delete_item(
         for child in children {
             queue.push(child.id.clone());
             repo.delete(&child.id).await?;
+            item_series::unlink_deleted_item_occurrence(event_series, &child.id).await?;
         }
     }
     unlink_source_event_tasks(repo, item_id).await?;
@@ -683,7 +696,9 @@ pub(crate) fn copy_children_as_template<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::sqlite::{MockActivityLogRepo, MockItemRepo, MockProjectRepo};
+    use crate::storage::sqlite::{
+        MockActivityLogRepo, MockItemRepo, MockItemSeriesRepo, MockProjectRepo,
+    };
 
     /// `create_item`'s `find_personal_project` lookup, stubbed to "none found" — none
     /// of these tests care about the resolved `project_id`, so this keeps them from
@@ -993,8 +1008,9 @@ mod tests {
             .returning(|_| Ok(()));
 
         let repo: Arc<dyn ItemRepo> = Arc::new(mock);
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(MockItemSeriesRepo::new());
 
-        delete_item(&repo, "u1", "event1")
+        delete_item(&repo, &event_series, "u1", "event1")
             .await
             .expect("should delete the event and unlink referencing tasks");
     }

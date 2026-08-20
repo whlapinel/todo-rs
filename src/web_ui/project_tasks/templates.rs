@@ -184,6 +184,12 @@ pub struct ProjectTaskVirtualRow {
     pub occurrence_ts: i64,
     pub name: String,
     pub date_label: String,
+    /// Mirrors `ProjectTaskRow`'s 💀-vs-📅 date icon choice — see
+    /// `ProjectOccurrence::is_due_date_basis`'s doc comment.
+    pub is_due_date_basis: bool,
+    /// Same meaning as `ProjectTaskRow::overdue` — `false` for a scheduled-date-basis series
+    /// (scheduled dates are never styled overdue, matching a materialized row).
+    pub overdue: bool,
     pub materialize_url: String,
     pub skip_url: String,
     pub complete_url: String,
@@ -194,6 +200,11 @@ pub struct ProjectTaskVirtualRow {
     /// materialize link/Skip button.
     pub is_skipped: bool,
     pub unskip_url: String,
+    /// Populated the same way `ProjectTaskRow::assignee_name` is — previously dropped despite
+    /// `ProjectOccurrence` already carrying it, so a virtual occurrence's row silently showed no
+    /// assignee until materialized. See docs/issues_and_features.md's "occurrences don't show
+    /// the assignee unless it's materialized" item.
+    pub assignee_name: Option<String>,
 }
 
 impl ProjectTaskVirtualRow {
@@ -204,12 +215,15 @@ impl ProjectTaskVirtualRow {
             occurrence_ts: occ.occurrence_date.timestamp(),
             name: occ.series_name.clone(),
             date_label: local.format("%Y-%m-%d %H:%M").to_string(),
+            is_due_date_basis: occ.is_due_date_basis,
+            overdue: occ.is_due_date_basis && occ.occurrence_date < Utc::now(),
             materialize_url: occ.materialize_url(project_id),
             skip_url: occ.skip_url(project_id),
             complete_url: occ.complete_url(project_id),
             is_current: occ.is_current,
             is_skipped: occ.is_skipped(),
             unskip_url: occ.unskip_url(project_id),
+            assignee_name: occ.assigned_to_user_name.clone(),
         }
     }
 }

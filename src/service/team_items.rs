@@ -1,11 +1,12 @@
 use crate::domain::item::{Item, ItemKind, ItemType, Recurrence, Schedule, TeamAssignment};
 use crate::service::activity_log::reverse_entry;
+use crate::service::item_series;
 use crate::service::items::{
     copy_template_children_to_event, has_incomplete_children, is_pure_complete_toggle, item_anchor,
     sync_offset_children, sync_source_event_tasks, unlink_source_event_tasks, ItemError,
 };
 use crate::service::projects::{require_project_admin, require_project_member, resolve_project_assignee};
-use crate::storage::sqlite::{ActivityLogRepo, ItemRepo, ProjectRepo, TeamRepo};
+use crate::storage::sqlite::{ActivityLogRepo, ItemRepo, ItemSeriesRepo, ProjectRepo, TeamRepo};
 use chrono::{DateTime, Utc};
 use std::sync::Arc;
 
@@ -268,8 +269,12 @@ pub async fn create_team_item(
 /// docs/team-id-removal-plan.md to scope by `project_id` rather than `team_id` — unlike
 /// `create_team_item`/`update_team_item`, delete never writes a row, so there's no
 /// `items.team_id` dual-write concern here.
+/// See `items::delete_item`'s identical doc comment for why every recursively-deleted child
+/// now also gets `item_series::unlink_deleted_item_occurrence` called on it, not just
+/// `item_id` itself.
 pub async fn delete_team_item(
     repo: &Arc<dyn ItemRepo>,
+    event_series: &Arc<dyn ItemSeriesRepo>,
     teams: &Arc<dyn TeamRepo>,
     projects: &Arc<dyn ProjectRepo>,
     requester_user_id: &str,
@@ -286,6 +291,7 @@ pub async fn delete_team_item(
         for child in children {
             queue.push(child.id.clone());
             repo.delete(&child.id).await?;
+            item_series::unlink_deleted_item_occurrence(event_series, &child.id).await?;
         }
     }
     unlink_source_event_tasks(repo, item_id).await?;

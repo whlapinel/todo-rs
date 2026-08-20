@@ -940,6 +940,12 @@ pub struct ProjectOccurrence {
     pub assigned_to_user_id: Option<String>,
     pub assigned_to_user_name: Option<String>,
     pub state: OccurrenceState,
+    /// Mirrors `is_due_date_basis(series)` at the time this occurrence was listed — lets a
+    /// still-virtual occurrence's row render its date the same way a materialized one from the
+    /// same series would (💀 due-date vs 📅 scheduled-date icon/overdue styling), instead of
+    /// every virtual row rendering as a generic undated "Due:" label regardless of the series'
+    /// actual basis.
+    pub is_due_date_basis: bool,
 }
 
 impl ProjectOccurrence {
@@ -1116,6 +1122,7 @@ pub async fn list_occurrence_states_for_project(
                 assigned_to_user_id: series.assigned_to_user_id.clone(),
                 assigned_to_user_name: assigned_user_name.clone(),
                 state,
+                is_due_date_basis: is_due_date_basis(series),
             });
         }
     }

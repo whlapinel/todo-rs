@@ -554,6 +554,7 @@ pub async fn delete_project_item(
         Some(_) => {
             team_items::delete_team_item(
                 repo,
+                event_series,
                 teams,
                 projects,
                 requester_user_id,
@@ -562,7 +563,9 @@ pub async fn delete_project_item(
             )
             .await?;
         }
-        None => items::delete_item(repo, &project.owner_user_id, item_id).await?,
+        None => {
+            items::delete_item(repo, event_series, &project.owner_user_id, item_id).await?
+        }
     }
     item_series::unlink_deleted_item_occurrence(event_series, item_id).await
 }
@@ -1435,5 +1438,86 @@ mod tests {
         )
         .await
         .expect("should delete the item and un-materialize its occurrence");
+    }
+
+    /// Regression test for docs/issues_and_features.md's "materialized occurrences are not
+    /// properly deleted upon skipping" — a series-materialized item can be reparented under
+    /// another (unrelated) item via the "Subordinate" feature, so `items::delete_item`'s
+    /// recursive child-delete loop must call `unlink_deleted_item_occurrence` for every
+    /// deleted child too, not just for the top-level id `delete_project_item` was given
+    /// (which the dedicated test above already covers).
+    #[tokio::test]
+    async fn delete_project_item_unlinks_a_series_materialized_descendant() {
+        let mut projects_mock = MockProjectRepo::new();
+        projects_mock
+            .expect_get()
+            .returning(|_| Ok(personal_project()));
+        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+
+        let mut items_mock = MockItemRepo::new();
+        items_mock
+            .expect_get()
+            .returning(|_, _| Ok(Item::new_user_item("owner1", "Parent")));
+        items_mock
+            .expect_list_children()
+            .withf(|parent_id: &str| parent_id == "i1")
+            .returning(|_| {
+                Ok(vec![Item {
+                    id: "i2".to_string(),
+                    ..Item::new_user_item("owner1", "Reparented child")
+                }])
+            });
+        items_mock
+            .expect_list_children()
+            .withf(|parent_id: &str| parent_id == "i2")
+            .returning(|_| Ok(vec![]));
+        items_mock
+            .expect_list_by_source_event()
+            .returning(|_| Ok(vec![]));
+        items_mock
+            .expect_delete()
+            .withf(|id: &str| id == "i1" || id == "i2")
+            .times(2)
+            .returning(|_| Ok(()));
+        let repo: Arc<dyn ItemRepo> = Arc::new(items_mock);
+
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock
+            .expect_find_occurrence_by_item_id()
+            .withf(|item_id: &str| item_id == "i2")
+            .times(1)
+            .returning(|_| {
+                Ok(Some(crate::domain::item_series::ItemOccurrence {
+                    series_id: "s2".to_string(),
+                    occurrence_date: DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+                    item_id: Some("i2".to_string()),
+                    is_exdate: false,
+                }))
+            });
+        series_mock
+            .expect_delete_occurrence()
+            .withf(|series_id: &str, _date| series_id == "s2")
+            .times(1)
+            .returning(|_, _| Ok(()));
+        // "i1" (the delete target itself) was never materialized from a series.
+        series_mock
+            .expect_find_occurrence_by_item_id()
+            .withf(|item_id: &str| item_id == "i1")
+            .times(1)
+            .returning(|_| Ok(None));
+        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        delete_project_item(
+            &repo,
+            &projects,
+            &teams,
+            &event_series,
+            "owner1",
+            "p1",
+            "i1",
+        )
+        .await
+        .expect("should delete the whole tree and un-materialize the reparented child's occurrence");
     }
 }
