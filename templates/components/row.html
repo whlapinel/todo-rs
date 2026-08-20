@@ -11,7 +11,7 @@
             {% if has_children %}<span class="text-gray-400 dark:text-gray-500">&#9656;</span>{% endif %} {{ name }}
         </a>
         {% if let Some(url) = reschedule_url %}
-        <button hx-get="{{ url }}" hx-target="#action-dialog" hx-swap="innerHTML"
+        <button hx-get="{{ url }}" hx-target="#action-dialog" hx-select="unset" hx-swap="innerHTML"
             class="shrink-0 cursor-pointer text-red-600 hover:text-red-500 dark:text-red-400 dark:hover:text-red-300">
             {% include "icons/calendar.html" %}
         </button>

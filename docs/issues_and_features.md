@@ -2,7 +2,6 @@
 
 Open issues and feature requests, merged from the former `docs/issues.md` and `docs/features.md` (2026-08-20) into a single unsorted list. Completed or superseded items — including ones from the old files that were already resolved but hadn't been moved out yet — live in `docs/archived/archived_issues_and_features.md`.
 
-- (issue) the dialog doesn't display content sent in when clicking 'reschedule' -- it doesn't appear to be swapped in either.
 - Should events have "save as template" ability? Not sure we need event templates, but perhaps — maybe templates should be called task templates to clarify the narrower purpose if we decide to rule out event templates. Needs a decision from the user, not sized as a task.
 - Need a plan for deleting old data to keep the DB from growing infinitely (completed recurring/series occurrences, activity log rows), likely via a user-configurable retention/row-limit policy. No design doc exists yet — needs its own planning pass (retention shape, global vs. per-user config, delete vs. archive) before implementation.
 - Audit `src/storage/migrations/` for `CREATE INDEX` statements that run before the column-adding migration they depend on — only the `source_event_id` one is confirmed fixed; there may be others in the same wrong position.
