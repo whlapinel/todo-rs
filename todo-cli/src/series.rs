@@ -66,6 +66,11 @@ pub enum SeriesCommand {
         /// project's admin (silently dropped otherwise)
         #[arg(long)]
         points: Option<i32>,
+        /// User id to add to the rotation — repeatable, one occurrence per user in
+        /// order of user id. Mutually exclusive with --assign. Only valid on a task
+        /// series on a team-backed project
+        #[arg(long = "rotate")]
+        rotate: Vec<String>,
     },
     /// Show one item series
     Get {
@@ -103,6 +108,11 @@ pub enum SeriesCommand {
         /// project's admin; round-trip to keep it, omit to clear it
         #[arg(long)]
         points: Option<i32>,
+        /// User id to add to the rotation — repeatable, one occurrence per user in
+        /// order of user id. Mutually exclusive with --assign. Round-trip to keep the
+        /// rotation, omit (along with --assign) to clear it
+        #[arg(long = "rotate")]
+        rotate: Vec<String>,
     },
     /// Delete an item series. Orphan, not cascade: already-materialized occurrences are
     /// kept as standalone items — only the series itself (and its occurrence records) go away.
@@ -149,6 +159,7 @@ pub async fn cmd_series(client: &Client, cmd: SeriesCommand, _user_id: Option<St
             template,
             assign,
             points,
+            rotate,
         } => {
             let anchor_date = parse_date(&anchor).unwrap_or_else(|e| {
                 eprintln!("{e}");
@@ -158,6 +169,10 @@ pub async fn cmd_series(client: &Client, cmd: SeriesCommand, _user_id: Option<St
                 eprintln!("error: --item-type is required (task or event)");
                 std::process::exit(1);
             };
+            if !rotate.is_empty() && assign.is_some() {
+                eprintln!("error: --rotate and --assign are mutually exclusive");
+                std::process::exit(1);
+            }
             let mut req = client
                 .create_item_series()
                 .project_id(&project_id)
@@ -179,6 +194,9 @@ pub async fn cmd_series(client: &Client, cmd: SeriesCommand, _user_id: Option<St
             }
             if let Some(points) = points {
                 req = req.points(points);
+            }
+            for user_id in rotate {
+                req = req.rotation_user_ids(user_id);
             }
             let out = unwrap_or_exit(req.send().await, "create item series");
             println!("created item series {}", out.series_id());
@@ -211,6 +229,14 @@ pub async fn cmd_series(client: &Client, cmd: SeriesCommand, _user_id: Option<St
                 "points:      {}",
                 out.points().map(|p| p.to_string()).unwrap_or_else(|| "-".to_string())
             );
+            println!(
+                "rotation:    {}",
+                if out.rotation_user_ids().is_empty() {
+                    "-".to_string()
+                } else {
+                    out.rotation_user_ids().join(", ")
+                }
+            );
         }
         SeriesCommand::Update {
             project_id,
@@ -224,6 +250,7 @@ pub async fn cmd_series(client: &Client, cmd: SeriesCommand, _user_id: Option<St
             template,
             assign,
             points,
+            rotate,
         } => {
             let anchor_date = parse_date(&anchor).unwrap_or_else(|e| {
                 eprintln!("{e}");
@@ -233,6 +260,10 @@ pub async fn cmd_series(client: &Client, cmd: SeriesCommand, _user_id: Option<St
                 eprintln!("error: --item-type is required (task or event)");
                 std::process::exit(1);
             };
+            if !rotate.is_empty() && assign.is_some() {
+                eprintln!("error: --rotate and --assign are mutually exclusive");
+                std::process::exit(1);
+            }
             let mut req = client
                 .update_item_series()
                 .project_id(&project_id)
@@ -255,6 +286,9 @@ pub async fn cmd_series(client: &Client, cmd: SeriesCommand, _user_id: Option<St
             }
             if let Some(points) = points {
                 req = req.points(points);
+            }
+            for user_id in rotate {
+                req = req.rotation_user_ids(user_id);
             }
             unwrap_or_exit(req.send().await, "update item series");
             println!("updated item series {series_id}");

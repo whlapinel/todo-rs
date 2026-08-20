@@ -548,19 +548,48 @@ prl series create <project-id> "Water plants" "every 3 days" 2026-08-17 \
   --item-type task --template <template-item-id>
 ```
 
+`--assign <user-id>` fixes every materialized occurrence's assignee, and
+`--points <n>` awards that many points to the assignee on completion — both
+only valid on a task series (`--item-type task`) on a team-backed project,
+and `--points` further requires that project's admin (silently dropped
+otherwise).
+
+As an alternative to a fixed `--assign`, `--rotate <user-id>` (repeatable)
+rotates the assignee through a set of users, one per occurrence, cycling in
+order of user id — e.g. occurrence 1 goes to the lowest user id given,
+occurrence 2 to the next, wrapping back around after the last. `--rotate`
+and `--assign` are mutually exclusive; pass `--rotate` two or more times to
+build the rotation:
+
+```sh
+prl series create <project-id> "Take out trash" "every week" 2026-08-24 \
+  --item-type task --rotate <user-id-1> --rotate <user-id-2> --rotate <user-id-3>
+```
+
+Removing someone from the rotation, or a rotation member leaving the
+project, doesn't need special handling — see `docs/assignment-rotation-plan.md`
+if you're curious why. A single occurrence's assignee can always be
+overridden afterward like any other item field; it won't be recomputed once
+materialized.
+
 ### Show one item series
 
 ```sh
 prl series get <project-id> <series-id>
 ```
 
+`prl series get` prints the resolved rotation (if any) as a comma-separated
+list of user ids under `rotation:`.
+
 ### Update an item series
 
 Update is a full replace of `name`/`recurrence`/`anchor`/`description`/
-`item-type`/`basis`/`template` — pass `--description`/`--basis`/`--template`
+`item-type`/`basis`/`template`/`assign`/`points`/`rotate` — pass
+`--description`/`--basis`/`--template`/`--assign`/`--points`/`--rotate`
 again to keep them, or omit to clear them (omitting `--basis` resets to
-`schedule`). `--item-type` is required on every update, the same as on
-create.
+`schedule`; omitting both `--assign` and `--rotate` clears whichever
+assignment mode was set). `--item-type` is required on every update, the
+same as on create.
 
 ```sh
 prl series update <project-id> <series-id> "Standup" "every weekday" 2026-08-17 \

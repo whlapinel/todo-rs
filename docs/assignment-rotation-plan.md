@@ -1,9 +1,9 @@
-# Assignment rotation for item series — design sketch (WIP, Stages 1-4 done)
+# Assignment rotation for item series — design sketch (complete, all 5 stages done)
 
-Status: **Stages 1-4 (storage, service, Smithy/codegen/json_api, web UI)
-implemented and tested.** Stage 5 (CLI + MCP + user guide) is next — see
-"Suggested staged rollout" at the bottom. Not yet linked from
-`docs/issues_and_features.md`.
+Status: **Complete.** All 5 stages (storage, service, Smithy/codegen/json_api,
+web UI, CLI/MCP/docs) implemented and tested — see "Suggested staged
+rollout" at the bottom. Moved from `docs/issues_and_features.md` to
+`docs/archived/archived_issues_and_features.md` (2026-08-20).
 
 ## Implementation status
 
@@ -365,4 +365,15 @@ this project's `docs/*-plan.md` convention) once implementation begins:
 3. Smithy + codegen + json_api wiring. **Done.**
 4. Web UI: create/edit forms, row/detail/calendar display. **Done** — see
    "Web UI implementation notes" above.
-5. CLI + MCP + user guide. **Next.**
+5. CLI + MCP + user guide. **Done.** `prl series create`/`update` gained a
+   repeatable `--rotate <user-id>` flag (mutually exclusive with `--assign`,
+   validated client-side), `prl series get` prints the resolved rotation.
+   MCP `create_item_series`/`update_item_series` gained an optional
+   `rotationUserIds: string[]` parameter, passed through unchanged.
+   `get_item_series`/`list_item_series` needed no code change — they proxy
+   the JSON API response verbatim, which already included `rotationUserIds`
+   from Stage 3. `docs/prl-user-guide.md`'s Item Series section documents
+   `--rotate` (and, as a byproduct, the previously-undocumented series
+   `--assign`/`--points` flags). No `task codegen` rerun needed — the
+   generated `todo-client`'s `rotation_user_ids()` builder/accessor methods
+   already existed from Stage 3.
