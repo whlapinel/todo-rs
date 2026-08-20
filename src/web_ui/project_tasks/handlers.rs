@@ -20,6 +20,7 @@ use crate::web_ui::project_tasks::{
 };
 use askama::Template;
 use axum::extract::{Extension, Form, Path, Query};
+use axum::http::HeaderMap;
 use axum::response::{Html, IntoResponse, Response};
 use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveTime, Utc};
 use std::collections::HashMap;
@@ -91,6 +92,14 @@ pub async fn project_tasks_page(
         .filter(|occ| occ.item_type == ItemKind::Task && occ.is_current)
         .filter(|occ| !matches!(occ.state, item_series_service::OccurrenceState::Materialized { .. }))
         .collect();
+    let mut skip_urls: HashMap<String, String> = HashMap::new();
+    for item in &items {
+        if let Some(url) =
+            item_series_service::skip_url_for_item(&event_series, item, &project_id).await?
+        {
+            skip_urls.insert(item.id.clone(), url);
+        }
+    }
     let rows = super::render_rows_with_virtual(
         &items,
         &virtual_occurrences,
@@ -98,6 +107,7 @@ pub async fn project_tasks_page(
         &names,
         show_complete,
         tz,
+        &skip_urls,
     )?;
     let points_label = match &project.team_id {
         Some(team_id) => {
@@ -532,6 +542,80 @@ pub async fn update_project_task_series_occurrence_form(
     Ok(hx_redirect(project_task_url(&project_id, &item.id)))
 }
 
+/// See `project_item_series::handlers::redirect_to_current_page`'s identical rationale —
+/// duplicated per that module's own precedent rather than shared.
+fn redirect_to_current_page(headers: &HeaderMap, project_id: &str) -> Response {
+    let location = headers
+        .get("hx-current-url")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string)
+        .unwrap_or_else(|| project_tasks_list_url(project_id));
+    hx_redirect(location)
+}
+
+/// The row-checkbox counterpart to Skip/Unskip (`project_item_series::handlers`) — completes a
+/// Task-series occurrence directly from a list/dashboard row's checkbox, whether it's still
+/// virtual or already materialized doesn't matter to the caller: materializes it first if
+/// needed (`get_or_materialize_occurrence`, a no-op if already materialized), then completes it
+/// via the exact same `update_project_item` path a real item's own checkbox already uses — so
+/// cursor validation (`item_series::require_current_occurrence`), points, and activity logging
+/// all apply identically. Task-typed series only — `Item::validate` rejects `complete: true`
+/// for Events, so this route is never wired onto an Event occurrence's row. Redirects back to
+/// the calling screen like Skip/Unskip, rather than to the item's own detail page — a row
+/// checkbox click should behave like any other row checkbox, not navigate away.
+pub async fn complete_project_item_series_occurrence_form(
+    Path((project_id, series_id, occurrence_ts)): Path<(String, String, i64)>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(item_series): Extension<Arc<dyn ItemSeriesRepo>>,
+    Extension(activity_log): Extension<Arc<dyn ActivityLogRepo>>,
+    TzOffset(tz): TzOffset,
+    headers: HeaderMap,
+) -> Result<Response, ItemError> {
+    let series = item_series_service::get_series(
+        &projects,
+        &teams,
+        &item_series,
+        &auth_user.user_id,
+        &series_id,
+    )
+    .await?;
+    if series.project_id != project_id || series.item_type != ItemKind::Task {
+        return Err(ItemError::NotFound);
+    }
+    let occurrence_date = DateTime::<Utc>::from_timestamp(occurrence_ts, 0)
+        .ok_or_else(|| ItemError::Invalid("invalid occurrence timestamp".to_string()))?;
+    let item = item_series_service::get_or_materialize_occurrence(
+        &repo,
+        &projects,
+        &teams,
+        &item_series,
+        &auth_user.user_id,
+        &series_id,
+        occurrence_date,
+        tz,
+    )
+    .await?;
+    let form = ProjectTaskForm {
+        complete: Some("true".to_string()),
+        ..Default::default()
+    };
+    let params = update_params_from_form(&project_id, &item.id, &item, &form, tz);
+    project_item_service::update_project_item(
+        &repo,
+        &projects,
+        &teams,
+        &activity_log,
+        &item_series,
+        &auth_user.user_id,
+        params,
+    )
+    .await?;
+    Ok(redirect_to_current_page(&headers, &project_id))
+}
+
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectTaskSeriesOccurrenceChildForm {
@@ -618,7 +702,7 @@ pub(crate) async fn render_children_fragment(
         Some(team_id) => names_for(teams, team_id, requester_user_id).await?,
         None => HashMap::new(),
     };
-    let rows = super::render_rows(&children, project_id, &names, true, tz)?;
+    let rows = super::render_rows(&children, project_id, &names, true, tz, &HashMap::new())?;
     render(ProjectTaskRowsFragmentTemplate {
         rows,
         empty_message: "No sub-items yet.".to_string(),
@@ -646,7 +730,7 @@ pub(crate) async fn render_source_event_fragment(
         Some(team_id) => names_for(teams, team_id, requester_user_id).await?,
         None => HashMap::new(),
     };
-    let rows = super::render_rows(&tasks, project_id, &names, true, tz)?;
+    let rows = super::render_rows(&tasks, project_id, &names, true, tz, &HashMap::new())?;
     render(ProjectTaskRowsFragmentTemplate {
         rows,
         empty_message: "No linked tasks yet.".to_string(),
@@ -866,8 +950,18 @@ pub async fn update_project_task_form(
             let siblings =
                 sibling_group(&repo, &project_id, updated.parent_item_id.as_deref()).await?;
             let siblings_ref: Vec<&Item> = siblings.iter().collect();
-            let row = ProjectTaskRow::from_item(&updated, &project_id, &names, &siblings_ref, tz)
-                .render()?;
+            let skip_url =
+                item_series_service::skip_url_for_item(&event_series, &updated, &project_id)
+                    .await?;
+            let row = ProjectTaskRow::from_item(
+                &updated,
+                &project_id,
+                &names,
+                &siblings_ref,
+                tz,
+                skip_url,
+            )
+            .render()?;
             let (assignee_options, is_team_admin) = match &project.team_id {
                 Some(team_id) => (
                     active_member_options(&teams, team_id, &auth_user.user_id).await?,

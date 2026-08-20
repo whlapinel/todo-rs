@@ -23,6 +23,12 @@
             {% include "icons/duplicate.html" %}
         </button>
         {% endif %}
+        {% if let Some(url) = skip_url %}
+        <button hx-post="{{ url }}" hx-confirm="Skip this occurrence?"
+            class="shrink-0 cursor-pointer text-xs text-gray-400 hover:text-red-500 dark:text-gray-500 dark:hover:text-red-400">
+            Skip
+        </button>
+        {% endif %}
         <button hx-delete="{{ item_url }}"
             hx-confirm="Delete {{ name }}{% if has_children %} and all its sub-items{% endif %}?"
             hx-target="#item-{{ id }}" hx-select="unset" hx-swap="outerHTML swap:200ms"

@@ -255,6 +255,10 @@ fn build_web_router() -> Router {
             put(update_project_task_series_occurrence_form),
         )
         .route(
+            "/projects/:project_id/series/:series_id/occurrences/:occurrence_ts/complete",
+            post(complete_project_item_series_occurrence_form),
+        )
+        .route(
             "/projects/:project_id/series/:series_id/occurrences/:occurrence_ts/task-children",
             post(create_project_task_series_occurrence_child_form),
         )

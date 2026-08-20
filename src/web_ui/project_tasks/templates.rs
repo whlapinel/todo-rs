@@ -37,12 +37,14 @@ pub fn format_points_input(points: Option<i32>) -> String {
 pub struct ProjectTaskRow;
 
 impl ProjectTaskRow {
+    #[allow(clippy::too_many_arguments)]
     pub fn from_item(
         item: &Item,
         project_id: &str,
         names: &HashMap<String, String>,
         siblings: &[&Item],
         tz: i32,
+        skip_url: Option<String>,
     ) -> Row {
         let offset_label = offset_label_for(item);
         let assignee_name = item
@@ -95,6 +97,7 @@ impl ProjectTaskRow {
                 "/web/projects/{project_id}/tasks/{}/reschedule",
                 item.id
             )),
+            skip_url,
             toggle_complete_json: (!item.complete).to_string(),
             siblings: siblings
                 .iter()
@@ -183,6 +186,7 @@ pub struct ProjectTaskVirtualRow {
     pub date_label: String,
     pub materialize_url: String,
     pub skip_url: String,
+    pub complete_url: String,
     pub is_current: bool,
     /// Stage B of `docs/unify-virtual-materialized-occurrences-plan.md` — `true` when this
     /// occurrence has been explicitly skipped (`OccurrenceState::Skipped`), in which case the
@@ -202,6 +206,7 @@ impl ProjectTaskVirtualRow {
             date_label: local.format("%Y-%m-%d %H:%M").to_string(),
             materialize_url: occ.materialize_url(project_id),
             skip_url: occ.skip_url(project_id),
+            complete_url: occ.complete_url(project_id),
             is_current: occ.is_current,
             is_skipped: occ.is_skipped(),
             unskip_url: occ.unskip_url(project_id),

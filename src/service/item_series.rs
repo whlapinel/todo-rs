@@ -978,6 +978,40 @@ impl ProjectOccurrence {
     pub fn unskip_url(&self, project_id: &str) -> String {
         format!("{}/unskip", self.materialize_url(project_id))
     }
+
+    /// Row-checkbox target for a still-virtual/skipped Task occurrence — materializes and
+    /// completes in one POST (`complete_project_item_series_occurrence_form`), the same
+    /// composition `update_project_task_series_occurrence_form` already uses for the detail
+    /// page's checkbox. Meaningless for an Event-typed series (no completion concept) — never
+    /// rendered there.
+    pub fn complete_url(&self, project_id: &str) -> String {
+        format!("{}/complete", self.materialize_url(project_id))
+    }
+}
+
+/// Skip-button URL for an already-materialized series occurrence's own item row — Tasks and
+/// Events list rows both need this, since `skip_or_delete_series_occurrence` already works
+/// identically whether `occurrence_date` is still virtual or already materialized (see its doc
+/// comment): it deletes the item first, then marks exdate. Uses the occurrence's true stored
+/// date via the `item_occurrences` reverse lookup rather than `item.due_date()`/
+/// `scheduled_date()`, which can drift from it after a plain edit of the materialized item —
+/// using a stale date here would silently target the wrong `(series_id, occurrence_date)` row.
+/// `None` for an item never materialized from a series.
+pub async fn skip_url_for_item(
+    event_series: &Arc<dyn ItemSeriesRepo>,
+    item: &Item,
+    project_id: &str,
+) -> Result<Option<String>, ItemError> {
+    let Some(series_id) = &item.series_id else {
+        return Ok(None);
+    };
+    let occurrence = event_series.find_occurrence_by_item_id(&item.id).await?;
+    Ok(occurrence.map(|o| {
+        format!(
+            "/web/projects/{project_id}/series/{series_id}/occurrences/{}/skip",
+            o.occurrence_date.timestamp(),
+        )
+    }))
 }
 
 pub async fn list_occurrence_states_for_project(

@@ -32,6 +32,12 @@ pub struct Row {
     pub complete_url: Option<String>,
     pub duplicate_url: Option<String>,
     pub reschedule_url: Option<String>,
+    /// `Some(...)` when this item was materialized from an `item_series` occurrence — see
+    /// `service::item_series::skip_url_for_item`. Lets a materialized row's own Skip action
+    /// reach the same unified Skip route a still-virtual occurrence's row already uses, so the
+    /// user never needs to know or care whether a series occurrence is materialized before
+    /// skipping it. `None` for any item that never came from a series.
+    pub skip_url: Option<String>,
     pub toggle_complete_json: String,
     /// (id, name) of every other item rendered alongside this one in the same list —
     /// i.e. this item's actual siblings, since `render_rows` is only ever called with a

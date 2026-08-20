@@ -31,6 +31,7 @@ impl ProjectSimpleItemRow {
             complete_url: None,
             duplicate_url: None,
             reschedule_url: None,
+            skip_url: None,
             toggle_complete_json: String::new(),
             siblings: siblings
                 .iter()

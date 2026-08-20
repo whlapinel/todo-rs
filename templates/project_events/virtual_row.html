@@ -1,11 +1,11 @@
 <li id="event-list-virtual-{{ series_id }}-{{ occurrence_ts }}" class="py-2">
   <div class="flex items-center gap-x-3">
     {% if is_skipped %}
-    <span class="min-w-0 flex-1 truncate italic line-through text-gray-400 dark:text-gray-500">{{ name }}</span>
+    <span class="min-w-0 flex-1 truncate line-through text-gray-400 dark:text-gray-500">{{ name }}</span>
     <span class="shrink-0 text-[10px] uppercase tracking-wide font-semibold text-gray-400 dark:text-gray-500">Skipped</span>
     {% else %}
     <a href="{{ materialize_url }}"
-      class="min-w-0 flex-1 truncate italic text-gray-500 dark:text-gray-400">{{ name }}</a>
+      class="min-w-0 flex-1 truncate text-gray-900 dark:text-white">{{ name }}</a>
     {% endif %}
   </div>
   <div class="mt-1 flex items-center gap-x-3 pl-0 text-xs text-gray-500 dark:text-gray-400">

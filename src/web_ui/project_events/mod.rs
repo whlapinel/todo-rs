@@ -11,6 +11,7 @@ use crate::web_ui::project_events::templates::{
 use askama::Template;
 use axum::response::Html;
 use chrono::{DateTime, Datelike, NaiveDate, Utc};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 pub(crate) fn render<T: Template>(t: T) -> Result<Html<String>, ItemError> {
@@ -262,10 +263,13 @@ pub(crate) fn render_rows(
     items: &[Item],
     project_id: &str,
     tz: i32,
+    skip_urls: &HashMap<String, String>,
 ) -> Result<Vec<String>, ItemError> {
     items
         .iter()
-        .map(|i| ProjectEventRow::from_item(i, project_id, tz).render())
+        .map(|i| {
+            ProjectEventRow::from_item(i, project_id, tz, skip_urls.get(&i.id).cloned()).render()
+        })
         .collect::<Result<Vec<_>, _>>()
         .map_err(ItemError::from)
 }
@@ -295,11 +299,12 @@ pub(crate) fn render_rows_with_virtual(
     virtual_occurrences: &[ProjectOccurrence],
     project_id: &str,
     tz: i32,
+    skip_urls: &HashMap<String, String>,
 ) -> Result<Vec<String>, ItemError> {
     let mut entries: Vec<(i64, String)> = items
         .iter()
         .map(|i| {
-            ProjectEventRow::from_item(i, project_id, tz)
+            ProjectEventRow::from_item(i, project_id, tz, skip_urls.get(&i.id).cloned())
                 .render()
                 .map(|html| (sort_key(i), html))
         })

@@ -17,7 +17,7 @@ use chrono::Utc;
 pub struct ProjectEventRow;
 
 impl ProjectEventRow {
-    pub fn from_item(item: &Item, project_id: &str, tz: i32) -> Row {
+    pub fn from_item(item: &Item, project_id: &str, tz: i32, skip_url: Option<String>) -> Row {
         Row {
             id: item.id.clone(),
             item_url: format!("/web/projects/{project_id}/events/{}", item.id),
@@ -54,6 +54,7 @@ impl ProjectEventRow {
                 "/web/projects/{project_id}/events/{}/reschedule",
                 item.id
             )),
+            skip_url,
             toggle_complete_json: String::new(),
             siblings: Vec::new(),
             is_source_event_linked: false,

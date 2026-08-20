@@ -19,6 +19,7 @@ use askama::Template;
 use axum::extract::{Extension, Form, Path, Query};
 use axum::response::{Html, IntoResponse, Response};
 use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveTime, Utc};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 fn active_context(project_id: &str) -> ActiveContext {
@@ -78,7 +79,21 @@ pub async fn project_events_page(
         )
     })
     .collect();
-    let rows = super::render_rows_with_virtual(&items, &virtual_occurrences, &project_id, tz)?;
+    let mut skip_urls: HashMap<String, String> = HashMap::new();
+    for item in &items {
+        if let Some(url) =
+            event_series_service::skip_url_for_item(&event_series, item, &project_id).await?
+        {
+            skip_urls.insert(item.id.clone(), url);
+        }
+    }
+    let rows = super::render_rows_with_virtual(
+        &items,
+        &virtual_occurrences,
+        &project_id,
+        tz,
+        &skip_urls,
+    )?;
     let nav_html = nav::build_nav_html(
         &projects,
         &auth_user.user_id,
@@ -593,7 +608,7 @@ pub async fn create_project_event_form(
         return Ok(redirect_to_project_events(&project_id));
     }
     let items = list_project_events(&repo, &project_id).await?;
-    let rows = super::render_rows(&items, &project_id, tz)?;
+    let rows = super::render_rows(&items, &project_id, tz, &HashMap::new())?;
     Ok(render(ProjectEventRowsFragmentTemplate {
         rows,
         empty_message: "No events yet.".to_string(),
@@ -661,7 +676,9 @@ pub async fn update_project_event_form(
         })?
         .into_response());
     }
-    let row = ProjectEventRow::from_item(&updated, &project_id, tz).render()?;
+    let skip_url =
+        event_series_service::skip_url_for_item(&event_series, &updated, &project_id).await?;
+    let row = ProjectEventRow::from_item(&updated, &project_id, tz, skip_url).render()?;
     let fields = ProjectEventDetailFields::from_item(&updated, &project_id, tz, true).render()?;
     let view = ProjectEventDetailView::from_item(&updated, tz, series_link).render()?;
     Ok(Html(format!("{row}{fields}{view}")).into_response())

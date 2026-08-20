@@ -329,6 +329,7 @@ pub(crate) fn render_rows(
     names: &HashMap<String, String>,
     show_complete: bool,
     tz: i32,
+    skip_urls: &HashMap<String, String>,
 ) -> Result<Vec<String>, ItemError> {
     let visible: Vec<&Item> = items
         .iter()
@@ -336,7 +337,10 @@ pub(crate) fn render_rows(
         .collect();
     visible
         .iter()
-        .map(|i| ProjectTaskRow::from_item(i, project_id, names, &visible, tz).render())
+        .map(|i| {
+            ProjectTaskRow::from_item(i, project_id, names, &visible, tz, skip_urls.get(&i.id).cloned())
+                .render()
+        })
         .collect::<Result<Vec<_>, _>>()
         .map_err(ItemError::from)
 }
@@ -348,6 +352,7 @@ pub(crate) fn render_rows(
 /// separate from `render_rows` rather than adding a parameter to it, since `render_rows` has
 /// three other call sites in this module (children/subordinate task lists) where virtual
 /// occurrences don't apply.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn render_rows_with_virtual(
     items: &[Item],
     virtual_occurrences: &[ProjectOccurrence],
@@ -355,6 +360,7 @@ pub(crate) fn render_rows_with_virtual(
     names: &HashMap<String, String>,
     show_complete: bool,
     tz: i32,
+    skip_urls: &HashMap<String, String>,
 ) -> Result<Vec<String>, ItemError> {
     let visible: Vec<&Item> = items
         .iter()
@@ -363,7 +369,7 @@ pub(crate) fn render_rows_with_virtual(
     let mut entries: Vec<(i64, String)> = visible
         .iter()
         .map(|i| {
-            ProjectTaskRow::from_item(i, project_id, names, &visible, tz)
+            ProjectTaskRow::from_item(i, project_id, names, &visible, tz, skip_urls.get(&i.id).cloned())
                 .render()
                 .map(|html| (sort_key(i), html))
         })
@@ -438,6 +444,7 @@ pub(crate) async fn render_scope_fragment(
         &names,
         parent_item_id.is_some() || show_complete,
         tz,
+        &HashMap::new(),
     )?;
     render(ProjectTaskRowsFragmentTemplate {
         rows,
