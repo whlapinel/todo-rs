@@ -2,6 +2,7 @@ pub mod assigned_items;
 pub mod components;
 pub mod error;
 pub mod login;
+pub mod main_dashboard;
 pub mod nav;
 pub mod project_activity;
 pub mod project_dashboard;

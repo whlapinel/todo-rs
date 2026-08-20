@@ -49,6 +49,7 @@ use tower_cookies::CookieManagerLayer;
 use tower_http::services::ServeDir;
 use web_ui::assigned_items::assigned_items_page;
 use web_ui::login::login_page;
+use web_ui::main_dashboard::*;
 use web_ui::project_activity::*;
 use web_ui::project_dashboard::*;
 use web_ui::project_events::handlers::*;
@@ -61,6 +62,12 @@ use web_ui::teams::*;
 
 fn build_web_router() -> Router {
     Router::new()
+        .route("/dashboard", get(main_dashboard_page))
+        .route("/dashboard/calendar", get(main_dashboard_calendar_page))
+        .route(
+            "/dashboard/projects/:project_id/items/:item_id",
+            put(toggle_main_dashboard_item_complete),
+        )
         .route("/projects", get(projects_page).post(create_project_form))
         .route(
             "/projects/:project_id/tasks",
@@ -418,7 +425,7 @@ async fn main() {
             let public_web_router = build_public_web_router();
 
             Router::new()
-                .route("/", get(|| async { Redirect::to("/web/projects") }))
+                .route("/", get(|| async { Redirect::to("/web/dashboard") }))
                 .nest("/api", api_router)
                 .nest("/auth", auth_router)
                 .nest("/web", web_router.merge(public_web_router))
@@ -485,7 +492,7 @@ async fn main() {
             let public_web_router = build_public_web_router();
 
             Router::new()
-                .route("/", get(|| async { Redirect::to("/web/projects") }))
+                .route("/", get(|| async { Redirect::to("/web/dashboard") }))
                 .nest("/auth", auth_router)
                 .nest("/api", api_router)
                 .nest("/web", web_router.merge(public_web_router))

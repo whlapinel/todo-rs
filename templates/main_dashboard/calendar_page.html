@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}Dashboard Calendar · Todo{% endblock %}
+{% block content %}
+<div class="space-y-4">
+  <div class="flex flex-wrap items-center justify-between gap-3 border-b border-gray-200 pb-4 dark:border-white/10">
+    <h1 class="text-base font-semibold text-gray-900 dark:text-white">
+      <time datetime="{{ month_iso }}">{{ month_label }}</time>
+    </h1>
+    <div class="flex items-center gap-x-3">
+      <div class="flex items-center rounded-md bg-white shadow-xs outline -outline-offset-1 outline-gray-300 dark:bg-white/10 dark:shadow-none dark:outline-white/5">
+        <a href="/web/dashboard/calendar?year={{ prev_year }}&month={{ prev_month }}"
+           class="flex h-9 w-9 items-center justify-center rounded-l-md text-gray-400 hover:bg-gray-50 hover:text-gray-500 dark:hover:bg-white/10 dark:hover:text-white">
+          <span class="sr-only">Previous month</span>
+          <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" class="size-5">
+            <path fill-rule="evenodd" clip-rule="evenodd" d="M11.78 5.22a.75.75 0 0 1 0 1.06L8.06 10l3.72 3.72a.75.75 0 1 1-1.06 1.06l-4.25-4.25a.75.75 0 0 1 0-1.06l4.25-4.25a.75.75 0 0 1 1.06 0Z" />
+          </svg>
+        </a>
+        <span class="h-5 w-px bg-gray-300 dark:bg-white/10"></span>
+        <a href="/web/dashboard/calendar?year={{ next_year }}&month={{ next_month }}"
+           class="flex h-9 w-9 items-center justify-center rounded-r-md text-gray-400 hover:bg-gray-50 hover:text-gray-500 dark:hover:bg-white/10 dark:hover:text-white">
+          <span class="sr-only">Next month</span>
+          <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" class="size-5">
+            <path fill-rule="evenodd" clip-rule="evenodd" d="M8.22 5.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 0 1-1.06-1.06L11.94 10 8.22 6.28a.75.75 0 0 1 0-1.06Z" />
+          </svg>
+        </a>
+      </div>
+      <a href="/web/dashboard" hx-target="#page" hx-select="#page" hx-swap="innerHTML"
+         class="inline-flex items-center justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-xs inset-ring inset-ring-gray-300 hover:bg-gray-50 dark:bg-white/10 dark:text-white dark:shadow-none dark:inset-ring-white/5 dark:hover:bg-white/20">List view</a>
+    </div>
+  </div>
+
+  <div class="flex items-center gap-x-4 text-xs text-gray-500 dark:text-gray-400">
+    <span class="flex items-center gap-x-1"><span class="inline-flex size-4 items-center justify-center rounded-full bg-gray-200 text-[10px] font-semibold text-gray-600 dark:bg-white/10 dark:text-gray-300">T</span> Task</span>
+    <span class="flex items-center gap-x-1"><span class="inline-flex size-4 items-center justify-center rounded-full bg-gray-200 text-[10px] font-semibold text-gray-600 dark:bg-white/10 dark:text-gray-300">E</span> Event</span>
+  </div>
+
+  <div class="overflow-hidden shadow-sm ring-1 ring-black/5 dark:shadow-none dark:ring-white/5">
+    <div class="grid grid-cols-7 gap-px border-b border-gray-300 bg-gray-200 text-center text-xs/6 font-semibold text-gray-700 dark:border-white/5 dark:bg-white/15 dark:text-gray-300">
+      <div class="bg-white py-2 dark:bg-gray-900">Mon</div>
+      <div class="bg-white py-2 dark:bg-gray-900">Tue</div>
+      <div class="bg-white py-2 dark:bg-gray-900">Wed</div>
+      <div class="bg-white py-2 dark:bg-gray-900">Thu</div>
+      <div class="bg-white py-2 dark:bg-gray-900">Fri</div>
+      <div class="bg-white py-2 dark:bg-gray-900">Sat</div>
+      <div class="bg-white py-2 dark:bg-gray-900">Sun</div>
+    </div>
+    <div class="grid grid-cols-7 grid-rows-6 gap-px bg-gray-200 text-xs/6 text-gray-700 dark:bg-white/10 dark:text-gray-300">
+      {% for day in days %}
+      <div class="relative min-h-24 {% if day.is_current_month %}bg-white dark:bg-gray-900{% else %}bg-gray-50 dark:bg-gray-800/50{% endif %} px-2 py-2">
+        <time datetime="{{ day.date }}"
+              class="relative {% if !day.is_current_month %}opacity-50{% endif %} {% if day.is_today %}flex size-6 items-center justify-center rounded-full bg-indigo-600 font-semibold text-white dark:bg-indigo-500{% endif %}">{{ day.day_number }}</time>
+        {% if !day.entries.is_empty() %}
+        <ol class="mt-1 space-y-1">
+          {% for entry in day.entries %}
+          <li id="{{ entry.entry_id }}" class="flex items-center gap-x-0.5">
+            {% if entry.is_skipped %}
+            <span class="group flex min-w-0 flex-1 items-center gap-x-1 opacity-70">
+              <span class="shrink-0 inline-flex size-3.5 items-center justify-center rounded-full bg-gray-200 text-[9px] font-semibold text-gray-600 dark:bg-white/10 dark:text-gray-300">{{ entry.type_symbol }}</span>
+              <p class="flex-auto truncate font-medium italic line-through text-gray-400 dark:text-gray-500">{{ entry.name }}</p>
+              <span class="ml-1 hidden shrink-0 text-gray-400 xl:inline dark:text-gray-500">{{ entry.project_name }}</span>
+              {% if let Some(t) = entry.time_label %}<span class="ml-2 hidden flex-none text-gray-500 xl:block dark:text-gray-400">{{ t }}</span>{% endif %}
+              <span class="shrink-0 text-[9px] uppercase tracking-wide font-semibold text-gray-400 dark:text-gray-500">Skipped</span>
+            </span>
+            {% if let Some(uu) = entry.unskip_url %}
+            <button type="button" hx-post="{{ uu }}"
+              class="shrink-0 text-gray-400 hover:text-indigo-500 dark:text-gray-500 dark:hover:text-indigo-400"
+              title="Unskip occurrence">&#8635;</button>
+            {% endif %}
+            {% else %}
+            <a href="{% if let Some(url) = entry.materialize_url %}{{ url }}{% else %}{{ entry.detail_link }}{% endif %}"
+               class="group flex min-w-0 flex-1 items-center gap-x-1 {% if entry.is_virtual %}opacity-70{% else if entry.complete %}opacity-50{% endif %}">
+              <span class="shrink-0 inline-flex size-3.5 items-center justify-center rounded-full bg-gray-200 text-[9px] font-semibold text-gray-600 dark:bg-white/10 dark:text-gray-300 {% if entry.is_current %}ring-2 ring-indigo-500 dark:ring-indigo-400{% endif %}"
+                title="{% if entry.is_current %}Current occurrence{% endif %}">{{ entry.type_symbol }}</span>
+              <p class="flex-auto truncate font-medium {% if entry.complete %}line-through{% endif %} {% if entry.is_virtual %}italic text-gray-500 dark:text-gray-400{% else %}text-gray-900 group-hover:text-indigo-600 dark:text-white dark:group-hover:text-indigo-400{% endif %}">{{ entry.name }}</p>
+              <span class="ml-1 hidden shrink-0 text-gray-400 xl:inline dark:text-gray-500">{{ entry.project_name }}</span>
+              {% if let Some(t) = entry.time_label %}<span class="ml-2 hidden flex-none text-gray-500 group-hover:text-indigo-600 xl:block dark:text-gray-400 dark:group-hover:text-indigo-400 {% if entry.complete %}line-through{% endif %}">{{ t }}</span>{% endif %}
+            </a>
+            {% if let Some(su) = entry.skip_url %}
+            <button type="button" hx-post="{{ su }}" hx-confirm="Skip this occurrence?"
+              class="shrink-0 text-gray-400 hover:text-red-500 dark:text-gray-500 dark:hover:text-red-400"
+              title="Skip occurrence">&times;</button>
+            {% endif %}
+            {% endif %}
+          </li>
+          {% endfor %}
+        </ol>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+{% endblock %}
