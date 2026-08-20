@@ -110,7 +110,7 @@ impl ProjectTaskRow {
 }
 
 /// A lightweight date/schedule-only editor, opened from a task row's calendar-icon button —
-/// see `docs/features.md`'s "quick reschedule" entry. Deliberately reuses the same PUT
+/// see `docs/archived/archived_issues_and_features.md`'s "quick reschedule" entry. Deliberately reuses the same PUT
 /// `/web/projects/:project_id/tasks/:item_id` endpoint (`handlers::update_project_task_form`)
 /// the full edit form already saves to, rather than introducing a second save path: the field
 /// names below (`dueDate`/`dueTime`/`scheduledDate`/... via `macros::due_date_fields`/
@@ -340,7 +340,7 @@ pub struct ProjectTaskDetailView {
     pub linked_event: Option<(String, String)>,
     /// Stage B of `docs/unify-virtual-materialized-occurrences-plan.md` — `Some((series_name,
     /// edit_url))` when this item was materialized from a series (`item.series_id.is_some()`),
-    /// closing `docs/issues.md`'s ranked item 2(a) ("no link from a materialized item's detail
+    /// closing `docs/archived/archived_issues_and_features.md`'s ranked item 2(a) ("no link from a materialized item's detail
     /// page back to its series"). `None` for every item never materialized from a series — the
     /// overwhelmingly common case.
     pub series_link: Option<(String, String)>,

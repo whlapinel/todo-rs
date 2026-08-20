@@ -89,7 +89,7 @@ struct ProjectActivityPageTemplate {
 /// underlying data query has been `project_id`-keyed since stage B2 already (see
 /// `list_activity_for_project`'s own doc comment), so this stage was originally a new
 /// URL/screen on top of already-correct data, not a data-layer change. A personal
-/// project's completions are logged too now (see docs/issues.md's "unify
+/// project's completions are logged too now (see docs/archived/archived_issues_and_features.md's "unify
 /// completion-undo" note and `service::items::update_item`), so this is no longer the
 /// "always empty for personal projects" case it started as — `list_activity_for_project`
 /// naturally returns nothing only for a project with no completions logged yet at
@@ -145,7 +145,7 @@ pub async fn undo_project_activity_log_entry_form(
     Extension(event_series): Extension<Arc<dyn ItemSeriesRepo>>,
     TzOffset(tz): TzOffset,
 ) -> Result<Html<String>, ItemError> {
-    // Project-scoped (see docs/issues.md's "unify completion-undo" note) — works for
+    // Project-scoped (see docs/archived/archived_issues_and_features.md's "unify completion-undo" note) — works for
     // a personal project too now, not just a team-backed one, since it's gated by
     // project membership rather than resolving a backing team.
     activity_log_service::undo_project_activity_log_entry(

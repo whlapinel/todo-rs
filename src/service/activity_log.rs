@@ -48,7 +48,7 @@ async fn resolve_reversal_project_id(
 /// personal items), and `reverse_and_reopen` below (the manual-Undo path) — see
 /// CLAUDE.md's Points plan, Stage 6, stage C1 of docs/project-abstraction-plan.md
 /// (points authority moved from `team_members` to `project_members`), and
-/// docs/issues.md's "unify completion-undo" note. `mark_reversed` is attempted
+/// docs/archived/archived_issues_and_features.md's "unify completion-undo" note. `mark_reversed` is attempted
 /// *first*, since its `WHERE reversed = 0` guard is the only atomic "claim" either
 /// path has; only the caller that wins that race goes on to touch the point balance,
 /// so two concurrent reversals of the same entry can never double-deduct. A no-op
@@ -75,7 +75,7 @@ pub(crate) async fn reverse_entry(
 /// `team_items::update_team_item`'s own `just_uncompleted` branch, series-cursor
 /// restore via `item_series::record_task_uncompletion`, the completion-guard rules)
 /// applies identically regardless of whether "uncomplete" was triggered by the
-/// checkbox or by the activity feed's Undo button — see docs/issues.md's "unify
+/// checkbox or by the activity feed's Undo button — see docs/archived/archived_issues_and_features.md's "unify
 /// completion-undo" note, the reason this function exists at all. Every other field
 /// is round-tripped from the item's own current state, per this app's usual
 /// direct-overwrite convention (see CLAUDE.md's Recurrence/Scheduled sections).
@@ -137,7 +137,7 @@ async fn reopen_item_if_still_complete(
 /// `undo_project_activity_log_entry` (project-scoped) below — ownership/reversed
 /// checks, then reverse the entry's points and reopen its item if one still exists.
 /// The two public wrappers differ only in which scoping key they check membership
-/// and entry ownership against (team vs project) — see docs/issues.md's "unify
+/// and entry ownership against (team vs project) — see docs/archived/archived_issues_and_features.md's "unify
 /// completion-undo" note for why this isn't duplicated between them.
 async fn reverse_and_reopen(
     repo: &Arc<dyn ItemRepo>,
@@ -235,7 +235,7 @@ pub async fn undo_activity_log_entry(
 /// Project-scoped sibling of `undo_activity_log_entry` above, for the web UI's
 /// project activity feed (`src/web_ui/project_activity.rs`) — works for any project,
 /// personal or team-backed, since it's gated by project membership
-/// (`require_project_member`) rather than team membership. See docs/issues.md's
+/// (`require_project_member`) rather than team membership. See docs/archived/archived_issues_and_features.md's
 /// "unify completion-undo" note.
 pub async fn undo_project_activity_log_entry(
     repo: &Arc<dyn ItemRepo>,

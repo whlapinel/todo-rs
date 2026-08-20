@@ -101,7 +101,7 @@ async fn names_for(
         .collect())
 }
 
-/// Cross-project scoping rule (see docs/features.md's "Main dashboard" note): Events are
+/// Cross-project scoping rule (see docs/archived/archived_issues_and_features.md's "Main dashboard" note): Events are
 /// never assignment-gated (no personal/team distinction that matters for them, and no
 /// `assignedToUserId` concept prevents a personal-project Event from having one anyway); a
 /// Task is unrestricted on a personal project (single member, so "assigned to me" is moot)

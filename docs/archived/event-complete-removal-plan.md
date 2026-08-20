@@ -4,7 +4,7 @@ Status: **superseded, implemented in reduced form 2026-08-15**. Written 2026-08-
 
 Item-level recurrence (including for Events) was fully retired in Stage 10 of `docs/recurring-events-virtual-occurrences-rough-plan.md` (`8797ac9`), before this plan's sections 2/3/5 (`advance_if_stale`, the read-time advance wrapper, and the CLI/MCP client-side guard) were ever built. Recurring Events now live on `item_series`, advanced by materialization independent of any `complete` field — so the "complication" this doc was written to solve no longer exists, and sections 2/3/5 were never implemented and never will be.
 
-**Section 4 (UI removal) was implemented as originally scoped**, once the blocker cleared — see `docs/archived-features.md` for the shipped write-up: `Item::validate()` rejects `complete: true` for `ItemKind::Event`, and every checkbox/Done-label/"Show completed" filter was stripped from `templates/project_events/*.html`, `src/web_ui/project_events/*.rs`, and `src/web_ui/project_dashboard.rs`'s Event rows, exactly matching this doc's section 4 file list.
+**Section 4 (UI removal) was implemented as originally scoped**, once the blocker cleared — see `docs/archived/archived_issues_and_features.md` for the shipped write-up: `Item::validate()` rejects `complete: true` for `ItemKind::Event`, and every checkbox/Done-label/"Show completed" filter was stripped from `templates/project_events/*.html`, `src/web_ui/project_events/*.rs`, and `src/web_ui/project_dashboard.rs`'s Event rows, exactly matching this doc's section 4 file list.
 
 ## Context
 

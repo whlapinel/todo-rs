@@ -424,7 +424,7 @@ impl Item {
         // above). Item-level recurrence (the mechanism that used to require completion
         // to advance a recurring Event's date) was retired in Stage 10; recurring
         // Events now live on item_series, advanced by materialization, independent of
-        // this field. See docs/archived-features.md for the removal.
+        // this field. See docs/archived/archived_issues_and_features.md for the removal.
         if self.complete && self.kind() == ItemKind::Event {
             return Err("events cannot be marked complete".to_string());
         }

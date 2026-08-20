@@ -4,7 +4,7 @@ use sqlx::{Row, SqliteConnection};
 
 /// Relaxes `activity_log.team_id` from `NOT NULL` to nullable, so a personal (non-team)
 /// project's item completions can be logged too — see CLAUDE.md's Points section and
-/// docs/issues.md's "unify completion-undo" note. SQLite has no
+/// docs/archived/archived_issues_and_features.md's "unify completion-undo" note. SQLite has no
 /// `ALTER TABLE ... ALTER COLUMN` to drop a constraint, so this uses the standard
 /// rebuild-and-copy shape: a fresh `activity_log_new` with the relaxed schema, copy
 /// every row across, drop the old table, rename the new one into place, then recreate

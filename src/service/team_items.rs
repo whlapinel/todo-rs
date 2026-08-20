@@ -190,7 +190,7 @@ pub async fn create_team_item(
         // the one viewing/completing the occurrence — often the assignee, not the
         // admin who authorized the points) would silently zero out already-valid
         // points on every materialization triggered by a non-admin. See
-        // docs/issues.md's virtual-occurrence-completion-doesn't-award-points bug.
+        // docs/archived/archived_issues_and_features.md's virtual-occurrence-completion-doesn't-award-points bug.
         let points = if params.series_id.is_some() {
             params.points
         } else if params.points.is_some()
@@ -514,7 +514,7 @@ pub async fn update_team_item(
     // anything (see CLAUDE.md's Points plan, Stage 6, and its cross-stage risk #2).
     //
     // Every top-level team item completion is logged now, not just points-bearing
-    // ones (see docs/issues.md's "unify completion-undo" note) — logging and
+    // ones (see docs/archived/archived_issues_and_features.md's "unify completion-undo" note) — logging and
     // point-awarding are two separate steps, so a 0-point completion still creates an
     // entry the activity feed's Undo button can act on, it just never touches the
     // project's point balance.
@@ -645,7 +645,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_team_item_honors_series_carried_points_for_non_admin() {
-        // Regression test for docs/issues.md's "virtual occurrence completion doesn't
+        // Regression test for docs/archived/archived_issues_and_features.md's "virtual occurrence completion doesn't
         // award points" bug: get_or_materialize_occurrence carries series.points
         // forward as params.points with series_id set, having already had that value
         // vetted by resolve_series_assignment at series create/update time. The
@@ -887,7 +887,7 @@ mod tests {
         let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
         let projects: Arc<dyn ProjectRepo> =
             Arc::new(project_with_role("p1", "t1", TeamRole::Member));
-        // A points-less completion still logs (see docs/issues.md's "unify
+        // A points-less completion still logs (see docs/archived/archived_issues_and_features.md's "unify
         // completion-undo" note) — just never awards anything.
         let mut activity_log = MockActivityLogRepo::new();
         activity_log
@@ -1164,7 +1164,7 @@ mod tests {
         let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
         let mut projects_mock = project_with_role("p1", "t1", TeamRole::Member);
         // Never called — a 0-point completion still logs, but there is nothing to
-        // award (see docs/issues.md's "unify completion-undo" note).
+        // award (see docs/archived/archived_issues_and_features.md's "unify completion-undo" note).
         projects_mock.expect_add_project_points().times(0);
 
         update_team_item(

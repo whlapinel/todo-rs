@@ -4,7 +4,7 @@ Status: **Stages A, B, C, and D implemented (2026-08-19). Complete.**
 
 ## Context
 
-This is `docs/features.md`'s last open item (labeled "Major change" there) and `docs/issues.md`'s ranked item 2, treated as one piece of work rather than two, since they're the same request from two angles:
+This is `docs/archived/archived_issues_and_features.md`'s last open item (labeled "Major change" there) and `docs/archived/archived_issues_and_features.md`'s ranked item 2, treated as one piece of work rather than two, since they're the same request from two angles:
 
 > "I want virtual occurrences to look the same as materialized occurrences, except that I want to carry over the UI from virtual rows (e.g. display current if current, and skip action is available). This implies that skipping should be available for materialized occurrences, which means we need to essentially delete the occurrence and skip it in a single pass for that path. Additionally and more broadly, I want to materialize only when necessary, i.e. when marked complete, or when the occurrence is actually modified in some other way. So we need to have a way of viewing details for a virtual occurrence that looks the same as materialized occurrences - just use the series id and occurrence date instead of the item id for the URL. I want the distinction between virtual and materialized to be fully hidden from the user."
 

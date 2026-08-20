@@ -207,7 +207,7 @@ pub struct UpdateItemParams {
 /// `params.user_id`, so a mismatched (non-owned) `item_id` surfaces as `ItemError::NotFound`
 /// rather than silently operating on someone else's item.
 ///
-/// `activity_log` (see docs/issues.md's "unify completion-undo" note) mirrors
+/// `activity_log` (see docs/archived/archived_issues_and_features.md's "unify completion-undo" note) mirrors
 /// `team_items::update_team_item`'s own completion logging, minus the points/assignee
 /// concepts a personal item doesn't have: a top-level completion still gets logged (0
 /// points, `team_id: None`), so the project activity feed's Undo button works on a

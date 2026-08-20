@@ -895,7 +895,7 @@ mod tests {
 
         let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
         let mut activity_log_mock = MockActivityLogRepo::new();
-        // A personal item's completion now logs too (see docs/issues.md's "unify
+        // A personal item's completion now logs too (see docs/archived/archived_issues_and_features.md's "unify
         // completion-undo" note) — 0 points, no team.
         activity_log_mock
             .expect_log_activity()
