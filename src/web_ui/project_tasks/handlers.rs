@@ -1072,6 +1072,16 @@ pub async fn update_project_task_form(
             let siblings_ref: Vec<&Item> = siblings.iter().collect();
             let skip_url =
                 item_series_service::skip_url_for_item(&series, &updated, &project_id).await?;
+            // Confirmation/auto-dismiss only apply to the completing transition (not
+            // un-completing, and not a plain field edit that leaves `complete` unchanged) —
+            // see Row's doc comments. `show_complete` here is whatever the checkbox's own
+            // `hx-vals` last sent (baked in when this row was originally rendered by a list
+            // load, per row.html) — the only way the server can know what the requester's
+            // current "Show completed" toggle is set to.
+            let show_complete = form.show_complete.is_some();
+            let just_completed = !current.complete && updated.complete;
+            let confirmation = just_completed.then(|| "Completed".to_string());
+            let dismiss_after_ms = (just_completed && !show_complete).then_some(1800u32);
             let row = ProjectTaskRow::from_item(
                 &updated,
                 &project_id,
@@ -1080,6 +1090,9 @@ pub async fn update_project_task_form(
                 tz,
                 skip_url,
                 project.team_id.is_some(),
+                show_complete,
+                confirmation,
+                dismiss_after_ms,
             )
             .render()?;
             let (assignee_options, is_team_admin) = match &project.team_id {

@@ -346,6 +346,9 @@ pub(crate) fn render_rows(
                 tz,
                 skip_urls.get(&i.id).cloned(),
                 team_id.is_some(),
+                show_complete,
+                None,
+                None,
             )
             .render()
         })
@@ -386,6 +389,9 @@ pub(crate) fn render_rows_with_virtual(
                 tz,
                 skip_urls.get(&i.id).cloned(),
                 team_id.is_some(),
+                show_complete,
+                None,
+                None,
             )
             .render()
             .map(|html| (sort_key(i), html))

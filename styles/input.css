@@ -15,6 +15,21 @@
   animation: toast-fade 2.5s ease-in forwards;
 }
 
+/* Rows/fragments the server marks with data-dismiss-after="<ms>" (see components/row.html,
+   base.html's htmx:afterSwap listener) fade out just before their own JS-driven removal from
+   the DOM -- e.g. a freshly-completed task row when "Show completed" is off, giving the user
+   a moment to see the success state (checkbox checked, strikethrough, the .toast-fade
+   confirmation badge) before it leaves the list, instead of vanishing the instant the
+   request completes. Reusable by any row/fragment for any successful action, not just
+   completion -- a handler just needs to set the attribute. */
+[data-dismiss-after] {
+  transition: opacity 300ms ease-in;
+}
+
+[data-dismiss-after].dismiss-fade-out {
+  opacity: 0;
+}
+
 /* Desktop sidebar collapse (base.html's toggleSidebar()/nav.html's #sidebar-desktop).
    #page is untouched by any of this — the sidebar is a fixed-position overlay that
    slides via `transform` (a compositor-only property, no layout recalculation) rather

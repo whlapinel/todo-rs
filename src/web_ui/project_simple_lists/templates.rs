@@ -40,6 +40,9 @@ impl ProjectSimpleItemRow {
                 .map(|s| (s.id.clone(), s.name.clone()))
                 .collect(),
             is_source_event_linked: false,
+            show_complete: false,
+            confirmation: None,
+            dismiss_after_ms: None,
         }
     }
 }

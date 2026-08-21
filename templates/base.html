@@ -106,6 +106,27 @@
       if (dialog && !dialog.open) dialog.showModal();
     });
 
+    // Rows/fragments the server marks with data-dismiss-after="<ms>" (styles/input.css,
+    // components/row.html) fade out and remove themselves that many ms after being swapped
+    // in — e.g. a freshly-completed task row when "Show completed" is off, giving the user a
+    // moment to see the success state before it leaves the list rather than vanishing the
+    // instant the request completes. Scans the whole document rather than just the swap
+    // target, since outerHTML swaps (the checkbox's own hx-swap) replace the target element
+    // entirely and htmx:afterSwap's detail.target identity around that isn't reliable to
+    // depend on; the dismissScheduled guard keeps this idempotent across the repeated scans.
+    // Reusable by any row/fragment for any successful action, not just completion — a
+    // handler just needs to set the attribute.
+    document.body.addEventListener('htmx:afterSwap', function () {
+      document.querySelectorAll('[data-dismiss-after]:not([data-dismiss-scheduled])').forEach(function (el) {
+        el.setAttribute('data-dismiss-scheduled', '1');
+        var delay = parseInt(el.getAttribute('data-dismiss-after'), 10) || 0;
+        window.setTimeout(function () {
+          el.classList.add('dismiss-fade-out');
+          window.setTimeout(function () { el.remove(); }, 300);
+        }, delay);
+      });
+    });
+
     // Mirrors #sidebar-mobile's backdrop-click-to-close: clicking anywhere outside the
     // expanded desktop sidebar (and outside its own toggle button, so that click doesn't
     // immediately re-open what toggleSidebar() just closed) collapses it too.

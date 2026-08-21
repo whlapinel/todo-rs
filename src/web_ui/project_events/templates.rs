@@ -59,6 +59,9 @@ impl ProjectEventRow {
             toggle_complete_json: String::new(),
             siblings: Vec::new(),
             is_source_event_linked: false,
+            show_complete: false,
+            confirmation: None,
+            dismiss_after_ms: None,
         }
     }
 }

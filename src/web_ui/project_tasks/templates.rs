@@ -46,6 +46,9 @@ impl ProjectTaskRow {
         tz: i32,
         skip_url: Option<String>,
         is_team_project: bool,
+        show_complete: bool,
+        confirmation: Option<String>,
+        dismiss_after_ms: Option<u32>,
     ) -> Row {
         let offset_label = offset_label_for(item);
         let assignee_name = item
@@ -108,6 +111,9 @@ impl ProjectTaskRow {
                 .map(|s| (s.id.clone(), s.name.clone()))
                 .collect(),
             is_source_event_linked: item.source_event_id().is_some(),
+            show_complete,
+            confirmation,
+            dismiss_after_ms,
         }
     }
 }

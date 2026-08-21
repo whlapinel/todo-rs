@@ -52,4 +52,21 @@ pub struct Row {
     /// "subordinate under…" picker even when siblings exist, since giving it a
     /// `parentItemId` too would conflict with the reference (see `Item::validate`).
     pub is_source_event_linked: bool,
+    /// Whether the screen this row belongs to is currently showing completed items — baked
+    /// into the checkbox's own `hx-vals` (as `showComplete`) so a completion PUT round-trips
+    /// the value back to the handler that decides `dismiss_after_ms` below, the same way
+    /// `toggle_complete_json` round-trips the next click's target state. Irrelevant (and
+    /// harmless as `false`) for a row with no `complete_url`.
+    pub show_complete: bool,
+    /// Set on the single freshly-rendered row returned by a successful action's response
+    /// (e.g. "Completed") to show a brief, non-blocking `.toast-fade` badge — the reusable
+    /// counterpart to `ProjectTaskDetailFields`' `just_saved` for row-level actions, not
+    /// completion-specific. `None` on every other render (list loads, unrelated updates).
+    pub confirmation: Option<String>,
+    /// Set (in ms) on that same one-shot response when this row should remove itself from
+    /// the list shortly after — e.g. a just-completed task on a list currently hiding
+    /// completed items — rather than vanishing the instant the request completes. Consumed
+    /// by the generic `data-dismiss-after` handling in `base.html`/`styles/input.css`; not
+    /// completion-specific, any action's row response can set it. `None` means "stay put."
+    pub dismiss_after_ms: Option<u32>,
 }

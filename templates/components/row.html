@@ -1,8 +1,9 @@
-<li id="item-{{ id }}" class="py-2">
+<li id="item-{{ id }}" class="py-2"{% if let Some(ms) = dismiss_after_ms %} data-dismiss-after="{{ ms }}"{% endif %}>
     <div class="flex items-center gap-x-3">
         {% if let Some(url) = complete_url %}
         <input type="checkbox" {% if complete %}checked{% endif %} hx-put="{{ url }}"
-            hx-vals='{"complete": "{{ toggle_complete_json }}"}' hx-target="#item-{{ id }}" hx-select="#item-{{ id }}"
+            hx-vals='{"complete": "{{ toggle_complete_json }}"{% if show_complete %}, "showComplete": "1"{% endif %}}'
+            hx-target="#item-{{ id }}" hx-select="#item-{{ id }}"
             hx-swap="outerHTML"
             class="shrink-0 size-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-600 dark:border-white/20 dark:bg-white/5" />
         {% endif %}
@@ -10,6 +11,10 @@
             class="min-w-0 flex-1 truncate {% if complete %}line-through text-gray-400 dark:text-gray-500{% else %}text-gray-900 dark:text-white{% endif %}">
             {% if has_children %}<span class="text-gray-400 dark:text-gray-500">&#9656;</span>{% endif %} {{ name }}
         </a>
+        {% if let Some(msg) = confirmation %}
+        <span class="toast-fade shrink-0 text-xs font-medium text-green-600 dark:text-green-400">&#10003; {{ msg
+            }}</span>
+        {% endif %}
         {% if let Some(url) = reschedule_url %}
         <button hx-get="{{ url }}" hx-target="#action-dialog" hx-select="unset" hx-swap="innerHTML"
             class="shrink-0 cursor-pointer text-red-600 hover:text-red-500 dark:text-red-400 dark:hover:text-red-300">

@@ -1,6 +1,5 @@
 # Issues & features
 
-- Let's give more (any) visual confirmation of task completion — show a nice confirmation dialog, and after crossing a task out, delay its removal from the list (unless "show complete" is already enabled). This can be a quick timeout since it's only for successful actions.
 - Let's shrink the calendar view by at least 50% so that the list has plenty of room. Also, if it's fairly straighforward: On small screens i.e. mobile portrait width, they probably need to stay vertically arranged but on desktop/(ipad landscape?) let's put the month beside the list.
 - Add metadata fields to `Item`: `created_at`, `created_by`, `deleted_at`, `deleted_by` (tag for deletion instead of deleting outright, allowing recovery), with a TTL after which the item is actually deleted. Depends on the soft-delete design question mentioned elsewhere.
 Open issues and feature requests, merged from the former `docs/issues.md` and `docs/features.md` (2026-08-20) into a single unsorted list. Completed or superseded items — including ones from the old files that were already resolved but hadn't been moved out yet — live in `docs/archived/archived_issues_and_features.md`.
