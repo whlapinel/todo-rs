@@ -2,7 +2,6 @@
 
 Open issues and feature requests, merged from the former `docs/issues.md` and `docs/features.md` (2026-08-20) into a single unsorted list. Completed or superseded items — including ones from the old files that were already resolved but hadn't been moved out yet — live in `docs/archived/archived_issues_and_features.md`.
 
-- Should link to series from series virtual occurrence details page the same way we link from a materialized occurrence (item) details page.
 - Allow Delete any item from its details page - event, series, task, simple list (currently only available from the row-level UI, not the detail page itself).
 - Put link to parent in child task detail view
 - Allow a project admin to complete tasks not assigned to them.

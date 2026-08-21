@@ -309,6 +309,9 @@ pub struct ProjectEventSeriesOccurrenceView {
     pub event_type: Option<String>,
     pub skip_url: String,
     pub unskip_url: String,
+    /// See `project_tasks::templates::ProjectTaskSeriesOccurrenceView::series_link`'s doc
+    /// comment — identical rationale, Events counterpart.
+    pub series_link: (String, String),
 }
 
 impl ProjectEventSeriesOccurrenceView {
@@ -341,6 +344,10 @@ impl ProjectEventSeriesOccurrenceView {
             unskip_url: format!(
                 "/web/projects/{project_id}/series/{}/occurrences/{occurrence_ts}/unskip",
                 series.id,
+            ),
+            series_link: (
+                series.name.clone(),
+                format!("/web/projects/{project_id}/series/{}/edit", series.id),
             ),
         }
     }
@@ -571,5 +578,44 @@ mod tests {
         let result = resolve_series_link(&series, "p1", &item).await;
 
         assert_eq!(result.unwrap(), None);
+    }
+
+    fn series_fixture() -> crate::domain::item_series::ItemSeries {
+        crate::domain::item_series::ItemSeries {
+            id: "s1".to_string(),
+            project_id: "p1".to_string(),
+            name: "Standup".to_string(),
+            description: None,
+            event_type: None,
+            recurrence: "every 7 days".to_string(),
+            anchor_date: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+            item_type: crate::domain::item::ItemKind::Event,
+            cursor_date: None,
+            basis: None,
+            template_item_id: None,
+            assigned_to_user_id: None,
+            points: None,
+        }
+    }
+
+    #[test]
+    fn from_series_links_to_the_series_edit_page() {
+        let series = series_fixture();
+
+        let view = ProjectEventSeriesOccurrenceView::from_series(
+            &series,
+            series.anchor_date,
+            "p1",
+            false,
+            0,
+        );
+
+        assert_eq!(
+            view.series_link,
+            (
+                "Standup".to_string(),
+                "/web/projects/p1/series/s1/edit".to_string()
+            )
+        );
     }
 }
