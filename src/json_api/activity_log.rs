@@ -52,7 +52,7 @@ pub async fn undo_activity_log_entry(
     server::Extension(teams): server::Extension<Arc<dyn TeamRepo>>,
     server::Extension(projects): server::Extension<Arc<dyn ProjectRepo>>,
     server::Extension(activity_log): server::Extension<Arc<dyn ActivityLogRepo>>,
-    server::Extension(event_series): server::Extension<Arc<dyn ItemSeriesRepo>>,
+    server::Extension(series): server::Extension<Arc<dyn ItemSeriesRepo>>,
     server::Extension(auth): server::Extension<AuthUser>,
 ) -> Result<output::UndoActivityLogEntryOutput, error::UndoActivityLogEntryError> {
     // No `timezoneOffsetMinutes` field on this legacy Smithy operation (see
@@ -66,7 +66,7 @@ pub async fn undo_activity_log_entry(
         &teams,
         &projects,
         &activity_log,
-        &event_series,
+        &series,
         &input.team_id,
         &input.entry_id,
         &auth.user_id,

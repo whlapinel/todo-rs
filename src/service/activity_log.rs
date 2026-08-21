@@ -89,7 +89,7 @@ async fn reopen_item_if_still_complete(
     projects: &Arc<dyn ProjectRepo>,
     teams: &Arc<dyn TeamRepo>,
     activity_log: &Arc<dyn ActivityLogRepo>,
-    event_series: &Arc<dyn ItemSeriesRepo>,
+    series: &Arc<dyn ItemSeriesRepo>,
     project_id: &str,
     item_id: &str,
     requester_user_id: &str,
@@ -106,7 +106,7 @@ async fn reopen_item_if_still_complete(
         projects,
         teams,
         activity_log,
-        event_series,
+        series,
         requester_user_id,
         UpdateProjectItemParams {
             project_id: project_id.to_string(),
@@ -144,7 +144,7 @@ async fn reverse_and_reopen(
     projects: &Arc<dyn ProjectRepo>,
     teams: &Arc<dyn TeamRepo>,
     activity_log: &Arc<dyn ActivityLogRepo>,
-    event_series: &Arc<dyn ItemSeriesRepo>,
+    series: &Arc<dyn ItemSeriesRepo>,
     entry: &ActivityLogEntry,
     requester_user_id: &str,
     tz_offset_minutes: i32,
@@ -174,7 +174,7 @@ async fn reverse_and_reopen(
         && let Ok(item) = repo.get_by_project(project_id, &entry.item_id).await
         && item.complete
     {
-        item_series::validate_uncompletable(event_series, &entry.item_id).await?;
+        item_series::validate_uncompletable(series, &entry.item_id).await?;
     }
     reverse_entry(projects, activity_log, entry).await?;
     if let Some(project_id) = &entry.project_id {
@@ -183,7 +183,7 @@ async fn reverse_and_reopen(
             projects,
             teams,
             activity_log,
-            event_series,
+            series,
             project_id,
             &entry.item_id,
             requester_user_id,
@@ -205,7 +205,7 @@ pub async fn undo_activity_log_entry(
     teams: &Arc<dyn TeamRepo>,
     projects: &Arc<dyn ProjectRepo>,
     activity_log: &Arc<dyn ActivityLogRepo>,
-    event_series: &Arc<dyn ItemSeriesRepo>,
+    series: &Arc<dyn ItemSeriesRepo>,
     team_id: &str,
     entry_id: &str,
     requester_user_id: &str,
@@ -227,7 +227,7 @@ pub async fn undo_activity_log_entry(
         projects,
         teams,
         activity_log,
-        event_series,
+        series,
         &entry,
         requester_user_id,
         tz_offset_minutes,
@@ -245,7 +245,7 @@ pub async fn undo_project_activity_log_entry(
     projects: &Arc<dyn ProjectRepo>,
     teams: &Arc<dyn TeamRepo>,
     activity_log: &Arc<dyn ActivityLogRepo>,
-    event_series: &Arc<dyn ItemSeriesRepo>,
+    series: &Arc<dyn ItemSeriesRepo>,
     project_id: &str,
     entry_id: &str,
     requester_user_id: &str,
@@ -267,7 +267,7 @@ pub async fn undo_project_activity_log_entry(
         projects,
         teams,
         activity_log,
-        event_series,
+        series,
         &entry,
         requester_user_id,
         tz_offset_minutes,
@@ -328,7 +328,7 @@ mod tests {
         Arc::new(mock)
     }
 
-    fn no_op_event_series() -> Arc<dyn ItemSeriesRepo> {
+    fn no_op_series() -> Arc<dyn ItemSeriesRepo> {
         let mut mock = MockItemSeriesRepo::new();
         mock.expect_find_occurrence_by_item_id()
             .returning(|_| Ok(None));
@@ -389,7 +389,7 @@ mod tests {
         let repo = no_item_to_reopen();
         let teams: Arc<dyn TeamRepo> = Arc::new(member_teams());
         let projects: Arc<dyn ProjectRepo> = Arc::new(MockProjectRepo::new());
-        let event_series = no_op_event_series();
+        let series = no_op_series();
 
         let mut log = MockActivityLogRepo::new();
         log.expect_get_entry()
@@ -397,19 +397,10 @@ mod tests {
 
         let log: Arc<dyn ActivityLogRepo> = Arc::new(log);
 
-        let err = undo_activity_log_entry(
-            &repo,
-            &teams,
-            &projects,
-            &log,
-            &event_series,
-            "t1",
-            "e1",
-            "u2",
-            0,
-        )
-        .await
-        .expect_err("should reject a non-owner's undo attempt");
+        let err =
+            undo_activity_log_entry(&repo, &teams, &projects, &log, &series, "t1", "e1", "u2", 0)
+                .await
+                .expect_err("should reject a non-owner's undo attempt");
         assert!(matches!(err, ItemError::Invalid(_)));
     }
 
@@ -418,7 +409,7 @@ mod tests {
         let repo = no_item_to_reopen();
         let teams: Arc<dyn TeamRepo> = Arc::new(member_teams());
         let projects: Arc<dyn ProjectRepo> = Arc::new(MockProjectRepo::new());
-        let event_series = no_op_event_series();
+        let series = no_op_series();
 
         let mut log = MockActivityLogRepo::new();
         log.expect_get_entry()
@@ -426,19 +417,10 @@ mod tests {
 
         let log: Arc<dyn ActivityLogRepo> = Arc::new(log);
 
-        let err = undo_activity_log_entry(
-            &repo,
-            &teams,
-            &projects,
-            &log,
-            &event_series,
-            "t1",
-            "e1",
-            "u1",
-            0,
-        )
-        .await
-        .expect_err("should reject undoing an already-reversed entry");
+        let err =
+            undo_activity_log_entry(&repo, &teams, &projects, &log, &series, "t1", "e1", "u1", 0)
+                .await
+                .expect_err("should reject undoing an already-reversed entry");
         assert!(matches!(err, ItemError::Invalid(_)));
     }
 
@@ -542,7 +524,7 @@ mod tests {
         let teams: Arc<dyn TeamRepo> = Arc::new(SqliteTeamRepo(pool.clone()));
         let projects: Arc<dyn ProjectRepo> = Arc::new(SqliteProjectRepo(pool.clone()));
         let activity_log: Arc<dyn ActivityLogRepo> = Arc::new(SqliteActivityLogRepo(pool.clone()));
-        let event_series = no_op_event_series();
+        let series = no_op_series();
 
         let entry_id = activity_log
             .log_activity(Some("t1"), Some("p1"), "u1", "item1", "Mow the lawn", 30)
@@ -554,7 +536,7 @@ mod tests {
             &teams,
             &projects,
             &activity_log,
-            &event_series,
+            &series,
             "t1",
             &entry_id,
             "u1",
@@ -579,7 +561,7 @@ mod tests {
             &teams,
             &projects,
             &activity_log,
-            &event_series,
+            &series,
             "t1",
             &entry_id,
             "u1",
@@ -595,7 +577,7 @@ mod tests {
         let repo = no_item_to_reopen();
         let teams: Arc<dyn TeamRepo> = Arc::new(member_teams());
         let projects: Arc<dyn ProjectRepo> = Arc::new(projects_with_points());
-        let event_series = no_op_event_series();
+        let series = no_op_series();
 
         let mut log = MockActivityLogRepo::new();
         log.expect_get_entry()
@@ -604,19 +586,9 @@ mod tests {
 
         let log: Arc<dyn ActivityLogRepo> = Arc::new(log);
 
-        undo_activity_log_entry(
-            &repo,
-            &teams,
-            &projects,
-            &log,
-            &event_series,
-            "t1",
-            "e1",
-            "u1",
-            0,
-        )
-        .await
-        .expect("owner should be able to undo their own unreversed entry");
+        undo_activity_log_entry(&repo, &teams, &projects, &log, &series, "t1", "e1", "u1", 0)
+            .await
+            .expect("owner should be able to undo their own unreversed entry");
     }
 
     #[tokio::test]
@@ -624,26 +596,17 @@ mod tests {
         let repo = no_item_to_reopen();
         let teams: Arc<dyn TeamRepo> = Arc::new(member_teams());
         let projects: Arc<dyn ProjectRepo> = Arc::new(MockProjectRepo::new());
-        let event_series = no_op_event_series();
+        let series = no_op_series();
 
         let mut log = MockActivityLogRepo::new();
         log.expect_get_entry()
             .returning(|_| Ok(entry("u1", "other-team", 30, false)));
         let log: Arc<dyn ActivityLogRepo> = Arc::new(log);
 
-        let err = undo_activity_log_entry(
-            &repo,
-            &teams,
-            &projects,
-            &log,
-            &event_series,
-            "t1",
-            "e1",
-            "u1",
-            0,
-        )
-        .await
-        .expect_err("should reject an entry that doesn't belong to this team");
+        let err =
+            undo_activity_log_entry(&repo, &teams, &projects, &log, &series, "t1", "e1", "u1", 0)
+                .await
+                .expect_err("should reject an entry that doesn't belong to this team");
         assert!(matches!(err, ItemError::NotFound));
     }
 
@@ -694,7 +657,7 @@ mod tests {
         let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
 
         let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
-        let event_series = no_op_event_series();
+        let series = no_op_series();
 
         let mut log = MockActivityLogRepo::new();
         log.expect_get_entry().returning(|_| {
@@ -720,15 +683,7 @@ mod tests {
         let log: Arc<dyn ActivityLogRepo> = Arc::new(log);
 
         undo_project_activity_log_entry(
-            &repo,
-            &projects,
-            &teams,
-            &log,
-            &event_series,
-            "p1",
-            "e1",
-            "u1",
-            0,
+            &repo, &projects, &teams, &log, &series, "p1", "e1", "u1", 0,
         )
         .await
         .expect("should reverse the entry and reopen the item");
@@ -814,7 +769,7 @@ mod tests {
                 is_exdate: false,
             }))
         });
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let mut log = MockActivityLogRepo::new();
         log.expect_get_entry().returning(|_| {
@@ -835,15 +790,7 @@ mod tests {
         let log: Arc<dyn ActivityLogRepo> = Arc::new(log);
 
         let err = undo_project_activity_log_entry(
-            &repo,
-            &projects,
-            &teams,
-            &log,
-            &event_series,
-            "p1",
-            "e1",
-            "u1",
-            0,
+            &repo, &projects, &teams, &log, &series, "p1", "e1", "u1", 0,
         )
         .await
         .expect_err("should reject undoing an out-of-order series occurrence");
@@ -864,7 +811,7 @@ mod tests {
         });
         let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
         let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
-        let event_series = no_op_event_series();
+        let series = no_op_series();
 
         let mut log = MockActivityLogRepo::new();
         log.expect_get_entry()
@@ -876,7 +823,7 @@ mod tests {
             &projects,
             &teams,
             &log,
-            &event_series,
+            &series,
             "some-other-project",
             "e1",
             "u1",

@@ -363,7 +363,7 @@ pub async fn update_item(
 /// item happened to have a reparented series-materialized descendant).
 pub async fn delete_item(
     repo: &Arc<dyn ItemRepo>,
-    event_series: &Arc<dyn ItemSeriesRepo>,
+    series: &Arc<dyn ItemSeriesRepo>,
     user_id: &str,
     item_id: &str,
 ) -> Result<(), ItemError> {
@@ -376,7 +376,7 @@ pub async fn delete_item(
         for child in children {
             queue.push(child.id.clone());
             repo.delete(&child.id).await?;
-            item_series::unlink_deleted_item_occurrence(event_series, &child.id).await?;
+            item_series::unlink_deleted_item_occurrence(series, &child.id).await?;
         }
     }
     unlink_source_event_tasks(repo, item_id).await?;
@@ -1009,9 +1009,9 @@ mod tests {
             .returning(|_| Ok(()));
 
         let repo: Arc<dyn ItemRepo> = Arc::new(mock);
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(MockItemSeriesRepo::new());
+        let series: Arc<dyn ItemSeriesRepo> = Arc::new(MockItemSeriesRepo::new());
 
-        delete_item(&repo, &event_series, "u1", "event1")
+        delete_item(&repo, &series, "u1", "event1")
             .await
             .expect("should delete the event and unlink referencing tasks");
     }

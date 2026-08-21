@@ -670,14 +670,21 @@ pub async fn resolve_linked_event(
 /// there's no dedicated series *detail* page (only the list and edit screens), and the edit
 /// page already shows every field a "view" would.
 pub async fn resolve_series_link(
-    event_series: &Arc<dyn crate::storage::sqlite::ItemSeriesRepo>,
+    series: &Arc<dyn crate::storage::sqlite::ItemSeriesRepo>,
     project_id: &str,
     item: &Item,
 ) -> Result<Option<(String, String)>, ItemError> {
     let Some(series_id) = &item.series_id else {
         return Ok(None);
     };
-    let series = event_series.get_series(series_id).await?;
+    // `delete_series` orphans rather than cascades (see its doc comment) — a materialized
+    // item can outlive its parent series, so a missing series here means "no link to show",
+    // not "this item doesn't exist."
+    let series = match series.get_series(series_id).await {
+        Ok(series) => series,
+        Err(crate::storage::sqlite::RepoError::NotFound) => return Ok(None),
+        Err(e) => return Err(e.into()),
+    };
     Ok(Some((
         series.name,
         format!("/web/projects/{project_id}/series/{series_id}/edit"),
@@ -807,4 +814,29 @@ pub struct ProjectTasksCalendarPageTemplate {
     pub next_month: u32,
     pub days: Vec<CalendarDay>,
     pub nav_html: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::sqlite::{ItemSeriesRepo, MockItemSeriesRepo, RepoError};
+
+    #[tokio::test]
+    async fn resolve_series_link_returns_none_when_parent_series_was_deleted() {
+        // Regression for the "delete a series, then its materialized occurrence 404s"
+        // bug: `delete_series` orphans (see its doc comment) rather than cascading, so
+        // `item.series_id` can point at a series row that no longer exists.
+        let item = Item {
+            series_id: Some("deleted-series".to_string()),
+            ..Item::default()
+        };
+        let mut mock = MockItemSeriesRepo::new();
+        mock.expect_get_series()
+            .returning(|_| Err(RepoError::NotFound));
+        let series: Arc<dyn ItemSeriesRepo> = Arc::new(mock);
+
+        let result = resolve_series_link(&series, "p1", &item).await;
+
+        assert_eq!(result.unwrap(), None);
+    }
 }

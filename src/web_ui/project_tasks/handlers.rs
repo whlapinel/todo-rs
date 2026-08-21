@@ -51,7 +51,7 @@ pub async fn project_tasks_page(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(users): Extension<Arc<dyn UserRepo>>,
-    Extension(event_series): Extension<Arc<dyn ItemSeriesRepo>>,
+    Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
     TzOffset(tz): TzOffset,
     Query(q): Query<ShowCompleteQuery>,
 ) -> Result<Html<String>, ItemError> {
@@ -79,7 +79,7 @@ pub async fn project_tasks_page(
     // to show in this current-only view — see the calendar/dashboard views for where a
     // skipped occurrence's struck-through Unskip row actually appears.
     let virtual_occurrences: Vec<_> = item_series_service::list_occurrence_states_for_project(
-        &event_series,
+        &series,
         &users,
         &project_id,
         Utc::now(),
@@ -99,7 +99,7 @@ pub async fn project_tasks_page(
     let mut skip_urls: HashMap<String, String> = HashMap::new();
     for item in &items {
         if let Some(url) =
-            item_series_service::skip_url_for_item(&event_series, item, &project_id).await?
+            item_series_service::skip_url_for_item(&series, item, &project_id).await?
         {
             skip_urls.insert(item.id.clone(), url);
         }
@@ -192,7 +192,7 @@ pub async fn project_tasks_calendar_page(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(users): Extension<Arc<dyn UserRepo>>,
-    Extension(event_series): Extension<Arc<dyn ItemSeriesRepo>>,
+    Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
     TzOffset(tz): TzOffset,
     Query(q): Query<CalendarQuery>,
 ) -> Result<Html<String>, ItemError> {
@@ -225,7 +225,7 @@ pub async fn project_tasks_calendar_page(
     // settled date outright). Materialized dates are excluded — those already render via
     // `items` above.
     let virtual_occurrences: Vec<_> = item_series_service::list_occurrence_states_for_project(
-        &event_series,
+        &series,
         &users,
         &project_id,
         range_start,
@@ -283,7 +283,7 @@ pub async fn project_task_detail_page(
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
-    Extension(event_series): Extension<Arc<dyn ItemSeriesRepo>>,
+    Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
     TzOffset(tz): TzOffset,
 ) -> Result<Html<String>, ItemError> {
     let project =
@@ -296,7 +296,7 @@ pub async fn project_task_detail_page(
         None => HashMap::new(),
     };
     let linked_event = resolve_linked_event(&repo, &project_id, &item).await?;
-    let series_link = resolve_series_link(&event_series, &project_id, &item).await?;
+    let series_link = resolve_series_link(&series, &project_id, &item).await?;
     let view = ProjectTaskDetailView::from_item(
         &item,
         &project_id,
@@ -934,7 +934,7 @@ pub async fn update_project_task_form(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(activity_log): Extension<Arc<dyn ActivityLogRepo>>,
-    Extension(event_series): Extension<Arc<dyn ItemSeriesRepo>>,
+    Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
     TzOffset(tz): TzOffset,
     Form(form): Form<ProjectTaskForm>,
 ) -> Result<Response, ItemError> {
@@ -950,7 +950,7 @@ pub async fn update_project_task_form(
         &projects,
         &teams,
         &activity_log,
-        &event_series,
+        &series,
         &auth_user.user_id,
         params,
     )
@@ -963,7 +963,7 @@ pub async fn update_project_task_form(
                 None => HashMap::new(),
             };
             let linked_event = resolve_linked_event(&repo, &project_id, &updated).await?;
-            let series_link = resolve_series_link(&event_series, &project_id, &updated).await?;
+            let series_link = resolve_series_link(&series, &project_id, &updated).await?;
             let view = ProjectTaskDetailView::from_item(
                 &updated,
                 &project_id,
@@ -1000,8 +1000,7 @@ pub async fn update_project_task_form(
                 sibling_group(&repo, &project_id, updated.parent_item_id.as_deref()).await?;
             let siblings_ref: Vec<&Item> = siblings.iter().collect();
             let skip_url =
-                item_series_service::skip_url_for_item(&event_series, &updated, &project_id)
-                    .await?;
+                item_series_service::skip_url_for_item(&series, &updated, &project_id).await?;
             let row = ProjectTaskRow::from_item(
                 &updated,
                 &project_id,
@@ -1036,7 +1035,7 @@ pub async fn update_project_task_form(
             )
             .render()?;
             let linked_event = resolve_linked_event(&repo, &project_id, &updated).await?;
-            let series_link = resolve_series_link(&event_series, &project_id, &updated).await?;
+            let series_link = resolve_series_link(&series, &project_id, &updated).await?;
             let view = ProjectTaskDetailView::from_item(
                 &updated,
                 &project_id,
@@ -1070,7 +1069,7 @@ pub async fn delete_project_task_form(
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
-    Extension(event_series): Extension<Arc<dyn ItemSeriesRepo>>,
+    Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
 ) -> Result<Html<String>, ItemError> {
     let current = project_item_service::get_project_item(
         &repo,
@@ -1086,7 +1085,7 @@ pub async fn delete_project_task_form(
         &repo,
         &projects,
         &teams,
-        &event_series,
+        &series,
         &auth_user.user_id,
         &project_id,
         &item_id,
@@ -1189,7 +1188,7 @@ pub async fn promote_project_task_form(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(activity_log): Extension<Arc<dyn ActivityLogRepo>>,
-    Extension(event_series): Extension<Arc<dyn ItemSeriesRepo>>,
+    Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
     TzOffset(tz): TzOffset,
 ) -> Result<Response, ItemError> {
     let target = project_item_service::resolve_promotion_target(
@@ -1216,7 +1215,7 @@ pub async fn promote_project_task_form(
         &projects,
         &teams,
         &activity_log,
-        &event_series,
+        &series,
         &auth_user.user_id,
         params,
     )
@@ -1243,7 +1242,7 @@ pub async fn subordinate_project_task_form(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(activity_log): Extension<Arc<dyn ActivityLogRepo>>,
-    Extension(event_series): Extension<Arc<dyn ItemSeriesRepo>>,
+    Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
     TzOffset(tz): TzOffset,
     Form(form): Form<SubordinateForm>,
 ) -> Result<Response, ItemError> {
@@ -1272,7 +1271,7 @@ pub async fn subordinate_project_task_form(
         &projects,
         &teams,
         &activity_log,
-        &event_series,
+        &series,
         &auth_user.user_id,
         params,
     )

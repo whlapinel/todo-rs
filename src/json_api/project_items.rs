@@ -134,7 +134,7 @@ pub async fn update_project_item(
     server::Extension(projects): server::Extension<Arc<dyn ProjectRepo>>,
     server::Extension(teams): server::Extension<Arc<dyn TeamRepo>>,
     server::Extension(activity_log): server::Extension<Arc<dyn ActivityLogRepo>>,
-    server::Extension(event_series): server::Extension<Arc<dyn ItemSeriesRepo>>,
+    server::Extension(series): server::Extension<Arc<dyn ItemSeriesRepo>>,
     server::Extension(auth): server::Extension<AuthUser>,
 ) -> Result<output::UpdateProjectItemOutput, error::UpdateProjectItemError> {
     let due_date = input
@@ -154,7 +154,7 @@ pub async fn update_project_item(
         &projects,
         &teams,
         &activity_log,
-        &event_series,
+        &series,
         &auth.user_id,
         UpdateProjectItemParams {
             project_id: input.project_id,
@@ -193,14 +193,14 @@ pub async fn delete_project_item(
     server::Extension(repo): server::Extension<Arc<dyn ItemRepo>>,
     server::Extension(projects): server::Extension<Arc<dyn ProjectRepo>>,
     server::Extension(teams): server::Extension<Arc<dyn TeamRepo>>,
-    server::Extension(event_series): server::Extension<Arc<dyn ItemSeriesRepo>>,
+    server::Extension(series): server::Extension<Arc<dyn ItemSeriesRepo>>,
     server::Extension(auth): server::Extension<AuthUser>,
 ) -> Result<output::DeleteProjectItemOutput, error::DeleteProjectItemError> {
     project_item_service::delete_project_item(
         &repo,
         &projects,
         &teams,
-        &event_series,
+        &series,
         &auth.user_id,
         &input.project_id,
         &input.item_id,

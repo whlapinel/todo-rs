@@ -6,7 +6,7 @@ use crate::domain::item::ItemKind;
 /// series — see docs/recurring-events-virtual-occurrences-rough-plan.md's staged
 /// breakdown. Originally Event-only (stage 2, as `EventSeries`); generalized to
 /// also cover Task series at stage 7a via the `item_type` field, backed by the
-/// `item_series` table (renamed from `event_series` — see that migration for the
+/// `item_series` table (renamed from `series` — see that migration for the
 /// data carried forward). Distinct from `Item`'s own `recurrence`/`recurrence_basis`
 /// auto-advance-on-read mechanism (see CLAUDE.md's Recurrence section): that model
 /// conflates "the rule" and "the currently active instance" into one row, whereas a

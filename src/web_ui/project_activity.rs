@@ -153,7 +153,7 @@ pub async fn undo_project_activity_log_entry_form(
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(activity_log): Extension<Arc<dyn ActivityLogRepo>>,
-    Extension(event_series): Extension<Arc<dyn ItemSeriesRepo>>,
+    Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
     TzOffset(tz): TzOffset,
 ) -> Result<Html<String>, ItemError> {
     // Project-scoped (see docs/archived/archived_issues_and_features.md's "unify completion-undo" note) — works for
@@ -164,7 +164,7 @@ pub async fn undo_project_activity_log_entry_form(
         &projects,
         &teams,
         &activity_log,
-        &event_series,
+        &series,
         &project_id,
         &entry_id,
         &auth_user.user_id,

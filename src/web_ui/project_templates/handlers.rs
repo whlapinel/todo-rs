@@ -192,13 +192,13 @@ pub async fn delete_project_template_form(
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
-    Extension(event_series): Extension<Arc<dyn ItemSeriesRepo>>,
+    Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
 ) -> Result<Html<String>, ItemError> {
     project_item_service::delete_project_item(
         &repo,
         &projects,
         &teams,
-        &event_series,
+        &series,
         &auth_user.user_id,
         &project_id,
         &template_id,
@@ -454,7 +454,7 @@ pub async fn update_project_template_child_form(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(activity_log): Extension<Arc<dyn crate::storage::sqlite::ActivityLogRepo>>,
-    Extension(event_series): Extension<Arc<dyn ItemSeriesRepo>>,
+    Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
     Form(form): Form<ProjectTemplateChildForm>,
 ) -> Result<Response, ItemError> {
     let close = form.redirect.is_some();
@@ -489,7 +489,7 @@ pub async fn update_project_template_child_form(
         &projects,
         &teams,
         &activity_log,
-        &event_series,
+        &series,
         &auth_user.user_id,
         params,
     )
@@ -528,13 +528,13 @@ pub async fn delete_project_template_child_form(
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
-    Extension(event_series): Extension<Arc<dyn ItemSeriesRepo>>,
+    Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
 ) -> Result<Html<String>, ItemError> {
     project_item_service::delete_project_item(
         &repo,
         &projects,
         &teams,
-        &event_series,
+        &series,
         &auth_user.user_id,
         &project_id,
         &item_id,

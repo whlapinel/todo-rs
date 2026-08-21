@@ -1,7 +1,7 @@
 use crate::auth::AuthUser;
 use crate::domain::item::ItemKind;
 use crate::service::error::ItemError;
-use crate::service::item_series::{self as event_series_service};
+use crate::service::item_series::{self as series_service};
 use crate::service::project_items::{self as project_item_service};
 use crate::service::projects::{self as project_service};
 use crate::service::templates::{self as template_service, CreateProjectTemplateParams};
@@ -50,7 +50,7 @@ pub async fn project_events_page(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(users): Extension<Arc<dyn UserRepo>>,
-    Extension(event_series): Extension<Arc<dyn ItemSeriesRepo>>,
+    Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
     TzOffset(tz): TzOffset,
 ) -> Result<Html<String>, ItemError> {
     let _project =
@@ -61,8 +61,8 @@ pub async fn project_events_page(
     // `virtual_occurrence_window` since, unlike the calendar's own month grid, this view has
     // no natural range of its own.
     let (range_start, range_end) = super::virtual_occurrence_window(Utc::now());
-    let virtual_occurrences: Vec<_> = event_series_service::list_occurrence_states_for_project(
-        &event_series,
+    let virtual_occurrences: Vec<_> = series_service::list_occurrence_states_for_project(
+        &series,
         &users,
         &project_id,
         range_start,
@@ -75,15 +75,13 @@ pub async fn project_events_page(
     .filter(|occ| {
         !matches!(
             occ.state,
-            event_series_service::OccurrenceState::Materialized { .. }
+            series_service::OccurrenceState::Materialized { .. }
         )
     })
     .collect();
     let mut skip_urls: HashMap<String, String> = HashMap::new();
     for item in &items {
-        if let Some(url) =
-            event_series_service::skip_url_for_item(&event_series, item, &project_id).await?
-        {
+        if let Some(url) = series_service::skip_url_for_item(&series, item, &project_id).await? {
             skip_urls.insert(item.id.clone(), url);
         }
     }
@@ -142,7 +140,7 @@ pub async fn project_events_calendar_page(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(users): Extension<Arc<dyn UserRepo>>,
-    Extension(event_series): Extension<Arc<dyn ItemSeriesRepo>>,
+    Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
     TzOffset(tz): TzOffset,
     Query(q): Query<CalendarQuery>,
 ) -> Result<Html<String>, ItemError> {
@@ -171,8 +169,8 @@ pub async fn project_events_calendar_page(
     // so a skipped occurrence stays visible (struck through, with an Unskip button) instead
     // of disappearing outright — `Materialized` entries are excluded since those already
     // render via `items` above.
-    let virtual_occurrences: Vec<_> = event_series_service::list_occurrence_states_for_project(
-        &event_series,
+    let virtual_occurrences: Vec<_> = series_service::list_occurrence_states_for_project(
+        &series,
         &users,
         &project_id,
         range_start,
@@ -185,7 +183,7 @@ pub async fn project_events_calendar_page(
     .filter(|occ| {
         !matches!(
             occ.state,
-            event_series_service::OccurrenceState::Materialized { .. }
+            series_service::OccurrenceState::Materialized { .. }
         )
     })
     .collect();
@@ -230,7 +228,7 @@ pub async fn project_event_detail_page(
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
-    Extension(event_series): Extension<Arc<dyn ItemSeriesRepo>>,
+    Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
     TzOffset(tz): TzOffset,
 ) -> Result<Html<String>, ItemError> {
     let item = project_item_service::get_project_item(
@@ -243,12 +241,9 @@ pub async fn project_event_detail_page(
     )
     .await?;
     let item = require_event(item)?;
-    let series_link = crate::web_ui::project_events::templates::resolve_series_link(
-        &event_series,
-        &project_id,
-        &item,
-    )
-    .await?;
+    let series_link =
+        crate::web_ui::project_events::templates::resolve_series_link(&series, &project_id, &item)
+            .await?;
     let view = ProjectEventDetailView::from_item(&item, tz, series_link).render()?;
     let nav_html = nav::build_nav_html(
         &projects,
@@ -394,7 +389,7 @@ pub async fn update_project_event_series_occurrence_form(
     TzOffset(tz): TzOffset,
     Form(form): Form<ProjectEventForm>,
 ) -> Result<Response, ItemError> {
-    let series = event_series_service::get_series(
+    let series = series_service::get_series(
         &projects,
         &teams,
         &item_series,
@@ -407,7 +402,7 @@ pub async fn update_project_event_series_occurrence_form(
     }
     let occurrence_date = DateTime::<Utc>::from_timestamp(occurrence_ts, 0)
         .ok_or_else(|| ItemError::Invalid("invalid occurrence timestamp".to_string()))?;
-    let item = event_series_service::get_or_materialize_occurrence(
+    let item = series_service::get_or_materialize_occurrence(
         &repo,
         &projects,
         &teams,
@@ -453,7 +448,7 @@ pub async fn create_project_event_series_occurrence_child_form(
     TzOffset(tz): TzOffset,
     Form(form): Form<ProjectEventSeriesOccurrenceChildForm>,
 ) -> Result<Response, ItemError> {
-    let series = event_series_service::get_series(
+    let series = series_service::get_series(
         &projects,
         &teams,
         &item_series,
@@ -466,7 +461,7 @@ pub async fn create_project_event_series_occurrence_child_form(
     }
     let occurrence_date = DateTime::<Utc>::from_timestamp(occurrence_ts, 0)
         .ok_or_else(|| ItemError::Invalid("invalid occurrence timestamp".to_string()))?;
-    let item = event_series_service::get_or_materialize_occurrence(
+    let item = series_service::get_or_materialize_occurrence(
         &repo,
         &projects,
         &teams,
@@ -622,7 +617,7 @@ pub async fn update_project_event_form(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(activity_log): Extension<Arc<dyn crate::storage::sqlite::ActivityLogRepo>>,
-    Extension(event_series): Extension<Arc<dyn ItemSeriesRepo>>,
+    Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
     TzOffset(tz): TzOffset,
     Form(form): Form<ProjectEventForm>,
 ) -> Result<Response, ItemError> {
@@ -643,7 +638,7 @@ pub async fn update_project_event_form(
         &projects,
         &teams,
         &activity_log,
-        &event_series,
+        &series,
         &auth_user.user_id,
         params,
     )
@@ -652,7 +647,7 @@ pub async fn update_project_event_form(
     let updated =
         project_item_service::get_project_item_unchecked(&repo, &project_id, &item_id).await?;
     let series_link = crate::web_ui::project_events::templates::resolve_series_link(
-        &event_series,
+        &series,
         &project_id,
         &updated,
     )
@@ -675,8 +670,7 @@ pub async fn update_project_event_form(
         })?
         .into_response());
     }
-    let skip_url =
-        event_series_service::skip_url_for_item(&event_series, &updated, &project_id).await?;
+    let skip_url = series_service::skip_url_for_item(&series, &updated, &project_id).await?;
     let row = ProjectEventRow::from_item(&updated, &project_id, tz, skip_url).render()?;
     let fields = ProjectEventDetailFields::from_item(&updated, &project_id, tz, true).render()?;
     let view = ProjectEventDetailView::from_item(&updated, tz, series_link).render()?;
@@ -689,7 +683,7 @@ pub async fn delete_project_event_form(
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
-    Extension(event_series): Extension<Arc<dyn ItemSeriesRepo>>,
+    Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
 ) -> Result<Html<String>, ItemError> {
     let current = project_item_service::get_project_item(
         &repo,
@@ -705,7 +699,7 @@ pub async fn delete_project_event_form(
         &repo,
         &projects,
         &teams,
-        &event_series,
+        &series,
         &auth_user.user_id,
         &project_id,
         &item_id,

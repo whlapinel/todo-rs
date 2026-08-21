@@ -4,9 +4,7 @@ use super::{TzOffset, to_local};
 use crate::auth::AuthUser;
 use crate::domain::item::{Item, ItemKind};
 use crate::service::error::ItemError;
-use crate::service::item_series::{
-    self as event_series_service, OccurrenceState, ProjectOccurrence,
-};
+use crate::service::item_series::{self as series_service, OccurrenceState, ProjectOccurrence};
 use crate::service::project_items::{self as project_item_service, UpdateProjectItemParams};
 use crate::service::projects::{self as project_service};
 use crate::service::teams as team_service;
@@ -282,7 +280,7 @@ pub async fn main_dashboard_page(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(users): Extension<Arc<dyn UserRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
-    Extension(event_series): Extension<Arc<dyn ItemSeriesRepo>>,
+    Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
     TzOffset(tz_offset): TzOffset,
     Query(q): Query<MainDashboardQuery>,
 ) -> Result<Html<String>, ItemError> {
@@ -304,8 +302,8 @@ pub async fn main_dashboard_page(
             project_item_service::list_due_project_items_unchecked(&repo, &project.id, None, None)
                 .await?;
         let virtual_occurrences = if virtual_after <= virtual_before {
-            event_series_service::list_occurrence_states_for_project(
-                &event_series,
+            series_service::list_occurrence_states_for_project(
+                &series,
                 &users,
                 &project.id,
                 virtual_after,
@@ -557,7 +555,7 @@ pub async fn main_dashboard_calendar_page(
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(users): Extension<Arc<dyn UserRepo>>,
-    Extension(event_series): Extension<Arc<dyn ItemSeriesRepo>>,
+    Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
     TzOffset(tz): TzOffset,
     Query(q): Query<CalendarQuery>,
 ) -> Result<Html<String>, ItemError> {
@@ -592,8 +590,8 @@ pub async fn main_dashboard_calendar_page(
                 due_bucket.push((di, project.id.clone(), project.name.clone()));
             }
         }
-        let occurrences = event_series_service::list_occurrence_states_for_project(
-            &event_series,
+        let occurrences = series_service::list_occurrence_states_for_project(
+            &series,
             &users,
             &project.id,
             range_start,
@@ -655,7 +653,7 @@ pub async fn toggle_main_dashboard_item_complete(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(activity_log): Extension<Arc<dyn ActivityLogRepo>>,
-    Extension(event_series): Extension<Arc<dyn ItemSeriesRepo>>,
+    Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
     TzOffset(tz): TzOffset,
     Form(form): Form<ToggleForm>,
 ) -> Result<Html<String>, ItemError> {
@@ -694,7 +692,7 @@ pub async fn toggle_main_dashboard_item_complete(
         &projects,
         &teams,
         &activity_log,
-        &event_series,
+        &series,
         &auth_user.user_id,
         params,
     )

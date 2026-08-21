@@ -277,7 +277,7 @@ pub async fn create_team_item(
 /// `item_id` itself.
 pub async fn delete_team_item(
     repo: &Arc<dyn ItemRepo>,
-    event_series: &Arc<dyn ItemSeriesRepo>,
+    series: &Arc<dyn ItemSeriesRepo>,
     teams: &Arc<dyn TeamRepo>,
     projects: &Arc<dyn ProjectRepo>,
     requester_user_id: &str,
@@ -294,7 +294,7 @@ pub async fn delete_team_item(
         for child in children {
             queue.push(child.id.clone());
             repo.delete(&child.id).await?;
-            item_series::unlink_deleted_item_occurrence(event_series, &child.id).await?;
+            item_series::unlink_deleted_item_occurrence(series, &child.id).await?;
         }
     }
     unlink_source_event_tasks(repo, item_id).await?;

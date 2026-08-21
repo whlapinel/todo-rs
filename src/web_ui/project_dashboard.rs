@@ -3,9 +3,7 @@ use super::{TzOffset, to_local};
 use crate::auth::AuthUser;
 use crate::domain::item::{Item, ItemKind};
 use crate::service::error::ItemError;
-use crate::service::item_series::{
-    self as event_series_service, OccurrenceState, ProjectOccurrence,
-};
+use crate::service::item_series::{self as series_service, OccurrenceState, ProjectOccurrence};
 use crate::service::project_items::{self as project_item_service, UpdateProjectItemParams};
 use crate::service::projects::{self as project_service};
 use crate::service::teams as team_service;
@@ -377,7 +375,7 @@ pub async fn project_dashboard_page(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(users): Extension<Arc<dyn UserRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
-    Extension(event_series): Extension<Arc<dyn ItemSeriesRepo>>,
+    Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
     TzOffset(tz_offset): TzOffset,
     Query(q): Query<DashboardQuery>,
 ) -> Result<Html<String>, ItemError> {
@@ -398,8 +396,8 @@ pub async fn project_dashboard_page(
     // Unskip button — see `render_rows`'s `filtered_occurrences`, which excludes only
     // `Materialized` entries) instead of disappearing outright.
     let virtual_occurrences = if virtual_after <= virtual_before {
-        event_series_service::list_occurrence_states_for_project(
-            &event_series,
+        series_service::list_occurrence_states_for_project(
+            &series,
             &users,
             &project_id,
             virtual_after,
@@ -562,7 +560,7 @@ fn end_of_day() -> chrono::NaiveTime {
 /// for why a materialized occurrence never appears twice here: once materialized it's a real
 /// `items` row already covered by `due_items`, so `virtual_occurrences` only ever contains
 /// occurrences with no `event_occurrences` row at all (see
-/// `event_series::list_virtual_occurrences_for_project_unchecked`).
+/// `series::list_virtual_occurrences_for_project_unchecked`).
 fn build_calendar_days(
     year: i32,
     month: u32,
@@ -658,7 +656,7 @@ pub async fn project_dashboard_calendar_page(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(users): Extension<Arc<dyn UserRepo>>,
-    Extension(event_series): Extension<Arc<dyn ItemSeriesRepo>>,
+    Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
     TzOffset(tz): TzOffset,
     Query(q): Query<CalendarQuery>,
 ) -> Result<Html<String>, ItemError> {
@@ -686,8 +684,8 @@ pub async fn project_dashboard_calendar_page(
     // identical rationale above — `Materialized` entries are filtered out here (those already
     // render via `due_items`, fed into `build_calendar_days` separately), leaving Virtual and
     // Skipped visible.
-    let virtual_occurrences = event_series_service::list_occurrence_states_for_project(
-        &event_series,
+    let virtual_occurrences = series_service::list_occurrence_states_for_project(
+        &series,
         &users,
         &project_id,
         range_start,
@@ -746,7 +744,7 @@ pub async fn toggle_project_dashboard_item_complete(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(activity_log): Extension<Arc<dyn ActivityLogRepo>>,
-    Extension(event_series): Extension<Arc<dyn ItemSeriesRepo>>,
+    Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
     TzOffset(tz): TzOffset,
     Form(form): Form<ToggleForm>,
 ) -> Result<Html<String>, ItemError> {
@@ -785,7 +783,7 @@ pub async fn toggle_project_dashboard_item_complete(
         &projects,
         &teams,
         &activity_log,
-        &event_series,
+        &series,
         &auth_user.user_id,
         params,
     )

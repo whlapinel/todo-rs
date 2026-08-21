@@ -235,8 +235,7 @@ pub async fn project_item_series_page(
         // Stage 4 of docs/assignment-rotation-plan.md: resolves to the series' fixed
         // assignee, or — for a rotating series — the current occurrence's computed
         // rotation assignee (open question 4).
-        let assignee_id =
-            item_series_service::current_series_assignee(&item_series, s, tz).await?;
+        let assignee_id = item_series_service::current_series_assignee(&item_series, s, tz).await?;
         let assignee_name = assignee_id.and_then(|id| member_names.get(&id).cloned());
         rows.push(
             ProjectItemSeriesRow::from_series(s, tz, template_name, assignee_name)

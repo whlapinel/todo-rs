@@ -355,8 +355,8 @@ pub struct UpdateProjectItemParams {
 /// reversal, see `team_items::update_team_item`); the personal branch's
 /// `items::update_item` has no use for it at all.
 ///
-/// `event_series` (Stage 9 of docs/recurring-events-virtual-occurrences-rough-plan.md)
-/// is the completion-side counterpart to `delete_project_item`'s own `event_series`
+/// `series` (Stage 9 of docs/recurring-events-virtual-occurrences-rough-plan.md)
+/// is the completion-side counterpart to `delete_project_item`'s own `series`
 /// parameter: after a successful update that requests `complete: true`, this calls
 /// `item_series::record_task_completion` — a cheap no-op for the overwhelmingly common
 /// case (`item_id` never came from a series). Gated on `params.complete` rather than
@@ -382,7 +382,7 @@ pub async fn update_project_item(
     projects: &Arc<dyn ProjectRepo>,
     teams: &Arc<dyn TeamRepo>,
     activity_log: &Arc<dyn ActivityLogRepo>,
-    event_series: &Arc<dyn ItemSeriesRepo>,
+    series: &Arc<dyn ItemSeriesRepo>,
     requester_user_id: &str,
     params: UpdateProjectItemParams,
 ) -> Result<(), ItemError> {
@@ -396,7 +396,7 @@ pub async fn update_project_item(
     // persist, so it can no longer be the rejection point.
     if complete {
         item_series::validate_completable(
-            event_series,
+            series,
             &item_id,
             params.timezone_offset_minutes.unwrap_or(0),
         )
@@ -420,7 +420,7 @@ pub async fn update_project_item(
     } else {
         let item = repo.get_by_project(&params.project_id, &item_id).await?;
         if item.complete {
-            item_series::validate_uncompletable(event_series, &item_id).await?;
+            item_series::validate_uncompletable(series, &item_id).await?;
         }
         item.complete
     };
@@ -490,10 +490,10 @@ pub async fn update_project_item(
     };
     result?;
     if complete {
-        item_series::record_task_completion(event_series, &item_id).await?;
+        item_series::record_task_completion(series, &item_id).await?;
     } else if was_complete {
         item_series::record_task_uncompletion(
-            event_series,
+            series,
             &item_id,
             params.timezone_offset_minutes.unwrap_or(0),
         )
@@ -543,7 +543,7 @@ pub async fn delete_project_item(
     repo: &Arc<dyn ItemRepo>,
     projects: &Arc<dyn ProjectRepo>,
     teams: &Arc<dyn TeamRepo>,
-    event_series: &Arc<dyn ItemSeriesRepo>,
+    series: &Arc<dyn ItemSeriesRepo>,
     requester_user_id: &str,
     project_id: &str,
     item_id: &str,
@@ -554,7 +554,7 @@ pub async fn delete_project_item(
         Some(_) => {
             team_items::delete_team_item(
                 repo,
-                event_series,
+                series,
                 teams,
                 projects,
                 requester_user_id,
@@ -563,9 +563,9 @@ pub async fn delete_project_item(
             )
             .await?;
         }
-        None => items::delete_item(repo, event_series, &project.owner_user_id, item_id).await?,
+        None => items::delete_item(repo, series, &project.owner_user_id, item_id).await?,
     }
-    item_series::unlink_deleted_item_occurrence(event_series, item_id).await
+    item_series::unlink_deleted_item_occurrence(series, item_id).await
 }
 
 #[cfg(test)]
@@ -579,7 +579,7 @@ mod tests {
 
     /// Every `delete_project_item` test but the dedicated series-unlinking one below just
     /// needs the reverse lookup to be a harmless no-op — this is what those tests share.
-    fn no_op_event_series_repo() -> Arc<dyn ItemSeriesRepo> {
+    fn no_op_series_repo() -> Arc<dyn ItemSeriesRepo> {
         let mut mock = MockItemSeriesRepo::new();
         mock.expect_find_occurrence_by_item_id()
             .returning(|_| Ok(None));
@@ -857,14 +857,14 @@ mod tests {
 
         let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
         let activity_log: Arc<dyn ActivityLogRepo> = Arc::new(MockActivityLogRepo::new());
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(MockItemSeriesRepo::new());
+        let series: Arc<dyn ItemSeriesRepo> = Arc::new(MockItemSeriesRepo::new());
 
         update_project_item(
             &repo,
             &projects,
             &teams,
             &activity_log,
-            &event_series,
+            &series,
             "owner1",
             UpdateProjectItemParams {
                 project_id: "p1".to_string(),
@@ -923,14 +923,14 @@ mod tests {
             // item never came from a series.
             .times(2)
             .returning(|_| Ok(None));
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         update_project_item(
             &repo,
             &projects,
             &teams,
             &activity_log,
-            &event_series,
+            &series,
             "owner1",
             UpdateProjectItemParams {
                 project_id: "p1".to_string(),
@@ -979,14 +979,14 @@ mod tests {
             // Both are cheap no-ops here since this item never came from a series.
             .times(2)
             .returning(|_| Ok(None));
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         update_project_item(
             &repo,
             &projects,
             &teams,
             &activity_log,
-            &event_series,
+            &series,
             "owner1",
             UpdateProjectItemParams {
                 project_id: "p1".to_string(),
@@ -1024,14 +1024,14 @@ mod tests {
         let repo: Arc<dyn ItemRepo> = Arc::new(items_mock);
 
         let activity_log: Arc<dyn ActivityLogRepo> = Arc::new(MockActivityLogRepo::new());
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(MockItemSeriesRepo::new());
+        let series: Arc<dyn ItemSeriesRepo> = Arc::new(MockItemSeriesRepo::new());
 
         update_project_item(
             &repo,
             &projects,
             &teams,
             &activity_log,
-            &event_series,
+            &series,
             "member1",
             UpdateProjectItemParams {
                 project_id: "p1".to_string(),
@@ -1180,14 +1180,14 @@ mod tests {
             })
             .times(1)
             .returning(|_, _| Ok(()));
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         update_project_item(
             &repo,
             &projects,
             &teams,
             &activity_log,
-            &event_series,
+            &series,
             "member1",
             UpdateProjectItemParams {
                 project_id: "p1".to_string(),
@@ -1223,19 +1223,11 @@ mod tests {
         let repo: Arc<dyn ItemRepo> = Arc::new(items_mock);
 
         let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
-        let event_series = no_op_event_series_repo();
+        let series = no_op_series_repo();
 
-        delete_project_item(
-            &repo,
-            &projects,
-            &teams,
-            &event_series,
-            "owner1",
-            "p1",
-            "i1",
-        )
-        .await
-        .expect("should delete personal project item");
+        delete_project_item(&repo, &projects, &teams, &series, "owner1", "p1", "i1")
+            .await
+            .expect("should delete personal project item");
     }
 
     #[tokio::test]
@@ -1261,19 +1253,11 @@ mod tests {
             .returning(|_| Ok(vec![]));
         items_mock.expect_delete().times(1).returning(|_| Ok(()));
         let repo: Arc<dyn ItemRepo> = Arc::new(items_mock);
-        let event_series = no_op_event_series_repo();
+        let series = no_op_series_repo();
 
-        delete_project_item(
-            &repo,
-            &projects,
-            &teams,
-            &event_series,
-            "member1",
-            "p1",
-            "i1",
-        )
-        .await
-        .expect("should delete team project item");
+        delete_project_item(&repo, &projects, &teams, &series, "member1", "p1", "i1")
+            .await
+            .expect("should delete team project item");
     }
 
     /// Regression test for the bug docs/team-id-removal-plan.md exists to fix:
@@ -1321,14 +1305,14 @@ mod tests {
         let repo: Arc<dyn ItemRepo> = Arc::new(items_mock);
 
         let activity_log: Arc<dyn ActivityLogRepo> = Arc::new(MockActivityLogRepo::new());
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(MockItemSeriesRepo::new());
+        let series: Arc<dyn ItemSeriesRepo> = Arc::new(MockItemSeriesRepo::new());
 
         update_project_item(
             &repo,
             &projects,
             &teams,
             &activity_log,
-            &event_series,
+            &series,
             "member1",
             UpdateProjectItemParams {
                 project_id: "p1".to_string(),
@@ -1378,9 +1362,9 @@ mod tests {
             .returning(|_| Ok(vec![]));
         items_mock.expect_delete().times(1).returning(|_| Ok(()));
         let repo: Arc<dyn ItemRepo> = Arc::new(items_mock);
-        let event_series = no_op_event_series_repo();
+        let series = no_op_series_repo();
 
-        delete_project_item(&repo, &projects, &teams, &event_series, "member1", "p1", "i1")
+        delete_project_item(&repo, &projects, &teams, &series, "member1", "p1", "i1")
             .await
             .expect(
                 "delete should succeed even though the project's team changed since the item was created",
@@ -1427,19 +1411,11 @@ mod tests {
         series_mock.expect_mark_exdate().times(0);
         series_mock.expect_get_series().times(0);
         series_mock.expect_advance_cursor().times(0);
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
-        delete_project_item(
-            &repo,
-            &projects,
-            &teams,
-            &event_series,
-            "owner1",
-            "p1",
-            "i1",
-        )
-        .await
-        .expect("should delete the item and un-materialize its occurrence");
+        delete_project_item(&repo, &projects, &teams, &series, "owner1", "p1", "i1")
+            .await
+            .expect("should delete the item and un-materialize its occurrence");
     }
 
     /// Regression test for docs/issues_and_features.md's "materialized occurrences are not
@@ -1508,20 +1484,12 @@ mod tests {
             .withf(|item_id: &str| item_id == "i1")
             .times(1)
             .returning(|_| Ok(None));
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
-        delete_project_item(
-            &repo,
-            &projects,
-            &teams,
-            &event_series,
-            "owner1",
-            "p1",
-            "i1",
-        )
-        .await
-        .expect(
-            "should delete the whole tree and un-materialize the reparented child's occurrence",
-        );
+        delete_project_item(&repo, &projects, &teams, &series, "owner1", "p1", "i1")
+            .await
+            .expect(
+                "should delete the whole tree and un-materialize the reparented child's occurrence",
+            );
     }
 }

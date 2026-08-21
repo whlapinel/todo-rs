@@ -340,7 +340,7 @@ async fn main() {
     let item_repo = Arc::new(SqliteItemRepo(pool.clone())) as Arc<dyn ItemRepo>;
     let team_repo = Arc::new(SqliteTeamRepo(pool.clone())) as Arc<dyn TeamRepo>;
     let project_repo = Arc::new(SqliteProjectRepo(pool.clone())) as Arc<dyn ProjectRepo>;
-    let event_series_repo = Arc::new(SqliteItemSeriesRepo(pool.clone())) as Arc<dyn ItemSeriesRepo>;
+    let series_repo = Arc::new(SqliteItemSeriesRepo(pool.clone())) as Arc<dyn ItemSeriesRepo>;
     let activity_log_repo = Arc::new(SqliteActivityLogRepo(pool)) as Arc<dyn ActivityLogRepo>;
 
     let config = PeoplesRepublicOfListsConfig::builder().build();
@@ -394,7 +394,7 @@ async fn main() {
         .layer(Extension(item_repo.clone()))
         .layer(Extension(team_repo.clone()))
         .layer(Extension(project_repo.clone()))
-        .layer(Extension(event_series_repo.clone()))
+        .layer(Extension(series_repo.clone()))
         .layer(Extension(activity_log_repo.clone()))
         .map_response(|res: http::Response<_>| res.map(boxed))
         .service(smithy);
@@ -427,7 +427,7 @@ async fn main() {
                 .layer(Extension(item_repo.clone()))
                 .layer(Extension(team_repo.clone()))
                 .layer(Extension(project_repo.clone()))
-                .layer(Extension(event_series_repo.clone()))
+                .layer(Extension(series_repo.clone()))
                 .layer(Extension(activity_log_repo.clone()))
                 .layer(middleware::from_fn(auth::caddy_header_middleware));
             let public_web_router = build_public_web_router();
@@ -494,7 +494,7 @@ async fn main() {
                 .layer(Extension(item_repo.clone()))
                 .layer(Extension(team_repo.clone()))
                 .layer(Extension(project_repo))
-                .layer(Extension(event_series_repo))
+                .layer(Extension(series_repo))
                 .layer(Extension(activity_log_repo))
                 .layer(middleware::from_fn(auth::web_auth_middleware));
             let public_web_router = build_public_web_router();

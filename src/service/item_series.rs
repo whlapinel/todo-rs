@@ -31,14 +31,14 @@ pub async fn get_or_materialize_occurrence(
     repo: &Arc<dyn ItemRepo>,
     projects: &Arc<dyn ProjectRepo>,
     teams: &Arc<dyn TeamRepo>,
-    event_series: &Arc<dyn ItemSeriesRepo>,
+    series_repo: &Arc<dyn ItemSeriesRepo>,
     requester_user_id: &str,
     series_id: &str,
     occurrence_date: DateTime<Utc>,
     tz_offset_minutes: i32,
 ) -> Result<Item, ItemError> {
-    let series = event_series.get_series(series_id).await?;
-    let existing = event_series
+    let series = series_repo.get_series(series_id).await?;
+    let existing = series_repo
         .get_occurrence(series_id, occurrence_date)
         .await?;
 
@@ -60,7 +60,7 @@ pub async fn get_or_materialize_occurrence(
     // is a plain resolve, not a re-validation. Fixed assignee or rotation member,
     // whichever the series is set up for (docs/assignment-rotation-plan.md, Stage 2).
     let occurrence_assignee =
-        resolve_occurrence_assignee(event_series, &series, occurrence_date, tz_offset_minutes)
+        resolve_occurrence_assignee(series_repo, &series, occurrence_date, tz_offset_minutes)
             .await?;
     // Due-date-basis materializes onto due_date instead of scheduled_date (see
     // ItemSeries::basis's doc comment) — everything else about the created item is
@@ -98,7 +98,7 @@ pub async fn get_or_materialize_occurrence(
         project_items::create_project_item(repo, projects, teams, requester_user_id, params)
             .await?;
 
-    event_series
+    series_repo
         .record_materialized_occurrence(series_id, occurrence_date, &item_id)
         .await?;
 
@@ -131,14 +131,14 @@ pub async fn get_or_materialize_occurrence(
 /// Task-typed series' current occurrence, before either write below runs — see that
 /// function's doc comment for why this replaces Stage 9's forward-jumping behavior.
 pub async fn skip_occurrence(
-    event_series: &Arc<dyn ItemSeriesRepo>,
+    series_repo: &Arc<dyn ItemSeriesRepo>,
     series_id: &str,
     occurrence_date: DateTime<Utc>,
     tz_offset_minutes: i32,
 ) -> Result<(), ItemError> {
-    let series = event_series.get_series(series_id).await?;
-    require_current_occurrence(event_series, &series, occurrence_date, tz_offset_minutes).await?;
-    event_series.mark_exdate(series_id, occurrence_date).await?;
+    let series = series_repo.get_series(series_id).await?;
+    require_current_occurrence(series_repo, &series, occurrence_date, tz_offset_minutes).await?;
+    series_repo.mark_exdate(series_id, occurrence_date).await?;
     // Stage 9: skipping settles the occurrence exactly like completing one does — see
     // record_task_completion's doc comment below for why this is symmetric. Meaningless
     // for an Event-typed series (no completion/cursor concept), so left untouched there.
@@ -146,7 +146,7 @@ pub async fn skip_occurrence(
     // completion-basis series — the same symmetry.
     if series.item_type == ItemKind::Task {
         let cursor_value = cursor_value_for_settlement(&series, occurrence_date);
-        event_series.advance_cursor(series_id, cursor_value).await?;
+        series_repo.advance_cursor(series_id, cursor_value).await?;
     }
     Ok(())
 }
@@ -164,14 +164,14 @@ pub async fn skip_or_delete_series_occurrence(
     repo: &Arc<dyn ItemRepo>,
     projects: &Arc<dyn ProjectRepo>,
     teams: &Arc<dyn TeamRepo>,
-    event_series: &Arc<dyn ItemSeriesRepo>,
+    series_repo: &Arc<dyn ItemSeriesRepo>,
     requester_user_id: &str,
     series_id: &str,
     occurrence_date: DateTime<Utc>,
     tz_offset_minutes: i32,
 ) -> Result<(), ItemError> {
-    let series = event_series.get_series(series_id).await?;
-    if let Some(occurrence) = event_series
+    let series = series_repo.get_series(series_id).await?;
+    if let Some(occurrence) = series_repo
         .get_occurrence(series_id, occurrence_date)
         .await?
         && let Some(item_id) = occurrence.item_id
@@ -180,14 +180,14 @@ pub async fn skip_or_delete_series_occurrence(
             repo,
             projects,
             teams,
-            event_series,
+            series_repo,
             requester_user_id,
             &series.project_id,
             &item_id,
         )
         .await?;
     }
-    skip_occurrence(event_series, series_id, occurrence_date, tz_offset_minutes).await
+    skip_occurrence(series_repo, series_id, occurrence_date, tz_offset_minutes).await
 }
 
 /// The counterpart to Skip — reverses an exdate-marked occurrence back to virtual. Mirrors
@@ -200,13 +200,13 @@ pub async fn skip_or_delete_series_occurrence(
 /// exdate-marked occurrence may be unskipped unconditionally. Rejects outright if
 /// `occurrence_date` isn't actually marked exdate — nothing to unskip.
 pub async fn unskip_occurrence(
-    event_series: &Arc<dyn ItemSeriesRepo>,
+    series_repo: &Arc<dyn ItemSeriesRepo>,
     series_id: &str,
     occurrence_date: DateTime<Utc>,
     tz_offset_minutes: i32,
 ) -> Result<(), ItemError> {
-    let series = event_series.get_series(series_id).await?;
-    let occurrence = event_series
+    let series = series_repo.get_series(series_id).await?;
+    let occurrence = series_repo
         .get_occurrence(series_id, occurrence_date)
         .await?;
     if !occurrence.map(|o| o.is_exdate).unwrap_or(false) {
@@ -225,16 +225,14 @@ pub async fn unskip_occurrence(
         // Same shape as record_task_uncompletion's cursor restore: retreat one step, or
         // clear back to the pre-anything-settled None state if this was the anchor.
         if occurrence_date == series.anchor_date {
-            event_series
-                .clear_cursor(series_id, occurrence_date)
-                .await?;
+            series_repo.clear_cursor(series_id, occurrence_date).await?;
         } else {
             let rule = recurrence::parse(&series.recurrence).map_err(ItemError::Invalid)?;
             let previous = recurrence::retreat_once(&rule, occurrence_date, tz_offset_minutes);
-            event_series.retreat_cursor(series_id, previous).await?;
+            series_repo.retreat_cursor(series_id, previous).await?;
         }
     }
-    event_series
+    series_repo
         .delete_occurrence(series_id, occurrence_date)
         .await?;
     Ok(())
@@ -264,7 +262,7 @@ pub async fn unskip_occurrence(
 /// `advance_cursor` exactly like an automatic skip, so the correction sticks instead of
 /// being silently recomputed (and rejected on) every call.
 async fn require_current_occurrence(
-    event_series: &Arc<dyn ItemSeriesRepo>,
+    series_repo: &Arc<dyn ItemSeriesRepo>,
     series: &ItemSeries,
     occurrence_date: DateTime<Utc>,
     tz_offset_minutes: i32,
@@ -274,11 +272,11 @@ async fn require_current_occurrence(
     }
     let rule = recurrence::parse(&series.recurrence).map_err(ItemError::Invalid)?;
     let mut current = current_occurrence_date(series, &rule, tz_offset_minutes);
-    while let Some(occurrence) = event_series.get_occurrence(&series.id, current).await? {
+    while let Some(occurrence) = series_repo.get_occurrence(&series.id, current).await? {
         if !occurrence.is_exdate {
             break;
         }
-        event_series.advance_cursor(&series.id, current).await?;
+        series_repo.advance_cursor(&series.id, current).await?;
         current = recurrence::advance_once(&rule, current, tz_offset_minutes);
     }
     if occurrence_date != current {
@@ -301,7 +299,7 @@ async fn require_current_occurrence(
 /// occurrence first (issues.md's still-open "unskip" item), not have this silently
 /// walk further back to some earlier completion instead.
 async fn require_cursor_occurrence(
-    event_series: &Arc<dyn ItemSeriesRepo>,
+    series_repo: &Arc<dyn ItemSeriesRepo>,
     series: &ItemSeries,
     occurrence_date: DateTime<Utc>,
 ) -> Result<(), ItemError> {
@@ -314,7 +312,7 @@ async fn require_cursor_occurrence(
                 .to_string(),
         ));
     };
-    if let Some(occurrence) = event_series.get_occurrence(&series.id, cursor).await?
+    if let Some(occurrence) = series_repo.get_occurrence(&series.id, cursor).await?
         && occurrence.is_exdate
     {
         return Err(ItemError::Invalid(format!(
@@ -340,14 +338,14 @@ async fn require_cursor_occurrence(
 /// Cheap no-op for the overwhelmingly common case (item never came from a series),
 /// same shape as `record_task_completion`/`unlink_deleted_item_occurrence`.
 pub async fn validate_completable(
-    event_series: &Arc<dyn ItemSeriesRepo>,
+    series_repo: &Arc<dyn ItemSeriesRepo>,
     item_id: &str,
     tz_offset_minutes: i32,
 ) -> Result<(), ItemError> {
-    if let Some(occurrence) = event_series.find_occurrence_by_item_id(item_id).await? {
-        let series = event_series.get_series(&occurrence.series_id).await?;
+    if let Some(occurrence) = series_repo.find_occurrence_by_item_id(item_id).await? {
+        let series = series_repo.get_series(&occurrence.series_id).await?;
         require_current_occurrence(
-            event_series,
+            series_repo,
             &series,
             occurrence.occurrence_date,
             tz_offset_minutes,
@@ -363,12 +361,12 @@ pub async fn validate_completable(
 /// doc comment for the rule it enforces. `record_task_uncompletion` below is this
 /// function's post-persistence counterpart, mirroring `record_task_completion`.
 pub async fn validate_uncompletable(
-    event_series: &Arc<dyn ItemSeriesRepo>,
+    series_repo: &Arc<dyn ItemSeriesRepo>,
     item_id: &str,
 ) -> Result<(), ItemError> {
-    if let Some(occurrence) = event_series.find_occurrence_by_item_id(item_id).await? {
-        let series = event_series.get_series(&occurrence.series_id).await?;
-        require_cursor_occurrence(event_series, &series, occurrence.occurrence_date).await?;
+    if let Some(occurrence) = series_repo.find_occurrence_by_item_id(item_id).await? {
+        let series = series_repo.get_series(&occurrence.series_id).await?;
+        require_cursor_occurrence(series_repo, &series, occurrence.occurrence_date).await?;
     }
     Ok(())
 }
@@ -406,11 +404,11 @@ pub async fn validate_uncompletable(
 /// `None` result (the overwhelmingly common case — most deleted items never came from a
 /// series) is a normal, cheap no-op.
 pub async fn unlink_deleted_item_occurrence(
-    event_series: &Arc<dyn ItemSeriesRepo>,
+    series_repo: &Arc<dyn ItemSeriesRepo>,
     item_id: &str,
 ) -> Result<(), ItemError> {
-    if let Some(occurrence) = event_series.find_occurrence_by_item_id(item_id).await? {
-        event_series
+    if let Some(occurrence) = series_repo.find_occurrence_by_item_id(item_id).await? {
+        series_repo
             .delete_occurrence(&occurrence.series_id, occurrence.occurrence_date)
             .await?;
     }
@@ -475,7 +473,7 @@ fn rotation_assignee(rotation: &[String], index: usize) -> Option<&String> {
 /// preview/edit-form assignee before it's materialized, not just at materialization
 /// time itself.
 pub(crate) async fn resolve_occurrence_assignee(
-    event_series: &Arc<dyn ItemSeriesRepo>,
+    series_repo: &Arc<dyn ItemSeriesRepo>,
     series: &ItemSeries,
     occurrence_date: DateTime<Utc>,
     tz_offset_minutes: i32,
@@ -483,7 +481,7 @@ pub(crate) async fn resolve_occurrence_assignee(
     if series.assigned_to_user_id.is_some() {
         return Ok(series.assigned_to_user_id.clone());
     }
-    let rotation = event_series.list_rotation_members(&series.id).await?;
+    let rotation = series_repo.list_rotation_members(&series.id).await?;
     if rotation.is_empty() {
         return Ok(None);
     }
@@ -506,7 +504,7 @@ pub(crate) async fn resolve_occurrence_assignee(
 /// assignment`'s Task-only gate), so this falls straight through to the plain
 /// `assigned_to_user_id` for anything but a Task series, identical to today's display.
 pub async fn current_series_assignee(
-    event_series: &Arc<dyn ItemSeriesRepo>,
+    series_repo: &Arc<dyn ItemSeriesRepo>,
     series: &ItemSeries,
     tz_offset_minutes: i32,
 ) -> Result<Option<String>, ItemError> {
@@ -515,7 +513,7 @@ pub async fn current_series_assignee(
     }
     let rule = recurrence::parse(&series.recurrence).map_err(ItemError::Invalid)?;
     let occurrence_date = current_occurrence_date(series, &rule, tz_offset_minutes);
-    resolve_occurrence_assignee(event_series, series, occurrence_date, tz_offset_minutes).await
+    resolve_occurrence_assignee(series_repo, series, occurrence_date, tz_offset_minutes).await
 }
 
 /// Stage 10 gap 1: the date to advance a Task-typed series' cursor to when settling
@@ -549,14 +547,14 @@ fn cursor_value_for_settlement(
 /// Stage 10 gap 1: for a completion-basis series, advances the cursor to `Utc::now()`
 /// (via `cursor_value_for_settlement`) instead of the occurrence's nominal date.
 pub async fn record_task_completion(
-    event_series: &Arc<dyn ItemSeriesRepo>,
+    series_repo: &Arc<dyn ItemSeriesRepo>,
     item_id: &str,
 ) -> Result<(), ItemError> {
-    if let Some(occurrence) = event_series.find_occurrence_by_item_id(item_id).await? {
-        let series = event_series.get_series(&occurrence.series_id).await?;
+    if let Some(occurrence) = series_repo.find_occurrence_by_item_id(item_id).await? {
+        let series = series_repo.get_series(&occurrence.series_id).await?;
         if series.item_type == ItemKind::Task {
             let cursor_value = cursor_value_for_settlement(&series, occurrence.occurrence_date);
-            event_series
+            series_repo
                 .advance_cursor(&occurrence.series_id, cursor_value)
                 .await?;
         }
@@ -576,22 +574,22 @@ pub async fn record_task_completion(
 /// occurrence — there's no earlier occurrence for `retreat_once` to land on, so the
 /// cursor goes back to its pre-anything-settled `None` state instead.
 pub async fn record_task_uncompletion(
-    event_series: &Arc<dyn ItemSeriesRepo>,
+    series_repo: &Arc<dyn ItemSeriesRepo>,
     item_id: &str,
     tz_offset_minutes: i32,
 ) -> Result<(), ItemError> {
-    if let Some(occurrence) = event_series.find_occurrence_by_item_id(item_id).await? {
-        let series = event_series.get_series(&occurrence.series_id).await?;
+    if let Some(occurrence) = series_repo.find_occurrence_by_item_id(item_id).await? {
+        let series = series_repo.get_series(&occurrence.series_id).await?;
         if series.item_type == ItemKind::Task {
             if occurrence.occurrence_date == series.anchor_date {
-                event_series
+                series_repo
                     .clear_cursor(&series.id, occurrence.occurrence_date)
                     .await?;
             } else {
                 let rule = recurrence::parse(&series.recurrence).map_err(ItemError::Invalid)?;
                 let previous =
                     recurrence::retreat_once(&rule, occurrence.occurrence_date, tz_offset_minutes);
-                event_series.retreat_cursor(&series.id, previous).await?;
+                series_repo.retreat_cursor(&series.id, previous).await?;
             }
         }
     }
@@ -851,7 +849,7 @@ pub async fn create_series(
     repo: &Arc<dyn ItemRepo>,
     projects: &Arc<dyn ProjectRepo>,
     teams: &Arc<dyn TeamRepo>,
-    event_series: &Arc<dyn ItemSeriesRepo>,
+    series_repo: &Arc<dyn ItemSeriesRepo>,
     requester_user_id: &str,
     params: CreateItemSeriesParams,
 ) -> Result<String, ItemError> {
@@ -877,7 +875,7 @@ pub async fn create_series(
         params.points,
     )
     .await?;
-    let series_id = event_series
+    let series_id = series_repo
         .create_series(&ItemSeries {
             id: String::new(),
             project_id: params.project_id,
@@ -897,7 +895,7 @@ pub async fn create_series(
         })
         .await?;
     if !rotation_user_ids.is_empty() {
-        event_series
+        series_repo
             .set_rotation_members(&series_id, &rotation_user_ids)
             .await?;
     }
@@ -945,13 +943,13 @@ pub async fn duplicate_series(
 pub async fn delete_series(
     projects: &Arc<dyn ProjectRepo>,
     teams: &Arc<dyn TeamRepo>,
-    event_series: &Arc<dyn ItemSeriesRepo>,
+    series_repo: &Arc<dyn ItemSeriesRepo>,
     requester_user_id: &str,
     series_id: &str,
 ) -> Result<(), ItemError> {
-    let series = event_series.get_series(series_id).await?;
+    let series = series_repo.get_series(series_id).await?;
     require_project_member(projects, teams, &series.project_id, requester_user_id).await?;
-    event_series.delete_series(series_id).await?;
+    series_repo.delete_series(series_id).await?;
     Ok(())
 }
 
@@ -976,12 +974,12 @@ pub async fn update_series(
     repo: &Arc<dyn ItemRepo>,
     projects: &Arc<dyn ProjectRepo>,
     teams: &Arc<dyn TeamRepo>,
-    event_series: &Arc<dyn ItemSeriesRepo>,
+    series_repo: &Arc<dyn ItemSeriesRepo>,
     requester_user_id: &str,
     series_id: &str,
     params: UpdateItemSeriesParams,
 ) -> Result<(), ItemError> {
-    let current = event_series.get_series(series_id).await?;
+    let current = series_repo.get_series(series_id).await?;
     require_project_member(projects, teams, &current.project_id, requester_user_id).await?;
     validate_series_item_type(params.item_type)?;
     validate_series_event_type(&params.event_type)?;
@@ -1004,7 +1002,7 @@ pub async fn update_series(
         params.points,
     )
     .await?;
-    event_series
+    series_repo
         .update_series(
             series_id,
             &ItemSeries {
@@ -1041,7 +1039,7 @@ pub async fn update_series(
     // write regardless of whether rotation_user_ids is empty, so switching a series
     // from rotating back to fixed (or to neither) actually clears its prior members
     // rather than leaving them stranded in the join table.
-    event_series
+    series_repo
         .set_rotation_members(series_id, &rotation_user_ids)
         .await?;
     Ok(())
@@ -1050,12 +1048,12 @@ pub async fn update_series(
 pub async fn list_series_for_project(
     projects: &Arc<dyn ProjectRepo>,
     teams: &Arc<dyn TeamRepo>,
-    event_series: &Arc<dyn ItemSeriesRepo>,
+    series_repo: &Arc<dyn ItemSeriesRepo>,
     requester_user_id: &str,
     project_id: &str,
 ) -> Result<Vec<ItemSeries>, ItemError> {
     require_project_member(projects, teams, project_id, requester_user_id).await?;
-    Ok(event_series.list_series_for_project(project_id).await?)
+    Ok(series_repo.list_series_for_project(project_id).await?)
 }
 
 /// Stage 5 of docs/recurring-events-virtual-occurrences-rough-plan.md, superseded by Stage B
@@ -1155,14 +1153,14 @@ impl ProjectOccurrence {
 /// using a stale date here would silently target the wrong `(series_id, occurrence_date)` row.
 /// `None` for an item never materialized from a series.
 pub async fn skip_url_for_item(
-    event_series: &Arc<dyn ItemSeriesRepo>,
+    series_repo: &Arc<dyn ItemSeriesRepo>,
     item: &Item,
     project_id: &str,
 ) -> Result<Option<String>, ItemError> {
     let Some(series_id) = &item.series_id else {
         return Ok(None);
     };
-    let occurrence = event_series.find_occurrence_by_item_id(&item.id).await?;
+    let occurrence = series_repo.find_occurrence_by_item_id(&item.id).await?;
     Ok(occurrence.map(|o| {
         format!(
             "/web/projects/{project_id}/series/{series_id}/occurrences/{}/skip",
@@ -1172,7 +1170,7 @@ pub async fn skip_url_for_item(
 }
 
 pub async fn list_occurrence_states_for_project(
-    event_series: &Arc<dyn ItemSeriesRepo>,
+    series_repo: &Arc<dyn ItemSeriesRepo>,
     users: &Arc<dyn UserRepo>,
     project_id: &str,
     range_start: DateTime<Utc>,
@@ -1180,7 +1178,7 @@ pub async fn list_occurrence_states_for_project(
     tz_offset_minutes: i32,
 ) -> Result<Vec<ProjectOccurrence>, ItemError> {
     let now = Utc::now();
-    let all_series = event_series.list_series_for_project(project_id).await?;
+    let all_series = series_repo.list_series_for_project(project_id).await?;
     let mut result = Vec::new();
     let mut names: HashMap<String, String> = HashMap::new();
     for series in &all_series {
@@ -1194,7 +1192,7 @@ pub async fn list_occurrence_states_for_project(
         // Only queried on the "no fixed assignee" path, same as
         // `resolve_occurrence_assignee`.
         let rotation_members = if series.assigned_to_user_id.is_none() {
-            event_series.list_rotation_members(&series.id).await?
+            series_repo.list_rotation_members(&series.id).await?
         } else {
             Vec::new()
         };
@@ -1226,7 +1224,7 @@ pub async fn list_occurrence_states_for_project(
         }
         let query_start = range_start.min(current_date);
         let query_end = range_end.max(current_date);
-        let existing = event_series
+        let existing = series_repo
             .list_occurrences_between(&series.id, query_start, query_end)
             .await?;
         let existing_by_ts: HashMap<i64, &ItemOccurrence> = existing
@@ -1400,7 +1398,7 @@ mod tests {
             }))
         });
         series_mock.expect_record_materialized_occurrence().times(0);
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let mut projects_mock = MockProjectRepo::new();
         projects_mock
@@ -1424,7 +1422,7 @@ mod tests {
             &repo,
             &projects,
             &teams,
-            &event_series,
+            &series_repo,
             "owner1",
             "s1",
             occurrence_date(),
@@ -1455,7 +1453,7 @@ mod tests {
             })
             .times(1)
             .returning(|_, _, _| Ok(()));
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let mut projects_mock = MockProjectRepo::new();
         projects_mock
@@ -1489,7 +1487,7 @@ mod tests {
             &repo,
             &projects,
             &teams,
-            &event_series,
+            &series_repo,
             "owner1",
             "s1",
             occurrence_date(),
@@ -1520,7 +1518,7 @@ mod tests {
             .expect_record_materialized_occurrence()
             .times(1)
             .returning(|_, _, _| Ok(()));
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let mut projects_mock = MockProjectRepo::new();
         projects_mock
@@ -1552,7 +1550,7 @@ mod tests {
             &repo,
             &projects,
             &teams,
-            &event_series,
+            &series_repo,
             "owner1",
             "s1",
             occurrence_date(),
@@ -1582,7 +1580,7 @@ mod tests {
             .expect_record_materialized_occurrence()
             .times(1)
             .returning(|_, _, _| Ok(()));
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let mut projects_mock = MockProjectRepo::new();
         projects_mock
@@ -1610,7 +1608,7 @@ mod tests {
             &repo,
             &projects,
             &teams,
-            &event_series,
+            &series_repo,
             "owner1",
             "s1",
             occurrence_date(),
@@ -1641,7 +1639,7 @@ mod tests {
             .expect_record_materialized_occurrence()
             .times(1)
             .returning(|_, _, _| Ok(()));
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let mut projects_mock = MockProjectRepo::new();
         projects_mock
@@ -1698,7 +1696,7 @@ mod tests {
             &repo,
             &projects,
             &teams,
-            &event_series,
+            &series_repo,
             "owner1",
             "s1",
             occurrence_date(),
@@ -1717,7 +1715,7 @@ mod tests {
             .expect_get_series()
             .returning(|_| Err(RepoError::NotFound));
         series_mock.expect_get_occurrence().times(0);
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let repo: Arc<dyn ItemRepo> = Arc::new(MockItemRepo::new());
         let projects: Arc<dyn ProjectRepo> = Arc::new(MockProjectRepo::new());
@@ -1727,7 +1725,7 @@ mod tests {
             &repo,
             &projects,
             &teams,
-            &event_series,
+            &series_repo,
             "owner1",
             "bogus",
             occurrence_date(),
@@ -1750,7 +1748,7 @@ mod tests {
         series_mock
             .expect_list_rotation_members()
             .returning(|_| Ok(Vec::new()));
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let mut projects_mock = MockProjectRepo::new();
         projects_mock
@@ -1765,7 +1763,7 @@ mod tests {
             &repo,
             &projects,
             &teams,
-            &event_series,
+            &series_repo,
             "not-the-owner",
             "s1",
             occurrence_date(),
@@ -1792,7 +1790,7 @@ mod tests {
             .expect_record_materialized_occurrence()
             .times(1)
             .returning(|_, _, _| Ok(()));
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let mut projects_mock = MockProjectRepo::new();
         projects_mock
@@ -1820,7 +1818,7 @@ mod tests {
             &repo,
             &projects,
             &teams,
-            &event_series,
+            &series_repo,
             "member1",
             "s1",
             occurrence_date(),
@@ -1843,9 +1841,9 @@ mod tests {
             .withf(|series_id: &str, _date| series_id == "s1")
             .times(1)
             .returning(|_, _| Ok(()));
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
-        skip_occurrence(&event_series, "s1", occurrence_date(), 0)
+        skip_occurrence(&series_repo, "s1", occurrence_date(), 0)
             .await
             .expect("should mark the occurrence as skipped");
     }
@@ -1858,9 +1856,9 @@ mod tests {
             .returning(|_| Ok(series("p1")));
         series_mock.expect_mark_exdate().returning(|_, _| Ok(()));
         series_mock.expect_advance_cursor().times(0);
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
-        skip_occurrence(&event_series, "s1", occurrence_date(), 0)
+        skip_occurrence(&series_repo, "s1", occurrence_date(), 0)
             .await
             .expect("should mark the occurrence as skipped");
     }
@@ -1889,9 +1887,9 @@ mod tests {
             })
             .times(1)
             .returning(|_, _| Ok(()));
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
-        skip_occurrence(&event_series, "s1", occurrence_date(), 0)
+        skip_occurrence(&series_repo, "s1", occurrence_date(), 0)
             .await
             .expect("should mark the occurrence as skipped and advance the cursor");
     }
@@ -1922,9 +1920,9 @@ mod tests {
             })
             .times(1)
             .returning(|_, _| Ok(()));
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
-        skip_occurrence(&event_series, "s1", occurrence_date(), 0)
+        skip_occurrence(&series_repo, "s1", occurrence_date(), 0)
             .await
             .expect("should advance the cursor to roughly now");
     }
@@ -1945,9 +1943,9 @@ mod tests {
             .returning(|_, _| Ok(None));
         series_mock.expect_mark_exdate().times(0);
         series_mock.expect_advance_cursor().times(0);
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
-        let result = skip_occurrence(&event_series, "s1", occurrence_date(), 0).await;
+        let result = skip_occurrence(&series_repo, "s1", occurrence_date(), 0).await;
         assert!(matches!(result, Err(ItemError::Invalid(_))));
     }
 
@@ -1986,7 +1984,7 @@ mod tests {
             .expect_delete_occurrence()
             .times(1)
             .returning(|_, _| Ok(()));
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let mut projects_mock = MockProjectRepo::new();
         projects_mock
@@ -2011,7 +2009,7 @@ mod tests {
             &repo,
             &projects,
             &teams,
-            &event_series,
+            &series_repo,
             "owner1",
             "s1",
             occurrence_date(),
@@ -2034,7 +2032,7 @@ mod tests {
             .expect_mark_exdate()
             .times(1)
             .returning(|_, _| Ok(()));
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         // No expectations set on these mocks at all — mockall panics on any unmocked
         // call, so this asserts `delete_project_item`'s machinery is never reached when
@@ -2047,7 +2045,7 @@ mod tests {
             &repo,
             &projects,
             &teams,
-            &event_series,
+            &series_repo,
             "owner1",
             "s1",
             occurrence_date(),
@@ -2067,9 +2065,9 @@ mod tests {
             .expect_get_occurrence()
             .returning(|_, _| Ok(None));
         series_mock.expect_delete_occurrence().times(0);
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
-        let result = unskip_occurrence(&event_series, "s1", occurrence_date(), 0).await;
+        let result = unskip_occurrence(&series_repo, "s1", occurrence_date(), 0).await;
         assert!(matches!(result, Err(ItemError::Invalid(_))));
     }
 
@@ -2094,9 +2092,9 @@ mod tests {
             .expect_delete_occurrence()
             .times(1)
             .returning(|_, _| Ok(()));
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
-        unskip_occurrence(&event_series, "s1", occurrence_date(), 0)
+        unskip_occurrence(&series_repo, "s1", occurrence_date(), 0)
             .await
             .expect("should unskip unconditionally for an Event-typed series");
     }
@@ -2120,9 +2118,9 @@ mod tests {
             }))
         });
         series_mock.expect_delete_occurrence().times(0);
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
-        let result = unskip_occurrence(&event_series, "s1", occurrence_date(), 0).await;
+        let result = unskip_occurrence(&series_repo, "s1", occurrence_date(), 0).await;
         assert!(matches!(result, Err(ItemError::Invalid(_))));
     }
 
@@ -2158,9 +2156,9 @@ mod tests {
             .expect_delete_occurrence()
             .times(1)
             .returning(|_, _| Ok(()));
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
-        unskip_occurrence(&event_series, "s1", occurrence_date(), 0)
+        unskip_occurrence(&series_repo, "s1", occurrence_date(), 0)
             .await
             .expect("should retreat the cursor and delete the exdate row");
     }
@@ -2195,9 +2193,9 @@ mod tests {
             .expect_delete_occurrence()
             .times(1)
             .returning(|_, _| Ok(()));
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
-        unskip_occurrence(&event_series, "s1", occurrence_date(), 0)
+        unskip_occurrence(&series_repo, "s1", occurrence_date(), 0)
             .await
             .expect("should clear the cursor and delete the exdate row");
     }
@@ -2225,9 +2223,9 @@ mod tests {
         series_mock
             .expect_get_occurrence()
             .returning(|_, _| Ok(None));
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
-        let result = validate_completable(&event_series, "completed-item", 0).await;
+        let result = validate_completable(&series_repo, "completed-item", 0).await;
         assert!(matches!(result, Err(ItemError::Invalid(_))));
     }
 
@@ -2275,9 +2273,9 @@ mod tests {
             })
             .times(1)
             .returning(|_, _| Ok(()));
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
-        validate_completable(&event_series, "completed-item", 0)
+        validate_completable(&series_repo, "completed-item", 0)
             .await
             .expect("should self-heal past the exdate anchor and allow the next occurrence");
     }
@@ -2306,9 +2304,9 @@ mod tests {
         series_mock
             .expect_get_occurrence()
             .returning(|_, _| Ok(None));
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
-        validate_completable(&event_series, "completed-item", 0)
+        validate_completable(&series_repo, "completed-item", 0)
             .await
             .expect("the series' own current occurrence should be completable");
     }
@@ -2331,9 +2329,9 @@ mod tests {
         series_mock
             .expect_get_series()
             .returning(|_| Ok(series("p1")));
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
-        validate_completable(&event_series, "some-item", 0)
+        validate_completable(&series_repo, "some-item", 0)
             .await
             .expect("an Event-typed series has no current-occurrence restriction");
     }
@@ -2345,9 +2343,9 @@ mod tests {
             .expect_find_occurrence_by_item_id()
             .returning(|_| Ok(None));
         series_mock.expect_get_series().times(0);
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
-        validate_completable(&event_series, "some-task", 0)
+        validate_completable(&series_repo, "some-task", 0)
             .await
             .expect("should no-op for an item with no linked occurrence");
     }
@@ -2379,9 +2377,9 @@ mod tests {
                 is_exdate: false,
             }))
         });
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
-        validate_uncompletable(&event_series, "completed-item")
+        validate_uncompletable(&series_repo, "completed-item")
             .await
             .expect("the series' own most recently completed occurrence should be uncompletable");
     }
@@ -2418,9 +2416,9 @@ mod tests {
                     is_exdate: false,
                 }))
             });
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
-        let result = validate_uncompletable(&event_series, "completed-item").await;
+        let result = validate_uncompletable(&series_repo, "completed-item").await;
         assert!(matches!(result, Err(ItemError::Invalid(_))));
     }
 
@@ -2452,9 +2450,9 @@ mod tests {
                 is_exdate: true,
             }))
         });
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
-        let result = validate_uncompletable(&event_series, "completed-item").await;
+        let result = validate_uncompletable(&series_repo, "completed-item").await;
         assert!(matches!(result, Err(ItemError::Invalid(_))));
     }
 
@@ -2478,9 +2476,9 @@ mod tests {
             .expect_get_series()
             .returning(move |_| Ok(task_series.clone()));
         series_mock.expect_get_occurrence().times(0);
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
-        let result = validate_uncompletable(&event_series, "completed-item").await;
+        let result = validate_uncompletable(&series_repo, "completed-item").await;
         assert!(matches!(result, Err(ItemError::Invalid(_))));
     }
 
@@ -2502,9 +2500,9 @@ mod tests {
         series_mock
             .expect_get_series()
             .returning(|_| Ok(series("p1")));
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
-        validate_uncompletable(&event_series, "some-item")
+        validate_uncompletable(&series_repo, "some-item")
             .await
             .expect("an Event-typed series has no cursor-occurrence restriction");
     }
@@ -2516,9 +2514,9 @@ mod tests {
             .expect_find_occurrence_by_item_id()
             .returning(|_| Ok(None));
         series_mock.expect_get_series().times(0);
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
-        validate_uncompletable(&event_series, "some-task")
+        validate_uncompletable(&series_repo, "some-task")
             .await
             .expect("should no-op for an item with no linked occurrence");
     }
@@ -2547,9 +2545,9 @@ mod tests {
         series_mock.expect_mark_exdate().times(0);
         series_mock.expect_get_series().times(0);
         series_mock.expect_advance_cursor().times(0);
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
-        unlink_deleted_item_occurrence(&event_series, "deleted-item")
+        unlink_deleted_item_occurrence(&series_repo, "deleted-item")
             .await
             .expect("should un-materialize the occurrence");
     }
@@ -2561,9 +2559,9 @@ mod tests {
             .expect_find_occurrence_by_item_id()
             .returning(|_| Ok(None));
         series_mock.expect_delete_occurrence().times(0);
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
-        unlink_deleted_item_occurrence(&event_series, "some-task")
+        unlink_deleted_item_occurrence(&series_repo, "some-task")
             .await
             .expect("should no-op for an item with no linked occurrence");
     }
@@ -2600,9 +2598,9 @@ mod tests {
             .returning(|_, _| Ok(()));
         series_mock.expect_get_series().times(0);
         series_mock.expect_advance_cursor().times(0);
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
-        unlink_deleted_item_occurrence(&event_series, "deleted-item")
+        unlink_deleted_item_occurrence(&series_repo, "deleted-item")
             .await
             .expect("should un-materialize without touching the cursor");
     }
@@ -2633,9 +2631,9 @@ mod tests {
             })
             .times(1)
             .returning(|_, _| Ok(()));
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
-        record_task_completion(&event_series, "completed-item")
+        record_task_completion(&series_repo, "completed-item")
             .await
             .expect("should advance the cursor");
     }
@@ -2666,9 +2664,9 @@ mod tests {
             })
             .times(1)
             .returning(|_, _| Ok(()));
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
-        record_task_completion(&event_series, "completed-item")
+        record_task_completion(&series_repo, "completed-item")
             .await
             .expect("should advance the cursor to roughly now");
     }
@@ -2681,9 +2679,9 @@ mod tests {
             .returning(|_| Ok(None));
         series_mock.expect_get_series().times(0);
         series_mock.expect_advance_cursor().times(0);
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
-        record_task_completion(&event_series, "some-task")
+        record_task_completion(&series_repo, "some-task")
             .await
             .expect("should no-op for an item with no linked occurrence");
     }
@@ -2705,9 +2703,9 @@ mod tests {
             .expect_get_series()
             .returning(|_| Ok(series("p1")));
         series_mock.expect_advance_cursor().times(0);
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
-        record_task_completion(&event_series, "some-event")
+        record_task_completion(&series_repo, "some-event")
             .await
             .expect("should no-op for an Event-typed series");
     }
@@ -2742,9 +2740,9 @@ mod tests {
             })
             .times(1)
             .returning(|_, _| Ok(()));
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
-        record_task_uncompletion(&event_series, "uncompleted-item", 0)
+        record_task_uncompletion(&series_repo, "uncompleted-item", 0)
             .await
             .expect("should retreat the cursor to the previous occurrence");
     }
@@ -2775,9 +2773,9 @@ mod tests {
             })
             .times(1)
             .returning(|_, _| Ok(()));
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
-        record_task_uncompletion(&event_series, "uncompleted-item", 0)
+        record_task_uncompletion(&series_repo, "uncompleted-item", 0)
             .await
             .expect("should clear the cursor back to None");
     }
@@ -2791,9 +2789,9 @@ mod tests {
         series_mock.expect_get_series().times(0);
         series_mock.expect_retreat_cursor().times(0);
         series_mock.expect_clear_cursor().times(0);
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
-        record_task_uncompletion(&event_series, "some-task", 0)
+        record_task_uncompletion(&series_repo, "some-task", 0)
             .await
             .expect("should no-op for an item with no linked occurrence");
     }
@@ -2816,9 +2814,9 @@ mod tests {
             .returning(|_| Ok(series("p1")));
         series_mock.expect_retreat_cursor().times(0);
         series_mock.expect_clear_cursor().times(0);
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
-        record_task_uncompletion(&event_series, "some-event", 0)
+        record_task_uncompletion(&series_repo, "some-event", 0)
             .await
             .expect("should no-op for an Event-typed series");
     }
@@ -2852,9 +2850,9 @@ mod tests {
             .expect_get_series()
             .returning(|_| Err(RepoError::NotFound));
         series_mock.expect_mark_exdate().times(0);
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
-        let result = skip_occurrence(&event_series, "bogus", occurrence_date(), 0).await;
+        let result = skip_occurrence(&series_repo, "bogus", occurrence_date(), 0).await;
         assert!(matches!(result, Err(ItemError::NotFound)));
     }
 
@@ -2923,13 +2921,13 @@ mod tests {
             .withf(|s: &ItemSeries| s.project_id == "p1" && s.name == "Standup")
             .times(1)
             .returning(|_| Ok("new-series-id".to_string()));
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let id = create_series(
             &no_template_repo(),
             &projects,
             &teams,
-            &event_series,
+            &series_repo,
             "owner1",
             create_params("p1"),
         )
@@ -2946,13 +2944,13 @@ mod tests {
             .returning(|_| Ok(personal_project()));
         let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
         let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(MockItemSeriesRepo::new());
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(MockItemSeriesRepo::new());
 
         let result = create_series(
             &no_template_repo(),
             &projects,
             &teams,
-            &event_series,
+            &series_repo,
             "not-the-owner",
             create_params("p1"),
         )
@@ -2975,7 +2973,7 @@ mod tests {
             .withf(|s: &ItemSeries| s.item_type == ItemKind::Task)
             .times(1)
             .returning(|_| Ok("new-series-id".to_string()));
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let mut params = create_params("p1");
         params.item_type = ItemKind::Task;
@@ -2983,7 +2981,7 @@ mod tests {
             &no_template_repo(),
             &projects,
             &teams,
-            &event_series,
+            &series_repo,
             "owner1",
             params,
         )
@@ -3005,7 +3003,7 @@ mod tests {
         let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
         let mut series_mock = MockItemSeriesRepo::new();
         series_mock.expect_create_series().times(0);
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let mut params = create_params("p1");
         params.item_type = ItemKind::Event;
@@ -3014,7 +3012,7 @@ mod tests {
             &no_template_repo(),
             &projects,
             &teams,
-            &event_series,
+            &series_repo,
             "owner1",
             params,
         )
@@ -3032,7 +3030,7 @@ mod tests {
         let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
         let mut series_mock = MockItemSeriesRepo::new();
         series_mock.expect_create_series().times(0);
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let mut params = create_params("p1");
         params.item_type = ItemKind::Task;
@@ -3041,7 +3039,7 @@ mod tests {
             &no_template_repo(),
             &projects,
             &teams,
-            &event_series,
+            &series_repo,
             "owner1",
             params,
         )
@@ -3069,7 +3067,7 @@ mod tests {
             })
             .times(1)
             .returning(|_| Ok("new-series-id".to_string()));
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let mut params = create_params("p1");
         params.item_type = ItemKind::Task;
@@ -3079,7 +3077,7 @@ mod tests {
             &no_template_repo(),
             &projects,
             &teams,
-            &event_series,
+            &series_repo,
             "admin1",
             params,
         )
@@ -3108,7 +3106,7 @@ mod tests {
             })
             .times(1)
             .returning(|_| Ok("new-series-id".to_string()));
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let mut params = create_params("p1");
         params.item_type = ItemKind::Task;
@@ -3118,7 +3116,7 @@ mod tests {
             &no_template_repo(),
             &projects,
             &teams,
-            &event_series,
+            &series_repo,
             "member1",
             params,
         )
@@ -3140,7 +3138,7 @@ mod tests {
         let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
         let mut series_mock = MockItemSeriesRepo::new();
         series_mock.expect_create_series().times(0);
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let mut params = create_params("p1");
         params.item_type = ItemKind::Task;
@@ -3150,7 +3148,7 @@ mod tests {
             &no_template_repo(),
             &projects,
             &teams,
-            &event_series,
+            &series_repo,
             "member1",
             params,
         )
@@ -3171,7 +3169,7 @@ mod tests {
         let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
         let mut series_mock = MockItemSeriesRepo::new();
         series_mock.expect_create_series().times(0);
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let mut params = create_params("p1");
         params.item_type = ItemKind::Task;
@@ -3180,7 +3178,7 @@ mod tests {
             &no_template_repo(),
             &projects,
             &teams,
-            &event_series,
+            &series_repo,
             "member1",
             params,
         )
@@ -3205,7 +3203,7 @@ mod tests {
         let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
         let mut series_mock = MockItemSeriesRepo::new();
         series_mock.expect_create_series().times(0);
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let mut params = create_params("p1");
         params.item_type = ItemKind::Task;
@@ -3214,7 +3212,7 @@ mod tests {
             &no_template_repo(),
             &projects,
             &teams,
-            &event_series,
+            &series_repo,
             "member1",
             params,
         )
@@ -3248,7 +3246,7 @@ mod tests {
             })
             .times(1)
             .returning(|_, _| Ok(()));
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let mut params = create_params("p1");
         params.item_type = ItemKind::Task;
@@ -3257,7 +3255,7 @@ mod tests {
             &no_template_repo(),
             &projects,
             &teams,
-            &event_series,
+            &series_repo,
             "member1",
             params,
         )
@@ -3276,7 +3274,7 @@ mod tests {
         let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
         let mut series_mock = MockItemSeriesRepo::new();
         series_mock.expect_create_series().times(0);
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let mut params = create_params("p1");
         params.item_type = ItemKind::Template;
@@ -3284,7 +3282,7 @@ mod tests {
             &no_template_repo(),
             &projects,
             &teams,
-            &event_series,
+            &series_repo,
             "owner1",
             params,
         )
@@ -3302,7 +3300,7 @@ mod tests {
         let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
         let mut series_mock = MockItemSeriesRepo::new();
         series_mock.expect_create_series().times(0);
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let mut params = create_params("p1");
         params.item_type = ItemKind::Simple;
@@ -3310,7 +3308,7 @@ mod tests {
             &no_template_repo(),
             &projects,
             &teams,
-            &event_series,
+            &series_repo,
             "owner1",
             params,
         )
@@ -3328,7 +3326,7 @@ mod tests {
         let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
         let mut series_mock = MockItemSeriesRepo::new();
         series_mock.expect_create_series().times(0);
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let mut params = create_params("p1");
         params.item_type = ItemKind::Task;
@@ -3337,7 +3335,7 @@ mod tests {
             &no_template_repo(),
             &projects,
             &teams,
-            &event_series,
+            &series_repo,
             "owner1",
             params,
         )
@@ -3357,7 +3355,7 @@ mod tests {
         let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
         let mut series_mock = MockItemSeriesRepo::new();
         series_mock.expect_create_series().times(0);
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let mut params = create_params("p1");
         params.item_type = ItemKind::Event;
@@ -3366,7 +3364,7 @@ mod tests {
             &no_template_repo(),
             &projects,
             &teams,
-            &event_series,
+            &series_repo,
             "owner1",
             params,
         )
@@ -3387,7 +3385,7 @@ mod tests {
             .expect_create_series()
             .times(1)
             .returning(|_| Ok("new-series-id".to_string()));
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let mut params = create_params("p1");
         params.item_type = ItemKind::Task;
@@ -3396,7 +3394,7 @@ mod tests {
             &no_template_repo(),
             &projects,
             &teams,
-            &event_series,
+            &series_repo,
             "owner1",
             params,
         )
@@ -3414,7 +3412,7 @@ mod tests {
         let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
         let mut series_mock = MockItemSeriesRepo::new();
         series_mock.expect_create_series().times(0);
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let mut params = create_params("p1");
         params.item_type = ItemKind::Event;
@@ -3423,7 +3421,7 @@ mod tests {
             &no_template_repo(),
             &projects,
             &teams,
-            &event_series,
+            &series_repo,
             "owner1",
             params,
         )
@@ -3441,7 +3439,7 @@ mod tests {
         let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
         let mut series_mock = MockItemSeriesRepo::new();
         series_mock.expect_create_series().times(0);
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let mut params = create_params("p1");
         params.item_type = ItemKind::Event;
@@ -3450,7 +3448,7 @@ mod tests {
             &no_template_repo(),
             &projects,
             &teams,
-            &event_series,
+            &series_repo,
             "owner1",
             params,
         )
@@ -3472,7 +3470,7 @@ mod tests {
             .withf(|s: &ItemSeries| s.basis.as_deref() == Some("DUE_DATE"))
             .times(1)
             .returning(|_| Ok("s1".to_string()));
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let mut params = create_params("p1");
         params.item_type = ItemKind::Task;
@@ -3485,7 +3483,7 @@ mod tests {
             &no_template_repo(),
             &projects,
             &teams,
-            &event_series,
+            &series_repo,
             "owner1",
             params,
         )
@@ -3503,7 +3501,7 @@ mod tests {
         let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
         let mut series_mock = MockItemSeriesRepo::new();
         series_mock.expect_create_series().times(0);
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let mut params = create_params("p1");
         params.item_type = ItemKind::Task;
@@ -3515,7 +3513,7 @@ mod tests {
             &no_template_repo(),
             &projects,
             &teams,
-            &event_series,
+            &series_repo,
             "owner1",
             params,
         )
@@ -3537,7 +3535,7 @@ mod tests {
             .withf(|s: &ItemSeries| s.basis.as_deref() == Some("COMPLETION"))
             .times(1)
             .returning(|_| Ok("new-series-id".to_string()));
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let mut params = create_params("p1");
         params.item_type = ItemKind::Task;
@@ -3548,7 +3546,7 @@ mod tests {
             &no_template_repo(),
             &projects,
             &teams,
-            &event_series,
+            &series_repo,
             "owner1",
             params,
         )
@@ -3561,7 +3559,7 @@ mod tests {
         let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
         let mut series_mock = MockItemSeriesRepo::new();
         series_mock.expect_create_series().times(0);
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
         let mut projects_mock = MockProjectRepo::new();
         projects_mock
             .expect_get()
@@ -3572,7 +3570,7 @@ mod tests {
         let mut params = create_params("p1");
         params.item_type = ItemKind::Event;
         params.template_item_id = Some("template-1".to_string());
-        let result = create_series(&repo, &projects, &teams, &event_series, "owner1", params).await;
+        let result = create_series(&repo, &projects, &teams, &series_repo, "owner1", params).await;
         assert!(matches!(result, Err(ItemError::Invalid(_))));
     }
 
@@ -3586,7 +3584,7 @@ mod tests {
         let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
         let mut series_mock = MockItemSeriesRepo::new();
         series_mock.expect_create_series().times(0);
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let mut items_mock = MockItemRepo::new();
         items_mock
@@ -3600,7 +3598,7 @@ mod tests {
         let mut params = create_params("p1");
         params.item_type = ItemKind::Task;
         params.template_item_id = Some("not-a-template".to_string());
-        let result = create_series(&repo, &projects, &teams, &event_series, "owner1", params).await;
+        let result = create_series(&repo, &projects, &teams, &series_repo, "owner1", params).await;
         assert!(matches!(result, Err(ItemError::Invalid(_))));
     }
 
@@ -3614,7 +3612,7 @@ mod tests {
         let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
         let mut series_mock = MockItemSeriesRepo::new();
         series_mock.expect_create_series().times(0);
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let mut items_mock = MockItemRepo::new();
         items_mock
@@ -3625,7 +3623,7 @@ mod tests {
         let mut params = create_params("p1");
         params.item_type = ItemKind::Task;
         params.template_item_id = Some("other-projects-template".to_string());
-        let result = create_series(&repo, &projects, &teams, &event_series, "owner1", params).await;
+        let result = create_series(&repo, &projects, &teams, &series_repo, "owner1", params).await;
         assert!(matches!(result, Err(ItemError::NotFound)));
     }
 
@@ -3643,7 +3641,7 @@ mod tests {
             .withf(|s: &ItemSeries| s.template_item_id.as_deref() == Some("template-1"))
             .times(1)
             .returning(|_| Ok("new-series-id".to_string()));
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let mut items_mock = MockItemRepo::new();
         items_mock
@@ -3655,7 +3653,7 @@ mod tests {
         let mut params = create_params("p1");
         params.item_type = ItemKind::Task;
         params.template_item_id = Some("template-1".to_string());
-        let result = create_series(&repo, &projects, &teams, &event_series, "owner1", params).await;
+        let result = create_series(&repo, &projects, &teams, &series_repo, "owner1", params).await;
         assert!(result.is_ok());
     }
 
@@ -3666,7 +3664,7 @@ mod tests {
             .expect_get_series()
             .returning(|_| Ok(series("p1")));
         series_mock.expect_update_series().times(0);
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let mut projects_mock = MockProjectRepo::new();
         projects_mock
@@ -3682,7 +3680,7 @@ mod tests {
             &no_template_repo(),
             &projects,
             &teams,
-            &event_series,
+            &series_repo,
             "owner1",
             "s1",
             params,
@@ -3700,7 +3698,7 @@ mod tests {
             .expect_get_series()
             .returning(|_| Ok(series("p1")));
         series_mock.expect_update_series().times(0);
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let mut projects_mock = MockProjectRepo::new();
         projects_mock
@@ -3716,7 +3714,7 @@ mod tests {
             &no_template_repo(),
             &projects,
             &teams,
-            &event_series,
+            &series_repo,
             "owner1",
             "s1",
             params,
@@ -3732,7 +3730,7 @@ mod tests {
             .expect_get_series()
             .returning(|_| Ok(series("p1")));
         series_mock.expect_update_series().times(0);
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let mut projects_mock = MockProjectRepo::new();
         projects_mock
@@ -3747,7 +3745,7 @@ mod tests {
             &no_template_repo(),
             &projects,
             &teams,
-            &event_series,
+            &series_repo,
             "owner1",
             "s1",
             params,
@@ -3771,7 +3769,7 @@ mod tests {
             .expect_set_rotation_members()
             .withf(|_, ids: &[String]| ids.is_empty())
             .returning(|_, _| Ok(()));
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let mut projects_mock = MockProjectRepo::new();
         projects_mock
@@ -3794,7 +3792,7 @@ mod tests {
             &repo,
             &projects,
             &teams,
-            &event_series,
+            &series_repo,
             "owner1",
             "s1",
             params,
@@ -3809,7 +3807,7 @@ mod tests {
         series_mock
             .expect_get_series()
             .returning(|_| Ok(series("p1")));
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let mut projects_mock = MockProjectRepo::new();
         projects_mock
@@ -3818,7 +3816,7 @@ mod tests {
         let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
         let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
 
-        let result = get_series(&projects, &teams, &event_series, "owner1", "s1")
+        let result = get_series(&projects, &teams, &series_repo, "owner1", "s1")
             .await
             .expect("owner should be able to read the series");
         assert_eq!(result.name, "Standup");
@@ -3830,11 +3828,11 @@ mod tests {
         series_mock
             .expect_get_series()
             .returning(|_| Err(RepoError::NotFound));
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
         let projects: Arc<dyn ProjectRepo> = Arc::new(MockProjectRepo::new());
         let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
 
-        let result = get_series(&projects, &teams, &event_series, "owner1", "bogus").await;
+        let result = get_series(&projects, &teams, &series_repo, "owner1", "bogus").await;
         assert!(matches!(result, Err(ItemError::NotFound)));
     }
 
@@ -3849,7 +3847,7 @@ mod tests {
             .withf(|series_id: &str| series_id == "s1")
             .times(1)
             .returning(|_| Ok(()));
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let mut projects_mock = MockProjectRepo::new();
         projects_mock
@@ -3858,7 +3856,7 @@ mod tests {
         let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
         let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
 
-        delete_series(&projects, &teams, &event_series, "owner1", "s1")
+        delete_series(&projects, &teams, &series_repo, "owner1", "s1")
             .await
             .expect("owner should be able to delete the series");
     }
@@ -3870,7 +3868,7 @@ mod tests {
             .expect_get_series()
             .returning(|_| Ok(series("p1")));
         series_mock.expect_delete_series().times(0);
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let mut projects_mock = MockProjectRepo::new();
         projects_mock
@@ -3879,7 +3877,7 @@ mod tests {
         let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
         let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
 
-        let result = delete_series(&projects, &teams, &event_series, "not-the-owner", "s1").await;
+        let result = delete_series(&projects, &teams, &series_repo, "not-the-owner", "s1").await;
         assert!(result.is_err());
     }
 
@@ -3890,11 +3888,11 @@ mod tests {
             .expect_get_series()
             .returning(|_| Err(RepoError::NotFound));
         series_mock.expect_delete_series().times(0);
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
         let projects: Arc<dyn ProjectRepo> = Arc::new(MockProjectRepo::new());
         let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
 
-        let result = delete_series(&projects, &teams, &event_series, "owner1", "bogus").await;
+        let result = delete_series(&projects, &teams, &series_repo, "owner1", "bogus").await;
         assert!(matches!(result, Err(ItemError::NotFound)));
     }
 
@@ -3915,7 +3913,7 @@ mod tests {
             .expect_set_rotation_members()
             .withf(|_, ids: &[String]| ids.is_empty())
             .returning(|_, _| Ok(()));
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let mut projects_mock = MockProjectRepo::new();
         projects_mock
@@ -3928,7 +3926,7 @@ mod tests {
             &no_template_repo(),
             &projects,
             &teams,
-            &event_series,
+            &series_repo,
             "owner1",
             "s1",
             update_params(),
@@ -3944,7 +3942,7 @@ mod tests {
             .expect_get_series()
             .returning(|_| Ok(series("p1")));
         series_mock.expect_update_series().times(0);
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let mut projects_mock = MockProjectRepo::new();
         projects_mock
@@ -3957,7 +3955,7 @@ mod tests {
             &no_template_repo(),
             &projects,
             &teams,
-            &event_series,
+            &series_repo,
             "not-the-owner",
             "s1",
             update_params(),
@@ -3972,7 +3970,7 @@ mod tests {
         series_mock
             .expect_list_series_for_project()
             .returning(|_| Ok(vec![series("p1")]));
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let mut projects_mock = MockProjectRepo::new();
         projects_mock
@@ -3981,7 +3979,7 @@ mod tests {
         let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
         let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
 
-        let result = list_series_for_project(&projects, &teams, &event_series, "owner1", "p1")
+        let result = list_series_for_project(&projects, &teams, &series_repo, "owner1", "p1")
             .await
             .expect("owner should be able to list series");
         assert_eq!(result.len(), 1);
@@ -3995,10 +3993,10 @@ mod tests {
             .returning(|_| Ok(personal_project()));
         let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
         let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(MockItemSeriesRepo::new());
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(MockItemSeriesRepo::new());
 
         let result =
-            list_series_for_project(&projects, &teams, &event_series, "not-the-owner", "p1").await;
+            list_series_for_project(&projects, &teams, &series_repo, "not-the-owner", "p1").await;
         assert!(result.is_err());
     }
 
@@ -4058,13 +4056,13 @@ mod tests {
                     },
                 ])
             });
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
         let users: Arc<dyn UserRepo> = Arc::new(MockUserRepo::new());
 
         let range_start = anchor() - chrono::Duration::days(1);
         let range_end = anchor() + chrono::Duration::days(20);
         let mut result = list_occurrence_states_for_project(
-            &event_series,
+            &series_repo,
             &users,
             "p1",
             range_start,
@@ -4109,7 +4107,7 @@ mod tests {
         series_mock
             .expect_list_occurrences_between()
             .returning(|_, _, _| Ok(vec![]));
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
         let users: Arc<dyn UserRepo> = Arc::new(MockUserRepo::new());
 
         // A window that doesn't naturally contain the series' current (anchor)
@@ -4119,7 +4117,7 @@ mod tests {
         let range_start = anchor() + chrono::Duration::days(3);
         let range_end = anchor() + chrono::Duration::days(4);
         let result = list_occurrence_states_for_project(
-            &event_series,
+            &series_repo,
             &users,
             "p1",
             range_start,
@@ -4148,7 +4146,7 @@ mod tests {
         series_mock
             .expect_list_occurrences_between()
             .returning(|_, _, _| Ok(vec![]));
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let mut users_mock = MockUserRepo::new();
         users_mock.expect_get().returning(|user_id| {
@@ -4164,7 +4162,7 @@ mod tests {
         let range_start = anchor() - chrono::Duration::days(1);
         let range_end = anchor() + chrono::Duration::days(20);
         let mut result = list_occurrence_states_for_project(
-            &event_series,
+            &series_repo,
             &users,
             "p1",
             range_start,
@@ -4207,7 +4205,7 @@ mod tests {
             .expect_record_materialized_occurrence()
             .times(1)
             .returning(|_, _, _| Ok(()));
-        let event_series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let mut projects_mock = MockProjectRepo::new();
         projects_mock
@@ -4235,7 +4233,7 @@ mod tests {
             &repo,
             &projects,
             &teams,
-            &event_series,
+            &series_repo,
             "owner1",
             "s1",
             occurrence,

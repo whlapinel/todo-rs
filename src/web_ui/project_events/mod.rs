@@ -393,7 +393,7 @@ pub(crate) fn grid_start_for(year: i32, month: u32) -> NaiveDate {
 /// `team_events::build_calendar_days` exactly. `virtual_occurrences` (Stage 5 of
 /// docs/recurring-events-virtual-occurrences-rough-plan.md) are bucketed the same way; a
 /// materialized occurrence never appears here since it's already a real `items` row covered
-/// by `items` above (see `event_series::list_virtual_occurrences_for_project_unchecked`).
+/// by `items` above (see `series::list_virtual_occurrences_for_project_unchecked`).
 pub(crate) fn build_calendar_days(
     year: i32,
     month: u32,
