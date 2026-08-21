@@ -1,15 +1,22 @@
 <li id="main-dash-virtual-{{ series_id }}-{{ occurrence_ts }}" class="py-2">
   <div class="flex items-center gap-x-3">
+    {% if is_skipped %}
     <span class="shrink-0 size-4"></span>
+    {% else if let Some(url) = complete_url %}
+    <input type="checkbox" hx-post="{{ url }}"
+      class="shrink-0 size-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-600 dark:border-white/20 dark:bg-white/5" />
+    {% else %}
+    <span class="shrink-0 size-4"></span>
+    {% endif %}
     <span
       class="shrink-0 inline-flex size-4 items-center justify-center rounded-full bg-gray-200 text-[10px] font-semibold text-gray-600 dark:bg-white/10 dark:text-gray-300"
       title="{{ title }}">{{ type_symbol }}</span>
     {% if is_skipped %}
-    <span class="min-w-0 flex-1 truncate italic line-through text-gray-400 dark:text-gray-500">{{ name }}</span>
+    <span class="min-w-0 flex-1 truncate line-through text-gray-400 dark:text-gray-500">{{ name }}</span>
     <span class="shrink-0 text-[10px] uppercase tracking-wide font-semibold text-gray-400 dark:text-gray-500">Skipped</span>
     {% else %}
     <a href="{{ materialize_url }}"
-      class="min-w-0 flex-1 truncate italic text-gray-500 dark:text-gray-400">{{ name }}</a>
+      class="min-w-0 flex-1 truncate text-gray-900 dark:text-white">{{ name }}</a>
     {% if is_current %}
     <span
       class="shrink-0 text-[10px] uppercase tracking-wide font-semibold text-indigo-600 dark:text-indigo-400">Current</span>

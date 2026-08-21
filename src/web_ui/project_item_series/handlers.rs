@@ -5,7 +5,7 @@ use crate::service::item_series::{
     self as item_series_service, CreateItemSeriesParams, UpdateItemSeriesParams,
 };
 use crate::service::projects::{self as project_service};
-use crate::storage::sqlite::{ItemRepo, ItemSeriesRepo, ProjectRepo, TeamRepo};
+use crate::storage::sqlite::{ItemRepo, ItemSeriesRepo, ProjectRepo, TeamRepo, UserRepo};
 use crate::web_ui::nav::{self, ActiveContext, SidebarSection};
 use crate::web_ui::project_item_series::templates::*;
 use crate::web_ui::project_item_series::{
@@ -14,7 +14,7 @@ use crate::web_ui::project_item_series::{
 use crate::web_ui::project_tasks::{active_member_options, names_for};
 use crate::web_ui::{TzOffset, hx_redirect, to_local};
 use askama::Template;
-use axum::extract::{Extension, Form, Path};
+use axum::extract::{Extension, Form, Path, Query};
 use axum::http::HeaderMap;
 use axum::http::header::HeaderName;
 use axum::response::{Html, IntoResponse, Redirect, Response};
@@ -503,15 +503,34 @@ pub async fn materialize_project_item_series_occurrence_form(
         .into_response())
 }
 
+/// Query param shared by Skip/Unskip below — set only by `ProjectTaskVirtualRow::
+/// from_occurrence` (`in_list_view: true`, i.e. only the flat Tasks list, never the calendar
+/// day panel or any other screen's own row template) via a URL-baked `?view=tasks-list`
+/// suffix, per its doc comment. See the archived "extend confirm-then-fade to virtual
+/// occurrences" entry (2026-08-21).
+#[derive(serde::Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct OccurrenceRowActionQuery {
+    view: Option<String>,
+    show_complete: Option<String>,
+}
+
 /// Stage 6 of docs/recurring-events-virtual-occurrences-rough-plan.md — the "Skip" button
 /// wired onto occurrences (Tasks list/calendar, Dashboard list/calendar, Events calendar; see
 /// each screen's own row/entry template). As of Stage B of
 /// `docs/unify-virtual-materialized-occurrences-plan.md`, this works whether the occurrence
 /// is still virtual or already materialized (`skip_or_delete_series_occurrence` deletes the
-/// materialized item first, if there is one) and redirects back to the calling screen
-/// (`redirect_to_current_page`) instead of returning an empty in-place-removal response, since
+/// materialized item first, if there is one).
+///
+/// Every screen except the flat Tasks list still redirects back to the calling screen
+/// (`redirect_to_current_page`) rather than returning an empty in-place-removal response, since
 /// a skipped occurrence now stays visible (struck through, with an Unskip button) rather than
-/// disappearing.
+/// disappearing — that whole-page `HX-Redirect` is a real, if blunt, way to show the struck-
+/// through state. The flat Tasks list (`?view=tasks-list`, see `OccurrenceRowActionQuery`)
+/// instead rebuilds `#items-list` in place via `project_tasks::list_task_rows_for_project` —
+/// skipping a series' current occurrence can advance its cursor to a new current occurrence,
+/// which needs a full list rebuild (not a single-row swap) to actually appear. See the archived
+/// "extend confirm-then-fade to virtual occurrences" entry (2026-08-21).
 ///
 /// Same defense-in-depth project_id/series match check as materialize, for the same reason.
 pub async fn skip_project_item_series_occurrence_form(
@@ -520,8 +539,10 @@ pub async fn skip_project_item_series_occurrence_form(
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(users): Extension<Arc<dyn UserRepo>>,
     Extension(item_series): Extension<Arc<dyn ItemSeriesRepo>>,
     TzOffset(tz): TzOffset,
+    Query(q): Query<OccurrenceRowActionQuery>,
     headers: HeaderMap,
 ) -> Result<Response, ItemError> {
     let series = item_series_service::get_series(
@@ -551,23 +572,41 @@ pub async fn skip_project_item_series_occurrence_form(
     )
     .await?;
 
+    if q.view.as_deref() == Some("tasks-list") {
+        return Ok(rebuild_tasks_list_response(
+            &repo,
+            &projects,
+            &teams,
+            &users,
+            &item_series,
+            &project_id,
+            &auth_user.user_id,
+            q.show_complete.is_some(),
+            tz,
+        )
+        .await?);
+    }
     Ok(redirect_to_current_page(&headers, &project_id))
 }
 
 /// Stage B of `docs/unify-virtual-materialized-occurrences-plan.md` — the "Unskip" button
 /// wired onto skipped occurrences everywhere `skip_project_item_series_occurrence_form`'s
-/// Skip button is (see that handler's doc comment for the redirect rationale, which this
-/// mirrors exactly). Un-materializing was never part of Skip's un-doing here — Skip already
-/// leaves a materialized occurrence un-materialized before marking it exdate, so there's
-/// nothing for Unskip to re-materialize; it only clears the exdate marker (and, for a
-/// Task-typed series, restores the cursor) via `item_series_service::unskip_occurrence`.
+/// Skip button is (see that handler's doc comment for the redirect/`view=tasks-list`
+/// rationale, which this mirrors exactly). Un-materializing was never part of Skip's un-doing
+/// here — Skip already leaves a materialized occurrence un-materialized before marking it
+/// exdate, so there's nothing for Unskip to re-materialize; it only clears the exdate marker
+/// (and, for a Task-typed series, restores the cursor) via
+/// `item_series_service::unskip_occurrence`.
 pub async fn unskip_project_item_series_occurrence_form(
     Path((project_id, series_id, occurrence_ts)): Path<(String, String, i64)>,
     Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(users): Extension<Arc<dyn UserRepo>>,
     Extension(item_series): Extension<Arc<dyn ItemSeriesRepo>>,
     TzOffset(tz): TzOffset,
+    Query(q): Query<OccurrenceRowActionQuery>,
     headers: HeaderMap,
 ) -> Result<Response, ItemError> {
     let series = item_series_service::get_series(
@@ -587,7 +626,56 @@ pub async fn unskip_project_item_series_occurrence_form(
 
     item_series_service::unskip_occurrence(&item_series, &series_id, occurrence_date, tz).await?;
 
+    if q.view.as_deref() == Some("tasks-list") {
+        return Ok(rebuild_tasks_list_response(
+            &repo,
+            &projects,
+            &teams,
+            &users,
+            &item_series,
+            &project_id,
+            &auth_user.user_id,
+            q.show_complete.is_some(),
+            tz,
+        )
+        .await?);
+    }
     Ok(redirect_to_current_page(&headers, &project_id))
+}
+
+/// Shared by the `view=tasks-list` branch of both Skip and Unskip above — rebuilds `#items-list`
+/// exactly as `project_tasks::list_task_rows_for_project` would for a fresh page load, with no
+/// row singled out for a `Row`-style confirmation badge (unlike
+/// `project_tasks::handlers::complete_project_item_series_occurrence_form`'s
+/// `just_completed_item_id`): a just-skipped/unskipped occurrence's own struck-through-or-not
+/// state change is its confirmation, so there's nothing else to badge.
+#[allow(clippy::too_many_arguments)]
+async fn rebuild_tasks_list_response(
+    repo: &Arc<dyn ItemRepo>,
+    projects: &Arc<dyn ProjectRepo>,
+    teams: &Arc<dyn TeamRepo>,
+    users: &Arc<dyn UserRepo>,
+    item_series: &Arc<dyn ItemSeriesRepo>,
+    project_id: &str,
+    requester_user_id: &str,
+    show_complete: bool,
+    tz: i32,
+) -> Result<Response, ItemError> {
+    let project = project_service::get_project(projects, teams, project_id, requester_user_id).await?;
+    let rows = crate::web_ui::project_tasks::list_task_rows_for_project(
+        repo,
+        teams,
+        users,
+        item_series,
+        project_id,
+        project.team_id.as_deref(),
+        requester_user_id,
+        show_complete,
+        tz,
+        None,
+    )
+    .await?;
+    Ok(Html(crate::web_ui::project_tasks::items_list_inner_html(&rows)).into_response())
 }
 
 pub async fn edit_project_item_series_page(

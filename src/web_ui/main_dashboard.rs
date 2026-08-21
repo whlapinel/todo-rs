@@ -220,6 +220,14 @@ struct MainDashboardVirtualRow {
     assignee_name: Option<String>,
     is_skipped: bool,
     unskip_url: String,
+    /// See `project_dashboard::ProjectDashboardVirtualRow::complete_url`'s identical rationale
+    /// — same narrowed-scope half of the "make dashboard rows look the same as task list rows"
+    /// item (2026-08-21), same `is_current` gate (confirmed live: a non-current occurrence's
+    /// checkbox otherwise 400s every time via `item_series::require_current_occurrence`), same
+    /// route reuse, same deferred-not-built in-place-rebuild rationale (this page's own
+    /// filtering is even wider than the per-project dashboard's, spanning every project the
+    /// requester belongs to).
+    complete_url: Option<String>,
 }
 
 impl MainDashboardVirtualRow {
@@ -254,6 +262,8 @@ impl MainDashboardVirtualRow {
             assignee_name: occ.assigned_to_user_name.clone(),
             is_skipped: occ.is_skipped(),
             unskip_url: occ.unskip_url(project_id),
+            complete_url: (occ.item_type == ItemKind::Task && occ.is_current)
+                .then(|| occ.complete_url(project_id)),
         }
     }
 }

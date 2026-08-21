@@ -363,6 +363,16 @@ pub(crate) fn render_rows(
 /// separate from `render_rows` rather than adding a parameter to it, since `render_rows` has
 /// three other call sites in this module (children/subordinate task lists) where virtual
 /// occurrences don't apply.
+///
+/// `just_completed_item_id` (added for the virtual-occurrence confirm-then-fade-away follow-up,
+/// see `handlers::complete_project_item_series_occurrence_form`) forces that one materialized
+/// item's row to stay visible even when `!show_complete` would otherwise filter a completed item
+/// out entirely — without the force-include, the row would simply vanish on this fresh render
+/// instead of getting a moment to show its "Completed" badge before `Row`'s own
+/// `data-dismiss-after` JS removes it client-side. `in_list_view` is threaded onto
+/// `ProjectTaskVirtualRow` so its checkbox/Skip/Unskip only target `#items-list` (see
+/// `handlers::list_task_rows_for_project`) when this is really the flat list's own render, not
+/// the calendar day panel's `day_list_rows` call below, which has no `#items-list` in its DOM.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn render_rows_with_virtual(
     items: &[Item],
@@ -373,14 +383,19 @@ pub(crate) fn render_rows_with_virtual(
     tz: i32,
     skip_urls: &HashMap<String, String>,
     team_id: Option<&str>,
+    just_completed_item_id: Option<&str>,
+    in_list_view: bool,
 ) -> Result<Vec<String>, ItemError> {
     let visible: Vec<&Item> = items
         .iter()
-        .filter(|i| show_complete || !i.complete)
+        .filter(|i| show_complete || !i.complete || Some(i.id.as_str()) == just_completed_item_id)
         .collect();
     let mut entries: Vec<(i64, String)> = visible
         .iter()
         .map(|i| {
+            let just_completed = Some(i.id.as_str()) == just_completed_item_id;
+            let confirmation = just_completed.then(|| "Completed".to_string());
+            let dismiss_after_ms = (just_completed && !show_complete).then_some(1800u32);
             ProjectTaskRow::from_item(
                 i,
                 project_id,
@@ -390,8 +405,8 @@ pub(crate) fn render_rows_with_virtual(
                 skip_urls.get(&i.id).cloned(),
                 team_id.is_some(),
                 show_complete,
-                None,
-                None,
+                confirmation,
+                dismiss_after_ms,
             )
             .render()
             .map(|html| (sort_key(i), html))
@@ -400,11 +415,94 @@ pub(crate) fn render_rows_with_virtual(
     for occ in virtual_occurrences {
         entries.push((
             occ.occurrence_date.timestamp(),
-            ProjectTaskVirtualRow::from_occurrence(occ, project_id, tz).render()?,
+            ProjectTaskVirtualRow::from_occurrence(occ, project_id, tz, show_complete, in_list_view)
+                .render()?,
         ));
     }
     entries.sort_by_key(|(ts, _)| *ts);
     Ok(entries.into_iter().map(|(_, html)| html).collect())
+}
+
+/// Renders exactly what `#items-list` (`templates/project_tasks/list_page.html`) shows for
+/// `project_id` — the same items + current-virtual-occurrence query `handlers::
+/// project_tasks_page` builds the initial page load from, factored out so the in-place
+/// checkbox/Skip/Unskip handlers (`handlers::complete_project_item_series_occurrence_form` and
+/// the `view=tasks-list` branch of `project_item_series::handlers::
+/// skip_project_item_series_occurrence_form`/`unskip_project_item_series_occurrence_form`) can
+/// rebuild the whole list in place after their mutation, rather than doing a full `HX-Redirect`
+/// page reload. A whole-list rebuild (not a single-row swap) is deliberate: completing or
+/// skipping a series' current occurrence can advance its cursor to a new current occurrence,
+/// which needs to actually appear in the list — a single `<li>` outerHTML swap could never do
+/// that. See `render_rows_with_virtual`'s `just_completed_item_id` for how the completing row
+/// still gets its own confirm-then-fade-away treatment despite the full rebuild.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn list_task_rows_for_project(
+    repo: &Arc<dyn ItemRepo>,
+    teams: &Arc<dyn TeamRepo>,
+    users: &Arc<dyn UserRepo>,
+    series: &Arc<dyn ItemSeriesRepo>,
+    project_id: &str,
+    team_id: Option<&str>,
+    requester_user_id: &str,
+    show_complete: bool,
+    tz: i32,
+    just_completed_item_id: Option<&str>,
+) -> Result<Vec<String>, ItemError> {
+    let items = list_project_tasks(repo, project_id).await?;
+    let names = match team_id {
+        Some(team_id) => names_for(teams, team_id, requester_user_id).await?,
+        None => HashMap::new(),
+    };
+    // See `handlers::project_tasks_page`'s identical query/filter — kept in sync deliberately.
+    let virtual_occurrences: Vec<_> = item_series_service::list_occurrence_states_for_project(
+        series,
+        users,
+        project_id,
+        Utc::now(),
+        Utc::now(),
+        tz,
+    )
+    .await?
+    .into_iter()
+    .filter(|occ| occ.item_type == ItemKind::Task && occ.is_current)
+    .filter(|occ| {
+        !matches!(
+            occ.state,
+            item_series_service::OccurrenceState::Materialized { .. }
+        )
+    })
+    .collect();
+    let mut skip_urls: HashMap<String, String> = HashMap::new();
+    for item in &items {
+        if let Some(url) = item_series_service::skip_url_for_item(series, item, project_id).await?
+        {
+            skip_urls.insert(item.id.clone(), url);
+        }
+    }
+    render_rows_with_virtual(
+        &items,
+        &virtual_occurrences,
+        project_id,
+        &names,
+        show_complete,
+        tz,
+        &skip_urls,
+        team_id,
+        just_completed_item_id,
+        true,
+    )
+}
+
+/// The `#items-list` placeholder markup (`templates/project_tasks/list_page.html`'s own
+/// `rows.is_empty()` branch) — duplicated here rather than shared via Askama, since this is
+/// only ever swapped in as raw `innerHTML` by `list_task_rows_for_project`'s callers, never
+/// rendered through a `Template` struct of its own.
+pub(crate) fn items_list_inner_html(rows: &[String]) -> String {
+    if rows.is_empty() {
+        "<li class=\"py-3 text-sm text-gray-500 dark:text-gray-400\">No tasks yet.</li>".to_string()
+    } else {
+        rows.concat()
+    }
 }
 
 /// The calendar's per-day panel — filters down to exactly `date` (a local calendar day) and
@@ -482,6 +580,8 @@ pub(crate) async fn day_list_rows(
         tz,
         &skip_urls,
         team_id,
+        None,
+        false,
     )
 }
 

@@ -216,6 +216,29 @@ struct ProjectDashboardVirtualRow {
     /// rationale.
     is_skipped: bool,
     unskip_url: String,
+    /// Narrowed-scope half of docs/issues_and_features.md's "make dashboard rows look the
+    /// same as task list rows" item (2026-08-21) — `Some` only for a Task-typed occurrence
+    /// (`Item::validate` rejects `complete: true` for Events, mirroring `ProjectDashboardRow::
+    /// toggle_target`'s identical `None`-for-Event convention above) that's also `is_current`,
+    /// giving the dashboard's virtual row the same completability the Tasks list's
+    /// `ProjectTaskVirtualRow` already has for the one occurrence per series that's actually
+    /// completable. Unlike the flat Tasks list (which only ever lists the current occurrence
+    /// to begin with — see `project_tasks::handlers::project_tasks_page`), this page also shows
+    /// future "Planned" occurrences; without the `is_current` gate a Planned row's checkbox
+    /// would reliably 400 (`item_series::require_current_occurrence`'s "cannot settle this
+    /// occurrence out of order" — confirmed live) instead of doing anything, so the gate keeps
+    /// this from being a checkbox that predictably errors on every click but one. Reuses the
+    /// exact same route `ProjectTaskVirtualRow::complete_url` points at
+    /// (`complete_project_item_series_occurrence_form`) — that handler's `view=tasks-list`
+    /// branch (see its doc comment) only activates when the URL carries that query param, which
+    /// this omits, so a completion from here falls back to that handler's original
+    /// `redirect_to_current_page` behavior, i.e. exactly what this row's own existing Skip
+    /// button below already does. A full in-place confirm-then-fade rebuild (like the Tasks
+    /// list now has) is out of scope here: unlike the flat Tasks list, this page's rows are
+    /// preset/assignment-filtered (`render_rows`'s `preset`/`show_complete`/`assigned_to_any`),
+    /// so rebuilding "the same view" in place would need to know all three, not just one
+    /// `show_complete` flag — deferred rather than half-built.
+    complete_url: Option<String>,
 }
 
 impl ProjectDashboardVirtualRow {
@@ -244,6 +267,8 @@ impl ProjectDashboardVirtualRow {
             assignee_name: occ.assigned_to_user_name.clone(),
             is_skipped: occ.is_skipped(),
             unskip_url: occ.unskip_url(project_id),
+            complete_url: (occ.item_type == ItemKind::Task && occ.is_current)
+                .then(|| occ.complete_url(project_id)),
         }
     }
 }

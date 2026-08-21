@@ -245,11 +245,34 @@ pub struct ProjectTaskVirtualRow {
     /// assignee until materialized. See docs/issues_and_features.md's "occurrences don't show
     /// the assignee unless it's materialized" item.
     pub assignee_name: Option<String>,
+    /// True only when this row is being rendered for the flat Tasks list (`handlers::
+    /// project_tasks_page`/`list_task_rows_for_project`), never the calendar day panel
+    /// (`day_list_rows`) — gates whether the checkbox/Skip/Unskip carry `hx-target="#items-list"`
+    /// at all. The calendar day panel has no such container in its DOM, so those same buttons
+    /// there fall back to the pre-existing default (whole-page) htmx behavior rather than
+    /// silently targeting an id that doesn't exist. See the archived "extend confirm-then-fade
+    /// to virtual occurrences" entry (2026-08-21) for why only the flat list got this treatment.
+    pub in_list_view: bool,
 }
 
 impl ProjectTaskVirtualRow {
-    pub fn from_occurrence(occ: &ProjectOccurrence, project_id: &str, tz: i32) -> Self {
+    pub fn from_occurrence(
+        occ: &ProjectOccurrence,
+        project_id: &str,
+        tz: i32,
+        show_complete: bool,
+        in_list_view: bool,
+    ) -> Self {
         let local = to_local(occ.occurrence_date, tz);
+        // Baked into the URL itself (rather than relying on `hx-vals`, which `Row`'s checkbox
+        // uses) so a single query-string suffix covers the checkbox and both Skip/Unskip
+        // buttons identically — see `list_task_rows_for_project`'s callers, which read these
+        // same two params back off the request.
+        let list_query = match (in_list_view, show_complete) {
+            (true, true) => "?view=tasks-list&showComplete=1",
+            (true, false) => "?view=tasks-list",
+            (false, _) => "",
+        };
         Self {
             series_id: occ.series_id.clone(),
             occurrence_ts: occ.occurrence_date.timestamp(),
@@ -258,12 +281,13 @@ impl ProjectTaskVirtualRow {
             is_due_date_basis: occ.is_due_date_basis,
             overdue: occ.is_due_date_basis && occ.occurrence_date < Utc::now(),
             materialize_url: occ.materialize_url(project_id),
-            skip_url: occ.skip_url(project_id),
-            complete_url: occ.complete_url(project_id),
+            skip_url: format!("{}{list_query}", occ.skip_url(project_id)),
+            complete_url: format!("{}{list_query}", occ.complete_url(project_id)),
             is_current: occ.is_current,
             is_skipped: occ.is_skipped(),
-            unskip_url: occ.unskip_url(project_id),
+            unskip_url: format!("{}{list_query}", occ.unskip_url(project_id)),
             assignee_name: occ.assigned_to_user_name.clone(),
+            in_list_view,
         }
     }
 }

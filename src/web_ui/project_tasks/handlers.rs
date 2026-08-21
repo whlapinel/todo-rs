@@ -58,11 +58,6 @@ pub async fn project_tasks_page(
     let project =
         project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
     let show_complete = q.show_complete.is_some();
-    let items = list_project_tasks(&repo, &project_id).await?;
-    let names = match &project.team_id {
-        Some(team_id) => names_for(&teams, team_id, &auth_user.user_id).await?,
-        None => HashMap::new(),
-    };
     // Stage 10 gap 2: a Task series' current occurrence is range-independent (a pure
     // function of the cursor), so any degenerate range surfaces it — see
     // `list_virtual_occurrences_for_project_unchecked`'s backlog-exemption logic (which
@@ -78,42 +73,23 @@ pub async fn project_tasks_page(
     // occurrence stops being current the instant it's settled, so it (correctly) has nothing
     // to show in this current-only view — see the calendar/dashboard views for where a
     // skipped occurrence's struck-through Unskip row actually appears.
-    let virtual_occurrences: Vec<_> = item_series_service::list_occurrence_states_for_project(
-        &series,
+    //
+    // The actual assembly now lives in `super::list_task_rows_for_project`, shared with the
+    // in-place checkbox/Skip/Unskip handlers so a mutation's response and this initial page
+    // load never drift apart.
+    let rows = super::list_task_rows_for_project(
+        &repo,
+        &teams,
         &users,
+        &series,
         &project_id,
-        Utc::now(),
-        Utc::now(),
-        tz,
-    )
-    .await?
-    .into_iter()
-    .filter(|occ| occ.item_type == ItemKind::Task && occ.is_current)
-    .filter(|occ| {
-        !matches!(
-            occ.state,
-            item_series_service::OccurrenceState::Materialized { .. }
-        )
-    })
-    .collect();
-    let mut skip_urls: HashMap<String, String> = HashMap::new();
-    for item in &items {
-        if let Some(url) =
-            item_series_service::skip_url_for_item(&series, item, &project_id).await?
-        {
-            skip_urls.insert(item.id.clone(), url);
-        }
-    }
-    let rows = super::render_rows_with_virtual(
-        &items,
-        &virtual_occurrences,
-        &project_id,
-        &names,
+        project.team_id.as_deref(),
+        &auth_user.user_id,
         show_complete,
         tz,
-        &skip_urls,
-        project.team_id.as_deref(),
-    )?;
+        None,
+    )
+    .await?;
     let points_label = match &project.team_id {
         Some(team_id) => {
             let points = team_service::member_points(&teams, team_id, &auth_user.user_id).await?;
@@ -657,6 +633,17 @@ fn redirect_to_current_page(headers: &HeaderMap, project_id: &str) -> Response {
     hx_redirect(location)
 }
 
+#[derive(serde::Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct OccurrenceRowActionQuery {
+    /// Set to `"tasks-list"` only by `ProjectTaskVirtualRow::from_occurrence` when
+    /// `in_list_view` is true (see its doc comment) — every other caller of this same route
+    /// (currently none besides the flat Tasks list and the calendar day panel, which never sets
+    /// this) falls back to the pre-existing `redirect_to_current_page` behavior below.
+    view: Option<String>,
+    show_complete: Option<String>,
+}
+
 /// The row-checkbox counterpart to Skip/Unskip (`project_item_series::handlers`) — completes a
 /// Task-series occurrence directly from a list/dashboard row's checkbox, whether it's still
 /// virtual or already materialized doesn't matter to the caller: materializes it first if
@@ -664,18 +651,28 @@ fn redirect_to_current_page(headers: &HeaderMap, project_id: &str) -> Response {
 /// via the exact same `update_project_item` path a real item's own checkbox already uses — so
 /// cursor validation (`item_series::require_current_occurrence`), points, and activity logging
 /// all apply identically. Task-typed series only — `Item::validate` rejects `complete: true`
-/// for Events, so this route is never wired onto an Event occurrence's row. Redirects back to
-/// the calling screen like Skip/Unskip, rather than to the item's own detail page — a row
-/// checkbox click should behave like any other row checkbox, not navigate away.
+/// for Events, so this route is never wired onto an Event occurrence's row.
+///
+/// See the archived "extend confirm-then-fade to virtual occurrences" entry (2026-08-21): when
+/// `view=tasks-list` (baked into the URL by `ProjectTaskVirtualRow::from_occurrence`), this
+/// rebuilds the whole `#items-list` in place via `list_task_rows_for_project` instead of
+/// `HX-Redirect`-ing the whole page, giving the completing row its own `Row`-style
+/// confirm-then-fade-away treatment (`just_completed_item_id`) — needed because completing a
+/// series' current occurrence can advance its cursor to a new current occurrence, which a
+/// single-row swap could never surface. Any other caller (nothing today, but this route
+/// predates the `view` param and its own doc history — see the calendar day panel's
+/// `in_list_view: false` rows) keeps the original whole-page redirect.
 pub async fn complete_project_item_series_occurrence_form(
     Path((project_id, series_id, occurrence_ts)): Path<(String, String, i64)>,
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(users): Extension<Arc<dyn UserRepo>>,
     Extension(item_series): Extension<Arc<dyn ItemSeriesRepo>>,
     Extension(activity_log): Extension<Arc<dyn ActivityLogRepo>>,
     TzOffset(tz): TzOffset,
+    Query(q): Query<OccurrenceRowActionQuery>,
     headers: HeaderMap,
 ) -> Result<Response, ItemError> {
     let series = item_series_service::get_series(
@@ -717,6 +714,26 @@ pub async fn complete_project_item_series_occurrence_form(
         params,
     )
     .await?;
+
+    if q.view.as_deref() == Some("tasks-list") {
+        let project =
+            project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id)
+                .await?;
+        let rows = super::list_task_rows_for_project(
+            &repo,
+            &teams,
+            &users,
+            &item_series,
+            &project_id,
+            project.team_id.as_deref(),
+            &auth_user.user_id,
+            q.show_complete.is_some(),
+            tz,
+            Some(item.id.as_str()),
+        )
+        .await?;
+        return Ok(Html(super::items_list_inner_html(&rows)).into_response());
+    }
     Ok(redirect_to_current_page(&headers, &project_id))
 }
 
