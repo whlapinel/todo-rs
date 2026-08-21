@@ -1,9 +1,9 @@
 @import "tailwindcss";
 @source "../templates/**/*.html";
-/* ItemError::into_response (src/handlers/web_ui/error.rs) builds its error-toast markup
-   as a raw HTML string in Rust rather than an Askama template, so its Tailwind classes
-   (p-3, bg-red-50, etc.) live outside the templates glob above and were silently
-   dropped from the compiled CSS -- the box appeared unstyled/transparent. */
+/* Some web_ui handlers (e.g. src/web_ui/project_tasks/handlers.rs,
+   src/web_ui/project_events/handlers.rs) build small HTML fragments as raw Rust strings
+   rather than Askama templates, so their Tailwind classes live outside the templates glob
+   above and would otherwise be silently dropped from the compiled CSS. */
 @source "../src/**/*.rs";
 
 @keyframes toast-fade {

@@ -39,9 +39,17 @@
        boosted navigation (which only swaps #page's innerHTML) never removes it. Row/checkbox
        actions target narrow ids like #item-{id} that don't exist in an ItemError's response
        body, so the server retargets error responses here via the HX-Retarget/HX-Reswap/
-       HX-Reselect headers (see ItemError::into_response in src/handlers/web_ui/error.rs)
-       instead of relying on the triggering element's own hx-target/hx-select. -->
-  <div id="error-toast" class="pointer-events-none fixed inset-x-0 top-4 z-50 flex justify-center px-4"></div>
+       HX-Reselect headers (see ItemError::into_response in src/web_ui/error.rs) instead of
+       relying on the triggering element's own hx-target/hx-select. A persistent <dialog>,
+       same shell as #action-dialog below (and auto-opened by the same htmx:afterSwap
+       listener) — modal, requires the user to click OK to dismiss, rather than the old
+       #error-toast div that auto-faded after 2.5s with nothing to acknowledge. Kept as its
+       own dialog rather than reusing #action-dialog so an error surfaced while a row-action
+       dialog is open (e.g. a rejected reschedule submit) stacks on top of it instead of
+       clobbering the form the user was mid-filling. -->
+  <dialog id="error-dialog"
+    class="group/dialog fixed inset-0 size-auto max-h-none max-w-none overflow-y-auto bg-transparent backdrop:bg-transparent">
+  </dialog>
 
   <script src="/web/static/js/htmx.min.js"></script>
   <script>
@@ -62,9 +70,9 @@
 
     // A checkbox's native `checked` state flips the instant the user clicks it, before the
     // hx-put it triggers even reaches the server — a rejected request (e.g. completing an
-    // unassigned team item) now shows its error in #error-toast (above) rather than silently
+    // unassigned team item) now shows its error in #error-dialog (above) rather than silently
     // vanishing, but the checkbox itself has no row/fields swap to revert it, since that swap
-    // got retargeted to the toast instead. Without this, a rejected completion would leave the
+    // got retargeted to the dialog instead. Without this, a rejected completion would leave the
     // checkbox looking checked even though the item never actually completed.
     document.body.addEventListener("htmx:afterRequest", function (evt) {
       if (!evt.detail.successful && evt.detail.elt && evt.detail.elt.matches && evt.detail.elt.matches("input[type=checkbox]")) {
