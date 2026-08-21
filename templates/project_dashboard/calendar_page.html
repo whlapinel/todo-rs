@@ -48,7 +48,7 @@
       {% for day in days %}
       <button type="button"
         hx-get="/web/projects/{{ project_id }}/dashboard/calendar/day?date={{ day.date }}"
-        hx-target="#calendar-day-list" hx-swap="innerHTML"
+        hx-target="#calendar-day-list" hx-select="unset" hx-swap="innerHTML"
         hx-push-url="/web/projects/{{ project_id }}/dashboard/calendar?year={{ year }}&month={{ month }}&date={{ day.date }}"
         class="relative flex min-h-24 w-full flex-col items-start px-2 py-2 text-left {% if day.is_current_month %}bg-white dark:bg-gray-900{% else %}bg-gray-50 dark:bg-gray-800/50{% endif %} hover:bg-gray-100 focus:z-10 focus:outline-none dark:hover:bg-white/5 {% if day.is_selected %}ring-2 ring-inset ring-indigo-500{% endif %}">
         <time datetime="{{ day.date }}"
