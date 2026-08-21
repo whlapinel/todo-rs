@@ -154,15 +154,21 @@ struct MainDashboardRow {
     toggle_target: Option<String>,
     detail_link: String,
     toggle_complete_json: String,
+    /// See `project_dashboard::ProjectDashboardRow`'s identical fields/rationale.
+    confirmation: Option<String>,
+    dismiss_after_ms: Option<u32>,
 }
 
 impl MainDashboardRow {
+    #[allow(clippy::too_many_arguments)]
     fn from_due_item(
         di: &DueItem,
         project_id: &str,
         project_name: &str,
         names: &HashMap<String, String>,
         tz: i32,
+        confirmation: Option<String>,
+        dismiss_after_ms: Option<u32>,
     ) -> Self {
         let item = &di.item;
         let date_label = dashboard_date(item).map(|d| {
@@ -199,6 +205,8 @@ impl MainDashboardRow {
                 .then(|| format!("/web/dashboard/projects/{project_id}/items/{}", item.id)),
             detail_link: detail_url(item, project_id),
             toggle_complete_json: (!item.complete).to_string(),
+            confirmation,
+            dismiss_after_ms,
         }
     }
 }
@@ -221,21 +229,27 @@ struct MainDashboardVirtualRow {
     is_skipped: bool,
     unskip_url: String,
     /// See `project_dashboard::ProjectDashboardVirtualRow::complete_url`'s identical rationale
-    /// — same narrowed-scope half of the "make dashboard rows look the same as task list rows"
-    /// item (2026-08-21), same `is_current` gate (confirmed live: a non-current occurrence's
-    /// checkbox otherwise 400s every time via `item_series::require_current_occurrence`), same
-    /// route reuse, same deferred-not-built in-place-rebuild rationale (this page's own
-    /// filtering is even wider than the per-project dashboard's, spanning every project the
-    /// requester belongs to).
+    /// — same `is_current` gate (confirmed live: a non-current occurrence's checkbox otherwise
+    /// 400s every time via `item_series::require_current_occurrence`), same route reuse. Now
+    /// rebuilds `#main-dashboard-list` in place via `list_query`/`in_list_view` below when
+    /// `complete_project_item_series_occurrence_form`'s `view=main-dashboard` branch handles it
+    /// — this page's own row assembly (`list_main_dashboard_rows`) spans every project the
+    /// requester belongs to, so that branch re-runs the full cross-project gather rather than a
+    /// single project's `list_dashboard_rows_for_project`.
     complete_url: Option<String>,
+    /// See `project_dashboard::ProjectDashboardVirtualRow::in_list_view`'s identical rationale.
+    in_list_view: bool,
 }
 
 impl MainDashboardVirtualRow {
+    /// `list_query` is `Some(&query_string)` (baked from `main_dashboard_list_query`) only when
+    /// rendering for the flat list — `None` for the calendar day panel.
     fn from_occurrence(
         occ: &ProjectOccurrence,
         project_id: &str,
         project_name: &str,
         tz: i32,
+        list_query: Option<&str>,
     ) -> Self {
         let local = to_local(occ.occurrence_date, tz);
         let kind_name = if occ.item_type == ItemKind::Event {
@@ -243,6 +257,7 @@ impl MainDashboardVirtualRow {
         } else {
             "Task"
         };
+        let suffix = list_query.unwrap_or("");
         Self {
             series_id: occ.series_id.clone(),
             occurrence_ts: occ.occurrence_date.timestamp(),
@@ -257,15 +272,30 @@ impl MainDashboardVirtualRow {
             type_symbol: type_symbol(occ.item_type),
             title: format!("{kind_name} (not yet created)"),
             materialize_url: occ.materialize_url(project_id),
-            skip_url: occ.skip_url(project_id),
+            skip_url: format!("{}{suffix}", occ.skip_url(project_id)),
             is_current: occ.is_current,
             assignee_name: occ.assigned_to_user_name.clone(),
             is_skipped: occ.is_skipped(),
-            unskip_url: occ.unskip_url(project_id),
+            unskip_url: format!("{}{suffix}", occ.unskip_url(project_id)),
             complete_url: (occ.item_type == ItemKind::Task && occ.is_current)
-                .then(|| occ.complete_url(project_id)),
+                .then(|| format!("{}{suffix}", occ.complete_url(project_id))),
+            in_list_view: list_query.is_some(),
         }
     }
+}
+
+/// Bakes `preset`/`show_complete` into a query-string suffix for a virtual row's checkbox/
+/// Skip/Unskip URLs — see `project_dashboard::dashboard_list_query`'s identical rationale, one
+/// filter dimension narrower (this screen has no `assignedToAny` toggle of its own).
+fn main_dashboard_list_query(preset: &str, show_complete: bool) -> String {
+    let mut params = vec![
+        "view=main-dashboard".to_string(),
+        format!("preset={}", preset.replace(' ', "%20")),
+    ];
+    if show_complete {
+        params.push("showComplete=1".to_string());
+    }
+    format!("?{}", params.join("&"))
 }
 
 #[derive(Template)]
@@ -284,37 +314,45 @@ pub struct MainDashboardQuery {
     show_complete: Option<String>,
 }
 
-pub async fn main_dashboard_page(
-    Extension(auth_user): Extension<AuthUser>,
-    Extension(repo): Extension<Arc<dyn ItemRepo>>,
-    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
-    Extension(users): Extension<Arc<dyn UserRepo>>,
-    Extension(teams): Extension<Arc<dyn TeamRepo>>,
-    Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
-    TzOffset(tz_offset): TzOffset,
-    Query(q): Query<MainDashboardQuery>,
-) -> Result<Html<String>, ItemError> {
-    let preset = q.preset.unwrap_or_else(|| "Today".to_string());
-    let show_complete = q.show_complete.is_some();
-    let (after, before) = preset_range(&preset, Utc::now(), tz_offset);
+/// Cross-project row assembly, shared between the initial page load (`main_dashboard_page`)
+/// and the in-place `#main-dashboard-list` rebuild the checkbox/Skip/Unskip handlers do on
+/// `view=main-dashboard` — mirrors `project_dashboard::list_dashboard_rows_for_project`'s
+/// identical rationale, just re-running the full cross-project gather every time (this
+/// screen's own filtering already spans every project the requester belongs to, so there's no
+/// narrower single-project query to reuse).
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn list_main_dashboard_rows(
+    repo: &Arc<dyn ItemRepo>,
+    projects: &Arc<dyn ProjectRepo>,
+    users: &Arc<dyn UserRepo>,
+    teams: &Arc<dyn TeamRepo>,
+    series: &Arc<dyn ItemSeriesRepo>,
+    requester_user_id: &str,
+    preset: &str,
+    show_complete: bool,
+    tz_offset: i32,
+    just_completed_item_id: Option<&str>,
+) -> Result<Vec<String>, ItemError> {
+    let (after, before) = preset_range(preset, Utc::now(), tz_offset);
     let (virtual_after, virtual_before) = virtual_occurrence_window(after, before, Utc::now());
+    let list_query = main_dashboard_list_query(preset, show_complete);
 
-    let user_projects = project_service::list_projects(&projects, &auth_user.user_id).await?;
+    let user_projects = project_service::list_projects(projects, requester_user_id).await?;
 
     let mut entries: Vec<(i64, String)> = Vec::new();
     for project in &user_projects {
         let is_team_project = project.team_id.is_some();
         let names = match &project.team_id {
-            Some(team_id) => names_for(&teams, team_id, &auth_user.user_id).await?,
+            Some(team_id) => names_for(teams, team_id, requester_user_id).await?,
             None => HashMap::new(),
         };
         let due_items =
-            project_item_service::list_due_project_items_unchecked(&repo, &project.id, None, None)
+            project_item_service::list_due_project_items_unchecked(repo, &project.id, None, None)
                 .await?;
         let virtual_occurrences = if virtual_after <= virtual_before {
             series_service::list_occurrence_states_for_project(
-                &series,
-                &users,
+                series,
+                users,
                 &project.id,
                 virtual_after,
                 virtual_before,
@@ -327,15 +365,16 @@ pub async fn main_dashboard_page(
 
         for di in &due_items {
             let item = &di.item;
+            let just_completed = Some(item.id.as_str()) == just_completed_item_id;
             if !is_included(
                 item.kind(),
                 is_team_project,
                 item.assigned_to_user_id().as_deref(),
-                &auth_user.user_id,
+                requester_user_id,
             ) {
                 continue;
             }
-            if !show_complete && item.complete {
+            if !show_complete && item.complete && !just_completed {
                 continue;
             }
             if preset == "All with due date" && dashboard_date(item).is_none() {
@@ -350,9 +389,18 @@ pub async fn main_dashboard_page(
                 continue;
             }
             let ts = d.map(|d| d.timestamp()).unwrap_or(i64::MAX);
-            let html =
-                MainDashboardRow::from_due_item(di, &project.id, &project.name, &names, tz_offset)
-                    .render()?;
+            let confirmation = just_completed.then(|| "Completed".to_string());
+            let dismiss_after_ms = (just_completed && !show_complete).then_some(1800u32);
+            let html = MainDashboardRow::from_due_item(
+                di,
+                &project.id,
+                &project.name,
+                &names,
+                tz_offset,
+                confirmation,
+                dismiss_after_ms,
+            )
+            .render()?;
             entries.push((ts, html));
         }
 
@@ -364,7 +412,7 @@ pub async fn main_dashboard_page(
                 occ.item_type,
                 is_team_project,
                 occ.assigned_to_user_id.as_deref(),
-                &auth_user.user_id,
+                requester_user_id,
             ) {
                 continue;
             }
@@ -375,6 +423,7 @@ pub async fn main_dashboard_page(
                     &project.id,
                     &project.name,
                     tz_offset,
+                    Some(&list_query),
                 )
                 .render()?,
             ));
@@ -382,7 +431,46 @@ pub async fn main_dashboard_page(
     }
 
     entries.sort_by_key(|(ts, _)| *ts);
-    let rows = entries.into_iter().map(|(_, html)| html).collect();
+    Ok(entries.into_iter().map(|(_, html)| html).collect())
+}
+
+/// The `#main-dashboard-list` innerHTML swap body — see `project_tasks::items_list_inner_html`'s
+/// identical rationale, matching `main_dashboard/page.html`'s own empty-state markup.
+pub(crate) fn main_dashboard_items_inner_html(rows: &[String]) -> String {
+    if rows.is_empty() {
+        "<li class=\"py-3 text-sm text-gray-500 dark:text-gray-400\">Nothing to show.</li>"
+            .to_string()
+    } else {
+        rows.concat()
+    }
+}
+
+pub async fn main_dashboard_page(
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
+    Extension(users): Extension<Arc<dyn UserRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
+    TzOffset(tz_offset): TzOffset,
+    Query(q): Query<MainDashboardQuery>,
+) -> Result<Html<String>, ItemError> {
+    let preset = q.preset.unwrap_or_else(|| "Today".to_string());
+    let show_complete = q.show_complete.is_some();
+
+    let rows = list_main_dashboard_rows(
+        &repo,
+        &projects,
+        &users,
+        &teams,
+        &series,
+        &auth_user.user_id,
+        &preset,
+        show_complete,
+        tz_offset,
+        None,
+    )
+    .await?;
 
     let presets = PRESETS.iter().map(|&p| (p, p == preset)).collect();
     let nav_html = nav::build_nav_html(
@@ -544,7 +632,8 @@ fn day_list_rows(
         let names = names_by_project.get(project_id).unwrap_or(&empty);
         entries.push((
             dt.timestamp(),
-            MainDashboardRow::from_due_item(di, project_id, project_name, names, tz).render()?,
+            MainDashboardRow::from_due_item(di, project_id, project_name, names, tz, None, None)
+                .render()?,
         ));
     }
     for (occ, project_id, project_name) in virtual_occurrences {
@@ -553,7 +642,8 @@ fn day_list_rows(
         }
         entries.push((
             occ.occurrence_date.timestamp(),
-            MainDashboardVirtualRow::from_occurrence(occ, project_id, project_name, tz).render()?,
+            MainDashboardVirtualRow::from_occurrence(occ, project_id, project_name, tz, None)
+                .render()?,
         ));
     }
     entries.sort_by_key(|(ts, _)| *ts);
@@ -837,6 +927,8 @@ pub async fn toggle_main_dashboard_item_complete(
             &project.name,
             &names,
             tz,
+            None,
+            None,
         )),
         // See `project_dashboard::toggle_project_dashboard_item_complete`'s identical
         // rationale for this branch.

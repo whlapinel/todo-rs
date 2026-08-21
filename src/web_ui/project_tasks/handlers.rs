@@ -636,12 +636,20 @@ fn redirect_to_current_page(headers: &HeaderMap, project_id: &str) -> Response {
 #[derive(serde::Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct OccurrenceRowActionQuery {
-    /// Set to `"tasks-list"` only by `ProjectTaskVirtualRow::from_occurrence` when
-    /// `in_list_view` is true (see its doc comment) — every other caller of this same route
-    /// (currently none besides the flat Tasks list and the calendar day panel, which never sets
-    /// this) falls back to the pre-existing `redirect_to_current_page` behavior below.
+    /// `"tasks-list"`, `"project-dashboard"`, or `"main-dashboard"` — set only by
+    /// `ProjectTaskVirtualRow`/`ProjectDashboardVirtualRow`/`MainDashboardVirtualRow`'s
+    /// `from_occurrence` when rendering for that screen's own flat list (never the calendar day
+    /// panel — see each struct's `in_list_view` doc comment). Every other caller of this same
+    /// route falls back to the pre-existing `redirect_to_current_page` behavior below.
     view: Option<String>,
     show_complete: Option<String>,
+    /// Only meaningful for `view=project-dashboard`/`main-dashboard` — baked in by
+    /// `dashboard_list_query`/`main_dashboard_list_query`, `None` for `view=tasks-list` (the
+    /// flat Tasks list has no preset of its own).
+    preset: Option<String>,
+    /// Only meaningful for `view=project-dashboard` — `main-dashboard` has no `assignedToAny`
+    /// toggle of its own (see `is_included`'s cross-project assignment rule).
+    assigned_to_any: Option<String>,
 }
 
 /// The row-checkbox counterpart to Skip/Unskip (`project_item_series::handlers`) — completes a
@@ -733,6 +741,46 @@ pub async fn complete_project_item_series_occurrence_form(
         )
         .await?;
         return Ok(Html(super::items_list_inner_html(&rows)).into_response());
+    }
+    if q.view.as_deref() == Some("project-dashboard") {
+        let rows = crate::web_ui::project_dashboard::list_dashboard_rows_for_project(
+            &repo,
+            &projects,
+            &teams,
+            &users,
+            &item_series,
+            &project_id,
+            &auth_user.user_id,
+            q.preset.as_deref().unwrap_or("Today"),
+            q.show_complete.is_some(),
+            q.assigned_to_any.is_some(),
+            tz,
+            Some(item.id.as_str()),
+        )
+        .await?;
+        return Ok(
+            Html(crate::web_ui::project_dashboard::dashboard_items_inner_html(&rows))
+                .into_response(),
+        );
+    }
+    if q.view.as_deref() == Some("main-dashboard") {
+        let rows = crate::web_ui::main_dashboard::list_main_dashboard_rows(
+            &repo,
+            &projects,
+            &users,
+            &teams,
+            &item_series,
+            &auth_user.user_id,
+            q.preset.as_deref().unwrap_or("Today"),
+            q.show_complete.is_some(),
+            tz,
+            Some(item.id.as_str()),
+        )
+        .await?;
+        return Ok(
+            Html(crate::web_ui::main_dashboard::main_dashboard_items_inner_html(&rows))
+                .into_response(),
+        );
     }
     Ok(redirect_to_current_page(&headers, &project_id))
 }

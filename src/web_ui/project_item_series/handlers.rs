@@ -513,6 +513,12 @@ pub async fn materialize_project_item_series_occurrence_form(
 pub struct OccurrenceRowActionQuery {
     view: Option<String>,
     show_complete: Option<String>,
+    /// See `project_tasks::handlers::OccurrenceRowActionQuery::preset`'s identical rationale —
+    /// only meaningful for `view=project-dashboard`/`main-dashboard`.
+    preset: Option<String>,
+    /// See `project_tasks::handlers::OccurrenceRowActionQuery::assigned_to_any`'s identical
+    /// rationale — only meaningful for `view=project-dashboard`.
+    assigned_to_any: Option<String>,
 }
 
 /// Stage 6 of docs/recurring-events-virtual-occurrences-rough-plan.md — the "Skip" button
@@ -586,6 +592,36 @@ pub async fn skip_project_item_series_occurrence_form(
         )
         .await?);
     }
+    if q.view.as_deref() == Some("project-dashboard") {
+        return Ok(rebuild_dashboard_list_response(
+            &repo,
+            &projects,
+            &teams,
+            &users,
+            &item_series,
+            &project_id,
+            &auth_user.user_id,
+            q.preset.as_deref().unwrap_or("Today"),
+            q.show_complete.is_some(),
+            q.assigned_to_any.is_some(),
+            tz,
+        )
+        .await?);
+    }
+    if q.view.as_deref() == Some("main-dashboard") {
+        return Ok(rebuild_main_dashboard_list_response(
+            &repo,
+            &projects,
+            &users,
+            &teams,
+            &item_series,
+            &auth_user.user_id,
+            q.preset.as_deref().unwrap_or("Today"),
+            q.show_complete.is_some(),
+            tz,
+        )
+        .await?);
+    }
     Ok(redirect_to_current_page(&headers, &project_id))
 }
 
@@ -640,6 +676,36 @@ pub async fn unskip_project_item_series_occurrence_form(
         )
         .await?);
     }
+    if q.view.as_deref() == Some("project-dashboard") {
+        return Ok(rebuild_dashboard_list_response(
+            &repo,
+            &projects,
+            &teams,
+            &users,
+            &item_series,
+            &project_id,
+            &auth_user.user_id,
+            q.preset.as_deref().unwrap_or("Today"),
+            q.show_complete.is_some(),
+            q.assigned_to_any.is_some(),
+            tz,
+        )
+        .await?);
+    }
+    if q.view.as_deref() == Some("main-dashboard") {
+        return Ok(rebuild_main_dashboard_list_response(
+            &repo,
+            &projects,
+            &users,
+            &teams,
+            &item_series,
+            &auth_user.user_id,
+            q.preset.as_deref().unwrap_or("Today"),
+            q.show_complete.is_some(),
+            tz,
+        )
+        .await?);
+    }
     Ok(redirect_to_current_page(&headers, &project_id))
 }
 
@@ -676,6 +742,73 @@ async fn rebuild_tasks_list_response(
     )
     .await?;
     Ok(Html(crate::web_ui::project_tasks::items_list_inner_html(&rows)).into_response())
+}
+
+/// Shared by the `view=project-dashboard` branch of both Skip and Unskip — rebuilds
+/// `#project-dashboard-list` exactly as `project_dashboard::list_dashboard_rows_for_project`
+/// would for a fresh page load, with no row singled out for a confirmation badge (same
+/// rationale as `rebuild_tasks_list_response` above).
+#[allow(clippy::too_many_arguments)]
+async fn rebuild_dashboard_list_response(
+    repo: &Arc<dyn ItemRepo>,
+    projects: &Arc<dyn ProjectRepo>,
+    teams: &Arc<dyn TeamRepo>,
+    users: &Arc<dyn UserRepo>,
+    item_series: &Arc<dyn ItemSeriesRepo>,
+    project_id: &str,
+    requester_user_id: &str,
+    preset: &str,
+    show_complete: bool,
+    assigned_to_any: bool,
+    tz: i32,
+) -> Result<Response, ItemError> {
+    let rows = crate::web_ui::project_dashboard::list_dashboard_rows_for_project(
+        repo,
+        projects,
+        teams,
+        users,
+        item_series,
+        project_id,
+        requester_user_id,
+        preset,
+        show_complete,
+        assigned_to_any,
+        tz,
+        None,
+    )
+    .await?;
+    Ok(Html(crate::web_ui::project_dashboard::dashboard_items_inner_html(&rows)).into_response())
+}
+
+/// Shared by the `view=main-dashboard` branch of both Skip and Unskip — rebuilds
+/// `#main-dashboard-list` exactly as `main_dashboard::list_main_dashboard_rows` would for a
+/// fresh page load, same no-confirmation-badge rationale as `rebuild_tasks_list_response`.
+#[allow(clippy::too_many_arguments)]
+async fn rebuild_main_dashboard_list_response(
+    repo: &Arc<dyn ItemRepo>,
+    projects: &Arc<dyn ProjectRepo>,
+    users: &Arc<dyn UserRepo>,
+    teams: &Arc<dyn TeamRepo>,
+    item_series: &Arc<dyn ItemSeriesRepo>,
+    requester_user_id: &str,
+    preset: &str,
+    show_complete: bool,
+    tz: i32,
+) -> Result<Response, ItemError> {
+    let rows = crate::web_ui::main_dashboard::list_main_dashboard_rows(
+        repo,
+        projects,
+        users,
+        teams,
+        item_series,
+        requester_user_id,
+        preset,
+        show_complete,
+        tz,
+        None,
+    )
+    .await?;
+    Ok(Html(crate::web_ui::main_dashboard::main_dashboard_items_inner_html(&rows)).into_response())
 }
 
 pub async fn edit_project_item_series_page(

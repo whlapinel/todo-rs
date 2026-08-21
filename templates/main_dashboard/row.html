@@ -1,4 +1,4 @@
-<li id="main-dash-item-{{ item_id }}" class="py-2">
+<li id="main-dash-item-{{ item_id }}" class="py-2"{% if let Some(ms) = dismiss_after_ms %} data-dismiss-after="{{ ms }}"{% endif %}>
   <div class="flex items-center gap-x-3">
     {% if let Some(target) = toggle_target %}
     <input type="checkbox" {% if complete %}checked{% endif %} hx-put="{{ target }}"
@@ -12,6 +12,9 @@
     <a href="{{ detail_link }}" hx-target="#page" hx-select="#page" hx-swap="innerHTML"
       class="min-w-0 flex-1 truncate {% if complete %}line-through text-gray-400 dark:text-gray-500{% else %}text-gray-900 dark:text-white{% endif %}">{{
       name }}</a>
+    {% if let Some(msg) = confirmation %}
+    <span class="toast-fade shrink-0 text-xs font-medium text-green-600 dark:text-green-400">&#10003; {{ msg }}</span>
+    {% endif %}
   </div>
   <div class="mt-1 flex items-center gap-x-3 pl-7 text-xs text-gray-500 dark:text-gray-400">
     <div class="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1">

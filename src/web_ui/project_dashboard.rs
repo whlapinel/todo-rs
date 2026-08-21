@@ -147,15 +147,27 @@ struct ProjectDashboardRow {
     toggle_target: Option<String>,
     detail_link: String,
     toggle_complete_json: String,
+    /// `components::row::Row`-style confirm-then-fade badge — see that struct's identical
+    /// fields. Only ever set by `render_rows`'s `just_completed_item_id` force-include, when
+    /// this row is the materialized result of completing a virtual series occurrence from
+    /// this same screen (see `ProjectDashboardVirtualRow::complete_url`) — `None` everywhere
+    /// else, including `toggle_project_dashboard_item_complete`'s own direct-item checkbox,
+    /// which is unrelated to this pass. See the archived "dashboard checkbox parity" follow-up
+    /// (2026-08-21).
+    confirmation: Option<String>,
+    dismiss_after_ms: Option<u32>,
 }
 
 impl ProjectDashboardRow {
+    #[allow(clippy::too_many_arguments)]
     fn from_due_item(
         di: &DueItem,
         project_id: &str,
         names: &HashMap<String, String>,
         is_team_project: bool,
         tz: i32,
+        confirmation: Option<String>,
+        dismiss_after_ms: Option<u32>,
     ) -> Self {
         let item = &di.item;
         let date_label = dashboard_date(item).map(|d| {
@@ -192,6 +204,8 @@ impl ProjectDashboardRow {
                 .then(|| format!("/web/projects/{project_id}/dashboard/items/{}", item.id)),
             detail_link: detail_url(item, project_id),
             toggle_complete_json: (!item.complete).to_string(),
+            confirmation,
+            dismiss_after_ms,
         }
     }
 }
@@ -216,39 +230,47 @@ struct ProjectDashboardVirtualRow {
     /// rationale.
     is_skipped: bool,
     unskip_url: String,
-    /// Narrowed-scope half of docs/issues_and_features.md's "make dashboard rows look the
-    /// same as task list rows" item (2026-08-21) — `Some` only for a Task-typed occurrence
-    /// (`Item::validate` rejects `complete: true` for Events, mirroring `ProjectDashboardRow::
-    /// toggle_target`'s identical `None`-for-Event convention above) that's also `is_current`,
-    /// giving the dashboard's virtual row the same completability the Tasks list's
-    /// `ProjectTaskVirtualRow` already has for the one occurrence per series that's actually
-    /// completable. Unlike the flat Tasks list (which only ever lists the current occurrence
-    /// to begin with — see `project_tasks::handlers::project_tasks_page`), this page also shows
-    /// future "Planned" occurrences; without the `is_current` gate a Planned row's checkbox
-    /// would reliably 400 (`item_series::require_current_occurrence`'s "cannot settle this
-    /// occurrence out of order" — confirmed live) instead of doing anything, so the gate keeps
-    /// this from being a checkbox that predictably errors on every click but one. Reuses the
-    /// exact same route `ProjectTaskVirtualRow::complete_url` points at
-    /// (`complete_project_item_series_occurrence_form`) — that handler's `view=tasks-list`
-    /// branch (see its doc comment) only activates when the URL carries that query param, which
-    /// this omits, so a completion from here falls back to that handler's original
-    /// `redirect_to_current_page` behavior, i.e. exactly what this row's own existing Skip
-    /// button below already does. A full in-place confirm-then-fade rebuild (like the Tasks
-    /// list now has) is out of scope here: unlike the flat Tasks list, this page's rows are
-    /// preset/assignment-filtered (`render_rows`'s `preset`/`show_complete`/`assigned_to_any`),
-    /// so rebuilding "the same view" in place would need to know all three, not just one
-    /// `show_complete` flag — deferred rather than half-built.
+    /// `Some` only for a Task-typed occurrence (`Item::validate` rejects `complete: true` for
+    /// Events, mirroring `ProjectDashboardRow::toggle_target`'s identical `None`-for-Event
+    /// convention above) that's also `is_current`, giving the dashboard's virtual row the same
+    /// completability the Tasks list's `ProjectTaskVirtualRow` already has for the one
+    /// occurrence per series that's actually completable. Unlike the flat Tasks list (which
+    /// only ever lists the current occurrence to begin with — see
+    /// `project_tasks::handlers::project_tasks_page`), this page also shows future "Planned"
+    /// occurrences; without the `is_current` gate a Planned row's checkbox would reliably 400
+    /// (`item_series::require_current_occurrence`'s "cannot settle this occurrence out of
+    /// order" — confirmed live) instead of doing anything, so the gate keeps this from being a
+    /// checkbox that predictably errors on every click but one. Reuses the exact same route
+    /// `ProjectTaskVirtualRow::complete_url` points at (`complete_project_item_series_
+    /// occurrence_form`) — that handler's `view=project-dashboard` branch (see its doc comment)
+    /// rebuilds `#project-dashboard-list` in place via `list_query`/`in_list_view` below,
+    /// mirroring the flat Tasks list's own `view=tasks-list` treatment (see the archived
+    /// "extend confirm-then-fade to virtual occurrences" entry, 2026-08-21) now that this
+    /// screen's `preset`/`show_complete`/`assigned_to_any` filter state is baked into the URL
+    /// too, closing the gap the original "dashboard checkbox parity" follow-up (2026-08-21)
+    /// left open.
     complete_url: Option<String>,
+    /// `true` only when this row is being rendered for the flat Dashboard list (`render_rows`),
+    /// never the calendar day panel (`day_list_rows`) — gates whether the checkbox/Skip/Unskip
+    /// carry `hx-target="#project-dashboard-list"` at all, mirroring `ProjectTaskVirtualRow::
+    /// in_list_view`'s identical rationale. The calendar day panel has no such container in its
+    /// DOM, so those buttons there fall back to the pre-existing whole-page `redirect_to_
+    /// current_page` behavior.
+    in_list_view: bool,
 }
 
 impl ProjectDashboardVirtualRow {
-    fn from_occurrence(occ: &ProjectOccurrence, project_id: &str, tz: i32) -> Self {
+    /// `list_query` is `Some(&query_string)` (baked from `dashboard_list_query`) only when
+    /// rendering for the flat list — `None` for the calendar day panel, matching
+    /// `ProjectTaskVirtualRow::from_occurrence`'s identical `in_list_view`-gated pattern.
+    fn from_occurrence(occ: &ProjectOccurrence, project_id: &str, tz: i32, list_query: Option<&str>) -> Self {
         let local = to_local(occ.occurrence_date, tz);
         let kind_name = if occ.item_type == ItemKind::Event {
             "Event"
         } else {
             "Task"
         };
+        let suffix = list_query.unwrap_or("");
         Self {
             series_id: occ.series_id.clone(),
             occurrence_ts: occ.occurrence_date.timestamp(),
@@ -262,13 +284,14 @@ impl ProjectDashboardVirtualRow {
             type_symbol: type_symbol(occ.item_type),
             title: format!("{kind_name} (not yet created)"),
             materialize_url: occ.materialize_url(project_id),
-            skip_url: occ.skip_url(project_id),
+            skip_url: format!("{}{suffix}", occ.skip_url(project_id)),
             is_current: occ.is_current,
             assignee_name: occ.assigned_to_user_name.clone(),
             is_skipped: occ.is_skipped(),
-            unskip_url: occ.unskip_url(project_id),
+            unskip_url: format!("{}{suffix}", occ.unskip_url(project_id)),
             complete_url: (occ.item_type == ItemKind::Task && occ.is_current)
-                .then(|| occ.complete_url(project_id)),
+                .then(|| format!("{}{suffix}", occ.complete_url(project_id))),
+            in_list_view: list_query.is_some(),
         }
     }
 }
@@ -292,6 +315,29 @@ pub struct DashboardQuery {
     assigned_to_any: Option<String>,
 }
 
+/// Bakes this screen's three filter dimensions into a query-string suffix for a virtual row's
+/// checkbox/Skip/Unskip URLs, so an in-place `#project-dashboard-list` rebuild
+/// (`complete_project_item_series_occurrence_form`'s/Skip's/Unskip's `view=project-dashboard`
+/// branch) knows how to re-render "the same view" — mirrors `ProjectTaskVirtualRow::
+/// from_occurrence`'s `list_query`, extended with this screen's two extra filters (`preset`,
+/// `assignedToAny`) since, unlike the flat Tasks list, this view has more than one filter
+/// dimension to round-trip. `preset`'s value is a closed, hardcoded set (`PRESETS` above) of
+/// plain-ASCII-plus-spaces strings, so a bare space-to-%20 substitution is sufficient escaping
+/// — no general percent-encoding is needed for this fixed vocabulary.
+fn dashboard_list_query(preset: &str, show_complete: bool, assigned_to_any: bool) -> String {
+    let mut params = vec![
+        "view=project-dashboard".to_string(),
+        format!("preset={}", preset.replace(' ', "%20")),
+    ];
+    if show_complete {
+        params.push("showComplete=1".to_string());
+    }
+    if assigned_to_any {
+        params.push("assignedToAny=1".to_string());
+    }
+    format!("?{}", params.join("&"))
+}
+
 /// Same Rust-side filtering rationale as `dashboard::render_rows` — an unfiltered SQL fetch
 /// (both `after`/`before` `None`) followed by filtering against `dashboard_date` here, so an
 /// Event showing up by `scheduled_date` isn't excluded for lacking a `due_date`.
@@ -309,12 +355,19 @@ fn render_rows(
     after: Option<DateTime<Utc>>,
     before: Option<DateTime<Utc>>,
     tz: i32,
+    // See `project_tasks::render_rows_with_virtual`'s identical rationale — force-includes a
+    // just-completed item (the materialized result of completing a virtual occurrence from
+    // this same screen) so it gets a moment to display its confirm-then-fade badge even when
+    // `show_complete` would otherwise filter it straight back out.
+    just_completed_item_id: Option<&str>,
 ) -> Result<Vec<String>, ItemError> {
     let mut items: Vec<&DueItem> = items
         .iter()
         .filter(|di| di.item.kind() != ItemKind::Simple)
         .filter(|di| assigned_to_any || di.item.assigned_to_user_id() == Some(user_id.to_string()))
-        .filter(|di| show_complete || !di.item.complete)
+        .filter(|di| {
+            show_complete || !di.item.complete || Some(di.item.id.as_str()) == just_completed_item_id
+        })
         .filter(|di| preset != "All with due date" || dashboard_date(&di.item).is_some())
         .filter(|di| match dashboard_date(&di.item) {
             Some(d) => after.is_none_or(|a| d >= a) && before.is_none_or(|b| d <= b),
@@ -333,9 +386,20 @@ fn render_rows(
             let ts = dashboard_date(&di.item)
                 .map(|d| d.timestamp())
                 .unwrap_or(i64::MAX);
-            ProjectDashboardRow::from_due_item(di, project_id, names, is_team_project, tz)
-                .render()
-                .map(|html| (ts, html))
+            let just_completed = Some(di.item.id.as_str()) == just_completed_item_id;
+            let confirmation = just_completed.then(|| "Completed".to_string());
+            let dismiss_after_ms = (just_completed && !show_complete).then_some(1800u32);
+            ProjectDashboardRow::from_due_item(
+                di,
+                project_id,
+                names,
+                is_team_project,
+                tz,
+                confirmation,
+                dismiss_after_ms,
+            )
+            .render()
+            .map(|html| (ts, html))
         })
         .collect::<Result<Vec<_>, _>>()?;
 
@@ -359,10 +423,12 @@ fn render_rows(
         .filter(|occ| !matches!(occ.state, OccurrenceState::Materialized { .. }))
         .filter(|occ| assigned_to_any || occ.assigned_to_user_id == Some(user_id.to_string()))
         .collect();
+    let list_query = dashboard_list_query(preset, show_complete, assigned_to_any);
     for occ in filtered_occurrences {
         entries.push((
             occ.occurrence_date.timestamp(),
-            ProjectDashboardVirtualRow::from_occurrence(occ, project_id, tz).render()?,
+            ProjectDashboardVirtualRow::from_occurrence(occ, project_id, tz, Some(&list_query))
+                .render()?,
         ));
     }
 
@@ -395,7 +461,7 @@ fn day_list_rows(
             let ts = dashboard_date(&di.item)
                 .map(|d| d.timestamp())
                 .unwrap_or(i64::MAX);
-            ProjectDashboardRow::from_due_item(di, project_id, names, is_team_project, tz)
+            ProjectDashboardRow::from_due_item(di, project_id, names, is_team_project, tz, None, None)
                 .render()
                 .map(|html| (ts, html))
         })
@@ -407,7 +473,7 @@ fn day_list_rows(
     {
         entries.push((
             occ.occurrence_date.timestamp(),
-            ProjectDashboardVirtualRow::from_occurrence(occ, project_id, tz).render()?,
+            ProjectDashboardVirtualRow::from_occurrence(occ, project_id, tz, None).render()?,
         ));
     }
     entries.sort_by_key(|(ts, _)| *ts);
@@ -437,6 +503,78 @@ fn virtual_occurrence_window(
     )
 }
 
+/// The flat Dashboard list's row assembly, shared between the initial page load
+/// (`project_dashboard_page`) and the in-place `#project-dashboard-list` rebuild the
+/// checkbox/Skip/Unskip handlers do on `view=project-dashboard` (`complete_project_item_series_
+/// occurrence_form`, `skip_project_item_series_occurrence_form`, `unskip_project_item_series_
+/// occurrence_form`) — mirrors `project_tasks::list_task_rows_for_project`'s identical
+/// rationale, so a mutation's response and a fresh reload can never drift apart.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn list_dashboard_rows_for_project(
+    repo: &Arc<dyn ItemRepo>,
+    projects: &Arc<dyn ProjectRepo>,
+    teams: &Arc<dyn TeamRepo>,
+    users: &Arc<dyn UserRepo>,
+    series: &Arc<dyn ItemSeriesRepo>,
+    project_id: &str,
+    requester_user_id: &str,
+    preset: &str,
+    show_complete: bool,
+    assigned_to_any: bool,
+    tz: i32,
+    just_completed_item_id: Option<&str>,
+) -> Result<Vec<String>, ItemError> {
+    let project = project_service::get_project(projects, teams, project_id, requester_user_id).await?;
+    let (after, before) = preset_range(preset, Utc::now(), tz);
+    let due_items =
+        project_item_service::list_due_project_items_unchecked(repo, project_id, None, None).await?;
+    let (virtual_after, virtual_before) = virtual_occurrence_window(after, before, Utc::now());
+    let virtual_occurrences = if virtual_after <= virtual_before {
+        series_service::list_occurrence_states_for_project(
+            series,
+            users,
+            project_id,
+            virtual_after,
+            virtual_before,
+            tz,
+        )
+        .await?
+    } else {
+        Vec::new()
+    };
+    let names = match &project.team_id {
+        Some(team_id) => names_for(teams, team_id, requester_user_id).await?,
+        None => HashMap::new(),
+    };
+    render_rows(
+        requester_user_id,
+        &due_items,
+        &virtual_occurrences,
+        project_id,
+        &names,
+        project.team_id.is_some(),
+        preset,
+        show_complete,
+        assigned_to_any,
+        after,
+        before,
+        tz,
+        just_completed_item_id,
+    )
+}
+
+/// The `#project-dashboard-list` innerHTML swap body — see `project_tasks::
+/// items_list_inner_html`'s identical rationale, matching `project_dashboard/page.html`'s own
+/// empty-state markup so an in-place rebuild that empties the list looks identical to a fresh
+/// load that finds nothing.
+pub(crate) fn dashboard_items_inner_html(rows: &[String]) -> String {
+    if rows.is_empty() {
+        "<li class=\"py-3 text-sm text-gray-500 dark:text-gray-400\">No items.</li>".to_string()
+    } else {
+        rows.concat()
+    }
+}
+
 pub async fn project_dashboard_page(
     Path(project_id): Path<String>,
     Extension(auth_user): Extension<AuthUser>,
@@ -448,53 +586,25 @@ pub async fn project_dashboard_page(
     TzOffset(tz_offset): TzOffset,
     Query(q): Query<DashboardQuery>,
 ) -> Result<Html<String>, ItemError> {
-    let project =
-        project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
     let preset = q.preset.unwrap_or_else(|| "Today".to_string());
     let show_complete = q.show_complete.is_some();
     let assigned_to_any = q.assigned_to_any.is_some();
-    let (after, before) = preset_range(&preset, Utc::now(), tz_offset);
 
-    let due_items =
-        project_item_service::list_due_project_items_unchecked(&repo, &project_id, None, None)
-            .await?;
-    let (virtual_after, virtual_before) = virtual_occurrence_window(after, before, Utc::now());
-    // Stage B of docs/unify-virtual-materialized-occurrences-plan.md: switched from
-    // `list_virtual_occurrences_for_project_unchecked` to `list_occurrence_states_for_project`
-    // so a skipped occurrence within this window stays visible (struck through, with an
-    // Unskip button — see `render_rows`'s `filtered_occurrences`, which excludes only
-    // `Materialized` entries) instead of disappearing outright.
-    let virtual_occurrences = if virtual_after <= virtual_before {
-        series_service::list_occurrence_states_for_project(
-            &series,
-            &users,
-            &project_id,
-            virtual_after,
-            virtual_before,
-            tz_offset,
-        )
-        .await?
-    } else {
-        Vec::new()
-    };
-    let names = match &project.team_id {
-        Some(team_id) => names_for(&teams, team_id, &auth_user.user_id).await?,
-        None => HashMap::new(),
-    };
-    let rows = render_rows(
-        &auth_user.user_id,
-        &due_items,
-        &virtual_occurrences,
+    let rows = list_dashboard_rows_for_project(
+        &repo,
+        &projects,
+        &teams,
+        &users,
+        &series,
         &project_id,
-        &names,
-        project.team_id.is_some(),
+        &auth_user.user_id,
         &preset,
         show_complete,
         assigned_to_any,
-        after,
-        before,
         tz_offset,
-    )?;
+        None,
+    )
+    .await?;
 
     let presets = PRESETS.iter().map(|&p| (p, p == preset)).collect();
     let nav_html = nav::build_nav_html(
@@ -904,6 +1014,8 @@ pub async fn toggle_project_dashboard_item_complete(
             &names,
             project.team_id.is_some(),
             tz,
+            None,
+            None,
         )),
         // Recurring item just completed and got replaced under a new id (see
         // service::items::update_item/team_items::update_team_item) — nothing to render
