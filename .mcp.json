@@ -3,6 +3,10 @@
     "todo": {
       "command": "bash",
       "args": ["-c", "set -a; source /home/whlapinel/todo/.env; set +a; exec node /home/whlapinel/todo/mcp-server/dist/index.js"]
+    },
+    "playwright": {
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@latest", "--headless"]
     }
   }
 }
