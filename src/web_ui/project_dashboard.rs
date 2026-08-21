@@ -345,6 +345,50 @@ fn render_rows(
     Ok(entries.into_iter().map(|(_, html)| html).collect())
 }
 
+/// The calendar's per-day panel — see `project_tasks::day_list_rows`'s identical rationale.
+/// Unlike `render_rows` above (the flat dashboard page's preset/assignment-filtered view),
+/// this shows every item/occurrence on `date` unfiltered, matching what the calendar grid's
+/// day cells already aggregated from before this redesign — reusing
+/// `ProjectDashboardRow`/`ProjectDashboardVirtualRow` as-is (no feature upgrade to virtual-row
+/// completability; that's tracked separately in docs/issues_and_features.md).
+fn day_list_rows(
+    due_items: &[DueItem],
+    virtual_occurrences: &[ProjectOccurrence],
+    project_id: &str,
+    names: &HashMap<String, String>,
+    is_team_project: bool,
+    date: NaiveDate,
+    tz: i32,
+) -> Result<Vec<String>, ItemError> {
+    let mut entries: Vec<(i64, String)> = due_items
+        .iter()
+        .filter(|di| di.item.kind() != ItemKind::Simple)
+        .filter(|di| {
+            dashboard_date(&di.item).map(|d| to_local(d, tz).date_naive()) == Some(date)
+        })
+        .map(|di| {
+            let ts = dashboard_date(&di.item)
+                .map(|d| d.timestamp())
+                .unwrap_or(i64::MAX);
+            ProjectDashboardRow::from_due_item(di, project_id, names, is_team_project, tz)
+                .render()
+                .map(|html| (ts, html))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    for occ in virtual_occurrences
+        .iter()
+        .filter(|occ| !matches!(occ.state, OccurrenceState::Materialized { .. }))
+        .filter(|occ| to_local(occ.occurrence_date, tz).date_naive() == date)
+    {
+        entries.push((
+            occ.occurrence_date.timestamp(),
+            ProjectDashboardVirtualRow::from_occurrence(occ, project_id, tz).render()?,
+        ));
+    }
+    entries.sort_by_key(|(ts, _)| *ts);
+    Ok(entries.into_iter().map(|(_, html)| html).collect())
+}
+
 /// Sane default forward window for virtual-occurrence generation when a preset leaves
 /// `(after, before)` open on one or both sides ("All", "All with due date", "Overdue" — see
 /// `preset_range`). Real items are unaffected either way; this only bounds how far ahead an
@@ -445,48 +489,17 @@ pub async fn project_dashboard_page(
     })
 }
 
-struct ProjectDashboardCalendarEntry {
-    /// Unique across the whole grid — a real item's own id for a materialized entry, a
-    /// `series_id`+`occurrence_ts` pair for a virtual one. Only actually needed as an
-    /// `hx-target` for the Skip button below, but set unconditionally for both kinds so the
-    /// template doesn't need an `Option` just to render an `id` attribute.
-    entry_id: String,
-    detail_link: String,
-    name: String,
-    time_label: Option<String>,
-    type_symbol: &'static str,
-    /// `Some(...)` only for a virtual (unmaterialized) occurrence — the template POSTs here
-    /// instead of following `detail_link` (which is `"#"` in that case).
-    materialize_url: Option<String>,
-    /// `Some(...)` only for a virtual occurrence too (Stage 6) — a materialized occurrence's
-    /// only "skip" affordance in this stage is deleting its item via the item's own detail
-    /// page, per docs/recurring-events-virtual-occurrences-rough-plan.md's stage 6 write-up.
-    skip_url: Option<String>,
-    is_virtual: bool,
-    /// Stage 9: `false` for a materialized entry (no visible "current" marker — see
-    /// Stage 6's write-up on why materialized occurrences stay unmarked); for a virtual
-    /// one, whether it's the series' `current_occurrence_date`.
-    is_current: bool,
-    /// `item.complete` for a materialized entry; always `false` for a virtual occurrence,
-    /// which has no completion concept of its own until materialized. Drives the same
-    /// dimmed/line-through treatment `project_tasks/calendar_page.html` already applies —
-    /// `due_items` here is unfiltered by completion (see `project_dashboard_page`'s own
-    /// `show_complete` filter, which this calendar route never applied), so without this the
-    /// grid silently rendered completed items identically to incomplete ones.
-    complete: bool,
-    /// See `ProjectDashboardVirtualRow::is_skipped`'s identical rationale — always `false`
-    /// for a materialized entry.
-    is_skipped: bool,
-    /// `Some(...)` only for a skipped occurrence — mirrors `skip_url`'s `Option` shape.
-    unskip_url: Option<String>,
-}
-
+/// Redesign per docs/issues_and_features.md's calendar-view entry: a day cell only shows a
+/// count hint now, not the items themselves — see `ProjectDashboardCalendarPageTemplate`'s
+/// doc comment for where the full list moved to, mirroring
+/// `project_tasks::templates::CalendarDay`.
 struct ProjectDashboardCalendarDay {
     date: String,
     day_number: u32,
     is_current_month: bool,
     is_today: bool,
-    entries: Vec<ProjectDashboardCalendarEntry>,
+    is_selected: bool,
+    entry_count: usize,
 }
 
 #[derive(Template)]
@@ -495,12 +508,26 @@ struct ProjectDashboardCalendarPageTemplate {
     project_id: String,
     month_label: String,
     month_iso: String,
+    year: i32,
+    month: u32,
     prev_year: i32,
     prev_month: u32,
     next_year: i32,
     next_month: u32,
     days: Vec<ProjectDashboardCalendarDay>,
+    /// See `project_tasks::templates::ProjectTasksCalendarPageTemplate::selected_date_label`'s
+    /// identical rationale.
+    selected_date_label: Option<String>,
+    day_rows: Vec<String>,
     nav_html: String,
+}
+
+/// See `project_tasks::templates::ProjectTasksCalendarDayPanelTemplate`'s identical rationale.
+#[derive(Template)]
+#[template(path = "project_dashboard/calendar_day_panel.html")]
+struct ProjectDashboardCalendarDayPanelTemplate {
+    selected_date_label: Option<String>,
+    day_rows: Vec<String>,
 }
 
 fn prev_month(year: i32, month: u32) -> (i32, u32) {
@@ -548,31 +575,25 @@ fn end_of_day() -> chrono::NaiveTime {
     chrono::NaiveTime::from_hms_opt(23, 59, 59).unwrap()
 }
 
-/// Mirrors `dashboard::build_calendar_days` exactly, project-scoped — same fixed 6-row
-/// Monday-start grid. Unlike the list view (`project_dashboard_page`'s `show_complete` filter),
-/// this never filters out completed items — the grid shows every due item regardless of
-/// completion, dimmed/struck-through via `ProjectDashboardCalendarEntry::complete` (2026-08-16
-/// fix: previously completed items rendered identically to incomplete ones here). A calendar
-/// view is a genuinely new capability for team-backed projects here (`team_dashboard.rs` never
-/// had one), same
-/// framing as every prior B5 sub-stage's own calendar view. `virtual_occurrences` (Stage 5)
-/// are bucketed into the same per-day map as real due items — see CLAUDE.md's Events section
-/// for why a materialized occurrence never appears twice here: once materialized it's a real
-/// `items` row already covered by `due_items`, so `virtual_occurrences` only ever contains
-/// occurrences with no `event_occurrences` row at all (see
-/// `series::list_virtual_occurrences_for_project_unchecked`).
+/// Mirrors `project_tasks::build_calendar_days`'s identical redesign rationale (per
+/// docs/issues_and_features.md's calendar-view entry): a cell only needs a tally now, the full
+/// list for a clicked day renders separately via `day_list_rows`. Unlike the list view
+/// (`project_dashboard_page`'s `show_complete` filter), this never filters out completed
+/// items — matching the tally this replaced, which also counted them. A materialized
+/// occurrence never appears in `virtual_occurrences` — it's already a real `items` row
+/// covered by `due_items` (see `series::list_virtual_occurrences_for_project_unchecked`).
 fn build_calendar_days(
     year: i32,
     month: u32,
-    project_id: &str,
     due_items: &[DueItem],
     virtual_occurrences: &[ProjectOccurrence],
     tz: i32,
     today: NaiveDate,
+    selected_date: Option<NaiveDate>,
 ) -> Vec<ProjectDashboardCalendarDay> {
     let grid_start = grid_start_for(year, month);
 
-    let mut by_date: std::collections::HashMap<NaiveDate, Vec<ProjectDashboardCalendarEntry>> =
+    let mut counts: std::collections::HashMap<NaiveDate, usize> =
         std::collections::HashMap::new();
     for di in due_items {
         let item = &di.item;
@@ -580,64 +601,24 @@ fn build_calendar_days(
             continue;
         }
         if let Some(dt) = dashboard_date(item) {
-            let local = to_local(dt, tz);
-            let time_label = dashboard_has_time(item).then(|| local.format("%H:%M").to_string());
-            by_date
-                .entry(local.date_naive())
-                .or_default()
-                .push(ProjectDashboardCalendarEntry {
-                    entry_id: format!("cal-item-{}", item.id),
-                    detail_link: detail_url(item, project_id),
-                    name: item.name.clone(),
-                    time_label,
-                    type_symbol: type_symbol(item.kind()),
-                    materialize_url: None,
-                    skip_url: None,
-                    is_virtual: false,
-                    is_current: false,
-                    complete: item.complete,
-                    is_skipped: false,
-                    unskip_url: None,
-                });
+            *counts.entry(to_local(dt, tz).date_naive()).or_default() += 1;
         }
     }
-    // The Task-typed past-date clamp (Stage 8) and `is_current` computation (Stage 9) now
-    // live inside `item_series::list_occurrence_states_for_project` itself (mirroring
-    // `list_virtual_occurrences_for_project_unchecked`'s own logic). `virtual_occurrences`
-    // is expected to already have `OccurrenceState::Materialized` entries filtered out by
-    // the caller — those already appear above via `due_items`.
     for occ in virtual_occurrences {
         let local = to_local(occ.occurrence_date, tz);
-        by_date
-            .entry(local.date_naive())
-            .or_default()
-            .push(ProjectDashboardCalendarEntry {
-                entry_id: occ.calendar_entry_id(),
-                detail_link: "#".to_string(),
-                name: occ.series_name.clone(),
-                time_label: Some(local.format("%H:%M").to_string()),
-                type_symbol: type_symbol(occ.item_type),
-                materialize_url: Some(occ.materialize_url(project_id)),
-                skip_url: Some(occ.skip_url(project_id)),
-                is_virtual: true,
-                is_current: occ.is_current,
-                complete: false,
-                is_skipped: occ.is_skipped(),
-                unskip_url: Some(occ.unskip_url(project_id)),
-            });
+        *counts.entry(local.date_naive()).or_default() += 1;
     }
 
     let mut days = Vec::with_capacity(42);
     for i in 0..42i64 {
         let date = grid_start + Duration::days(i);
-        let mut entries = by_date.remove(&date).unwrap_or_default();
-        entries.sort_by(|a, b| a.time_label.cmp(&b.time_label));
         days.push(ProjectDashboardCalendarDay {
             date: date.format("%Y-%m-%d").to_string(),
             day_number: date.day(),
             is_current_month: date.month() == month && date.year() == year,
             is_today: date == today,
-            entries,
+            is_selected: Some(date) == selected_date,
+            entry_count: counts.remove(&date).unwrap_or(0),
         });
     }
     days
@@ -647,6 +628,13 @@ fn build_calendar_days(
 pub struct CalendarQuery {
     year: Option<i32>,
     month: Option<u32>,
+    /// See `project_tasks::handlers::CalendarQuery::date`'s identical rationale.
+    date: Option<String>,
+}
+
+/// See `project_tasks::handlers::day_panel_label`'s identical rationale.
+fn day_panel_label(date: NaiveDate) -> String {
+    date.format("%A, %B %d, %Y").to_string()
 }
 
 pub async fn project_dashboard_calendar_page(
@@ -660,12 +648,18 @@ pub async fn project_dashboard_calendar_page(
     TzOffset(tz): TzOffset,
     Query(q): Query<CalendarQuery>,
 ) -> Result<Html<String>, ItemError> {
+    let project =
+        project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
     let today = to_local(Utc::now(), tz).date_naive();
     let year = q.year.unwrap_or_else(|| today.year());
     let month = q
         .month
         .filter(|m| (1..=12).contains(m))
         .unwrap_or_else(|| today.month());
+    let selected_date = q
+        .date
+        .as_deref()
+        .and_then(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").ok());
 
     let due_items = project_item_service::list_due_project_items(
         &repo,
@@ -699,11 +693,11 @@ pub async fn project_dashboard_calendar_page(
     let days = build_calendar_days(
         year,
         month,
-        &project_id,
         &due_items,
         &virtual_occurrences,
         tz,
         today,
+        selected_date,
     );
     let (prev_year, prev_month) = prev_month(year, month);
     let (next_year, next_month) = next_month(year, month);
@@ -714,6 +708,22 @@ pub async fn project_dashboard_calendar_page(
         SidebarSection::None,
     )
     .await?;
+    let names = match &project.team_id {
+        Some(team_id) => names_for(&teams, team_id, &auth_user.user_id).await?,
+        None => HashMap::new(),
+    };
+    let day_rows = match selected_date {
+        Some(date) => day_list_rows(
+            &due_items,
+            &virtual_occurrences,
+            &project_id,
+            &names,
+            project.team_id.is_some(),
+            date,
+            tz,
+        )?,
+        None => Vec::new(),
+    };
 
     render(ProjectDashboardCalendarPageTemplate {
         project_id,
@@ -722,12 +732,77 @@ pub async fn project_dashboard_calendar_page(
             .format("%B %Y")
             .to_string(),
         month_iso: format!("{year:04}-{month:02}"),
+        year,
+        month,
         prev_year,
         prev_month,
         next_year,
         next_month,
         days,
+        selected_date_label: selected_date.map(day_panel_label),
+        day_rows,
         nav_html,
+    })
+}
+
+pub async fn project_dashboard_calendar_day_fragment(
+    Path(project_id): Path<String>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(users): Extension<Arc<dyn UserRepo>>,
+    Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
+    TzOffset(tz): TzOffset,
+    Query(q): Query<CalendarQuery>,
+) -> Result<Html<String>, ItemError> {
+    let project =
+        project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
+    let date = q
+        .date
+        .as_deref()
+        .and_then(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").ok())
+        .ok_or(ItemError::Invalid("date is required".to_string()))?;
+    let due_items = project_item_service::list_due_project_items(
+        &repo,
+        &projects,
+        &teams,
+        &project_id,
+        &auth_user.user_id,
+        None,
+        None,
+    )
+    .await?;
+    let range_start = local_date_to_utc(date, start_of_day(), tz);
+    let range_end = local_date_to_utc(date, end_of_day(), tz);
+    let virtual_occurrences = series_service::list_occurrence_states_for_project(
+        &series,
+        &users,
+        &project_id,
+        range_start,
+        range_end,
+        tz,
+    )
+    .await?
+    .into_iter()
+    .filter(|occ| !matches!(occ.state, OccurrenceState::Materialized { .. }))
+    .collect::<Vec<_>>();
+    let names = match &project.team_id {
+        Some(team_id) => names_for(&teams, team_id, &auth_user.user_id).await?,
+        None => HashMap::new(),
+    };
+    let day_rows = day_list_rows(
+        &due_items,
+        &virtual_occurrences,
+        &project_id,
+        &names,
+        project.team_id.is_some(),
+        date,
+        tz,
+    )?;
+    render(ProjectDashboardCalendarDayPanelTemplate {
+        selected_date_label: Some(day_panel_label(date)),
+        day_rows,
     })
 }
 

@@ -131,6 +131,13 @@ pub async fn new_project_event_page(
 pub struct CalendarQuery {
     year: Option<i32>,
     month: Option<u32>,
+    /// See `project_tasks::handlers::CalendarQuery::date`'s identical rationale.
+    date: Option<String>,
+}
+
+/// See `project_tasks::handlers::day_panel_label`'s identical rationale.
+fn day_panel_label(date: NaiveDate) -> String {
+    date.format("%A, %B %d, %Y").to_string()
 }
 
 pub async fn project_events_calendar_page(
@@ -152,6 +159,10 @@ pub async fn project_events_calendar_page(
         .month
         .filter(|m| (1..=12).contains(m))
         .unwrap_or_else(|| today.month());
+    let selected_date = q
+        .date
+        .as_deref()
+        .and_then(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").ok());
 
     let items = list_project_events(&repo, &project_id).await?;
     let grid_start = grid_start_for(year, month);
@@ -190,11 +201,11 @@ pub async fn project_events_calendar_page(
     let days = build_calendar_days(
         year,
         month,
-        &project_id,
         &items,
         &virtual_occurrences,
         tz,
         today,
+        selected_date,
     );
     let (prev_year, prev_month) = prev_month(year, month);
     let (next_year, next_month) = next_month(year, month);
@@ -205,6 +216,10 @@ pub async fn project_events_calendar_page(
         SidebarSection::Events,
     )
     .await?;
+    let day_rows = match selected_date {
+        Some(date) => super::day_list_rows(&repo, &series, &users, &project_id, date, tz).await?,
+        None => Vec::new(),
+    };
 
     render(ProjectEventsCalendarPageTemplate {
         project_id,
@@ -213,12 +228,41 @@ pub async fn project_events_calendar_page(
             .format("%B %Y")
             .to_string(),
         month_iso: format!("{year:04}-{month:02}"),
+        year,
+        month,
         prev_year,
         prev_month,
         next_year,
         next_month,
         days,
+        selected_date_label: selected_date.map(day_panel_label),
+        day_rows,
         nav_html,
+    })
+}
+
+pub async fn project_events_calendar_day_fragment(
+    Path(project_id): Path<String>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(users): Extension<Arc<dyn UserRepo>>,
+    Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
+    TzOffset(tz): TzOffset,
+    Query(q): Query<CalendarQuery>,
+) -> Result<Html<String>, ItemError> {
+    let _project =
+        project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
+    let date = q
+        .date
+        .as_deref()
+        .and_then(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").ok())
+        .ok_or(ItemError::Invalid("date is required".to_string()))?;
+    let day_rows = super::day_list_rows(&repo, &series, &users, &project_id, date, tz).await?;
+    render(ProjectEventsCalendarDayPanelTemplate {
+        selected_date_label: Some(day_panel_label(date)),
+        day_rows,
     })
 }
 

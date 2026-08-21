@@ -46,46 +46,23 @@
     </div>
     <div class="grid grid-cols-7 grid-rows-6 gap-px bg-gray-200 text-xs/6 text-gray-700 dark:bg-white/10 dark:text-gray-300">
       {% for day in days %}
-      <div class="relative min-h-24 {% if day.is_current_month %}bg-white dark:bg-gray-900{% else %}bg-gray-50 dark:bg-gray-800/50{% endif %} px-2 py-2">
+      <button type="button"
+        hx-get="/web/projects/{{ project_id }}/dashboard/calendar/day?date={{ day.date }}"
+        hx-target="#calendar-day-list" hx-swap="innerHTML"
+        hx-push-url="/web/projects/{{ project_id }}/dashboard/calendar?year={{ year }}&month={{ month }}&date={{ day.date }}"
+        class="relative flex min-h-24 w-full flex-col items-start px-2 py-2 text-left {% if day.is_current_month %}bg-white dark:bg-gray-900{% else %}bg-gray-50 dark:bg-gray-800/50{% endif %} hover:bg-gray-100 focus:z-10 focus:outline-none dark:hover:bg-white/5 {% if day.is_selected %}ring-2 ring-inset ring-indigo-500{% endif %}">
         <time datetime="{{ day.date }}"
               class="relative {% if !day.is_current_month %}opacity-50{% endif %} {% if day.is_today %}flex size-6 items-center justify-center rounded-full bg-indigo-600 font-semibold text-white dark:bg-indigo-500{% endif %}">{{ day.day_number }}</time>
-        {% if !day.entries.is_empty() %}
-        <ol class="mt-1 space-y-1">
-          {% for entry in day.entries %}
-          <li id="{{ entry.entry_id }}" class="flex items-center gap-x-0.5">
-            {% if entry.is_skipped %}
-            <span class="group flex min-w-0 flex-1 items-center gap-x-1 opacity-70">
-              <span class="shrink-0 inline-flex size-3.5 items-center justify-center rounded-full bg-gray-200 text-[9px] font-semibold text-gray-600 dark:bg-white/10 dark:text-gray-300">{{ entry.type_symbol }}</span>
-              <p class="flex-auto truncate font-medium italic line-through text-gray-400 dark:text-gray-500">{{ entry.name }}</p>
-              {% if let Some(t) = entry.time_label %}<span class="ml-2 hidden flex-none text-gray-500 xl:block dark:text-gray-400">{{ t }}</span>{% endif %}
-              <span class="shrink-0 text-[9px] uppercase tracking-wide font-semibold text-gray-400 dark:text-gray-500">Skipped</span>
-            </span>
-            {% if let Some(uu) = entry.unskip_url %}
-            <button type="button" hx-post="{{ uu }}"
-              class="shrink-0 text-gray-400 hover:text-indigo-500 dark:text-gray-500 dark:hover:text-indigo-400"
-              title="Unskip occurrence">&#8635;</button>
-            {% endif %}
-            {% else %}
-            <a href="{% if let Some(url) = entry.materialize_url %}{{ url }}{% else %}{{ entry.detail_link }}{% endif %}"
-               class="group flex min-w-0 flex-1 items-center gap-x-1 {% if entry.is_virtual %}opacity-70{% else if entry.complete %}opacity-50{% endif %}">
-              <span class="shrink-0 inline-flex size-3.5 items-center justify-center rounded-full bg-gray-200 text-[9px] font-semibold text-gray-600 dark:bg-white/10 dark:text-gray-300 {% if entry.is_current %}ring-2 ring-indigo-500 dark:ring-indigo-400{% endif %}"
-                title="{% if entry.is_current %}Current occurrence{% endif %}">{{ entry.type_symbol }}</span>
-              <p class="flex-auto truncate font-medium {% if entry.complete %}line-through{% endif %} {% if entry.is_virtual %}italic text-gray-500 dark:text-gray-400{% else %}text-gray-900 group-hover:text-indigo-600 dark:text-white dark:group-hover:text-indigo-400{% endif %}">{{ entry.name }}</p>
-              {% if let Some(t) = entry.time_label %}<span class="ml-2 hidden flex-none text-gray-500 group-hover:text-indigo-600 xl:block dark:text-gray-400 dark:group-hover:text-indigo-400 {% if entry.complete %}line-through{% endif %}">{{ t }}</span>{% endif %}
-            </a>
-            {% if let Some(su) = entry.skip_url %}
-            <button type="button" hx-post="{{ su }}" hx-confirm="Skip this occurrence?"
-              class="shrink-0 text-gray-400 hover:text-red-500 dark:text-gray-500 dark:hover:text-red-400"
-              title="Skip occurrence">&times;</button>
-            {% endif %}
-            {% endif %}
-          </li>
-          {% endfor %}
-        </ol>
+        {% if day.entry_count > 0 %}
+        <span class="mt-auto self-end rounded-full bg-gray-100 px-1.5 py-0.5 text-[11px] font-semibold text-gray-600 dark:bg-white/10 dark:text-gray-300">{{ day.entry_count }}</span>
         {% endif %}
-      </div>
+      </button>
       {% endfor %}
     </div>
+  </div>
+
+  <div id="calendar-day-list" class="rounded-lg">
+    {% include "project_dashboard/calendar_day_panel.html" %}
   </div>
 </div>
 {% endblock %}

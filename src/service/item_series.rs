@@ -1102,16 +1102,6 @@ impl ProjectOccurrence {
         matches!(self.state, OccurrenceState::Skipped)
     }
 
-    /// Unique id for this occurrence's cell in a calendar grid — every calendar view
-    /// (Tasks/Events/Dashboard) formatted this independently before Stage D of
-    /// `docs/unify-virtual-materialized-occurrences-plan.md` consolidated it here.
-    pub fn calendar_entry_id(&self) -> String {
-        format!(
-            "cal-virtual-{}-{}",
-            self.series_id,
-            self.occurrence_date.timestamp()
-        )
-    }
 
     /// `GET`s the no-side-effect read-only view for a still-virtual/skipped occurrence (see
     /// `project_item_series::handlers::project_item_series_occurrence_detail_page`), and is

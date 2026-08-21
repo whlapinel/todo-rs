@@ -2,22 +2,33 @@
 
 Open issues and feature requests, merged from the former `docs/issues.md` and `docs/features.md` (2026-08-20) into a single unsorted list. Completed or superseded items — including ones from the old files that were already resolved but hadn't been moved out yet — live in `docs/archived/archived_issues_and_features.md`.
 
-
-- Modify calendar views (Tasks, Events, dashboard) to show a per-day list below the month view instead of cramming items into each day cell — each day shows a minimal count/hint, clicking a day shows the full list for that day. Use `../tailwind-ui-html/html/data-display/calendars/02-month-view.html` or if the repo isn't pulled down there already, https://github.com/whlapinel/tailwind-ui-html.git
 - Allow Delete any item from its details page - event, series, task, simple list (currently only available from the row-level UI, not the detail page itself).
-- Should link to series from series occurrence page the same way we link from a materialized occurrence (item) page.
-- Make dashboard rows look the same as task list rows esp. regarding materialized vs. virtual occurrences -- currently show dimmed and italicized with no checkbox.
+- Should link to series from series virtual occurrence details page the same way we link from a materialized occurrence (item) details page.
+- Put link to parent in child task detail view
+- Make dashboard rows look the same as task list rows esp. regarding materialized vs. virtual occurrences -- currently show dimmed and italicized with no checkbox. Narrowed scope, 2026-08-21: the Tasks/Events calendar's per-day panel already inherited full row parity for free when it was rewritten to reuse `ProjectTaskRow`/`ProjectTaskVirtualRow`/`ProjectEventRow`/`ProjectEventVirtualRow` (see the archived "calendar views" entry) — this now applies only to `project_dashboard`/`main_dashboard`'s own, separate, less-featured row components (`ProjectDashboardRow`/`ProjectDashboardVirtualRow`, `MainDashboardRow`/`MainDashboardVirtualRow`), used by both their flat list and their calendar's day panel. Explicitly deferred out of scope when the calendar redesign shipped.
 - Allow copying a task or event to another project (distinct from the same-project "duplicate" action above).
 - Allow a project admin to complete tasks not assigned to them.
+- Add reminder schema and UI to tasks, series, and events. 
+- Default value is reminders pushed on the instant they're scheduled for, and on the instant they're due
+- Add in-app notifications for reminders.
+- Create user settings schema and UI 
+    - Configure notifications to toggle e-mail on/off (default = on)
+    - Comment notifications configurability
+        - radio with (default = all comments ) or only tasks I'm assigned, 
+        - events (checkbox)
+- Add comments for all items. Any team-member can comment on any item. No edit or delete for now.
+- Add notifications for comments -- all team members notified of any comment by default
+- Turn app into a PWA
+- Add push notifications: need Apple for iOS and Google for Windows Desktop Chrome
+- Big feature addition, needs fleshing out: user should be encouraged, but not necessarily restricted in any way, to give tasks both a due date and a schedule date. So some kind of gentle warning indicator can be clicked to take user to a page that lists all tasks with scheduled date and no due date, and all tasks with due date but no scheduled date. However -- contrary to part of what I just stated, Consider this restriction: requiring due date for all tasks, and making scheduled date optional (but encouraged through this warning). This would be a very big change and would involve a migration to make all tasks scheduled and lacking a due date to have a due date matching the scheduled date.
+    - Future vision worth discussing now on this: I'm envisioning a system by which user can specify a due date and scheduling window for recurring tasks, allowing assignee to schedule completion of a task within the allowed window. But this is low-priority and only half-baked currently.
 - Add metadata fields to `Item`: `created_at`, `created_by`, `deleted_at`, `deleted_by` (tag for deletion instead of deleting outright, allowing recovery), with a TTL after which the item is actually deleted. Depends on the soft-delete design question above.
 - Audit `src/storage/migrations/` for `CREATE INDEX` statements that run before the column-adding migration they depend on — only the `source_event_id` one is confirmed fixed; there may be others in the same wrong position.
 - Contrast issue for the series "Children Template" select box: reported as white text on white background. The current markup (`templates/project_item_series/new_page.html`) already uses the standard dark-mode-aware select classes used everywhere else in the app, so this may already be fixed or may be browser/theme-specific — re-verify live in both themes before scoping any code change.
 - Events list rows still lack the "duplicate" action that Tasks and Series already have (`duplicate_url: None` in `ProjectEventRow`, `src/web_ui/project_events/templates.rs`) — add duplicate support for Events to reach parity. Fold into a vertical-ellipses menu alongside edit/delete/assign once that exists (see the pop-up dialog item below).
-- In calendar views, show assigned user (first letter of first name) beside tasks and task series when assignment exists — superseded in scope by the per-day list redesign below, but worth keeping as a minimum bar if that larger change is deferred.
-- Give the calendar and dashboard views a checkbox on virtual series occurrences that materializes-and-completes in one action, matching what flat list rows already got (`9962867`, "Give virtual series occurrences a checkbox and let materialized rows Skip") — explicitly deferred out of that commit as a separate, larger change.
 - Need a pop-up dialog component generalized for row actions (duplicate/delete/assign/etc.) — `#action-dialog` in `base.html` exists today but is only wired up for the quick-reschedule flow.
 - Ctrl+click or tap+hold should select rows, allowing bulk actions: "delete-selected", "reschedule-selected", "assign-selected".
-- Open design question: should delete mark a `deleted` column true instead of actually deleting, to allow undo within a timeframe and easy viewing of recently-deleted items? Unsure this is the right pattern — wants a tradeoffs discussion before deciding. If adopted, pairs with the metadata-fields item below.
+- Open design question: should delete mark a `deleted` column true instead of actually deleting, to allow undo within a timeframe and easy viewing of recently-deleted items? Unsure this is the right pattern — wants a tradeoffs discussion before deciding. If adopted, pairs with the metadata-fields item.
 - Add a `priority` field to task items and task series; sort first by priority, then by due date.
 - Mass rescheduling ("skip current" without completing), across projects. The single-row version already shipped (`bd000b1`, "Finish the quick-reschedule dialog and extend it to Events") — see the archived doc. The mass/bulk version is fully designed in `docs/scheduled-catchup-plan.md` but not yet built: needs a new cross-project screen, a new repo method, and a bulk-action pattern this codebase doesn't have precedent for yet. **Before implementing:** that plan doc predates the item_series redesign and has zero series-awareness in its "overdue" query — add a `series_id IS NULL` guard (or equivalent) before implementing, or it will desync a stale materialized series occurrence from its cursor.
 - Due date should be secondary for tasks (mirroring Todoist's `scheduled_date`-primary model), and/or due date should follow the same recurrence rules as scheduling. Explicitly deferred already — see CLAUDE.md's Scheduled start/end section. Touches dashboard preset grouping/sorting, `list_due`/`prl items due`, and web-UI field-prominence ordering across every screen; also tangled with the still-unresolved "floating calendar date" display tension noted in the same CLAUDE.md section. Needs its own planning pass before implementation.

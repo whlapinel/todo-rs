@@ -505,33 +505,16 @@ pub struct ProjectEventEditPageTemplate {
     pub nav_html: String,
 }
 
-pub struct CalendarEventEntry {
-    /// Unique across the whole grid — see `project_dashboard::ProjectDashboardCalendarEntry`'s
-    /// identical field for why it's unconditional rather than `Option`.
-    pub entry_id: String,
-    pub href: String,
-    pub name: String,
-    pub time_label: Option<String>,
-    /// `Some(...)` only for a virtual (unmaterialized) series occurrence (Stage 5 of
-    /// docs/recurring-events-virtual-occurrences-rough-plan.md) — the template POSTs here
-    /// instead of following `href` (which is `"#"` in that case).
-    pub materialize_url: Option<String>,
-    /// `Some(...)` only for a virtual occurrence too (Stage 6) — see
-    /// `project_dashboard::ProjectDashboardCalendarEntry::skip_url`'s identical rationale.
-    pub skip_url: Option<String>,
-    pub is_virtual: bool,
-    /// See `project_dashboard::ProjectDashboardCalendarEntry::is_skipped`'s identical
-    /// rationale.
-    pub is_skipped: bool,
-    pub unskip_url: Option<String>,
-}
-
+/// Redesign per docs/issues_and_features.md's calendar-view entry: a day cell only shows a
+/// count hint now, not the items themselves — see `ProjectEventsCalendarPageTemplate`'s doc
+/// comment for where the full list moved to, mirroring `project_tasks::templates::CalendarDay`.
 pub struct CalendarDay {
     pub date: String,
     pub day_number: u32,
     pub is_current_month: bool,
     pub is_today: bool,
-    pub events: Vec<CalendarEventEntry>,
+    pub is_selected: bool,
+    pub event_count: usize,
 }
 
 #[derive(Template)]
@@ -540,12 +523,26 @@ pub struct ProjectEventsCalendarPageTemplate {
     pub project_id: String,
     pub month_label: String,
     pub month_iso: String,
+    pub year: i32,
+    pub month: u32,
     pub prev_year: i32,
     pub prev_month: u32,
     pub next_year: i32,
     pub next_month: u32,
     pub days: Vec<CalendarDay>,
+    /// See `project_tasks::templates::ProjectTasksCalendarPageTemplate::selected_date_label`'s
+    /// identical rationale.
+    pub selected_date_label: Option<String>,
+    pub day_rows: Vec<String>,
     pub nav_html: String,
+}
+
+/// See `project_tasks::templates::ProjectTasksCalendarDayPanelTemplate`'s identical rationale.
+#[derive(Template)]
+#[template(path = "project_events/calendar_day_panel.html")]
+pub struct ProjectEventsCalendarDayPanelTemplate {
+    pub selected_date_label: Option<String>,
+    pub day_rows: Vec<String>,
 }
 
 #[cfg(test)]

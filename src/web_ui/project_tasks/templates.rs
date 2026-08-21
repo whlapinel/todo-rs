@@ -749,57 +749,19 @@ pub struct ProjectTaskEditPageTemplate {
     pub nav_html: String,
 }
 
-/// Stage D of `docs/unify-virtual-materialized-occurrences-plan.md` collapsed this and the
-/// former `CalendarVirtualTaskEntry` into one shape, following the precedent
-/// `project_events::templates::CalendarEventEntry` already set: one struct with
-/// `Option`/`bool` fields distinguishing a virtual/skipped occurrence from a real task, and
-/// one render block in `calendar_page.html` for both, rather than two parallel per-day lists.
-pub struct CalendarTaskEntry {
-    /// Unique across the whole grid — a real task's own id for a materialized entry, a
-    /// `series_id`+`occurrence_ts` pair (see `ProjectOccurrence::calendar_entry_id`) for a
-    /// virtual one.
-    pub entry_id: String,
-    pub href: String,
-    pub name: String,
-    pub time_label: Option<String>,
-    /// `None` for a virtual/skipped occurrence — it has no real date *field* yet, just a
-    /// bare `occurrence_date` (see the former `CalendarVirtualTaskEntry`'s identical
-    /// rationale for why this distinction exists at all).
-    pub date_type: Option<DateType>,
-    pub has_end: bool,
-    pub complete: bool,
-    /// `Some(...)` only for a virtual (unmaterialized) occurrence — the template follows
-    /// this instead of `href` (which is `"#"` in that case). See
-    /// `ProjectOccurrence::materialize_url`'s doc comment for why the name predates the
-    /// route's Stage C no-side-effect change.
-    pub materialize_url: Option<String>,
-    /// `Some(...)` only for a virtual occurrence too.
-    pub skip_url: Option<String>,
-    pub is_virtual: bool,
-    /// Stage 9: whether this is the series' `current_occurrence_date` — the one
-    /// settleable occurrence a Task-typed series exposes, possibly backlogged into
-    /// the past (see `service::item_series::current_occurrence_date`). Always `false` for a
-    /// materialized entry (no visible "current" marker once real).
-    pub is_current: bool,
-    /// See `ProjectTaskVirtualRow::is_skipped`'s identical rationale — always `false` for a
-    /// materialized entry.
-    pub is_skipped: bool,
-    /// `Some(...)` only for a skipped occurrence — mirrors `skip_url`'s `Option` shape.
-    pub unskip_url: Option<String>,
-}
-
-pub enum DateType {
-    Due,
-    ScheduledStart,
-    ScheduledEnd,
-}
-
+/// Redesign per docs/issues_and_features.md's calendar-view entry: a day cell only shows a
+/// count hint now, not the items themselves (see `ProjectTasksCalendarPageTemplate`'s doc
+/// comment for where the full list moved to) — so this only needs a tally, not the full
+/// `CalendarTaskEntry`/`DateType` shapes the crammed-cell rendering used to require.
 pub struct CalendarDay {
     pub date: String,
     pub day_number: u32,
     pub is_current_month: bool,
     pub is_today: bool,
-    pub tasks: Vec<CalendarTaskEntry>,
+    /// Whether this cell's `date` matches the calendar page's `?date=` query param — see
+    /// `ProjectTasksCalendarPageTemplate::selected_date`'s doc comment.
+    pub is_selected: bool,
+    pub task_count: usize,
 }
 
 #[derive(Template)]
@@ -808,12 +770,33 @@ pub struct ProjectTasksCalendarPageTemplate {
     pub project_id: String,
     pub month_label: String,
     pub month_iso: String,
+    pub year: i32,
+    pub month: u32,
     pub prev_year: i32,
     pub prev_month: u32,
     pub next_year: i32,
     pub next_month: u32,
     pub days: Vec<CalendarDay>,
+    /// Redesign per docs/issues_and_features.md: day cells only show a count hint now: the
+    /// full item list for a clicked day renders in a panel below the grid instead, populated
+    /// either by this initial page render (`?date=` in the URL, e.g. from a bookmark or the
+    /// `hx-push-url` a day click sets) or by the `.../calendar/day` htmx fragment route
+    /// (`ProjectTasksCalendarDayPanelTemplate`, which shares this same partial template).
+    pub selected_date_label: Option<String>,
+    pub day_rows: Vec<String>,
     pub nav_html: String,
+}
+
+/// The day-list panel shown below the month grid — shares `calendar_day_panel.html` with
+/// `ProjectTasksCalendarPageTemplate` above (which embeds it via `{% include %}` for the
+/// initial page render) so the two never drift. Bound to its own struct here so the
+/// `.../calendar/day` htmx fragment route can render just this panel's contents on a day
+/// click, swapped into the page's `#calendar-day-list` via `hx-target`/`hx-swap="innerHTML"`.
+#[derive(Template)]
+#[template(path = "project_tasks/calendar_day_panel.html")]
+pub struct ProjectTasksCalendarDayPanelTemplate {
+    pub selected_date_label: Option<String>,
+    pub day_rows: Vec<String>,
 }
 
 #[cfg(test)]

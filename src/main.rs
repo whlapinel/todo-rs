@@ -65,6 +65,10 @@ fn build_web_router() -> Router {
         .route("/dashboard", get(main_dashboard_page))
         .route("/dashboard/calendar", get(main_dashboard_calendar_page))
         .route(
+            "/dashboard/calendar/day",
+            get(main_dashboard_calendar_day_fragment),
+        )
+        .route(
             "/dashboard/projects/:project_id/items/:item_id",
             put(toggle_main_dashboard_item_complete),
         )
@@ -80,6 +84,10 @@ fn build_web_router() -> Router {
         .route(
             "/projects/:project_id/tasks/calendar",
             get(project_tasks_calendar_page),
+        )
+        .route(
+            "/projects/:project_id/tasks/calendar/day",
+            get(project_tasks_calendar_day_fragment),
         )
         .route(
             "/projects/:project_id/tasks/batch",
@@ -134,6 +142,10 @@ fn build_web_router() -> Router {
         .route(
             "/projects/:project_id/events/calendar",
             get(project_events_calendar_page),
+        )
+        .route(
+            "/projects/:project_id/events/calendar/day",
+            get(project_events_calendar_day_fragment),
         )
         .route(
             "/projects/:project_id/events/:item_id",
@@ -289,6 +301,10 @@ fn build_web_router() -> Router {
         .route(
             "/projects/:project_id/dashboard/calendar",
             get(project_dashboard_calendar_page),
+        )
+        .route(
+            "/projects/:project_id/dashboard/calendar/day",
+            get(project_dashboard_calendar_day_fragment),
         )
         .route(
             "/projects/:project_id/dashboard/items/:item_id",
