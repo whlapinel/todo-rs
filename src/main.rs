@@ -87,14 +87,6 @@ fn build_web_router() -> Router {
             get(new_project_task_page),
         )
         .route(
-            "/projects/:project_id/tasks/calendar",
-            get(project_tasks_calendar_page),
-        )
-        .route(
-            "/projects/:project_id/tasks/calendar/day",
-            get(project_tasks_calendar_day_fragment),
-        )
-        .route(
             "/projects/:project_id/tasks/batch",
             post(create_project_tasks_batch),
         )
@@ -143,14 +135,6 @@ fn build_web_router() -> Router {
         .route(
             "/projects/:project_id/events/new",
             get(new_project_event_page),
-        )
-        .route(
-            "/projects/:project_id/events/calendar",
-            get(project_events_calendar_page),
-        )
-        .route(
-            "/projects/:project_id/events/calendar/day",
-            get(project_events_calendar_day_fragment),
         )
         .route(
             "/projects/:project_id/events/:item_id",

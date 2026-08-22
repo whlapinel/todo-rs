@@ -13,16 +13,14 @@ use crate::web_ui::TzOffset;
 use crate::web_ui::nav::{self, ActiveContext, SidebarSection};
 use crate::web_ui::project_tasks::templates::*;
 use crate::web_ui::project_tasks::{
-    ProjectTaskForm, active_member_options, build_calendar_days, create_params_from_form,
-    grid_start_for, list_project_tasks, local_date_to_utc, names_for, next_month, non_empty,
-    prev_month, render, render_scope_fragment, require_task, sibling_group,
-    update_params_from_form,
+    ProjectTaskForm, active_member_options, create_params_from_form, names_for, non_empty, render,
+    render_scope_fragment, require_task, sibling_group, update_params_from_form,
 };
 use askama::Template;
 use axum::extract::{Extension, Form, Path, Query};
 use axum::http::HeaderMap;
 use axum::response::{Html, IntoResponse, Response};
-use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveTime, Utc};
+use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -152,175 +150,6 @@ pub async fn new_project_task_page(
         is_team_admin,
         blank_points_input: String::new(),
         nav_html,
-    })
-}
-
-#[derive(serde::Deserialize)]
-pub struct CalendarQuery {
-    year: Option<i32>,
-    month: Option<u32>,
-    /// `YYYY-MM-DD` — the day currently selected in the per-day panel below the grid. See
-    /// `ProjectTasksCalendarPageTemplate::selected_date`'s doc comment.
-    date: Option<String>,
-}
-
-/// "Friday, August 21, 2026" — shared by the full page and the `.../calendar/day` fragment
-/// route so the panel heading is identical regardless of which one rendered it.
-fn day_panel_label(date: NaiveDate) -> String {
-    date.format("%A, %B %d, %Y").to_string()
-}
-
-pub async fn project_tasks_calendar_page(
-    Path(project_id): Path<String>,
-    Extension(auth_user): Extension<AuthUser>,
-    Extension(repo): Extension<Arc<dyn ItemRepo>>,
-    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
-    Extension(teams): Extension<Arc<dyn TeamRepo>>,
-    Extension(users): Extension<Arc<dyn UserRepo>>,
-    Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
-    TzOffset(tz): TzOffset,
-    Query(q): Query<CalendarQuery>,
-) -> Result<Html<String>, ItemError> {
-    let project =
-        project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
-    let today = crate::web_ui::to_local(Utc::now(), tz).date_naive();
-    let year = q.year.unwrap_or_else(|| today.year());
-    let month = q
-        .month
-        .filter(|m| (1..=12).contains(m))
-        .unwrap_or_else(|| today.month());
-    let selected_date = q
-        .date
-        .as_deref()
-        .and_then(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").ok());
-
-    let items = list_project_tasks(&repo, &project_id).await?;
-    let grid_start = grid_start_for(year, month);
-    let range_start = local_date_to_utc(grid_start, NaiveTime::from_hms_opt(0, 0, 0).unwrap(), tz);
-    let range_end = local_date_to_utc(
-        grid_start + Duration::days(41),
-        NaiveTime::from_hms_opt(23, 59, 59).unwrap(),
-        tz,
-    );
-    // Filtered to Task-typed series only (Event-typed have their own home on the Events
-    // calendar) — the past-date clamp (Stage 8) and `is_current` computation (Stage 9) now
-    // live inside `list_occurrence_states_for_project` itself (mirroring
-    // `list_virtual_occurrences_for_project_unchecked`'s own logic — see its doc comment).
-    //
-    // Stage B of docs/unify-virtual-materialized-occurrences-plan.md: unlike the flat list
-    // above, the calendar shows a real date range, so a skipped occurrence within it stays
-    // visible (struck through, with an Unskip button) rather than disappearing — hence the
-    // switch from `list_virtual_occurrences_for_project_unchecked` (which drops any already-
-    // settled date outright). Materialized dates are excluded — those already render via
-    // `items` above.
-    let virtual_occurrences: Vec<_> = item_series_service::list_occurrence_states_for_project(
-        &series,
-        &users,
-        &project_id,
-        range_start,
-        range_end,
-        tz,
-    )
-    .await?
-    .into_iter()
-    .filter(|occ| occ.item_type == ItemKind::Task)
-    .filter(|occ| {
-        !matches!(
-            occ.state,
-            item_series_service::OccurrenceState::Materialized { .. }
-        )
-    })
-    .collect();
-    let days = build_calendar_days(
-        year,
-        month,
-        &project_id,
-        &items,
-        &virtual_occurrences,
-        tz,
-        today,
-        selected_date,
-    );
-    let (prev_year, prev_month) = prev_month(year, month);
-    let (next_year, next_month) = next_month(year, month);
-    let nav_html = nav::build_nav_html(
-        &projects,
-        &auth_user.user_id,
-        active_context(&project_id),
-        SidebarSection::Tasks,
-    )
-    .await?;
-    let day_rows = match selected_date {
-        Some(date) => {
-            super::day_list_rows(
-                &repo,
-                &series,
-                &users,
-                &teams,
-                &project_id,
-                project.team_id.as_deref(),
-                &auth_user.user_id,
-                date,
-                tz,
-            )
-            .await?
-        }
-        None => Vec::new(),
-    };
-
-    render(ProjectTasksCalendarPageTemplate {
-        project_id,
-        month_label: NaiveDate::from_ymd_opt(year, month, 1)
-            .unwrap()
-            .format("%B %Y")
-            .to_string(),
-        month_iso: format!("{year:04}-{month:02}"),
-        year,
-        month,
-        prev_year,
-        prev_month,
-        next_year,
-        next_month,
-        days,
-        selected_date_label: selected_date.map(day_panel_label),
-        day_rows,
-        nav_html,
-    })
-}
-
-pub async fn project_tasks_calendar_day_fragment(
-    Path(project_id): Path<String>,
-    Extension(auth_user): Extension<AuthUser>,
-    Extension(repo): Extension<Arc<dyn ItemRepo>>,
-    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
-    Extension(teams): Extension<Arc<dyn TeamRepo>>,
-    Extension(users): Extension<Arc<dyn UserRepo>>,
-    Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
-    TzOffset(tz): TzOffset,
-    Query(q): Query<CalendarQuery>,
-) -> Result<Html<String>, ItemError> {
-    let project =
-        project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
-    let date = q
-        .date
-        .as_deref()
-        .and_then(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").ok())
-        .ok_or(ItemError::Invalid("date is required".to_string()))?;
-    let day_rows = super::day_list_rows(
-        &repo,
-        &series,
-        &users,
-        &teams,
-        &project_id,
-        project.team_id.as_deref(),
-        &auth_user.user_id,
-        date,
-        tz,
-    )
-    .await?;
-    render(ProjectTasksCalendarDayPanelTemplate {
-        selected_date_label: Some(day_panel_label(date)),
-        day_rows,
     })
 }
 

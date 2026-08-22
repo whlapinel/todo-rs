@@ -3,12 +3,12 @@ pub mod templates;
 
 use crate::domain::item::{Item, ItemKind};
 use crate::service::error::ItemError;
-use crate::service::item_series::{self as item_series_service, ProjectOccurrence};
-use crate::storage::sqlite::{ItemRepo, ItemSeriesRepo};
-use crate::web_ui::project_events::templates::{CalendarDay, ProjectEventRow, ProjectEventVirtualRow};
+use crate::service::item_series::ProjectOccurrence;
+use crate::storage::sqlite::ItemRepo;
+use crate::web_ui::project_events::templates::{ProjectEventRow, ProjectEventVirtualRow};
 use askama::Template;
 use axum::response::Html;
-use chrono::{DateTime, Datelike, NaiveDate, NaiveTime, Utc};
+use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -104,18 +104,6 @@ fn end_of_day() -> chrono::NaiveTime {
 
 fn start_of_day() -> chrono::NaiveTime {
     chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap()
-}
-
-/// Converts a local calendar date + time-of-day into the UTC instant it represents, given
-/// `tz_offset_minutes` — same `local + offset = utc` convention as `combine_local_to_utc`
-/// above, just taking a `NaiveDate` directly instead of parsing one from a form string.
-pub(crate) fn local_date_to_utc(
-    date: NaiveDate,
-    time: chrono::NaiveTime,
-    tz_offset_minutes: i32,
-) -> DateTime<Utc> {
-    DateTime::<Utc>::from_naive_utc_and_offset(date.and_time(time), Utc)
-        + chrono::Duration::minutes(tz_offset_minutes as i64)
 }
 
 fn overlay_due_date(
@@ -281,7 +269,7 @@ pub(crate) fn render_rows(
 /// `docs/unify-virtual-materialized-occurrences-plan.md` — matches
 /// `project_dashboard::VIRTUAL_OCCURRENCE_DEFAULT_WINDOW_DAYS`'s identical rationale and
 /// value; duplicated per this module's own convention of not sharing small per-screen
-/// helpers (see e.g. `local_date_to_utc`'s neighboring comment) rather than importing it.
+/// helpers rather than importing it.
 const VIRTUAL_OCCURRENCE_WINDOW_DAYS: i64 = 90;
 
 pub(crate) fn virtual_occurrence_window(now: DateTime<Utc>) -> (DateTime<Utc>, DateTime<Utc>) {
@@ -324,57 +312,6 @@ pub(crate) fn render_rows_with_virtual(
     Ok(entries.into_iter().map(|(_, html)| html).collect())
 }
 
-/// The calendar's per-day panel — see `project_tasks::day_list_rows`'s identical rationale.
-/// Filters down to exactly `date` (a local calendar day, off `calendar_date`) and renders with
-/// the same full-featured `ProjectEventRow`/`ProjectEventVirtualRow` the flat Events list uses.
-pub(crate) async fn day_list_rows(
-    repo: &Arc<dyn ItemRepo>,
-    series: &Arc<dyn ItemSeriesRepo>,
-    users: &Arc<dyn crate::storage::sqlite::UserRepo>,
-    project_id: &str,
-    date: NaiveDate,
-    tz: i32,
-) -> Result<Vec<String>, ItemError> {
-    let items = list_project_events(repo, project_id).await?;
-    let day_items: Vec<Item> = items
-        .into_iter()
-        .filter(|item| {
-            calendar_date(item).map(|d| crate::web_ui::to_local(d, tz).date_naive()) == Some(date)
-        })
-        .collect();
-    let range_start = local_date_to_utc(date, NaiveTime::from_hms_opt(0, 0, 0).unwrap(), tz);
-    let range_end = local_date_to_utc(date, NaiveTime::from_hms_opt(23, 59, 59).unwrap(), tz);
-    let virtual_occurrences: Vec<_> = item_series_service::list_occurrence_states_for_project(
-        series,
-        users,
-        project_id,
-        range_start,
-        range_end,
-        tz,
-    )
-    .await?
-    .into_iter()
-    .filter(|occ| occ.item_type == ItemKind::Event)
-    .filter(|occ| {
-        !matches!(
-            occ.state,
-            item_series_service::OccurrenceState::Materialized { .. }
-        )
-    })
-    // See `project_tasks::day_list_rows`'s identical filter and its doc comment — defensive
-    // here too, in case a future range-independent case is ever added for Event series.
-    .filter(|occ| crate::web_ui::to_local(occ.occurrence_date, tz).date_naive() == date)
-    .collect();
-    let mut skip_urls: HashMap<String, String> = HashMap::new();
-    for item in &day_items {
-        if let Some(url) = item_series_service::skip_url_for_item(series, item, project_id).await?
-        {
-            skip_urls.insert(item.id.clone(), url);
-        }
-    }
-    render_rows_with_virtual(&day_items, &virtual_occurrences, project_id, tz, &skip_urls)
-}
-
 /// Sort key for the events list: primary date is `scheduled_date` (falling back to
 /// `due_date`), undated events last — mirrors `events::sort_key`/`team_events::sort_key`.
 fn sort_key(item: &Item) -> i64 {
@@ -396,82 +333,4 @@ pub(crate) async fn list_project_events(
     items.retain(|i| i.kind() == ItemKind::Event);
     items.sort_by_key(sort_key);
     Ok(items)
-}
-
-pub(crate) fn prev_month(year: i32, month: u32) -> (i32, u32) {
-    if month == 1 {
-        (year - 1, 12)
-    } else {
-        (year, month - 1)
-    }
-}
-
-pub(crate) fn next_month(year: i32, month: u32) -> (i32, u32) {
-    if month == 12 {
-        (year + 1, 1)
-    } else {
-        (year, month + 1)
-    }
-}
-
-/// The date each event displays under: `scheduled_date` if set, else `due_date` — mirrors
-/// `events::calendar_date`/`team_events::calendar_date`.
-fn calendar_date(item: &Item) -> Option<DateTime<Utc>> {
-    item.scheduled_date().or(item.due_date())
-}
-
-/// The first (Monday-start) cell of the 6-row grid for `year`/`month` — hoisted out of
-/// `build_calendar_days` so the handler can compute the same grid's UTC date range before
-/// calling it (to bound the virtual-occurrence lookup).
-pub(crate) fn grid_start_for(year: i32, month: u32) -> NaiveDate {
-    let first_of_month = NaiveDate::from_ymd_opt(year, month, 1).unwrap();
-    let leading = first_of_month.weekday().num_days_from_monday();
-    first_of_month - chrono::Duration::days(leading as i64)
-}
-
-/// Builds the 42-cell (6-week, Monday-start) grid for `year`/`month`, counting `items` per
-/// local calendar day via `calendar_date` — mirrors `project_tasks::build_calendar_days`'s
-/// identical redesign rationale (per docs/issues_and_features.md's calendar-view entry): a
-/// cell only needs a tally now, the full list for a clicked day renders separately via
-/// `day_list_rows`. A materialized occurrence never appears in `virtual_occurrences` — it's
-/// already a real `items` row covered above (see
-/// `series::list_virtual_occurrences_for_project_unchecked`).
-pub(crate) fn build_calendar_days(
-    year: i32,
-    month: u32,
-    items: &[Item],
-    virtual_occurrences: &[crate::service::item_series::ProjectOccurrence],
-    tz: i32,
-    today: NaiveDate,
-    selected_date: Option<NaiveDate>,
-) -> Vec<CalendarDay> {
-    let grid_start = grid_start_for(year, month);
-
-    let mut counts: std::collections::HashMap<NaiveDate, usize> =
-        std::collections::HashMap::new();
-    for item in items {
-        if let Some(dt) = calendar_date(item) {
-            *counts
-                .entry(crate::web_ui::to_local(dt, tz).date_naive())
-                .or_default() += 1;
-        }
-    }
-    for occ in virtual_occurrences {
-        let local = crate::web_ui::to_local(occ.occurrence_date, tz);
-        *counts.entry(local.date_naive()).or_default() += 1;
-    }
-
-    let mut days = Vec::with_capacity(42);
-    for i in 0..42i64 {
-        let date = grid_start + chrono::Duration::days(i);
-        days.push(CalendarDay {
-            date: date.format("%Y-%m-%d").to_string(),
-            day_number: date.day(),
-            is_current_month: date.month() == month && date.year() == year,
-            is_today: date == today,
-            is_selected: Some(date) == selected_date,
-            event_count: counts.remove(&date).unwrap_or(0),
-        });
-    }
-    days
 }

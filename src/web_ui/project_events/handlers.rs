@@ -10,15 +10,14 @@ use crate::web_ui::TzOffset;
 use crate::web_ui::nav::{self, ActiveContext, SidebarSection};
 use crate::web_ui::project_events::templates::*;
 use crate::web_ui::project_events::{
-    ProjectEventForm, build_calendar_days, create_params_from_form, grid_start_for,
-    list_project_events, local_date_to_utc, next_month, prev_month, render, require_event,
+    ProjectEventForm, create_params_from_form, list_project_events, render, require_event,
     update_params_from_form,
 };
 use crate::web_ui::project_tasks::handlers::render_source_event_fragment;
 use askama::Template;
-use axum::extract::{Extension, Form, Path, Query};
+use axum::extract::{Extension, Form, Path};
 use axum::response::{Html, IntoResponse, Response};
-use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveTime, Utc};
+use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -127,145 +126,6 @@ pub async fn new_project_event_page(
         blank_scheduled_end_date_input: String::new(),
         blank_scheduled_end_time_input: String::new(),
         nav_html,
-    })
-}
-
-#[derive(serde::Deserialize)]
-pub struct CalendarQuery {
-    year: Option<i32>,
-    month: Option<u32>,
-    /// See `project_tasks::handlers::CalendarQuery::date`'s identical rationale.
-    date: Option<String>,
-}
-
-/// See `project_tasks::handlers::day_panel_label`'s identical rationale.
-fn day_panel_label(date: NaiveDate) -> String {
-    date.format("%A, %B %d, %Y").to_string()
-}
-
-pub async fn project_events_calendar_page(
-    Path(project_id): Path<String>,
-    Extension(auth_user): Extension<AuthUser>,
-    Extension(repo): Extension<Arc<dyn ItemRepo>>,
-    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
-    Extension(teams): Extension<Arc<dyn TeamRepo>>,
-    Extension(users): Extension<Arc<dyn UserRepo>>,
-    Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
-    TzOffset(tz): TzOffset,
-    Query(q): Query<CalendarQuery>,
-) -> Result<Html<String>, ItemError> {
-    let _project =
-        project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
-    let today = crate::web_ui::to_local(Utc::now(), tz).date_naive();
-    let year = q.year.unwrap_or_else(|| today.year());
-    let month = q
-        .month
-        .filter(|m| (1..=12).contains(m))
-        .unwrap_or_else(|| today.month());
-    let selected_date = q
-        .date
-        .as_deref()
-        .and_then(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").ok());
-
-    let items = list_project_events(&repo, &project_id).await?;
-    let grid_start = grid_start_for(year, month);
-    let range_start = local_date_to_utc(grid_start, NaiveTime::from_hms_opt(0, 0, 0).unwrap(), tz);
-    let range_end = local_date_to_utc(
-        grid_start + Duration::days(41),
-        NaiveTime::from_hms_opt(23, 59, 59).unwrap(),
-        tz,
-    );
-    // Filtered to Event-typed series only (Stage 8) — Task-typed series get their own
-    // equivalent surface on the Tasks calendar instead of doubling up here.
-    //
-    // Stage B of docs/unify-virtual-materialized-occurrences-plan.md: switched from
-    // `list_virtual_occurrences_for_project_unchecked` to `list_occurrence_states_for_project`
-    // so a skipped occurrence stays visible (struck through, with an Unskip button) instead
-    // of disappearing outright — `Materialized` entries are excluded since those already
-    // render via `items` above.
-    let virtual_occurrences: Vec<_> = series_service::list_occurrence_states_for_project(
-        &series,
-        &users,
-        &project_id,
-        range_start,
-        range_end,
-        tz,
-    )
-    .await?
-    .into_iter()
-    .filter(|occ| occ.item_type == ItemKind::Event)
-    .filter(|occ| {
-        !matches!(
-            occ.state,
-            series_service::OccurrenceState::Materialized { .. }
-        )
-    })
-    .collect();
-    let days = build_calendar_days(
-        year,
-        month,
-        &items,
-        &virtual_occurrences,
-        tz,
-        today,
-        selected_date,
-    );
-    let (prev_year, prev_month) = prev_month(year, month);
-    let (next_year, next_month) = next_month(year, month);
-    let nav_html = nav::build_nav_html(
-        &projects,
-        &auth_user.user_id,
-        active_context(&project_id),
-        SidebarSection::Events,
-    )
-    .await?;
-    let day_rows = match selected_date {
-        Some(date) => super::day_list_rows(&repo, &series, &users, &project_id, date, tz).await?,
-        None => Vec::new(),
-    };
-
-    render(ProjectEventsCalendarPageTemplate {
-        project_id,
-        month_label: NaiveDate::from_ymd_opt(year, month, 1)
-            .unwrap()
-            .format("%B %Y")
-            .to_string(),
-        month_iso: format!("{year:04}-{month:02}"),
-        year,
-        month,
-        prev_year,
-        prev_month,
-        next_year,
-        next_month,
-        days,
-        selected_date_label: selected_date.map(day_panel_label),
-        day_rows,
-        nav_html,
-    })
-}
-
-pub async fn project_events_calendar_day_fragment(
-    Path(project_id): Path<String>,
-    Extension(auth_user): Extension<AuthUser>,
-    Extension(repo): Extension<Arc<dyn ItemRepo>>,
-    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
-    Extension(teams): Extension<Arc<dyn TeamRepo>>,
-    Extension(users): Extension<Arc<dyn UserRepo>>,
-    Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
-    TzOffset(tz): TzOffset,
-    Query(q): Query<CalendarQuery>,
-) -> Result<Html<String>, ItemError> {
-    let _project =
-        project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
-    let date = q
-        .date
-        .as_deref()
-        .and_then(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").ok())
-        .ok_or(ItemError::Invalid("date is required".to_string()))?;
-    let day_rows = super::day_list_rows(&repo, &series, &users, &project_id, date, tz).await?;
-    render(ProjectEventsCalendarDayPanelTemplate {
-        selected_date_label: Some(day_panel_label(date)),
-        day_rows,
     })
 }
 

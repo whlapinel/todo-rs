@@ -8,11 +8,11 @@ use crate::service::project_items::list_project_items_unchecked;
 use crate::service::teams as team_service;
 use crate::storage::sqlite::{ItemRepo, ItemSeriesRepo, TeamRepo, UserRepo};
 use crate::web_ui::project_tasks::templates::{
-    CalendarDay, ProjectTaskRow, ProjectTaskRowsFragmentTemplate, ProjectTaskVirtualRow,
+    ProjectTaskRow, ProjectTaskRowsFragmentTemplate, ProjectTaskVirtualRow,
 };
 use askama::Template;
 use axum::response::Html;
-use chrono::{DateTime, Datelike, NaiveDate, NaiveTime, Utc};
+use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -372,7 +372,7 @@ pub(crate) fn render_rows(
 /// `data-dismiss-after` JS removes it client-side. `in_list_view` is threaded onto
 /// `ProjectTaskVirtualRow` so its checkbox/Skip/Unskip only target `#items-list` (see
 /// `handlers::list_task_rows_for_project`) when this is really the flat list's own render, not
-/// the calendar day panel's `day_list_rows` call below, which has no `#items-list` in its DOM.
+/// a subordinate/children list render, which has no `#items-list` in its DOM.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn render_rows_with_virtual(
     items: &[Item],
@@ -505,86 +505,6 @@ pub(crate) fn items_list_inner_html(rows: &[String]) -> String {
     }
 }
 
-/// The calendar's per-day panel — filters down to exactly `date` (a local calendar day) and
-/// renders with the same full-featured `ProjectTaskRow`/`ProjectTaskVirtualRow` the flat Tasks
-/// list uses (checkbox, materialize+complete, skip/unskip, duplicate, reschedule, assign), not
-/// a stripped-down summary. See docs/issues_and_features.md's calendar redesign entry: each day
-/// cell shows only a count hint now, and clicking a day loads this instead.
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn day_list_rows(
-    repo: &Arc<dyn ItemRepo>,
-    series: &Arc<dyn ItemSeriesRepo>,
-    users: &Arc<dyn UserRepo>,
-    teams: &Arc<dyn TeamRepo>,
-    project_id: &str,
-    team_id: Option<&str>,
-    requester_user_id: &str,
-    date: NaiveDate,
-    tz: i32,
-) -> Result<Vec<String>, ItemError> {
-    let items = list_project_tasks(repo, project_id).await?;
-    let day_items: Vec<Item> = items
-        .into_iter()
-        .filter(|item| {
-            item.due_date()
-                .map(|d| crate::web_ui::to_local(d, tz).date_naive())
-                == Some(date)
-                || item
-                    .scheduled_date()
-                    .map(|d| crate::web_ui::to_local(d, tz).date_naive())
-                    == Some(date)
-        })
-        .collect();
-    let range_start = local_date_to_utc(date, NaiveTime::from_hms_opt(0, 0, 0).unwrap(), tz);
-    let range_end = local_date_to_utc(date, NaiveTime::from_hms_opt(23, 59, 59).unwrap(), tz);
-    let virtual_occurrences: Vec<_> = item_series_service::list_occurrence_states_for_project(
-        series,
-        users,
-        project_id,
-        range_start,
-        range_end,
-        tz,
-    )
-    .await?
-    .into_iter()
-    .filter(|occ| occ.item_type == ItemKind::Task)
-    .filter(|occ| {
-        !matches!(
-            occ.state,
-            item_series_service::OccurrenceState::Materialized { .. }
-        )
-    })
-    // A Task-typed series' current occurrence is range-independent (see
-    // `list_occurrence_states_for_project`'s doc comment) — it always surfaces regardless of
-    // `range_start`/`range_end`, so without this the series' one settleable occurrence would
-    // bleed into every day's panel instead of just the day it's actually dated on.
-    .filter(|occ| crate::web_ui::to_local(occ.occurrence_date, tz).date_naive() == date)
-    .collect();
-    let names = match team_id {
-        Some(team_id) => names_for(teams, team_id, requester_user_id).await?,
-        None => HashMap::new(),
-    };
-    let mut skip_urls: HashMap<String, String> = HashMap::new();
-    for item in &day_items {
-        if let Some(url) = item_series_service::skip_url_for_item(series, item, project_id).await?
-        {
-            skip_urls.insert(item.id.clone(), url);
-        }
-    }
-    render_rows_with_virtual(
-        &day_items,
-        &virtual_occurrences,
-        project_id,
-        &names,
-        true,
-        tz,
-        &skip_urls,
-        team_id,
-        None,
-        false,
-    )
-}
-
 /// `list_project_items_unchecked` already scopes to top-level, non-Template items — this narrows
 /// further to `Task` and sorts by due date (undated tasks last), mirroring
 /// `tasks::list_tasks`/`team_tasks::list_team_tasks`.
@@ -650,100 +570,4 @@ pub(crate) async fn render_scope_fragment(
         rows,
         empty_message: empty_message.to_string(),
     })
-}
-
-pub(crate) fn prev_month(year: i32, month: u32) -> (i32, u32) {
-    if month == 1 {
-        (year - 1, 12)
-    } else {
-        (year, month - 1)
-    }
-}
-
-pub(crate) fn next_month(year: i32, month: u32) -> (i32, u32) {
-    if month == 12 {
-        (year + 1, 1)
-    } else {
-        (year, month + 1)
-    }
-}
-
-/// The first (Monday-start) cell of the 6-row grid for `year`/`month` — hoisted out of
-/// `build_calendar_days` so the handler can compute the same grid's UTC date range before
-/// calling it (to bound the virtual-occurrence lookup), mirroring
-/// `project_events::grid_start_for`/`project_dashboard::grid_start_for`.
-pub(crate) fn grid_start_for(year: i32, month: u32) -> NaiveDate {
-    let first_of_month = NaiveDate::from_ymd_opt(year, month, 1).unwrap();
-    let leading = first_of_month.weekday().num_days_from_monday();
-    first_of_month - chrono::Duration::days(leading as i64)
-}
-
-/// Converts a local calendar date + time-of-day into the UTC instant it represents, given
-/// `tz_offset_minutes` — same convention as `project_events::local_date_to_utc`.
-pub(crate) fn local_date_to_utc(
-    date: NaiveDate,
-    time: chrono::NaiveTime,
-    tz_offset_minutes: i32,
-) -> DateTime<Utc> {
-    DateTime::<Utc>::from_naive_utc_and_offset(date.and_time(time), Utc)
-        + chrono::Duration::minutes(tz_offset_minutes as i64)
-}
-
-/// Builds the 42-cell (6-week, Monday-start) grid for `year`/`month`, counting `items` per
-/// local calendar day off `due_date`/`scheduled_date`/`scheduled_end_date` (an item touching
-/// more than one of those on the same day counts once per date it touches, matching the prior
-/// crammed-cell rendering's behavior) — mirrors `tasks::build_calendar_days`; team-backed
-/// projects never had a calendar view before this stage, so this is a new capability for them,
-/// not a port of an existing one. Per docs/issues_and_features.md's calendar redesign, a cell
-/// only needs a tally now — the full list for a clicked day renders separately via
-/// `day_list_rows`, using the same full-featured `ProjectTaskRow`/`ProjectTaskVirtualRow` the
-/// flat Tasks list uses, so this no longer needs to build a per-item shape at all. Callers are
-/// expected to have already filtered `virtual_occurrences` to `item_type == Task`.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn build_calendar_days(
-    year: i32,
-    month: u32,
-    _project_id: &str,
-    items: &[Item],
-    virtual_occurrences: &[ProjectOccurrence],
-    tz: i32,
-    today: NaiveDate,
-    selected_date: Option<NaiveDate>,
-) -> Vec<CalendarDay> {
-    let grid_start = grid_start_for(year, month);
-
-    let mut counts: std::collections::HashMap<NaiveDate, usize> =
-        std::collections::HashMap::new();
-    for item in items {
-        for dt in [
-            item.due_date(),
-            item.scheduled_date(),
-            item.scheduled_end_date(),
-        ]
-        .into_iter()
-        .flatten()
-        {
-            *counts
-                .entry(crate::web_ui::to_local(dt, tz).date_naive())
-                .or_default() += 1;
-        }
-    }
-    for occ in virtual_occurrences {
-        let local = crate::web_ui::to_local(occ.occurrence_date, tz);
-        *counts.entry(local.date_naive()).or_default() += 1;
-    }
-
-    let mut days = Vec::with_capacity(42);
-    for i in 0..42i64 {
-        let date = grid_start + chrono::Duration::days(i);
-        days.push(CalendarDay {
-            date: date.format("%Y-%m-%d").to_string(),
-            day_number: date.day(),
-            is_current_month: date.month() == month && date.year() == year,
-            is_today: date == today,
-            is_selected: Some(date) == selected_date,
-            task_count: counts.remove(&date).unwrap_or(0),
-        });
-    }
-    days
 }

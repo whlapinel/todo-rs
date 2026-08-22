@@ -793,56 +793,6 @@ pub struct ProjectTaskEditPageTemplate {
     pub nav_html: String,
 }
 
-/// Redesign per docs/issues_and_features.md's calendar-view entry: a day cell only shows a
-/// count hint now, not the items themselves (see `ProjectTasksCalendarPageTemplate`'s doc
-/// comment for where the full list moved to) — so this only needs a tally, not the full
-/// `CalendarTaskEntry`/`DateType` shapes the crammed-cell rendering used to require.
-pub struct CalendarDay {
-    pub date: String,
-    pub day_number: u32,
-    pub is_current_month: bool,
-    pub is_today: bool,
-    /// Whether this cell's `date` matches the calendar page's `?date=` query param — see
-    /// `ProjectTasksCalendarPageTemplate::selected_date`'s doc comment.
-    pub is_selected: bool,
-    pub task_count: usize,
-}
-
-#[derive(Template)]
-#[template(path = "project_tasks/calendar_page.html")]
-pub struct ProjectTasksCalendarPageTemplate {
-    pub project_id: String,
-    pub month_label: String,
-    pub month_iso: String,
-    pub year: i32,
-    pub month: u32,
-    pub prev_year: i32,
-    pub prev_month: u32,
-    pub next_year: i32,
-    pub next_month: u32,
-    pub days: Vec<CalendarDay>,
-    /// Redesign per docs/issues_and_features.md: day cells only show a count hint now: the
-    /// full item list for a clicked day renders in a panel below the grid instead, populated
-    /// either by this initial page render (`?date=` in the URL, e.g. from a bookmark or the
-    /// `hx-push-url` a day click sets) or by the `.../calendar/day` htmx fragment route
-    /// (`ProjectTasksCalendarDayPanelTemplate`, which shares this same partial template).
-    pub selected_date_label: Option<String>,
-    pub day_rows: Vec<String>,
-    pub nav_html: String,
-}
-
-/// The day-list panel shown below the month grid — shares `calendar_day_panel.html` with
-/// `ProjectTasksCalendarPageTemplate` above (which embeds it via `{% include %}` for the
-/// initial page render) so the two never drift. Bound to its own struct here so the
-/// `.../calendar/day` htmx fragment route can render just this panel's contents on a day
-/// click, swapped into the page's `#calendar-day-list` via `hx-target`/`hx-swap="innerHTML"`.
-#[derive(Template)]
-#[template(path = "project_tasks/calendar_day_panel.html")]
-pub struct ProjectTasksCalendarDayPanelTemplate {
-    pub selected_date_label: Option<String>,
-    pub day_rows: Vec<String>,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -541,46 +541,6 @@ pub struct ProjectEventEditPageTemplate {
     pub nav_html: String,
 }
 
-/// Redesign per docs/issues_and_features.md's calendar-view entry: a day cell only shows a
-/// count hint now, not the items themselves — see `ProjectEventsCalendarPageTemplate`'s doc
-/// comment for where the full list moved to, mirroring `project_tasks::templates::CalendarDay`.
-pub struct CalendarDay {
-    pub date: String,
-    pub day_number: u32,
-    pub is_current_month: bool,
-    pub is_today: bool,
-    pub is_selected: bool,
-    pub event_count: usize,
-}
-
-#[derive(Template)]
-#[template(path = "project_events/calendar_page.html")]
-pub struct ProjectEventsCalendarPageTemplate {
-    pub project_id: String,
-    pub month_label: String,
-    pub month_iso: String,
-    pub year: i32,
-    pub month: u32,
-    pub prev_year: i32,
-    pub prev_month: u32,
-    pub next_year: i32,
-    pub next_month: u32,
-    pub days: Vec<CalendarDay>,
-    /// See `project_tasks::templates::ProjectTasksCalendarPageTemplate::selected_date_label`'s
-    /// identical rationale.
-    pub selected_date_label: Option<String>,
-    pub day_rows: Vec<String>,
-    pub nav_html: String,
-}
-
-/// See `project_tasks::templates::ProjectTasksCalendarDayPanelTemplate`'s identical rationale.
-#[derive(Template)]
-#[template(path = "project_events/calendar_day_panel.html")]
-pub struct ProjectEventsCalendarDayPanelTemplate {
-    pub selected_date_label: Option<String>,
-    pub day_rows: Vec<String>,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
