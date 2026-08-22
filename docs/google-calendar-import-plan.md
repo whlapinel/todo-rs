@@ -528,7 +528,131 @@ Sleep-first (rather than sync-immediately-then-sleep) is deliberate: `create_cal
 
 ### Implementation notes
 
-_(empty until Stage 5 is actually done)_
+Done as planned, with a few additions beyond the original sketch (a user-requested UI
+addition, one genuine pre-existing bug caught by the live smoke test, and one deviation
+in how the info dialog is wired):
+
+- **Smithy**: `model/src/main/smithy/calendar_subscription.smithy` (new) — exactly the
+  three plain operations sketched (`CreateCalendarSubscription`/
+  `ListCalendarSubscriptions`/`DeleteCalendarSubscription`), no `Update`. Followed
+  `ItemSeries`'s precedent on the `@notProperty`/`@httpLabel` placement question the plan
+  didn't spell out in full: a lone `@httpLabel projectId` never gets `@notProperty`, but a
+  *second* `@httpLabel` identifier (`id`, in `DeleteCalendarSubscription`) does — copied
+  directly from `GetItemSeries`'s exact shape rather than re-deriving it. Registered in
+  `service.smithy`'s top-level `operations: [...]` list, right after the `ItemSeries` ops.
+  `task codegen` run clean.
+- **Service layer** (`src/service/calendar_subscriptions.rs`, new): `create_calendar_subscription`/
+  `list_calendar_subscriptions`/`delete_calendar_subscription` match the plan's gating
+  exactly (`require_project_admin` for create/delete, `require_project_member` for list).
+  Added one function not in the plan's sketch, `sync_all_subscriptions(calendar_repo,
+  item_repo)` — a thin wrapper around the plan's inline background-sweep sketch
+  (`list_all` + loop + per-subscription `sync_subscription` + `tracing::warn!` on
+  failure), pulled out of `main.rs` and into the service layer purely so it's unit-testable
+  and `main.rs`'s `tokio::spawn` body stays a one-liner. `create_calendar_subscription`'s
+  immediate post-create sync matches the plan exactly (awaited inline, failure logged but
+  never propagated — `sync_subscription` already records the failure on the row via
+  `record_sync_result`). `delete_calendar_subscription`'s cascade also matches the plan:
+  done in the service function via `list_by_calendar_subscription` + per-item `delete`,
+  not pushed into the repo layer. 7 new unit tests (admin/member gating × 3 operations,
+  cross-project subscription-id rejection on delete, cascade-deletes-every-imported-item).
+  One test-hermeticity note: the "create succeeds even though sync fails" test uses the
+  literal string `"not a valid url"` as the iCal URL rather than a syntactically-valid but
+  unreachable URL — `reqwest::get` fails at URL-parse time for that, before any real
+  network I/O, keeping the test from depending on network access.
+- **JSON API** (`src/json_api/calendar_subscriptions.rs`, new): three handlers following
+  `item_series.rs`'s exact shape (`server::Extension` params, `to_msg`/`to_summary`
+  helpers). Registered in `src/json_api/mod.rs`.
+- **`src/main.rs`**: `SqliteCalendarSubscriptionRepo` constructed alongside the other
+  repos; `Extension(calendar_repo)` layered onto the smithy `api` service and both
+  auth-mode branches' `web_router` (caddy and internal), matching every other repo's
+  wiring exactly. Background sync task: a `tokio::spawn`ed `loop { sleep(15 min); sync_all_subscriptions(...).await }`,
+  sleep-first as the plan specified (`create_calendar_subscription`'s own inline sync
+  already covers "just added"). This is genuinely the first `tokio::spawn`-based
+  background loop in this codebase — flagged with a comment at the spawn site, per the
+  plan's own note. Three new web routes: `GET/POST /projects/:project_id/calendar-subscriptions`,
+  `DELETE /projects/:project_id/calendar-subscriptions/:subscription_id`, and one not in
+  the original plan — `GET /calendar-subscriptions/ical-help` (see the info-dialog note
+  below).
+- **Web UI** (`src/web_ui/project_calendar_subscriptions.rs`, new;
+  `templates/project_calendar_subscriptions/*.html`, new): single-file module following
+  `project_activity.rs`'s precedent (small screen, no dedicated subdirectory of
+  handlers.rs/templates.rs) rather than the larger per-type screens' folder structure.
+  `project_calendar_subscriptions_page`/`create_project_calendar_subscription_form`/
+  `delete_project_calendar_subscription_form` share one `render_page` helper, matching
+  `project_activity.rs`'s `render_activity_page` reuse pattern. List is member-readable
+  (`list_calendar_subscriptions` only requires membership); the add form and each row's
+  delete button are conditionally rendered on `is_admin` (computed via
+  `is_project_admin`, matching the plan). Delete confirms via `hx-confirm` with the
+  cascade warning spelled out, exactly as specified. "Manage Google Calendars" link added
+  to `project_events/list_page.html`'s header, admin-only (`ProjectEventsListPageTemplate`
+  gained an `is_admin` field, computed in `project_events_page`).
+- **User-requested addition, mid-stage**: an info icon (ⓘ) next to the iCal URL field
+  opening a small dialog with step-by-step instructions for finding a calendar's "Secret
+  address in iCal format" in Google Calendar's own UI — not in the original plan, added
+  after the user asked for it while this stage was in progress. **Deviation from the
+  first draft**: the first pass embedded a self-contained `<dialog>` directly in
+  `page.html`, opened via a plain `onclick="...showModal()"`. That collided with
+  `base.html`'s existing `htmx:afterSwap` listener (added for `#action-dialog`/
+  `#error-dialog`), which auto-opens *any* `<dialog>` element found inside a swapped
+  target — since this screen's own page content is swapped into `#page` on every boosted
+  navigation, the dialog was popping open on every page load, not just on click (caught
+  live, not by any unit test — Askama/`cargo test` have no way to exercise client-side
+  JS). Fixed by following the established `#action-dialog` convention instead
+  (`templates/components/reschedule_dialog.html`'s exact shape): the instructions moved to
+  their own fragment template (`templates/project_calendar_subscriptions/ical_help_dialog.html`,
+  no `<dialog>` wrapper of its own) served by a new static handler
+  (`ical_help_dialog_fragment`, `GET /web/calendar-subscriptions/ical-help`, no project
+  scoping needed since the content never varies), and the info button now does
+  `hx-get="..." hx-target="#action-dialog" hx-select="unset" hx-swap="innerHTML"` like
+  every other row-action dialog trigger in this app. Confirmed live: closed on normal page
+  load/navigation, opens only on click, closes via its own "Got it" button.
+- **Pre-existing bug caught by the live smoke test, fixed as part of this stage**:
+  `ItemRepo::list_due`/`list_due_by_project` (`src/storage/sqlite/items.rs`) build their
+  own explicit `SELECT` column lists rather than reusing the shared `ITEM_SELECT`
+  constant every other query site uses. Stage 3's merged-in domain-field addition (see
+  that stage's own implementation notes) added `google_event_id`/`calendar_subscription_id`
+  to `ITEM_SELECT` and every site built on it, but missed these two — `row_to_item`
+  unconditionally does `row.get("google_event_id")`, which panics with `ColumnNotFound`
+  the instant either function runs against a database with at least one due item. No
+  prior test exercised either function against a real row (`list_due`/`list_due_by_project`
+  had zero dedicated unit tests before this), so it went unnoticed through Stages 3/4's
+  own `cargo test` runs, which only ever ran against tiny hand-built fixtures with no due
+  items in the relevant paths — it surfaced immediately on this stage's live smoke test
+  (see below), which ran the real server against a full copy of the project's actual
+  production data and hit the dashboard route, which calls `list_due_by_project`. Fixed
+  by adding `items.google_event_id, items.calendar_subscription_id` to both queries'
+  column lists. Added 2 regression tests (`list_due_by_project_does_not_panic_and_round_trips_google_event_id`,
+  `list_due_does_not_panic_and_round_trips_google_event_id`) that create a due item with
+  `google_event_id` set and assert both functions return it correctly rather than
+  panicking — the gap this bug slipped through.
+- **Live smoke test** (beyond the usual `cargo test`/`task check`): ran the actual server
+  (`caddy` auth mode, `TODO_DEV_EMAIL` bypass) against a scratch copy of the project's
+  real production database (never the real file — copied to a session-local scratch
+  path, deleted afterward) and drove it with Playwright. Confirmed, as the admin
+  (`whlapinel@gmail.com`, an actual admin on the real "Lapinel Family" project): the
+  "Manage Google Calendars" link appears on the Events header; the calendar-subscriptions
+  page loads; the info dialog opens on click and stays closed otherwise (see above);
+  subscribing with a syntactically-valid but nonexistent iCal URL succeeds (the row
+  appears immediately with a real "last sync failed: failed to fetch calendar feed:
+  unexpected status 404 Not Found" — confirming `fetch_ical`'s real-network path, never
+  actually unit-tested per Stage 3's own notes, works correctly end-to-end); unsubscribing
+  prompts the cascade-warning `hx-confirm` dialog and, once accepted, removes the row.
+  Also restarted the server as a different real project member (a `member`-role, not
+  `admin`-role, user on the same project) and confirmed the "Manage Google Calendars" link
+  is absent from the Events header and the add-form is absent from the
+  calendar-subscriptions page when visited directly (list itself still renders, empty, per
+  the plan's member-readable design). This also incidentally confirmed migration 25 applies
+  cleanly to the real production schema (which had never run past migration 24 before this
+  stage), not just the test-fixture schema.
+- **Verified**: `cargo test` — 446 passed, 0 failed (437 pre-stage + 7 new
+  `calendar_subscriptions` service tests + 2 new `list_due`/`list_due_by_project`
+  regression tests — see the bug note above). `task check`/`cargo check` — clean, same 13
+  pre-existing warnings as every prior stage, none new. `task web-styles` — picked up the
+  new Tailwind classes with no errors. Live smoke test as described above.
+- Nothing discovered that changes Stage 6's assumptions. `prl`/MCP parity (Stage 6) can
+  wire straight onto `CreateCalendarSubscription`/`ListCalendarSubscriptions`/
+  `DeleteCalendarSubscription` exactly as generated — no Smithy shape changed since this
+  stage landed them.
 
 ---
 

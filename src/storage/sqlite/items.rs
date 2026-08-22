@@ -275,6 +275,7 @@ impl ItemRepo for SqliteItemRepo {
             "SELECT items.id, items.user_id, items.project_id, items.parent_item_id, items.name, items.description, items.due_date, items.scheduled_date, items.scheduled_end_date,
                     items.complete, items.recurrence, items.recurrence_basis, items.has_due_time, items.has_scheduled_time, items.has_end_time,
                     items.item_type, items.event_type, items.due_offset_days, items.assigned_to_user_id, items.points, items.source_event_id, items.series_id,
+                    items.google_event_id, items.calendar_subscription_id,
                     COALESCE(parent.name, '') AS parent_name,
                     EXISTS(SELECT 1 FROM items c WHERE c.parent_item_id = items.id) AS has_children
              FROM items
@@ -313,6 +314,7 @@ impl ItemRepo for SqliteItemRepo {
             "SELECT items.id, items.user_id, items.project_id, items.parent_item_id, items.name, items.description, items.due_date, items.scheduled_date, items.scheduled_end_date,
                     items.complete, items.recurrence, items.recurrence_basis, items.has_due_time, items.has_scheduled_time, items.has_end_time,
                     items.item_type, items.event_type, items.due_offset_days, items.assigned_to_user_id, items.points, items.source_event_id, items.series_id,
+                    items.google_event_id, items.calendar_subscription_id,
                     COALESCE(parent.name, '') AS parent_name,
                     EXISTS(SELECT 1 FROM items c WHERE c.parent_item_id = items.id) AS has_children
              FROM items
@@ -610,6 +612,48 @@ mod tests {
         let updated = repo.get_by_project("p1", &id).await.unwrap();
         assert_eq!(updated.google_event_id.as_deref(), Some("evt-1"));
         assert_eq!(updated.calendar_subscription_id.as_deref(), Some("sub-1"));
+    }
+
+    /// Regression test for a bug caught during Stage 5's live smoke test
+    /// (docs/google-calendar-import-plan.md): `list_due`/`list_due_by_project` build
+    /// their own explicit SELECT column lists rather than reusing `ITEM_SELECT`, and
+    /// Stage 3's addition of `google_event_id`/`calendar_subscription_id` to every
+    /// other query site missed these two — `row_to_item` unconditionally does
+    /// `row.get("google_event_id")`, which panics with `ColumnNotFound` the moment a
+    /// due item exists to map. No prior test exercised either function against a real
+    /// row, so this went unnoticed until a live run against real data.
+    #[tokio::test]
+    async fn list_due_by_project_does_not_panic_and_round_trips_google_event_id() {
+        let pool = test_pool().await;
+        let repo = SqliteItemRepo(pool);
+        let mut item = item_in_project("p1", "Imported Event");
+        item.item_type.schedule_mut().unwrap().due_date = Some(chrono::Utc::now());
+        item.google_event_id = Some("evt-1".to_string());
+        item.calendar_subscription_id = Some("sub-1".to_string());
+        repo.create(&item).await.unwrap();
+
+        let due = repo.list_due_by_project("p1", None, None).await.unwrap();
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].item.google_event_id.as_deref(), Some("evt-1"));
+        assert_eq!(
+            due[0].item.calendar_subscription_id.as_deref(),
+            Some("sub-1")
+        );
+    }
+
+    #[tokio::test]
+    async fn list_due_does_not_panic_and_round_trips_google_event_id() {
+        let pool = test_pool().await;
+        let repo = SqliteItemRepo(pool);
+        let mut item = Item::new_user_item("u1", "Imported Event");
+        item.item_type.schedule_mut().unwrap().due_date = Some(chrono::Utc::now());
+        item.google_event_id = Some("evt-1".to_string());
+        item.calendar_subscription_id = Some("sub-1".to_string());
+        repo.create(&item).await.unwrap();
+
+        let due = repo.list_due("u1", None, None).await.unwrap();
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].item.google_event_id.as_deref(), Some("evt-1"));
     }
 
     #[tokio::test]

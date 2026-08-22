@@ -8,19 +8,23 @@ mod storage;
 mod web_ui;
 
 use crate::storage::sqlite::{
-    ActivityLogRepo, ItemRepo, ItemSeriesRepo, ProjectRepo, TeamRepo, UserRepo,
-    activity_log::SqliteActivityLogRepo, create_pool, item_series::SqliteItemSeriesRepo,
-    items::SqliteItemRepo, projects::SqliteProjectRepo, teams::SqliteTeamRepo,
-    users::SqliteUserRepo,
+    ActivityLogRepo, CalendarSubscriptionRepo, ItemRepo, ItemSeriesRepo, ProjectRepo, TeamRepo,
+    UserRepo, activity_log::SqliteActivityLogRepo,
+    calendar_subscriptions::SqliteCalendarSubscriptionRepo, create_pool,
+    item_series::SqliteItemSeriesRepo, items::SqliteItemRepo, projects::SqliteProjectRepo,
+    teams::SqliteTeamRepo, users::SqliteUserRepo,
 };
 use axum::{
     Extension, Router,
     body::boxed,
     middleware,
     response::Redirect,
-    routing::{get, post, put},
+    routing::{delete, get, post, put},
 };
 use json_api::activity_log::{list_team_activity_log, undo_activity_log_entry};
+use json_api::calendar_subscriptions::{
+    create_calendar_subscription, delete_calendar_subscription, list_calendar_subscriptions,
+};
 use json_api::invites::send_app_invite;
 use json_api::item_import::{get_item_import_template, import_project_items};
 use json_api::item_series::{
@@ -51,6 +55,7 @@ use web_ui::assigned_items::assigned_items_page;
 use web_ui::login::login_page;
 use web_ui::main_dashboard::*;
 use web_ui::project_activity::*;
+use web_ui::project_calendar_subscriptions::*;
 use web_ui::project_dashboard::*;
 use web_ui::project_events::handlers::*;
 use web_ui::project_item_series::handlers::*;
@@ -168,6 +173,18 @@ fn build_web_router() -> Router {
         .route(
             "/projects/:project_id/events/:item_id/save-as-template",
             post(save_project_event_as_template),
+        )
+        .route(
+            "/projects/:project_id/calendar-subscriptions",
+            get(project_calendar_subscriptions_page).post(create_project_calendar_subscription_form),
+        )
+        .route(
+            "/projects/:project_id/calendar-subscriptions/:subscription_id",
+            delete(delete_project_calendar_subscription_form),
+        )
+        .route(
+            "/calendar-subscriptions/ical-help",
+            get(ical_help_dialog_fragment),
         )
         .route(
             "/projects/:project_id/simple-lists",
@@ -357,7 +374,28 @@ async fn main() {
     let team_repo = Arc::new(SqliteTeamRepo(pool.clone())) as Arc<dyn TeamRepo>;
     let project_repo = Arc::new(SqliteProjectRepo(pool.clone())) as Arc<dyn ProjectRepo>;
     let series_repo = Arc::new(SqliteItemSeriesRepo(pool.clone())) as Arc<dyn ItemSeriesRepo>;
-    let activity_log_repo = Arc::new(SqliteActivityLogRepo(pool)) as Arc<dyn ActivityLogRepo>;
+    let activity_log_repo = Arc::new(SqliteActivityLogRepo(pool.clone())) as Arc<dyn ActivityLogRepo>;
+    let calendar_repo =
+        Arc::new(SqliteCalendarSubscriptionRepo(pool)) as Arc<dyn CalendarSubscriptionRepo>;
+
+    // Background calendar sync sweep — see docs/google-calendar-import-plan.md's Stage 5.
+    // This is the first tokio::spawn-based background loop in this codebase: every other
+    // piece of work here happens synchronously inside a request handler. Sleep-first
+    // (rather than sync-immediately-then-sleep) is deliberate: `create_calendar_subscription`
+    // already syncs a subscription inline right after it's created, so the periodic sweep's
+    // first useful run is naturally ~15 minutes after startup, avoiding a startup-time
+    // thundering-herd fetch against every subscription across every project.
+    {
+        let calendar_repo = calendar_repo.clone();
+        let item_repo = item_repo.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(15 * 60)).await;
+                service::calendar_subscriptions::sync_all_subscriptions(&calendar_repo, &item_repo)
+                    .await;
+            }
+        });
+    }
 
     let config = PeoplesRepublicOfListsConfig::builder().build();
     let smithy = PeoplesRepublicOfLists::builder(config)
@@ -403,6 +441,9 @@ async fn main() {
         .list_project_items(list_project_items)
         .import_project_items(import_project_items)
         .get_item_import_template(get_item_import_template)
+        .create_calendar_subscription(create_calendar_subscription)
+        .list_calendar_subscriptions(list_calendar_subscriptions)
+        .delete_calendar_subscription(delete_calendar_subscription)
         .build_unchecked();
 
     let api = ServiceBuilder::new()
@@ -412,6 +453,7 @@ async fn main() {
         .layer(Extension(project_repo.clone()))
         .layer(Extension(series_repo.clone()))
         .layer(Extension(activity_log_repo.clone()))
+        .layer(Extension(calendar_repo.clone()))
         .map_response(|res: http::Response<_>| res.map(boxed))
         .service(smithy);
 
@@ -445,6 +487,7 @@ async fn main() {
                 .layer(Extension(project_repo.clone()))
                 .layer(Extension(series_repo.clone()))
                 .layer(Extension(activity_log_repo.clone()))
+                .layer(Extension(calendar_repo.clone()))
                 .layer(middleware::from_fn(auth::caddy_header_middleware));
             let public_web_router = build_public_web_router();
 
@@ -512,6 +555,7 @@ async fn main() {
                 .layer(Extension(project_repo))
                 .layer(Extension(series_repo))
                 .layer(Extension(activity_log_repo))
+                .layer(Extension(calendar_repo))
                 .layer(middleware::from_fn(auth::web_auth_middleware));
             let public_web_router = build_public_web_router();
 

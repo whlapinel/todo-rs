@@ -1,0 +1,33 @@
+<!-- Swapped into #action-dialog's innerHTML (see base.html) — same fragment shape as
+     reschedule_dialog.html/quick_assign_dialog.html, no <dialog> wrapper of its own.
+     Purely static content (no server data), but still fetched via hx-get rather than a
+     plain onclick showModal() — base.html's htmx:afterSwap listener auto-opens any
+     <dialog> found in a swapped target, so a self-contained <dialog> embedded directly
+     in page.html would pop open on every page load/navigation, not just on click. -->
+<div id="dialog-backdrop"
+    class="fixed inset-0 bg-gray-500/75 dark:bg-gray-900/50 transition-opacity duration-300 ease-out opacity-0 group-open/dialog:opacity-100">
+</div>
+
+<div tabindex="0"
+    class="relative z-10 flex min-h-full items-end justify-center p-4 text-center focus:outline-none sm:items-center sm:p-0">
+    <div class="relative transform overflow-hidden rounded-lg bg-white dark:bg-gray-800 px-4 pt-5 pb-4 text-left shadow-xl transition-all duration-300 ease-out translate-y-4 opacity-0 scale-95 group-open/dialog:translate-y-0 group-open/dialog:opacity-100 group-open/dialog:scale-100 sm:my-8 sm:w-full sm:max-w-lg sm:p-6 dark:outline dark:-outline-offset-1 dark:outline-white/10">
+        <h3 class="text-base font-semibold text-gray-900 dark:text-white">Finding your calendar's iCal address</h3>
+        <ol class="mt-3 list-decimal space-y-2 pl-5 text-sm text-gray-600 dark:text-gray-300">
+            <li>Open <span class="font-medium text-gray-900 dark:text-white">Google Calendar</span> on the web.</li>
+            <li>In the left sidebar, hover the calendar you want to import, click the three-dot menu, then choose
+                <span class="font-medium text-gray-900 dark:text-white">Settings and sharing</span>.</li>
+            <li>Scroll down to <span class="font-medium text-gray-900 dark:text-white">Integrate calendar</span>.
+            </li>
+            <li>Copy the <span class="font-medium text-gray-900 dark:text-white">Secret address in iCal format</span>
+                — not the public address, so private event details still come through.</li>
+            <li>Paste it into the field here.</li>
+        </ol>
+        <p class="mt-3 text-xs text-gray-400 dark:text-gray-500">Treat this address like a password — anyone who has
+            it can see this calendar's events.</p>
+        <div class="mt-5 sm:mt-6">
+            <button type="button" onclick="document.getElementById('action-dialog').close()"
+                class="inline-flex w-full justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-xs inset-ring-1 inset-ring-gray-300 hover:bg-gray-50 sm:w-auto dark:bg-white/10 dark:text-white dark:shadow-none dark:inset-ring-white/5 dark:hover:bg-white/20">Got
+                it</button>
+        </div>
+    </div>
+</div>

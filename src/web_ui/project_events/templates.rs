@@ -485,6 +485,7 @@ pub struct ProjectEventRowsFragmentTemplate {
 pub struct ProjectEventsListPageTemplate {
     pub project_id: String,
     pub rows: Vec<String>,
+    pub is_admin: bool,
     pub nav_html: String,
 }
 

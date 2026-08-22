@@ -5,6 +5,7 @@ pub mod login;
 pub mod main_dashboard;
 pub mod nav;
 pub mod project_activity;
+pub mod project_calendar_subscriptions;
 pub mod project_dashboard;
 pub mod project_events;
 pub mod project_item_series;

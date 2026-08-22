@@ -55,6 +55,8 @@ pub async fn project_events_page(
 ) -> Result<Html<String>, ItemError> {
     let _project =
         project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
+    let is_admin =
+        project_service::is_project_admin(&projects, &teams, &project_id, &auth_user.user_id).await;
     let items = list_project_events(&repo, &project_id).await?;
     // Stage D of docs/unify-virtual-materialized-occurrences-plan.md: the flat list view
     // previously had zero virtual-occurrence support (only the calendar did) — bounded to
@@ -97,6 +99,7 @@ pub async fn project_events_page(
     render(ProjectEventsListPageTemplate {
         project_id,
         rows,
+        is_admin,
         nav_html,
     })
 }

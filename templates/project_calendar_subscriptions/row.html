@@ -1,0 +1,17 @@
+<li id="calendar-subscription-{{ id }}" class="flex items-center justify-between gap-x-3 py-3">
+  <span class="flex flex-col min-w-0">
+    <span class="text-gray-900 dark:text-white truncate font-mono text-xs">{{ masked_url }}</span>
+    <span class="text-xs text-gray-400 dark:text-gray-500">
+      {{ last_synced_label }}
+      {% if let Some(err) = last_sync_error %}
+      <span class="text-red-600 dark:text-red-400">— last sync failed: {{ err }}</span>
+      {% endif %}
+    </span>
+  </span>
+  {% if is_admin %}
+  <button hx-delete="/web/projects/{{ project_id }}/calendar-subscriptions/{{ id }}"
+    hx-confirm="Unsubscribe? This removes every event this calendar imported." hx-target="#page" hx-select="#page"
+    hx-swap="innerHTML"
+    class="shrink-0 cursor-pointer text-xs text-red-600 hover:text-red-500 dark:text-red-400 dark:hover:text-red-300">Unsubscribe</button>
+  {% endif %}
+</li>

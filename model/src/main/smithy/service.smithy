@@ -25,6 +25,9 @@ service PeoplesRepublicOfLists {
         UpdateItemSeries
         DeleteItemSeries
         ListItemSeriesForProject
+        CreateCalendarSubscription
+        ListCalendarSubscriptions
+        DeleteCalendarSubscription
         CreateProjectItem
         GetProjectItem
         UpdateProjectItem
