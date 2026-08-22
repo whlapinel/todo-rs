@@ -24,6 +24,8 @@ The user is migrating off Google Calendar onto this app, but can't cut over all 
 
 Same process as `docs/archived/project-abstraction-plan.md`: each stage is independently landable, leaves the app's running behavior unchanged (or only additively changed) until wired up, and is done in its own session — **compact/clear context between stages**, with this file as the only thing that survives the handoff. Before ending a stage, update that stage's section below with an **Implementation notes** entry: exact names if they ended up different, deviations and why, test status, anything discovered that changes a later stage's assumptions.
 
+**"Independently landable" describes the code, not a standing instruction to `git commit`.** Per this repo's global CLAUDE.md/git policy, commits only happen when the user explicitly asks — finishing a stage does not imply consent to commit it. Each stage being self-contained just means it's *safe* to commit on its own (and to do so without waiting for later stages) once the user actually asks.
+
 1. **Schema only** — new `calendar_subscriptions` table, new nullable `items.google_event_id`/`items.calendar_subscription_id` columns. Nothing reads or writes them yet.
 2. **Storage layer** — `CalendarSubscriptionRepo` trait + SQLite impl, plus the one new `ItemRepo` method the sync diff needs. Not called from anywhere yet.
 3. **Sync engine (service layer)** — iCal fetch + parse (`ical` crate, TZID-aware via `chrono-tz`) + create/update/delete diff logic, non-recurring events only (anything with an `RRULE` is skipped here, picked up in Stage 7). Unreachable via HTTP yet — exercised only by unit tests against fixture `.ics` text.
