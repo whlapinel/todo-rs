@@ -22,7 +22,7 @@ This plan also folds in three related, already-written entries from `docs/issues
 
 Once this plan is fully implemented, move those four bullets out of `docs/issues_and_features.md` (into `docs/archived/archived_issues_and_features.md`), and reconsider the remaining "Let's shrink the calendar view by at least 50%... put the month beside the list [on desktop]" bullet — the "put list beside grid" half is moot once the list is a drawer overlay rather than page content competing for space; the "shrink the grid" half is still a legitimate, independent, small follow-up worth keeping open.
 
-**Deferred, final-stage rename:** the user wants the per-project and cross-project "Dashboard" screens renamed to "Calendar" (nav label, page titles, etc.) once this is otherwise complete — see Stage 7. Whether that also means renaming the URL paths (`/dashboard` → `/calendar`) or just the display text is intentionally left open until that stage starts (see Stage 7's own note).
+**Deferred, final-stage rename:** the user wants the per-project and cross-project "Dashboard" screens renamed to "Calendar" (nav label, page titles, etc.) once this is otherwise complete — see Stage 7. Split at the start of Stage 7 into two stages, per the user's explicit request: Stage 7 does the display-text-only rename (nav sidebar label, page `<title>` blocks, user-facing headings); Stage 8 does the full route/module/struct rename (`/web/dashboard` → `/web/calendar`, `main_dashboard.rs`/`project_dashboard.rs` module names, `MainDashboardRow`/`ProjectDashboardRow` struct names, etc.) that Stage 7's own note had left open pending user confirmation.
 
 ### Explicitly out of scope (raised, then deliberately deferred by the user while planning)
 
@@ -52,7 +52,8 @@ Same process as `docs/archived/google-calendar-import-plan.md` / `docs/archived/
 4. **Port the drawer (+ tabs + toggle, no New button) to the cross-project Home Dashboard calendar.**
 5. **Retire the Tasks and Events calendar views.** Delete their `calendar_page.html`/`calendar_day_panel.html` templates, handlers, and routes; remove the "Calendar view" link from both list pages; audit for any other reference to `.../tasks/calendar` or `.../events/calendar` before deleting.
 6. **Default-view routing swap**, for the two screens that still have both a list and a calendar view (Home dashboard, per-project dashboard): the base URL now serves the calendar page; the list view moves to an explicit `.../list` route; old `.../calendar` URLs redirect to the base path.
-7. **Rename "Dashboard" to "Calendar"** (nav label, page titles, and possibly the URL paths — see the stage's own note) — deliberately last, per the user's explicit "defer that rename til the very end."
+7. **Rename "Dashboard" to "Calendar" — display text only.** Nav sidebar label, page `<title>` blocks, and any other user-facing "Dashboard" wording become "Calendar". Deliberately last among the functional stages, per the user's explicit "defer that rename til the very end." No route/module/struct changes in this stage.
+8. **Rename "Dashboard" to "Calendar" — full route/module rename.** `/web/dashboard` → `/web/calendar` (and the per-project equivalent), `main_dashboard.rs`/`project_dashboard.rs` module names, `MainDashboardRow`/`ProjectDashboardRow` struct names, `nav.rs`'s `section_href` path segment, the Stage-6 redirect handler names, and every internal link/redirect target that assumed the old path. Added as its own stage per the user's explicit request when Stage 7 began, splitting off the larger-blast-radius half Stage 7's own note had left pending confirmation.
 
 ---
 
@@ -246,9 +247,53 @@ For each of the two screens that still have both a list and a calendar view (Hom
 
 ---
 
-## Stage 7 — Rename "Dashboard" to "Calendar"
+## Stage 7 — Rename "Dashboard" to "Calendar" (display text only)
 
-Deliberately last, per the user's explicit "defer that rename til the very end" — and deliberately open-ended until this stage actually starts. At minimum: nav sidebar label, page `<title>` blocks, and any user-facing "Dashboard" wording across `templates/main_dashboard/*.html` / `templates/project_dashboard/*.html` become "Calendar". **Confirm with the user at the start of this stage** whether it's display-text-only, or also a full route/module rename (`/web/dashboard` → `/web/calendar`, `main_dashboard.rs`/`project_dashboard.rs` module names, `MainDashboardRow`/`ProjectDashboardRow` struct names, etc.) — the latter is a much larger blast radius (every internal link, every redirect target from Stage 6, `nav.rs`, this plan's own file, `CLAUDE.md`'s Web UI section) for comparatively low functional value, so don't assume it's wanted without asking.
+Deliberately last among the functional stages, per the user's explicit "defer that rename til the very end." Scoped, at the user's explicit request when this stage began, to **display text only** — nav sidebar label, page `<title>` blocks, and any other user-facing "Dashboard" wording become "Calendar", with no route/module/struct changes. The full route/module rename this stage's earlier draft had left open pending confirmation is now its own Stage 8 below, not part of this one.
+
+Every user-facing occurrence of the literal word "Dashboard" (confirmed by grep across `templates/`, not assumed):
+
+- `templates/nav_sidebar_inner.html` — the per-project sidebar link's `Dashboard` text (the `dashboard_href` link, i.e. `section_href(SidebarSection::None, ...)`). The cross-project Home dashboard's own sidebar link already reads "Home", not "Dashboard" — left untouched, since it isn't the word being renamed.
+- `templates/teams/detail_page.html` — the team detail page's `Dashboard` button linking to that team's backing project's dashboard.
+- `templates/main_dashboard/calendar_page.html` — `{% block title %}Dashboard Calendar · Todo{% endblock %}`.
+- `templates/main_dashboard/page.html` — `{% block title %}Dashboard · Todo{% endblock %}` and the page's own `<h2>Dashboard</h2>` heading.
+- `templates/project_dashboard/calendar_page.html` — `{% block title %}Dashboard Calendar · Todo{% endblock %}`.
+- `templates/project_dashboard/page.html` — `{% block title %}Dashboard · Todo{% endblock %}` and the page's own `<h2>Dashboard</h2>` heading.
+
+No Rust string literals say "Dashboard" (confirmed by grep over `src/`) — every occurrence is template-only, so this stage touches no `.rs` file.
+
+**Files touched:** `templates/nav_sidebar_inner.html`, `templates/teams/detail_page.html`, `templates/main_dashboard/calendar_page.html`, `templates/main_dashboard/page.html`, `templates/project_dashboard/calendar_page.html`, `templates/project_dashboard/page.html`.
+
+**Verification:** `cargo build` (Askama re-embeds templates at compile time), `task check`; grep confirming zero remaining user-facing "Dashboard" text in `templates/`.
+
+### Implementation notes
+
+**Landed exactly as scoped — a straight literal `Dashboard` → `Calendar` text swap across the six files the plan identified, no surprises.** The cross-project Home dashboard's sidebar link (`templates/nav_sidebar_inner.html`'s fixed bottom-links block) already read "Home", not "Dashboard", before this stage — confirmed via grep before editing, left untouched per the plan's own note that "Home" isn't the word being renamed. `src/main.rs`'s two `.../dashboard` `<title>` blocks both collapsed to the identical `Calendar · Todo` for both the calendar view and the list view of each screen, matching the existing Tasks/Events convention (`Tasks · Todo` for both any of that section's views) rather than inventing a "Calendar List" variant — same title regardless of which of the two views is loaded, consistent with how Tasks/Events never distinguished their list/calendar title either back when Tasks/Events still had a calendar view.
+
+**No `.rs` file needed a change** — confirmed via `grep -rn '"Dashboard' --include="*.rs" src/` returning zero matches before starting; every occurrence of the literal word lives in `templates/`.
+
+**Verification actually performed**: `cargo build` (clean, identical pre-existing warning set to every prior stage — zero new warnings from a template-only change), `cargo fmt -- --check` (zero new drift — the tool's full output shows only the same pre-existing drift spots in `main.rs`/`calendar_subscriptions.rs`, files this stage never touched), `cargo test` (455 passed, unchanged), `task check` (clean). Repo-wide `grep -rn "Dashboard" templates/` returned zero matches after the edits. Per `CLAUDE.md`'s no-Playwright instruction, live verification was `curl` against a locally-run `cargo run` (`TODO_BIND=127.0.0.1:3905`, `TODO_AUTH_MODE=caddy` + `x-token-user-email` header, a throwaway SQLite DB under the scratchpad dir): confirmed `/web/dashboard` and `/web/dashboard/list` both render `<title>Calendar · Todo</title>`; created a throwaway project and confirmed its `/web/projects/:id/dashboard` page renders `<title>Calendar · Todo</title>` plus a `>Calendar<` sidebar link and a `>Calendar<` page heading, with the cross-project page's own sidebar still showing `>Home<` (unchanged). Did not verify client-side rendering in an actual browser (nothing client-side changed this stage, so there was nothing new to exercise there) — the user's own visual check of nav/title wording is still worthwhile before considering this stage fully done, per their standing instruction on prior stages.
+
+---
+
+## Stage 8 — Rename "Dashboard" to "Calendar" (full route/module rename)
+
+Split off from Stage 7 at the user's explicit request when that stage began, since this half is a much larger blast radius (every internal link, every redirect target from Stage 6, `nav.rs`, this plan's own file, `CLAUDE.md`'s Web UI section) for comparatively low functional value — worth its own independently-landable stage rather than folding into Stage 7's display-only change.
+
+At minimum, in scope for this stage:
+
+- **Routes**: `/web/dashboard` → `/web/calendar` (and `/web/dashboard/list` → `/web/calendar/list`, `/web/dashboard/calendar` → ... — note the existing `.../dashboard/calendar` redirect path from Stage 6 becomes doubly confusing once "dashboard" itself is renamed; decide at the start of this stage whether that redirect's URL segment gets renamed too, or only the base path does) for the cross-project screen; the analogous `/web/projects/:project_id/dashboard[...]` → `.../calendar[...]` for the per-project screen.
+- **Module names**: `src/web_ui/main_dashboard.rs` → `src/web_ui/main_calendar.rs` (or similar), `src/web_ui/project_dashboard.rs` → `src/web_ui/project_calendar.rs` (or similar) — confirm actual naming with the user before renaming, since "Calendar" alone may collide/confuse with `src/web_ui/project_events/` calendar-adjacent concepts or `calendar_subscriptions.rs`/`calendar_sync.rs` (unrelated Google Calendar sync feature — same word, different feature, already a potential source of confusion worth flagging to the user explicitly).
+- **Struct/template names**: `MainDashboardRow`/`ProjectDashboardRow` and every `*Dashboard*Template` struct; `templates/main_dashboard/` / `templates/project_dashboard/` directory renames; the Stage-6 redirect handlers (`redirect_main_dashboard_calendar`/`redirect_project_dashboard_calendar`) need new names that still make sense once "dashboard" isn't the word for the old path anymore.
+- **`nav.rs`**: `section_href`'s `SidebarSection::None => "dashboard"` path segment, and its doc comments referencing "Dashboard".
+- **`CLAUDE.md`**: the Web UI section's route tables and prose describing `main_dashboard.rs`/`project_dashboard.rs`.
+- **This plan file**: every stage's own prose above refers to "the Home dashboard"/"the per-project dashboard" throughout — out of scope to rewrite retroactively (historical record of what was actually built at the time), but worth a note here that post-Stage-8 readers should mentally substitute "Calendar" for "Dashboard" when the module/route names are cited literally.
+
+**Confirm the exact new names (module/struct/route naming) with the user at the start of this stage** before renaming anything — this note is carried over from Stage 7's original draft, since naming is still genuinely open (e.g. avoiding collision with the unrelated `calendar_subscriptions.rs`/`calendar_sync.rs` Google Calendar sync feature).
+
+**Files touched:** `src/main.rs` (route table), `src/web_ui/main_dashboard.rs` (renamed), `src/web_ui/project_dashboard.rs` (renamed), `templates/main_dashboard/*` (renamed dir), `templates/project_dashboard/*` (renamed dir), `src/web_ui/nav.rs`, `src/web_ui/mod.rs` (module declarations), `templates/teams/detail_page.html` and any other template referencing the old routes, `CLAUDE.md`.
+
+**Verification:** `cargo build`, `cargo test`, `task check`; grep confirming zero remaining references to the old route paths/module names outside this plan file's own historical stage notes; live click-through confirming every internal link/redirect/bookmark (including the Stage-6 `.../calendar` redirect) still resolves correctly under the new names.
 
 ### Implementation notes (fill in before ending this stage)
 
