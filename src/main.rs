@@ -393,11 +393,16 @@ async fn main() {
     {
         let calendar_repo = calendar_repo.clone();
         let item_repo = item_repo.clone();
+        let user_repo = user_repo.clone();
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(std::time::Duration::from_secs(15 * 60)).await;
-                service::calendar_subscriptions::sync_all_subscriptions(&calendar_repo, &item_repo)
-                    .await;
+                service::calendar_subscriptions::sync_all_subscriptions(
+                    &calendar_repo,
+                    &item_repo,
+                    &user_repo,
+                )
+                .await;
             }
         });
     }

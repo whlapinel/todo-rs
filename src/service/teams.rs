@@ -296,6 +296,7 @@ mod tests {
                     last_name: "B".to_string(),
                     email: Some("a@b.com".to_string()),
                     google_id: None,
+                    timezone: None,
                 },
                 status: "ACTIVE".to_string(),
                 role: TeamRole::Member,

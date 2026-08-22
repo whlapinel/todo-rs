@@ -5,7 +5,7 @@ use crate::domain::calendar_subscription::CalendarSubscription;
 use crate::service::calendar_subscriptions as calendar_subscriptions_service;
 use crate::service::error::ItemError;
 use crate::service::projects as project_service;
-use crate::storage::sqlite::{CalendarSubscriptionRepo, ItemRepo, ProjectRepo, TeamRepo};
+use crate::storage::sqlite::{CalendarSubscriptionRepo, ItemRepo, ProjectRepo, TeamRepo, UserRepo};
 use askama::Template;
 use axum::extract::{Extension, Form, Path};
 use axum::response::Html;
@@ -143,6 +143,7 @@ pub async fn create_project_calendar_subscription_form(
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(calendar_repo): Extension<Arc<dyn CalendarSubscriptionRepo>>,
     Extension(item_repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(user_repo): Extension<Arc<dyn UserRepo>>,
     TzOffset(tz): TzOffset,
     Form(form): Form<CreateCalendarSubscriptionForm>,
 ) -> Result<Html<String>, ItemError> {
@@ -151,6 +152,7 @@ pub async fn create_project_calendar_subscription_form(
         &teams,
         &calendar_repo,
         &item_repo,
+        &user_repo,
         &project_id,
         &auth_user.user_id,
         form.ical_url.trim(),

@@ -8,6 +8,23 @@
 //! process, and Stage 4's read-only guard on those functions would otherwise reject
 //! the sync's own writes to an already-imported item.
 //!
+//! All-day (`VALUE=DATE`) `DTSTART`/`DTEND`/`RECURRENCE-ID`/`EXDATE` values carry no
+//! timezone of their own per RFC 5545, but this app still has to pick *some* UTC instant
+//! to store them as — and, unlike a manually-created all-day item (whose creator's
+//! browser bakes its own tz offset in via `combine_local_to_utc`), a background sync has
+//! no request-scoped viewer to borrow an offset from. `sync_subscription` resolves the
+//! subscription creator's `User::timezone` (falling back to UTC if unset/unparseable)
+//! and threads it through `parse_ical` as `all_day_tz`, used only for all-day dates —
+//! `resolve_all_day_instant` localizes local midnight (or end-of-day, for an inclusive
+//! multi-day end) in that zone before converting to UTC, matching the display layer's
+//! `to_local` (`src/web_ui/mod.rs`) so the imported date renders as the correct calendar
+//! day for that user. Fixed 2026-08-22 per issue #1 in docs/issues_and_features.md — an
+//! all-day event imported with the old UTC-midnight-always parsing displayed a day early
+//! for any viewer behind UTC. A genuinely different viewer's timezone can still disagree
+//! with the subscription creator's, but that's the same, already-accepted limitation the
+//! rest of this app's date-only values carry (see root CLAUDE.md's "Known design
+//! tension" note in the Scheduled start/end section) — not a new gap this fix opens.
+//!
 //! RRULE-bearing (recurring) master events are expanded into one synthetic pseudo-event
 //! per occurrence (`expand_master_event`, Stage 7) within a tight, sliding window
 //! (`RECURRING_WINDOW_PAST_DAYS`/`RECURRING_WINDOW_FUTURE_DAYS`) — each occurrence gets a
@@ -23,7 +40,7 @@
 
 use crate::domain::calendar_subscription::CalendarSubscription;
 use crate::domain::item::{Item, ItemType, Recurrence, Schedule};
-use crate::storage::sqlite::{CalendarSubscriptionRepo, ItemRepo, RepoError};
+use crate::storage::sqlite::{CalendarSubscriptionRepo, ItemRepo, RepoError, UserRepo};
 use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use chrono_tz::Tz;
 use rrule::{RRule, RRuleError, Tz as RTz, Unvalidated};
@@ -140,11 +157,15 @@ pub async fn fetch_ical(url: &str) -> Result<String, CalendarSyncError> {
 /// ones included (flagged via `has_rrule`, not expanded — see module docs). Applies no
 /// time-window filtering of its own; that's `sync_subscription`'s job, so this function
 /// stays pure and trivially testable against fixture text.
-pub fn parse_ical(content: &str) -> Vec<ParsedIcalEvent> {
+///
+/// `all_day_tz` is used only to resolve `VALUE=DATE` (all-day) properties — see module
+/// docs. It has no bearing on timed (`DTSTART`/`DTEND` with a real time-of-day)
+/// properties, which always resolve via their own `TZID` param regardless.
+pub fn parse_ical(content: &str, all_day_tz: Tz) -> Vec<ParsedIcalEvent> {
     let mut events = Vec::new();
     for calendar in ical::IcalParser::new(BufReader::new(content.as_bytes())).flatten() {
         for vevent in &calendar.events {
-            if let Some(parsed) = parse_vevent(vevent) {
+            if let Some(parsed) = parse_vevent(vevent, all_day_tz) {
                 events.push(parsed);
             }
         }
@@ -152,13 +173,16 @@ pub fn parse_ical(content: &str) -> Vec<ParsedIcalEvent> {
     events
 }
 
-fn parse_vevent(vevent: &ical::parser::ical::component::IcalEvent) -> Option<ParsedIcalEvent> {
+fn parse_vevent(
+    vevent: &ical::parser::ical::component::IcalEvent,
+    all_day_tz: Tz,
+) -> Option<ParsedIcalEvent> {
     let find_prop = |name: &str| vevent.properties.iter().find(|p| p.name == name);
     let prop_value = |name: &str| find_prop(name).and_then(|p| p.value.as_deref());
 
     let recurrence_id = find_prop("RECURRENCE-ID")
-        .and_then(parse_dt_property)
-        .map(|(dt, _, _)| dt);
+        .and_then(|p| parse_dt_property(p, all_day_tz))
+        .map(|(dt, _, _, _)| dt);
     let is_cancelled = prop_value("STATUS") == Some("CANCELLED");
     // A plain (non-override) cancelled event is dropped entirely, same as Stage 3 — it
     // was never imported and shouldn't be now. A cancelled *override* (RECURRENCE-ID
@@ -177,20 +201,38 @@ fn parse_vevent(vevent: &ical::parser::ical::component::IcalEvent) -> Option<Par
     let has_rrule = find_prop("RRULE").is_some();
     let rrule = prop_value("RRULE").map(str::to_string);
 
-    let (start, all_day, tz) = parse_dt_property(find_prop("DTSTART")?)?;
+    let (start, all_day, tz, start_date) = parse_dt_property(find_prop("DTSTART")?, all_day_tz)?;
 
-    let parsed_end = find_prop("DTEND")
-        .and_then(parse_dt_property)
-        .map(|(dt, _, _)| dt);
-    // RFC 5545: an all-day VEVENT with no DTEND defaults to a 1-day duration — its
-    // (exclusive) end is simply the day after DTSTART.
-    let end = parsed_end.or_else(|| all_day.then(|| start + Duration::days(1)));
+    let parsed_end = find_prop("DTEND").and_then(|p| parse_dt_property(p, all_day_tz));
+    let end = match (all_day, parsed_end, start_date) {
+        // RFC 5545: an all-day DTEND is *exclusive* — the day after the last actual
+        // day. Only surface it as a visible end date when it represents a real,
+        // multi-day span (more than one calendar day past DTSTART); a single-day
+        // all-day event (no DTEND, or an explicit DTEND of DTSTART + 1 day) shows only
+        // a start date, per issue #1 in docs/issues_and_features.md. When it is a real
+        // span, convert the exclusive end date to an inclusive one (the actual last
+        // day) at end-of-day in the same zone DTSTART resolved in — matching how
+        // `scheduled_end_date` defaults to end-of-day everywhere else in this app (see
+        // root CLAUDE.md's Scheduled start/end section).
+        (true, Some((_, _, _, Some(end_date))), Some(start_date))
+            if end_date > start_date + Duration::days(1) =>
+        {
+            Some(resolve_all_day_instant(
+                end_date - Duration::days(1),
+                tz,
+                true,
+            ))
+        }
+        (true, _, _) => None,
+        (false, Some((dt, _, _, _)), _) => Some(dt),
+        (false, None, _) => None,
+    };
 
     let exdates = vevent
         .properties
         .iter()
         .filter(|p| p.name == "EXDATE")
-        .flat_map(parse_exdate_values)
+        .flat_map(|p| parse_exdate_values(p, all_day_tz))
         .collect();
 
     Some(ParsedIcalEvent {
@@ -210,34 +252,41 @@ fn parse_vevent(vevent: &ical::parser::ical::component::IcalEvent) -> Option<Par
 }
 
 /// Resolves one `DTSTART`/`DTEND`/`RECURRENCE-ID`-shaped property to (UTC instant,
-/// is-all-day, resolved zone).
+/// is-all-day, resolved zone, and — only when all-day — the raw calendar date, needed by
+/// `parse_vevent` to decide whether a DTEND represents a real multi-day span).
 ///
 /// TZID handling is the actual fix over `family-board`'s `parse_ical_dt` (which
 /// silently treated any non-`Z` local time as UTC): a `TZID` param, when present, is
 /// resolved via `chrono_tz` and the naive local time is localized in that zone before
 /// converting to UTC. Falls back to treating the naive value as UTC only when the
-/// value already ends in `Z`, or there's no usable `TZID` at all.
-fn parse_dt_property(prop: &ical::property::Property) -> Option<(DateTime<Utc>, bool, Tz)> {
-    parse_dt_value(prop.value.as_deref()?, prop.params.as_ref())
+/// value already ends in `Z`, or there's no usable `TZID` at all. An all-day value has
+/// no `TZID` of its own (RFC 5545) — it's resolved in `all_day_tz` instead, see module
+/// docs.
+fn parse_dt_property(
+    prop: &ical::property::Property,
+    all_day_tz: Tz,
+) -> Option<(DateTime<Utc>, bool, Tz, Option<NaiveDate>)> {
+    parse_dt_value(prop.value.as_deref()?, prop.params.as_ref(), all_day_tz)
 }
 
 /// A single comma-separated `EXDATE` value can list multiple instants sharing the same
 /// `TZID`/`VALUE` params — this parses every one of them (an `EXDATE` property with a
 /// single value is just the one-element case).
-fn parse_exdate_values(prop: &ical::property::Property) -> Vec<DateTime<Utc>> {
+fn parse_exdate_values(prop: &ical::property::Property, all_day_tz: Tz) -> Vec<DateTime<Utc>> {
     let Some(val) = prop.value.as_deref() else {
         return Vec::new();
     };
     val.split(',')
-        .filter_map(|part| parse_dt_value(part.trim(), prop.params.as_ref()))
-        .map(|(dt, _, _)| dt)
+        .filter_map(|part| parse_dt_value(part.trim(), prop.params.as_ref(), all_day_tz))
+        .map(|(dt, _, _, _)| dt)
         .collect()
 }
 
 fn parse_dt_value(
     val: &str,
     params: Option<&Vec<(String, Vec<String>)>>,
-) -> Option<(DateTime<Utc>, bool, Tz)> {
+    all_day_tz: Tz,
+) -> Option<(DateTime<Utc>, bool, Tz, Option<NaiveDate>)> {
     let is_all_day = params
         .and_then(|params| params.iter().find(|(k, _)| k == "VALUE"))
         .map(|(_, vals)| vals.iter().any(|v| v == "DATE"))
@@ -246,15 +295,16 @@ fn parse_dt_value(
     if is_all_day {
         let date = NaiveDate::parse_from_str(val, "%Y%m%d").ok()?;
         return Some((
-            Utc.from_utc_datetime(&date.and_hms_opt(0, 0, 0)?),
+            resolve_all_day_instant(date, all_day_tz, false),
             true,
-            Tz::UTC,
+            all_day_tz,
+            Some(date),
         ));
     }
 
     if let Some(stripped) = val.strip_suffix('Z') {
         let naive = NaiveDateTime::parse_from_str(stripped, "%Y%m%dT%H%M%S").ok()?;
-        return Some((Utc.from_utc_datetime(&naive), false, Tz::UTC));
+        return Some((Utc.from_utc_datetime(&naive), false, Tz::UTC, None));
     }
 
     let naive = NaiveDateTime::parse_from_str(val, "%Y%m%dT%H%M%S").ok()?;
@@ -278,7 +328,31 @@ fn parse_dt_value(
         localized.unwrap_or_else(|| Utc.from_utc_datetime(&naive)),
         false,
         resolved_tz.unwrap_or(Tz::UTC),
+        None,
     ))
+}
+
+/// Localizes `date` at either local midnight (`end_of_day: false`, used for every
+/// all-day `DTSTART`/`RECURRENCE-ID`/`EXDATE`, and a real multi-day DTEND's *start*
+/// side is never called this way — only its already-decremented inclusive end date is)
+/// or 23:59:59 local (`end_of_day: true`, used only for a real multi-day span's
+/// inclusive end date) in `tz`, then converts to UTC.
+fn resolve_all_day_instant(date: NaiveDate, tz: Tz, end_of_day: bool) -> DateTime<Utc> {
+    let time = if end_of_day {
+        chrono::NaiveTime::from_hms_opt(23, 59, 59)
+    } else {
+        chrono::NaiveTime::from_hms_opt(0, 0, 0)
+    }
+    .expect("valid constant time");
+    let naive = date.and_time(time);
+    match tz.from_local_datetime(&naive) {
+        chrono::LocalResult::Single(dt) => dt.with_timezone(&Utc),
+        chrono::LocalResult::Ambiguous(dt, _) => dt.with_timezone(&Utc),
+        // A local wall-clock time that a DST spring-forward skipped entirely (rare at
+        // midnight, but not impossible) — falling back to treating it as UTC is a
+        // harmless, arbitrary tie-break, same precedent as the timed-value path above.
+        chrono::LocalResult::None => Utc.from_utc_datetime(&naive),
+    }
 }
 
 fn within_import_window(start: DateTime<Utc>, now: DateTime<Utc>) -> bool {
@@ -427,10 +501,26 @@ fn event_differs_from_item(event: &ParsedIcalEvent, existing: &Item) -> bool {
         || schedule.map(|s| s.has_scheduled_time) != Some(!event.all_day)
 }
 
+/// The zone to resolve this subscription's all-day event dates in — the creator's own
+/// `User::timezone` if they've set one, UTC otherwise (see module docs). A missing user
+/// record (shouldn't happen in practice, but `created_by_user_id` is a plain string, not
+/// a foreign key) falls back to UTC the same way.
+async fn resolve_all_day_tz(subscription: &CalendarSubscription, user_repo: &dyn UserRepo) -> Tz {
+    match user_repo.get(&subscription.created_by_user_id).await {
+        Ok(user) => user
+            .timezone
+            .as_deref()
+            .and_then(|tz| Tz::from_str(tz).ok())
+            .unwrap_or(Tz::UTC),
+        Err(_) => Tz::UTC,
+    }
+}
+
 pub async fn sync_subscription(
     subscription: &CalendarSubscription,
     item_repo: &dyn ItemRepo,
     calendar_repo: &dyn CalendarSubscriptionRepo,
+    user_repo: &dyn UserRepo,
 ) -> Result<SyncSummary, CalendarSyncError> {
     let now = Utc::now();
 
@@ -446,7 +536,8 @@ pub async fn sync_subscription(
         }
     };
 
-    let parsed = parse_ical(&content);
+    let all_day_tz = resolve_all_day_tz(subscription, user_repo).await;
+    let parsed = parse_ical(&content, all_day_tz);
 
     let mut masters: Vec<ParsedIcalEvent> = Vec::new();
     let mut overrides: HashMap<(String, DateTime<Utc>), ParsedIcalEvent> = HashMap::new();
@@ -616,17 +707,14 @@ mod tests {
     #[test]
     fn parses_a_plain_timed_utc_event() {
         let ics = timed_event_ics("evt-1", "20260901T140000Z", "20260901T150000Z", None);
-        let events = parse_ical(&ics);
+        let events = parse_ical(&ics, Tz::UTC);
         assert_eq!(events.len(), 1);
         let e = &events[0];
         assert_eq!(e.uid, "evt-1");
         assert_eq!(e.summary, "Test Event");
         assert!(!e.all_day);
         assert!(!e.has_rrule);
-        assert_eq!(
-            e.start,
-            Utc.with_ymd_and_hms(2026, 9, 1, 14, 0, 0).unwrap()
-        );
+        assert_eq!(e.start, Utc.with_ymd_and_hms(2026, 9, 1, 14, 0, 0).unwrap());
         assert_eq!(
             e.end,
             Some(Utc.with_ymd_and_hms(2026, 9, 1, 15, 0, 0).unwrap())
@@ -634,32 +722,76 @@ mod tests {
     }
 
     #[test]
-    fn parses_an_all_day_event() {
+    fn single_day_all_day_event_has_no_end_date() {
+        // Google Calendar's real export always includes an explicit DTEND even for a
+        // single-day all-day event (DTSTART + 1 day, RFC 5545's exclusive-end
+        // convention) — per issue #1 in docs/issues_and_features.md, this should show
+        // only a start date, not a spurious "2-day" end.
         let ics = concat!(
             "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:evt-allday\r\n",
             "DTSTART;VALUE=DATE:20260910\r\nDTEND;VALUE=DATE:20260911\r\n",
             "SUMMARY:All Day\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
         );
-        let events = parse_ical(ics);
+        let events = parse_ical(ics, Tz::UTC);
         assert_eq!(events.len(), 1);
         let e = &events[0];
         assert!(e.all_day);
         assert_eq!(e.start, Utc.with_ymd_and_hms(2026, 9, 10, 0, 0, 0).unwrap());
-        assert_eq!(e.end, Some(Utc.with_ymd_and_hms(2026, 9, 11, 0, 0, 0).unwrap()));
+        assert_eq!(e.end, None);
     }
 
     #[test]
-    fn all_day_event_with_no_dtend_defaults_to_one_day() {
+    fn all_day_event_with_no_dtend_has_no_end_date() {
         let ics = concat!(
             "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:evt-allday-2\r\n",
             "DTSTART;VALUE=DATE:20260910\r\nSUMMARY:All Day No End\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
         );
-        let events = parse_ical(ics);
+        let events = parse_ical(ics, Tz::UTC);
         assert_eq!(events.len(), 1);
-        assert_eq!(
-            events[0].end,
-            Some(Utc.with_ymd_and_hms(2026, 9, 11, 0, 0, 0).unwrap())
+        assert_eq!(events[0].end, None);
+    }
+
+    #[test]
+    fn multi_day_all_day_event_keeps_an_inclusive_end_date() {
+        // A real 3-day span (Sept 10-12 inclusive) — Google encodes DTEND as the
+        // exclusive day after the last day (Sept 13). The stored end should be the
+        // actual last day (Sept 12) at end-of-day, not the exclusive Sept 13.
+        let ics = concat!(
+            "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:evt-trip\r\n",
+            "DTSTART;VALUE=DATE:20260910\r\nDTEND;VALUE=DATE:20260913\r\n",
+            "SUMMARY:Trip\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
         );
+        let events = parse_ical(ics, Tz::UTC);
+        assert_eq!(events.len(), 1);
+        let e = &events[0];
+        assert_eq!(e.start, Utc.with_ymd_and_hms(2026, 9, 10, 0, 0, 0).unwrap());
+        assert_eq!(
+            e.end,
+            Some(Utc.with_ymd_and_hms(2026, 9, 12, 23, 59, 59).unwrap())
+        );
+    }
+
+    #[test]
+    fn all_day_event_is_resolved_in_the_given_all_day_tz_not_utc() {
+        // The regression this fixes (issue #1): an all-day date parsed as literal UTC
+        // midnight displays a day early for any viewer behind UTC. Resolving it in the
+        // subscription creator's own timezone instead keeps the UTC instant on the
+        // correct side of midnight once the display layer's `to_local` (which expects
+        // every stored instant to carry a real, undoable offset) converts it back.
+        let ics = concat!(
+            "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:evt-allday-ny\r\n",
+            "DTSTART;VALUE=DATE:20260910\r\nSUMMARY:All Day NY\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+        );
+        let ny = Tz::America__New_York;
+        let events = parse_ical(ics, ny);
+        assert_eq!(events.len(), 1);
+        // 2026-09-10 00:00 America/New_York (EDT, UTC-4) == 04:00 UTC — NOT the literal
+        // 2026-09-10 00:00 UTC the old, tz-agnostic parsing produced.
+        assert_eq!(
+            events[0].start,
+            Utc.with_ymd_and_hms(2026, 9, 10, 4, 0, 0).unwrap()
+        );
+        assert_eq!(events[0].tz, ny);
     }
 
     #[test]
@@ -671,7 +803,7 @@ mod tests {
             "20260901T100000",
             Some("America/New_York"),
         );
-        let events = parse_ical(&ics);
+        let events = parse_ical(&ics, Tz::UTC);
         assert_eq!(events.len(), 1);
         assert_eq!(
             events[0].start,
@@ -690,7 +822,7 @@ mod tests {
             "DTSTART:20260901T140000Z\r\nSTATUS:CANCELLED\r\nSUMMARY:Nope\r\n",
             "END:VEVENT\r\nEND:VCALENDAR\r\n"
         );
-        assert!(parse_ical(ics).is_empty());
+        assert!(parse_ical(ics, Tz::UTC).is_empty());
     }
 
     #[test]
@@ -703,7 +835,7 @@ mod tests {
             "DTSTART:20260901T140000Z\r\nRRULE:FREQ=WEEKLY\r\nSUMMARY:Standup\r\n",
             "END:VEVENT\r\nEND:VCALENDAR\r\n"
         );
-        let events = parse_ical(ics);
+        let events = parse_ical(ics, Tz::UTC);
         assert_eq!(events.len(), 1);
         assert!(events[0].has_rrule);
         assert_eq!(events[0].rrule.as_deref(), Some("FREQ=WEEKLY"));
@@ -720,7 +852,7 @@ mod tests {
             "DTSTART:20260922T150000Z\r\nSUMMARY:Standup (moved)\r\nEND:VEVENT\r\n",
             "END:VCALENDAR\r\n"
         );
-        let events = parse_ical(ics);
+        let events = parse_ical(ics, Tz::UTC);
         assert_eq!(events.len(), 2);
 
         let master = events.iter().find(|e| e.has_rrule).unwrap();
@@ -737,7 +869,10 @@ mod tests {
             over_ride.recurrence_id,
             Some(Utc.with_ymd_and_hms(2026, 9, 22, 14, 0, 0).unwrap())
         );
-        assert_eq!(over_ride.start, Utc.with_ymd_and_hms(2026, 9, 22, 15, 0, 0).unwrap());
+        assert_eq!(
+            over_ride.start,
+            Utc.with_ymd_and_hms(2026, 9, 22, 15, 0, 0).unwrap()
+        );
         assert_eq!(over_ride.summary, "Standup (moved)");
         assert!(!over_ride.cancelled);
     }
@@ -752,7 +887,7 @@ mod tests {
             "RECURRENCE-ID:20260922T140000Z\r\nDTSTART:20260922T140000Z\r\n",
             "STATUS:CANCELLED\r\nSUMMARY:Standup\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
         );
-        let events = parse_ical(ics);
+        let events = parse_ical(ics, Tz::UTC);
         assert_eq!(events.len(), 1);
         assert!(events[0].cancelled);
         assert!(events[0].recurrence_id.is_some());
@@ -907,7 +1042,12 @@ mod tests {
         // No `expect_update_by_project`/`expect_create` set up at all — a call to
         // either would panic the mock, which is exactly the assertion here.
 
-        let event = plain_event("evt-1", "Test Event", start, Some(start + Duration::hours(1)));
+        let event = plain_event(
+            "evt-1",
+            "Test Event",
+            start,
+            Some(start + Duration::hours(1)),
+        );
         let (created, updated, deleted) = run_diff(&sub, &[event], &item_repo).await.unwrap();
         assert_eq!((created, updated, deleted), (0, 0, 0));
     }
@@ -989,9 +1129,11 @@ mod tests {
 
         assert!(occurrences.iter().all(|o| o.start != excluded));
         assert!(occurrences.iter().any(|o| o.start == start));
-        assert!(occurrences
-            .iter()
-            .any(|o| o.start == start + Duration::days(14)));
+        assert!(
+            occurrences
+                .iter()
+                .any(|o| o.start == start + Duration::days(14))
+        );
     }
 
     #[test]
@@ -1131,5 +1273,68 @@ mod tests {
 
         let (created, updated, deleted) = run_diff(&sub, &occurrences, &item_repo).await.unwrap();
         assert_eq!((created, updated, deleted), (3, 0, 0));
+    }
+
+    fn user_with_timezone(timezone: Option<&str>) -> crate::domain::user::User {
+        crate::domain::user::User {
+            id: "user-1".to_string(),
+            first_name: "Test".to_string(),
+            last_name: "User".to_string(),
+            email: None,
+            google_id: None,
+            timezone: timezone.map(str::to_string),
+        }
+    }
+
+    #[tokio::test]
+    async fn resolve_all_day_tz_uses_the_subscription_creators_timezone() {
+        use crate::storage::sqlite::MockUserRepo;
+        let mut user_repo = MockUserRepo::new();
+        user_repo
+            .expect_get()
+            .with(eq("user-1"))
+            .returning(|_| Ok(user_with_timezone(Some("America/New_York"))));
+
+        let tz = resolve_all_day_tz(&subscription(), &user_repo).await;
+        assert_eq!(tz, Tz::America__New_York);
+    }
+
+    #[tokio::test]
+    async fn resolve_all_day_tz_falls_back_to_utc_when_unset() {
+        use crate::storage::sqlite::MockUserRepo;
+        let mut user_repo = MockUserRepo::new();
+        user_repo
+            .expect_get()
+            .with(eq("user-1"))
+            .returning(|_| Ok(user_with_timezone(None)));
+
+        let tz = resolve_all_day_tz(&subscription(), &user_repo).await;
+        assert_eq!(tz, Tz::UTC);
+    }
+
+    #[tokio::test]
+    async fn resolve_all_day_tz_falls_back_to_utc_when_unparseable() {
+        use crate::storage::sqlite::MockUserRepo;
+        let mut user_repo = MockUserRepo::new();
+        user_repo
+            .expect_get()
+            .with(eq("user-1"))
+            .returning(|_| Ok(user_with_timezone(Some("Not/A_Zone"))));
+
+        let tz = resolve_all_day_tz(&subscription(), &user_repo).await;
+        assert_eq!(tz, Tz::UTC);
+    }
+
+    #[tokio::test]
+    async fn resolve_all_day_tz_falls_back_to_utc_when_user_missing() {
+        use crate::storage::sqlite::MockUserRepo;
+        let mut user_repo = MockUserRepo::new();
+        user_repo
+            .expect_get()
+            .with(eq("user-1"))
+            .returning(|_| Err(RepoError::NotFound));
+
+        let tz = resolve_all_day_tz(&subscription(), &user_repo).await;
+        assert_eq!(tz, Tz::UTC);
     }
 }

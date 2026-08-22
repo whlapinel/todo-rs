@@ -60,13 +60,19 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "update_user",
-      description: "Update a user's name.",
+      description:
+        "Update a user's name. Optionally set their IANA timezone (e.g. \"America/New_York\") — used by Google Calendar import to resolve all-day event dates correctly. Omitting timezone leaves it unchanged.",
       inputSchema: {
         type: "object",
         properties: {
           userId: { type: "string" },
           firstName: { type: "string" },
           lastName: { type: "string" },
+          timezone: {
+            type: "string",
+            description:
+              "IANA timezone name, e.g. \"America/New_York\". Omit to leave the user's current timezone unchanged.",
+          },
         },
         required: ["userId", "firstName", "lastName"],
       },
@@ -775,6 +781,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         result = await api("PUT", `/users/${args.userId}`, {
           firstName: args.firstName,
           lastName: args.lastName,
+          ...(args.timezone !== undefined ? { timezone: args.timezone } : {}),
         });
         break;
 

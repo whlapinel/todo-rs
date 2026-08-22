@@ -3,7 +3,7 @@ use crate::auth::AuthUser;
 use crate::domain::calendar_subscription::CalendarSubscription;
 use crate::service::calendar_subscriptions as calendar_subscriptions_service;
 use crate::service::error::ItemError;
-use crate::storage::sqlite::{CalendarSubscriptionRepo, ItemRepo, ProjectRepo, TeamRepo};
+use crate::storage::sqlite::{CalendarSubscriptionRepo, ItemRepo, ProjectRepo, TeamRepo, UserRepo};
 use std::sync::Arc;
 use todo_server_sdk::{error, input, model, output, server, types::DateTime as SmithyDateTime};
 
@@ -34,6 +34,7 @@ pub async fn create_calendar_subscription(
     server::Extension(teams): server::Extension<Arc<dyn TeamRepo>>,
     server::Extension(calendar_repo): server::Extension<Arc<dyn CalendarSubscriptionRepo>>,
     server::Extension(item_repo): server::Extension<Arc<dyn ItemRepo>>,
+    server::Extension(user_repo): server::Extension<Arc<dyn UserRepo>>,
     server::Extension(auth): server::Extension<AuthUser>,
 ) -> Result<output::CreateCalendarSubscriptionOutput, error::CreateCalendarSubscriptionError> {
     let id = calendar_subscriptions_service::create_calendar_subscription(
@@ -41,6 +42,7 @@ pub async fn create_calendar_subscription(
         &teams,
         &calendar_repo,
         &item_repo,
+        &user_repo,
         &input.project_id,
         &auth.user_id,
         &input.ical_url,

@@ -9,6 +9,7 @@ resource User {
     properties: {
         firstName: String
         lastName: String
+        timezone: String
     }
     read: GetUser
     list: ListUsers
@@ -69,6 +70,8 @@ operation GetUser {
 
         @required
         $lastName
+
+        $timezone
     }
 
     errors: [
@@ -89,6 +92,12 @@ operation UpdateUser {
 
         @required
         $lastName
+
+        /// IANA timezone name (e.g. "America/New_York"). Optional — omitting it leaves
+        /// the user's current timezone unchanged, unlike firstName/lastName which are
+        /// always overwritten. Used by the Google Calendar import sync to resolve
+        /// all-day event dates into the correct UTC instant for this user.
+        $timezone
     }
 
     output := {}

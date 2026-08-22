@@ -5,6 +5,11 @@ pub struct User {
     pub last_name: String,
     pub email: Option<String>,
     pub google_id: Option<String>,
+    /// IANA timezone name (e.g. "America/New_York"), set via `UpdateUser`. `None` until
+    /// a user explicitly sets one. Currently consumed only by
+    /// `service::calendar_sync` to resolve an imported all-day event's date into the
+    /// correct UTC instant — see root CLAUDE.md's Google Calendar import notes.
+    pub timezone: Option<String>,
 }
 
 impl User {
@@ -15,6 +20,7 @@ impl User {
             last_name: last_name.to_string(),
             email: None,
             google_id: None,
+            timezone: None,
         }
     }
 }

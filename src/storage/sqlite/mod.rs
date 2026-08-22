@@ -458,6 +458,7 @@ fn row_to_user(row: &sqlx::sqlite::SqliteRow) -> User {
         last_name: row.get("last_name"),
         email: row.get("email"),
         google_id: row.get("google_id"),
+        timezone: row.get("timezone"),
     }
 }
 
@@ -589,7 +590,8 @@ pub async fn create_pool(url: &str) -> Result<SqlitePool, sqlx::Error> {
             first_name TEXT NOT NULL,
             last_name TEXT NOT NULL,
             email TEXT,
-            google_id TEXT UNIQUE
+            google_id TEXT UNIQUE,
+            timezone TEXT
         )",
     )
     .execute(&pool)

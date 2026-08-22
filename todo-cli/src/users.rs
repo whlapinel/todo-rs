@@ -10,6 +10,9 @@ pub enum UsersCommand {
     Get { user_id: Option<String> },
     /// Send an app invite email
     Invite { email: String },
+    /// Set your IANA timezone (e.g. "America/New_York") — used by Google Calendar
+    /// import to resolve all-day event dates correctly.
+    SetTimezone { timezone: String },
 }
 
 pub async fn cmd_users(client: &Client, cmd: UsersCommand, default_user: Option<String>) {
@@ -39,6 +42,27 @@ pub async fn cmd_users(client: &Client, cmd: UsersCommand, default_user: Option<
                 "send app invite",
             );
             println!("invite sent to {email}");
+        }
+        UsersCommand::SetTimezone { timezone } => {
+            let uid = require_user(default_user);
+            // UpdateUser requires firstName/lastName be round-tripped — only timezone
+            // is preserved when omitted, see root CLAUDE.md's User.smithy notes.
+            let current = unwrap_or_exit(
+                client.get_user().user_id(&uid).send().await,
+                "get user",
+            );
+            unwrap_or_exit(
+                client
+                    .update_user()
+                    .user_id(&uid)
+                    .first_name(current.first_name())
+                    .last_name(current.last_name())
+                    .timezone(&timezone)
+                    .send()
+                    .await,
+                "set timezone",
+            );
+            println!("timezone set to {timezone}");
         }
     }
 }

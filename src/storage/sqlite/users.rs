@@ -7,17 +7,19 @@ pub struct SqliteUserRepo(pub SqlitePool);
 #[async_trait]
 impl UserRepo for SqliteUserRepo {
     async fn get(&self, user_id: &str) -> Result<User, RepoError> {
-        sqlx::query("SELECT id, first_name, last_name, email, google_id FROM users WHERE id = ?")
-            .bind(user_id)
-            .fetch_optional(&self.0)
-            .await
-            .map_err(db_err)?
-            .map(|row| row_to_user(&row))
-            .ok_or_else(not_found)
+        sqlx::query(
+            "SELECT id, first_name, last_name, email, google_id, timezone FROM users WHERE id = ?",
+        )
+        .bind(user_id)
+        .fetch_optional(&self.0)
+        .await
+        .map_err(db_err)?
+        .map(|row| row_to_user(&row))
+        .ok_or_else(not_found)
     }
 
     async fn list(&self) -> Result<Vec<User>, RepoError> {
-        sqlx::query("SELECT id, first_name, last_name, email, google_id FROM users")
+        sqlx::query("SELECT id, first_name, last_name, email, google_id, timezone FROM users")
             .fetch_all(&self.0)
             .await
             .map_err(db_err)
@@ -37,14 +39,17 @@ impl UserRepo for SqliteUserRepo {
     }
 
     async fn update(&self, user: &User) -> Result<(), RepoError> {
-        let rows = sqlx::query("UPDATE users SET first_name = ?, last_name = ? WHERE id = ?")
-            .bind(&user.first_name)
-            .bind(&user.last_name)
-            .bind(&user.id)
-            .execute(&self.0)
-            .await
-            .map_err(db_err)?
-            .rows_affected();
+        let rows = sqlx::query(
+            "UPDATE users SET first_name = ?, last_name = ?, timezone = ? WHERE id = ?",
+        )
+        .bind(&user.first_name)
+        .bind(&user.last_name)
+        .bind(&user.timezone)
+        .bind(&user.id)
+        .execute(&self.0)
+        .await
+        .map_err(db_err)?
+        .rows_affected();
         if rows == 0 { Err(not_found()) } else { Ok(()) }
     }
 
@@ -66,7 +71,7 @@ impl UserRepo for SqliteUserRepo {
         last_name: &str,
     ) -> Result<User, RepoError> {
         if let Some(row) = sqlx::query(
-            "SELECT id, first_name, last_name, email, google_id FROM users WHERE google_id = ?",
+            "SELECT id, first_name, last_name, email, google_id, timezone FROM users WHERE google_id = ?",
         )
         .bind(google_id)
         .fetch_optional(&self.0)
@@ -95,6 +100,7 @@ impl UserRepo for SqliteUserRepo {
             last_name: last_name.to_string(),
             email: Some(email.to_string()),
             google_id: Some(google_id.to_string()),
+            timezone: None,
         })
     }
 
@@ -104,7 +110,7 @@ impl UserRepo for SqliteUserRepo {
         name: Option<&'a str>,
     ) -> Result<User, RepoError> {
         if let Some(row) = sqlx::query(
-            "SELECT id, first_name, last_name, email, google_id FROM users WHERE email = ?",
+            "SELECT id, first_name, last_name, email, google_id, timezone FROM users WHERE email = ?",
         )
         .bind(email)
         .fetch_optional(&self.0)
@@ -138,6 +144,7 @@ impl UserRepo for SqliteUserRepo {
             last_name,
             email: Some(email.to_string()),
             google_id: None,
+            timezone: None,
         })
     }
 }

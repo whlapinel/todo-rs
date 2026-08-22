@@ -284,6 +284,14 @@ prl users invite someone@example.com
 
 Requires SMTP to be configured on the server (`TODO_SMTP_USER` and `TODO_SMTP_PASSWORD`).
 
+### Set your timezone
+
+Sets your IANA timezone (e.g. `America/New_York`), used by Google Calendar import to resolve all-day event dates into the correct day for you. Without this set, imported all-day events default to UTC and may display a day off.
+
+```sh
+prl users set-timezone America/New_York
+```
+
 ---
 
 ## Teams

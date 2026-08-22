@@ -16,6 +16,7 @@ pub async fn get_user(
         user_id: user.id,
         first_name: user.first_name,
         last_name: user.last_name,
+        timezone: user.timezone,
     })
 }
 
@@ -23,12 +24,19 @@ pub async fn update_user(
     input: input::UpdateUserInput,
     server::Extension(repo): server::Extension<Arc<dyn UserRepo>>,
 ) -> Result<output::UpdateUserOutput, error::UpdateUserError> {
+    // `timezone` is optional and preserved when omitted (unlike firstName/lastName,
+    // which are always overwritten) — see UpdateUser's doc comment in user.smithy.
+    let current = repo.get(&input.user_id).await.map_err(|e| match e {
+        RepoError::NotFound => error::UpdateUserError::from(not_found()),
+        _ => error::UpdateUserError::from(internal(format!("{e:?}"))),
+    })?;
     let user = User {
         id: input.user_id,
         first_name: input.first_name,
         last_name: input.last_name,
-        email: None,
-        google_id: None,
+        email: current.email,
+        google_id: current.google_id,
+        timezone: input.timezone.or(current.timezone),
     };
     repo.update(&user).await.map_err(|e| match e {
         RepoError::NotFound => error::UpdateUserError::from(not_found()),
