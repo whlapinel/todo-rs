@@ -181,12 +181,6 @@ Not called from any service/handler code yet — unit-tested in isolation only (
 
 ### Implementation notes
 
-_(empty until Stage 2 is actually done)_
-
----
-
-### Implementation notes
-
 Done as planned, with a couple of small signature deviations from the sketch above
 (neither changes behavior, both just match this codebase's actual conventions more
 closely than the plan's pseudocode did):
@@ -289,7 +283,100 @@ These writes go straight through the repo (`item_repo.create`/`update`/`delete`)
 
 ### Implementation notes
 
-_(empty until Stage 3 is actually done)_
+Done as planned, with one deliberate scope merge and a couple of structural deviations:
+
+- **Merged in the domain-struct-only slice of Stage 4**, exactly as this plan's own
+  Stage 2 note suggested, since Stage 3's writes are meaningless without it: added
+  `google_event_id`/`calendar_subscription_id: Option<String>` to the domain `Item`
+  struct (`src/domain/item.rs`), following `series_id`'s precedent exactly (doc comment
+  says the same thing — set once at creation by the sync path only, carried forward
+  unchanged on every update, `None` for non-imported items). Wired both columns through
+  every site that already carries `series_id` in `src/storage/sqlite/items.rs`
+  (`ITEM_SELECT`, `create`'s INSERT, both `update`/`update_by_project` UPDATEs) and
+  `row_to_item` in `src/storage/sqlite/mod.rs`. **Not done** (correctly out of scope
+  for this merge, still real Stage 4 work): no Smithy fields, no service-layer
+  read-only guard, no web UI badge/hidden-Edit — an imported item is fully persistable
+  and readable via the domain/storage layer now, but still completely unreachable from
+  any HTTP request, exactly as intended until Stage 4/5 land.
+- `src/storage/sqlite/items.rs`'s `list_by_calendar_subscription_scopes_to_that_subscription`
+  test (added in Stage 2 as a raw-SQL `UPDATE` workaround, since the field didn't exist
+  yet) was simplified to set the now-real domain fields directly through `repo.create`.
+  Added a new `google_event_id_and_calendar_subscription_id_round_trip_through_create_and_update`
+  test mirroring `series_id_round_trips_through_create_and_update`'s exact shape.
+- `ParsedIcalEvent`/`CalendarSyncError`/`SyncSummary`/`parse_ical`/`fetch_ical`/
+  `sync_subscription` all match the plan's sketch exactly, name-for-name. One addition
+  not in the sketch: `CalendarSyncError` gained a second variant, `Repo(String)` — the
+  plan's sketch only anticipated fetch failures (`Fetch(String)`, "non-2xx, timeout,
+  etc."), but `sync_subscription` also has to propagate a storage-layer failure
+  (`list_by_calendar_subscription`/`create`/`update_by_project`/`delete`/
+  `record_sync_result` are all fallible). `RepoError` has no `Display`/`Error` impl, so
+  `repo_err()` formats it via `{:?}` into `CalendarSyncError::Repo`. Both variants get
+  `record_sync_result(..., Some(error.to_string()))` on failure via a shared
+  `Display`/`Error` impl on `CalendarSyncError` itself.
+- **Diff logic split into `sync_subscription` (fetch + bookkeeping) and a private
+  `run_diff` (the actual create/update/delete diff)**, not in the plan's sketch but a
+  natural factoring once `record_sync_result`'s success/failure bookkeeping needed to
+  wrap the diff step without duplicating that bookkeeping for every early-return. `run_diff` takes
+  `importable: &[ParsedIcalEvent]` (already RRULE-partitioned and window-filtered by its
+  caller) and returns a plain `(created, updated, deleted)` tuple; `sync_subscription`
+  computes `skipped_recurring` itself and assembles the final `SyncSummary`.
+- **Window filtering lives in `sync_subscription`, not `parse_ical`** — a deliberate
+  read of the plan's diff-logic bullet list (which only mentions RRULE-partitioning as
+  already done to `parsed` before the diff, not window filtering) plus a practical
+  concern: keeping `parse_ical` free of any `Utc::now()`-relative behavior makes its own
+  unit tests fully deterministic against fixture text with fixed dates, rather than
+  needing a controllable-clock parameter threaded through just for testing. A private
+  `within_import_window(start, now)` helper (constants `IMPORT_WINDOW_PAST_DAYS = 30`,
+  `IMPORT_WINDOW_FUTURE_DAYS = 365`, exactly as specified in the Context section) is
+  applied to the RRULE-partitioned non-recurring set before it reaches `run_diff`.
+  RRULE-bearing events are *not* window-filtered before being counted into
+  `skipped_recurring` — they're never imported regardless of window, so filtering them
+  would only make the skipped-count wrong.
+- **TZID resolution matches the plan's spec exactly**: `chrono_tz::Tz::from_str(tzid)`
+  resolves the param, `Tz::from_local_datetime` localizes the naive value, falls back to
+  literal UTC when the value ends in `Z` or has no usable `TZID`. One judgment call the
+  plan didn't specify: `LocalResult::Ambiguous` (a local time that maps to two UTC
+  instants during a fall-back DST transition) picks the earlier instant — arbitrary but
+  harmless, and RFC 5545 doesn't disambiguate this case either, noted in a code comment
+  so it isn't mistaken for an oversight later.
+- **All-day `DTEND` default**: the plan's "end computed as start + 1 day if DTEND gives
+  an exclusive end date" was read as "when DTEND is absent for an all-day event, default
+  it to start + 1 day" (RFC 5545's own default for a DTEND-less all-day VEVENT) rather
+  than "always recompute end as start + 1 day" — when DTEND *is* present it's parsed and
+  used as-is. Covered by `all_day_event_with_no_dtend_defaults_to_one_day` plus
+  `parses_an_all_day_event` (DTEND present) as two separate cases.
+- **The `google_event_id`-keyed diff, create/update/delete counts, and
+  `STATUS:CANCELLED` filtering** all match the plan exactly. `event_differs_from_item`
+  compares `summary`/`description`/`scheduled_date`/`scheduled_end_date`/
+  `has_scheduled_time` — a no-op update is skipped, confirmed by
+  `no_op_when_nothing_changed`, which sets up a `MockItemRepo` with **no**
+  `expect_update_by_project`/`expect_create` at all (a call to either panics the mock,
+  which is the assertion).
+- **Not abstracted behind a trait**: `fetch_ical` calls `reqwest::get` directly, so
+  `sync_subscription`'s own unit tests can't exercise the fetch step without a real HTTP
+  call. Per the plan's own verification note ("unit tests against fixture `.ics` text"),
+  tests instead call the private `run_diff` directly — documented inline in the first
+  diff test (`creates_a_new_event_not_previously_imported`) so this isn't rediscovered
+  as a gap later. `fetch_ical`/`sync_subscription`'s fetch-failure path (recording
+  `last_sync_error` without touching existing items) is therefore covered by code
+  inspection only, not a unit test — worth a live smoke test once Stage 5 makes this
+  reachable via a real subscription.
+- 11 new tests: 6 pure `parse_ical` fixture tests (plain timed UTC event, all-day event
+  with DTEND, all-day event without DTEND, TZID-bearing non-UTC event, CANCELLED event,
+  RRULE-bearing event flagged-not-expanded) + 4 `run_diff` tests against `MockItemRepo`
+  (create, update, no-op, delete) + 1 `within_import_window` boundary test.
+- **Verified**: `cargo test` — 433 passed, 0 failed (421 pre-stage + 11 new
+  `calendar_sync` tests + 1 new `items.rs` round-trip test, replacing the raw-SQL Stage 2
+  stopgap test 1-for-1 so the net is +1 there). `cargo check` — clean; the only new
+  warnings are the expected "never used" ones for this whole module (nothing in Stage 3
+  is called from anywhere reachable yet, exactly as planned) plus `CalendarSubscription`
+  finally losing its earlier "never constructed" warning now that Stage 3's own tests
+  construct one.
+- Nothing discovered that changes Stage 4 (the read-only-enforcement/Smithy/web-UI half
+  still to do) or Stage 5's assumptions. Stage 5's `create_calendar_subscription`
+  handler can call `calendar_sync::sync_subscription(&sub, item_repo.as_ref(),
+  calendar_repo.as_ref())` exactly as sketched in that stage's own section — the
+  signature landed unchanged from the plan.
 
 ---
 

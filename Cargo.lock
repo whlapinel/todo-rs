@@ -1114,6 +1114,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ical"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d4bad4eb99ee34e58a1e642114eded65b4ea5ea3c1584971a1afc12a3b927670"
+dependencies = [
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "icu_collections"
 version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2698,9 +2707,11 @@ dependencies = [
  "async-trait",
  "axum",
  "chrono",
+ "chrono-tz",
  "csv",
  "http 0.2.12",
  "hyper",
+ "ical",
  "jsonwebtoken",
  "lettre",
  "libsqlite3-sys",

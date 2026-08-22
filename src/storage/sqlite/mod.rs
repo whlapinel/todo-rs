@@ -538,6 +538,8 @@ fn row_to_item(row: &sqlx::sqlite::SqliteRow) -> Item {
         has_children: row.get::<Option<i64>, _>("has_children").unwrap_or(0) != 0,
         item_type,
         series_id: row.get("series_id"),
+        google_event_id: row.get("google_event_id"),
+        calendar_subscription_id: row.get("calendar_subscription_id"),
     }
 }
 

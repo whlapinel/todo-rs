@@ -31,4 +31,6 @@ askama = "0.16.0"
 thiserror = "2.0.19"
 rrule = "0.14.0"
 async-recursion = "1.1.1"
+ical = "0.10"
+chrono-tz = "0.10"
 

@@ -278,6 +278,16 @@ pub struct Item {
     /// item not materialized from a series. Carried forward on every update (like `project_id`)
     /// since an item's series membership never changes after creation.
     pub series_id: Option<String>,
+    /// The upstream iCal `UID` (or, once Stage 7 lands, a synthetic per-occurrence id
+    /// derived from it) this item was imported from — see
+    /// `docs/google-calendar-import-plan.md`. Set once, at creation, only by
+    /// `service::calendar_sync::sync_subscription`; `None` for every non-imported item.
+    /// Follows `series_id`'s exact precedent: carried forward unchanged on every update,
+    /// never settable via Smithy/CLI/MCP.
+    pub google_event_id: Option<String>,
+    /// The `calendar_subscriptions` row this item was imported from, alongside
+    /// `google_event_id` above. `None` for every non-imported item.
+    pub calendar_subscription_id: Option<String>,
 }
 
 impl Item {

@@ -10,6 +10,7 @@ const ITEM_SELECT: &str =
     "SELECT id, user_id, project_id, parent_item_id, name, description, due_date, scheduled_date, scheduled_end_date, complete, recurrence, recurrence_basis,
             has_due_time, has_scheduled_time, has_end_time,
             item_type, event_type, due_offset_days, assigned_to_user_id, points, source_event_id, series_id,
+            google_event_id, calendar_subscription_id,
             EXISTS(SELECT 1 FROM items c WHERE c.parent_item_id = items.id) AS has_children";
 
 #[async_trait]
@@ -133,8 +134,8 @@ impl ItemRepo for SqliteItemRepo {
         let has_end_time: i64 = item.has_end_time() as i64;
         let item_type: &str = item.kind().as_str();
         sqlx::query(
-            "INSERT INTO items (id, user_id, project_id, parent_item_id, name, description, due_date, scheduled_date, scheduled_end_date, complete, recurrence, recurrence_basis, has_due_time, has_scheduled_time, has_end_time, item_type, event_type, due_offset_days, assigned_to_user_id, points, source_event_id, series_id)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO items (id, user_id, project_id, parent_item_id, name, description, due_date, scheduled_date, scheduled_end_date, complete, recurrence, recurrence_basis, has_due_time, has_scheduled_time, has_end_time, item_type, event_type, due_offset_days, assigned_to_user_id, points, source_event_id, series_id, google_event_id, calendar_subscription_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(&item.user_id)
@@ -158,6 +159,8 @@ impl ItemRepo for SqliteItemRepo {
         .bind(item.points())
         .bind(item.source_event_id())
         .bind(&item.series_id)
+        .bind(&item.google_event_id)
+        .bind(&item.calendar_subscription_id)
         .execute(&self.0)
         .await
         .map_err(db_err)?;
@@ -175,7 +178,7 @@ impl ItemRepo for SqliteItemRepo {
         let item_type: &str = item.kind().as_str();
         let rows = sqlx::query(
             "UPDATE items SET name = ?, description = ?, due_date = ?, scheduled_date = ?, scheduled_end_date = ?, complete = ?, recurrence = ?, recurrence_basis = ?, \
-             has_due_time = ?, has_scheduled_time = ?, has_end_time = ?, parent_item_id = ?, item_type = ?, event_type = ?, due_offset_days = ?, assigned_to_user_id = ?, source_event_id = ?, project_id = ?, series_id = ? \
+             has_due_time = ?, has_scheduled_time = ?, has_end_time = ?, parent_item_id = ?, item_type = ?, event_type = ?, due_offset_days = ?, assigned_to_user_id = ?, source_event_id = ?, project_id = ?, series_id = ?, google_event_id = ?, calendar_subscription_id = ? \
              WHERE id = ? AND user_id = ?",
         )
         .bind(&item.name)
@@ -197,6 +200,8 @@ impl ItemRepo for SqliteItemRepo {
         .bind(item.source_event_id())
         .bind(&item.project_id)
         .bind(&item.series_id)
+        .bind(&item.google_event_id)
+        .bind(&item.calendar_subscription_id)
         .bind(&item.id)
         .bind(&item.user_id)
         .execute(&self.0)
@@ -217,7 +222,7 @@ impl ItemRepo for SqliteItemRepo {
         let item_type: &str = item.kind().as_str();
         let rows = sqlx::query(
             "UPDATE items SET name = ?, description = ?, due_date = ?, scheduled_date = ?, scheduled_end_date = ?, complete = ?, recurrence = ?, recurrence_basis = ?, \
-             has_due_time = ?, has_scheduled_time = ?, has_end_time = ?, parent_item_id = ?, item_type = ?, event_type = ?, due_offset_days = ?, assigned_to_user_id = ?, points = ?, source_event_id = ?, series_id = ? \
+             has_due_time = ?, has_scheduled_time = ?, has_end_time = ?, parent_item_id = ?, item_type = ?, event_type = ?, due_offset_days = ?, assigned_to_user_id = ?, points = ?, source_event_id = ?, series_id = ?, google_event_id = ?, calendar_subscription_id = ? \
              WHERE id = ? AND project_id = ?",
         )
         .bind(&item.name)
@@ -239,6 +244,8 @@ impl ItemRepo for SqliteItemRepo {
         .bind(item.points())
         .bind(item.source_event_id())
         .bind(&item.series_id)
+        .bind(&item.google_event_id)
+        .bind(&item.calendar_subscription_id)
         .bind(&item.id)
         .bind(&item.project_id)
         .execute(&self.0)
@@ -561,35 +568,48 @@ mod tests {
 
     #[tokio::test]
     async fn list_by_calendar_subscription_scopes_to_that_subscription() {
-        // `calendar_subscription_id` isn't a domain `Item` field yet (Stage 4 of
-        // docs/google-calendar-import-plan.md), so this seeds the column directly via
-        // raw SQL rather than through `repo.create`.
         let pool = test_pool().await;
         let repo = SqliteItemRepo(pool.clone());
-        let in_sub = repo.create(&item_in_project("p1", "Dentist")).await.unwrap();
-        let other_sub = repo
-            .create(&item_in_project("p1", "Other subscription"))
+
+        let mut in_sub = item_in_project("p1", "Dentist");
+        in_sub.calendar_subscription_id = Some("sub1".to_string());
+        in_sub.google_event_id = Some("evt1".to_string());
+        repo.create(&in_sub).await.unwrap();
+
+        let mut other_sub = item_in_project("p1", "Other subscription");
+        other_sub.calendar_subscription_id = Some("sub2".to_string());
+        other_sub.google_event_id = Some("evt2".to_string());
+        repo.create(&other_sub).await.unwrap();
+
+        repo.create(&item_in_project("p1", "Not imported"))
             .await
             .unwrap();
-        let not_imported = repo
-            .create(&item_in_project("p1", "Not imported"))
-            .await
-            .unwrap();
-        sqlx::query("UPDATE items SET calendar_subscription_id = 'sub1' WHERE id = ?")
-            .bind(&in_sub)
-            .execute(&pool)
-            .await
-            .unwrap();
-        sqlx::query("UPDATE items SET calendar_subscription_id = 'sub2' WHERE id = ?")
-            .bind(&other_sub)
-            .execute(&pool)
-            .await
-            .unwrap();
-        let _ = not_imported;
 
         let items = repo.list_by_calendar_subscription("sub1").await.unwrap();
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].name, "Dentist");
+    }
+
+    #[tokio::test]
+    async fn google_event_id_and_calendar_subscription_id_round_trip_through_create_and_update() {
+        let pool = test_pool().await;
+        let repo = SqliteItemRepo(pool);
+        let mut item = item_in_project("p1", "Imported Event");
+        item.google_event_id = Some("evt-1".to_string());
+        item.calendar_subscription_id = Some("sub-1".to_string());
+        let id = repo.create(&item).await.unwrap();
+
+        let created = repo.get_by_project("p1", &id).await.unwrap();
+        assert_eq!(created.google_event_id.as_deref(), Some("evt-1"));
+        assert_eq!(created.calendar_subscription_id.as_deref(), Some("sub-1"));
+
+        item.id = id.clone();
+        item.name = "Imported Event (renamed)".to_string();
+        repo.update_by_project(&item).await.unwrap();
+
+        let updated = repo.get_by_project("p1", &id).await.unwrap();
+        assert_eq!(updated.google_event_id.as_deref(), Some("evt-1"));
+        assert_eq!(updated.calendar_subscription_id.as_deref(), Some("sub-1"));
     }
 
     #[tokio::test]

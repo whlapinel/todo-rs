@@ -1,4 +1,5 @@
 pub mod activity_log;
+pub mod calendar_sync;
 pub mod error;
 pub mod import;
 pub mod item_series;
