@@ -99,10 +99,25 @@
     // element's own id survives across opens rather than being replaced by a fresh
     // response's root element. Guard on `!dialog.open` since showModal() throws if called
     // on an already-open dialog.
+    //
+    // Deliberately checks `e.detail.target.matches('dialog')` ONLY — every intended trigger
+    // (row actions into #action-dialog, an ItemError response HX-Retargeted to #error-dialog,
+    // a day-cell/drawer-arrow click hx-targeting #day-drawer directly) already swaps straight
+    // into the dialog element itself, so `e.detail.target` is always the dialog in every real
+    // case. A prior version also fell back to `e.detail.target.querySelector('dialog')` to
+    // catch a dialog nested *inside* some other swap target — but that made ANY full #page
+    // swap on a calendar page force-open the (always-present, often empty) #day-drawer via
+    // showModal(), since it's unconditionally rendered inside calendar_page.html regardless of
+    // whether a date is selected. Because #day-drawer is fully bg-transparent, this opened an
+    // invisible modal that blocked every click on the page until a hard refresh — the bug
+    // reported as "nothing clickable after clicking 'assigned to any' / switching List<->
+    // Calendar view... appears the drawer dialog is open" (docs/issues_and_features.md). The
+    // legitimate "arrive with ?date=... selected" auto-open is handled independently by
+    // calendar_page.html's own has_selected_date-gated inline <script>, which htmx already
+    // executes on every swap (including full #page ones) — so removing the fallback here
+    // doesn't lose that case.
     document.addEventListener('htmx:afterSwap', (e) => {
-      const dialog = e.detail.target.matches?.('dialog')
-        ? e.detail.target
-        : e.detail.target.querySelector?.('dialog');
+      const dialog = e.detail.target.matches?.('dialog') ? e.detail.target : null;
       if (dialog && !dialog.open) dialog.showModal();
     });
 
