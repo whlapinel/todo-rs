@@ -668,7 +668,51 @@ Per this repo's own touch-point checklist convention (new operations must reach 
 
 ### Implementation notes
 
-_(empty until Stage 6 is actually done)_
+Done as planned, with one naming deviation from the plan's literal CLI syntax sketch:
+
+- **CLI naming deviation**: the plan's own prose sketch (`prl projects calendar add
+  --project <id> --url <ical-url>`) implied a nested `calendar` sub-subcommand group,
+  but no command anywhere in `todo-cli` actually nests two levels deep (`Cli` →
+  `Command` → an `X Command` enum is the only nesting pattern in use — confirmed by
+  grepping every `#[derive(Subcommand)]`/`#[command(subcommand)]` site before writing
+  this). Introducing a second nesting level for three commands would have been a new,
+  one-off pattern rather than following precedent, so these landed as three flat
+  `ProjectsCommand` variants instead, matching `AttachTeam`/`DetachTeam`/`SetRole`'s
+  existing compound-PascalCase-name shape (`CalendarAdd`/`CalendarList`/
+  `CalendarRemove`, clap-kebab-cased to `calendar-add`/`calendar-list`/
+  `calendar-remove`). Positional args (`project_id` first, matching every other
+  `ProjectsCommand` variant) rather than the plan's sketched `--project`/`--url`
+  flags, for the same reason — no existing `ProjectsCommand` variant uses flags for
+  its own scoping id.
+- `todo-cli/src/projects.rs`: `CalendarAdd { project_id, url }` →
+  `create_calendar_subscription().project_id(..).ical_url(..).send()`, printing the
+  new subscription's id. `CalendarList { project_id }` →
+  `list_calendar_subscriptions()`, printed as a table (id / last-synced date via the
+  existing `fmt_date_opt` helper / last error or `-` / url) — reused `fmt_date_opt`
+  rather than adding a new formatter, since `CalendarSubscriptionSummary::last_synced_at()`
+  is already the same `Option<&aws_smithy_types::DateTime>` shape every other
+  `fmt_date_opt` call site takes. `CalendarRemove { project_id, subscription_id }` →
+  `delete_calendar_subscription().project_id(..).id(..).send()`.
+- **MCP** (`mcp-server/src/index.ts`): `create_calendar_subscription`/
+  `list_calendar_subscriptions`/`delete_calendar_subscription` tools added right after
+  `detach_team_from_project` in both the tool-definition list and the switch statement,
+  `projectId`-required on all three (matching every other project-scoped tool) plus
+  `icalUrl`/`subscriptionId` required on create/delete respectively. Route directly onto
+  the Stage 5 REST paths (`POST`/`GET`/`DELETE /projects/:projectId/calendar-subscriptions[/:id]`)
+  via the existing `api()` helper, no new plumbing needed. Descriptions call out the
+  read-only-import and ~15-minute background-resync behavior so a caller doesn't have to
+  discover either by trial and error.
+- `docs/prl-user-guide.md`: new "Google Calendar subscriptions" subsection under
+  "## Projects", documenting `calendar-add`/`calendar-list`/`calendar-remove` and the
+  read-only/cascade-delete behavior, matching the section's existing prose style.
+- **Verified**: `cargo test` (root crate) — 446 passed, 0 failed, unchanged from Stage
+  5 (this stage touched no Rust service/storage code, only the CLI crate and the
+  Node/TS MCP server). `cargo check` (root crate) — clean, same 13 pre-existing
+  warnings as every prior stage. `cd todo-cli && cargo check` — clean. `cd mcp-server
+  && npm run build` — clean. `cargo run --bin prl -- projects --help` confirmed the
+  three new subcommands appear with their descriptions.
+- Nothing discovered that changes Stage 7's assumptions — Stage 7 only touches
+  `src/service/calendar_sync.rs`, untouched by this stage.
 
 ---
 

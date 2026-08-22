@@ -459,6 +459,24 @@ prl projects set-role <project-id> <target-user-id> admin
 prl projects set-role <project-id> <target-user-id> member
 ```
 
+### Google Calendar subscriptions
+
+Subscribe a project to a private Google Calendar (its "Secret address in
+iCal format" from Google Calendar's settings) to import its events, read-only,
+into that project's Events screen. A background task re-syncs every ~15
+minutes (and once immediately on subscribe); imported events can't be edited
+or deleted directly — unsubscribe to remove them, or edit the source calendar
+in Google and wait for the next sync. You must be a project admin to
+subscribe or unsubscribe; any project member can list subscriptions.
+
+```sh
+prl projects calendar-add <project-id> <ical-url>
+prl projects calendar-list <project-id>
+prl projects calendar-remove <project-id> <subscription-id>
+```
+
+`calendar-remove` also deletes every event that subscription imported.
+
 ---
 
 ## Recurrence patterns

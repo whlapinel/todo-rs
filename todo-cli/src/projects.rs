@@ -1,4 +1,4 @@
-use crate::helpers::{require_user, unwrap_or_exit};
+use crate::helpers::{fmt_date_opt, require_user, unwrap_or_exit};
 use clap::Subcommand;
 use todo_client::Client;
 
@@ -20,6 +20,15 @@ pub enum ProjectsCommand {
         target_user_id: String,
         /// "admin" or "member"
         role: String,
+    },
+    /// Subscribe a project to a Google Calendar (private iCal URL) — imports its events read-only (you must be a project admin)
+    CalendarAdd { project_id: String, url: String },
+    /// List a project's Google Calendar subscriptions
+    CalendarList { project_id: String },
+    /// Unsubscribe a Google Calendar — also deletes every event it imported (you must be a project admin)
+    CalendarRemove {
+        project_id: String,
+        subscription_id: String,
     },
 }
 
@@ -123,6 +132,60 @@ pub async fn cmd_projects(client: &Client, cmd: ProjectsCommand, user_id: Option
                 "set project member role",
             );
             println!("set {target_user_id}'s role on project {project_id} to {role}");
+        }
+        ProjectsCommand::CalendarAdd { project_id, url } => {
+            let out = unwrap_or_exit(
+                client
+                    .create_calendar_subscription()
+                    .project_id(&project_id)
+                    .ical_url(url)
+                    .send()
+                    .await,
+                "create calendar subscription",
+            );
+            println!("subscribed calendar {} to project {project_id}", out.id());
+        }
+        ProjectsCommand::CalendarList { project_id } => {
+            let out = unwrap_or_exit(
+                client
+                    .list_calendar_subscriptions()
+                    .project_id(&project_id)
+                    .send()
+                    .await,
+                "list calendar subscriptions",
+            );
+            if out.subscriptions().is_empty() {
+                println!("(no calendar subscriptions)");
+                return;
+            }
+            println!(
+                "{:<36}  {:<10}  {:<10}  {}",
+                "ID", "LAST SYNC", "ERROR", "URL"
+            );
+            for s in out.subscriptions() {
+                println!(
+                    "{:<36}  {:<10}  {:<10}  {}",
+                    s.id(),
+                    fmt_date_opt(s.last_synced_at()),
+                    s.last_sync_error().unwrap_or("-"),
+                    s.ical_url()
+                );
+            }
+        }
+        ProjectsCommand::CalendarRemove {
+            project_id,
+            subscription_id,
+        } => {
+            unwrap_or_exit(
+                client
+                    .delete_calendar_subscription()
+                    .project_id(&project_id)
+                    .id(&subscription_id)
+                    .send()
+                    .await,
+                "delete calendar subscription",
+            );
+            println!("unsubscribed calendar {subscription_id} from project {project_id}");
         }
     }
 }

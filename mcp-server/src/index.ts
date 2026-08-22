@@ -439,6 +439,44 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: "create_calendar_subscription",
+      description:
+        "Subscribe a project to a private Google Calendar iCal URL. Its events are imported read-only (create_item/update_item/delete_item reject any item with a googleEventId set) and kept in sync by a background task roughly every 15 minutes, plus immediately on creation. The caller must be a project admin.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          projectId: { type: "string" },
+          icalUrl: { type: "string", description: "The calendar's private 'Secret address in iCal format' URL from Google Calendar settings" },
+        },
+        required: ["projectId", "icalUrl"],
+      },
+    },
+    {
+      name: "list_calendar_subscriptions",
+      description:
+        "List a project's Google Calendar subscriptions (id, icalUrl, lastSyncedAt, lastSyncError). The caller must be a project member.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          projectId: { type: "string" },
+        },
+        required: ["projectId"],
+      },
+    },
+    {
+      name: "delete_calendar_subscription",
+      description:
+        "Unsubscribe a Google Calendar. Also deletes every Item that subscription imported. The caller must be a project admin.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          projectId: { type: "string" },
+          subscriptionId: { type: "string" },
+        },
+        required: ["projectId", "subscriptionId"],
+      },
+    },
+    {
       name: "list_item_series",
       description:
         "List a project's recurring item series (a series is a recurrence rule + anchor date + static fields, materializing either Task or Event occurrences — distinct from a plain recurring item). The caller must be a project member.",
@@ -911,6 +949,28 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
 
       case "detach_team_from_project":
         result = await api("DELETE", `/projects/${args.projectId}/team`, {});
+        break;
+
+      case "create_calendar_subscription":
+        result = await api(
+          "POST",
+          `/projects/${args.projectId}/calendar-subscriptions`,
+          { icalUrl: args.icalUrl }
+        );
+        break;
+
+      case "list_calendar_subscriptions":
+        result = await api(
+          "GET",
+          `/projects/${args.projectId}/calendar-subscriptions`
+        );
+        break;
+
+      case "delete_calendar_subscription":
+        result = await api(
+          "DELETE",
+          `/projects/${args.projectId}/calendar-subscriptions/${args.subscriptionId}`
+        );
         break;
 
       case "list_item_series":
