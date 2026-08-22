@@ -8,16 +8,7 @@ Do not add `Co-Authored-By` trailers to commits.
 
 ## Commands
 
-```sh
-task codegen       # Generate Rust server SDK + TS client from .smithy files (slow first run, cached after)
-task run           # codegen + web-styles build + cargo run
-task build         # codegen + web-styles build + cargo build
-task check         # codegen + cargo check (fastest Rust verify)
-task web-styles    # Build Tailwind CSS + vendor htmx.min.js (outputs to static/)
-task cli-build     # Build the prl CLI binary (todo-cli/)
-task cli-install   # Install prl to ~/.cargo/bin
-cargo test         # Run all Rust tests
-```
+See `Taskfile.yml` for the full task list (`codegen`, `run`, `build`, `check`, `web-styles`, `cli-build`, `cli-install`) plus `cargo test` for the Rust test suite.
 
 Live-server smoke test (requires `TODO_API_URL` + `TODO_API_TOKEN`):
 
@@ -211,68 +202,11 @@ The original generic personal (`/web/items`) and team-scoped (`/web/team-items/:
 
 The tz offset (`new Date().getTimezoneOffset()`) is sent as an `X-Tz-Offset-Minutes` **header** (via a `htmx:configRequest` listener in `base.html`), not a form/query parameter — a parameter there previously leaked into `hx-push-url`'d URLs and broke `hx-select="#page"` navigation. A `tz_offset` cookie (set on every page load) is the fallback for non-htmx requests (bookmarks, hard refresh). See `TzOffset` in `src/web_ui/mod.rs`.
 
-### Tailwind Plus component library (`.vendor/tailwind-plus/`, gitignored)
+Tailwind Plus component restyling (`.vendor/tailwind-plus/`): see `.claude/skills/tailwind-plus-restyle/SKILL.md`.
 
-The user has a Tailwind Plus subscription and downloads component source as zips from their Google Drive when a restyle needs a specific component (this is how the items/team-items/checklists/dashboard/teams/assigned-items Tailwind Plus restyle commits got their markup). `.vendor/tailwind-plus/application-ui-v4/` is the extracted `application-ui-v4.zip` (Tailwind Plus's "Application UI" category) — not committed (`.gitignore`'d, `/.vendor/`), so it must be re-fetched from Drive in a fresh clone or a session that hasn't pulled it down yet. Layout: `html/<category>/<component-group>/NN-variant-name.html` (plain HTML + Tailwind classes, no framework), with sibling `react/` and `vue/` trees for the same components — **always use the `html/` tree**, never `react/`/`vue/`, since this app has no browser-side framework (see the Full Pipeline section above: server-rendered Askama + htmx only). E.g. the month-view calendar used for the Events calendar view is `html/data-display/calendars/02-month-view.html`.
+CLI (`todo-cli/`): see `todo-cli/CLAUDE.md`.
 
-If `.vendor/tailwind-plus/` is missing, ask the user which Drive file to pull (they'll usually know, or it can be found by searching Drive for `application-ui-v4.zip` / similarly-named category zips) rather than assuming — there's no guarantee the same category zip covers whatever component is needed next.
-
-### CLI (`todo-cli/`)
-
-A standalone Rust crate that builds the `prl` binary. Async (`#[tokio::main]`), uses the generated `todo-client` crate directly rather than hand-rolled `reqwest`/JSON structs. `client.rs` builds a `todo_client::Client` via `Config::builder().endpoint_url(...).bearer_token(Token::new(token, None)).build()` — the `@httpBearerAuth` trait (see Smithy section above) generates that `bearer_token` method, so there's no hand-written request interceptor. Config stored at `~/.config/prl/config.toml`. See `docs/prl-user-guide.md` for usage.
-
-`prl projects` (`todo-cli/src/projects.rs`) gives CLI parity for the Project abstraction (see `docs/project-abstraction-plan.md`, stage B6): `list`/`create`/`members`/`attach-team`/`detach-team`/`set-role`, mirroring `prl teams`' own shape one level up. `prl items` (`todo-cli/src/items.rs`) has a `--project <project-id>` flag on `list`/`add`/`done`/`delete`/`get`, **required** as of Stage C3 (`docs/project-abstraction-plan.md`) — those five route exclusively through the `ProjectItem` Smithy operations (`create_project_item`/`get_project_item`/`update_project_item`/`delete_project_item`/`list_project_items`) now; there is no more no-`--project` personal-item fallback, since the legacy personal `Item` Smithy operations it used to fall back to were retired in that same stage. Every user still has exactly one implicit default "Personal" project (auto-created via `ensure_default_project`, called from every login path in `src/auth.rs`), so `--project` isn't asking for something that doesn't exist — the CLI just doesn't default to it automatically today, so omitting the flag is a hard client-side error rather than a silent personal-item fallback. `due`/`assigned` have no `--project` variant — both are deliberately cross-project queries ("what's due", "what's assigned to me across every team"), not scoped to one project. `--assign`/`--points` on `add` are plain optional flags now (no longer specially gated on `--project`, since `--project` is unconditionally required for everything else on `add`), and `done`/`get` round-trip `assignedToUserId`/`points` the same way `dueOffsetDays`/`eventType`/the scheduled fields already do below.
-
-`prl teams set-role`/`activity`/`undo-activity` (`todo-cli/src/teams.rs`) give CLI parity for team role management and the points activity log (see the Per-team roles/Points sections above) — `prl teams members` also now prints each member's role and points balance.
-
-`prl items add` has a `--due-offset-days` flag for setting a child's offset (item-level `--recurrence` was removed when item-level recurrence retired — see Recurrence above; `prl series create --recurrence` is the series-level flag, unrelated). `prl items done` forwards the fetched item's `dueOffsetDays` back on the completion `update_item` call — without this, marking a child item done would have silently wiped its offset, the same class of round-trip bug the frontend had before its own fix.
-
-`prl items add` also has `--item-type <task|event|simple>` and `--event-type <string>` (see Events section above). It rejects `--event-type` client-side unless `--item-type event` is also given, mirroring `Item::validate()`'s own restriction. `prl items done` forwards both back on completion too — `itemType` doesn't strictly need it (the service layer falls back to the item's current type when omitted), but `eventType` does (no such fallback exists for it, by design, since it needs to support being explicitly cleared); this round-trip is only ever a no-op or an Event-to-Event forward now, since a Task/Simple item can no longer have had `eventType` set in the first place.
-
-`prl items add` also has `--scheduled`/`--scheduled-end` (see Scheduled start/end section above), accepting the same `YYYY-MM-DD`-or-Unix-timestamp format as `--due`. `prl items done` forwards `scheduledDate`/`scheduledEndDate`/`hasScheduledTime`/`hasEndTime` back on completion too, for the same no-service-fallback reason `dueOffsetDays`/`eventType` are forwarded.
-
-Build/install separately from the main server (`cargo` commands run from `todo-cli/` or via `task cli-build` / `task cli-install`).
-
-## MCP Server (`mcp-server/`)
-
-A Claude Code MCP server wrapping the todo API. Registered at `~/todo/.mcp.json` — picked up automatically when Claude Code opens this directory.
-
-**Build:**
-```sh
-cd mcp-server && npm install && npm run build
-```
-Output lands in `mcp-server/dist/index.js`. Must be built before the MCP server works.
-
-**Auth — how to get `TODO_API_TOKEN`:**
-
-The MCP server authenticates with a long-lived JWT, minted by `/auth/token`. This now works directly in either auth mode — no more temporarily flipping `TODO_AUTH_MODE` to `internal` to mint one.
-
-1. Log in through the browser: `https://todo.lapinel-fam.club/auth/google` in `internal` mode, or just load the site in `caddy` mode (caddy-security's own Google OAuth portal handles it)
-2. With the session established, visit `https://todo.lapinel-fam.club/auth/token` in the same browser
-3. Copy the `token` value from the JSON response
-4. Paste it into `.mcp.json` as `TODO_API_TOKEN` — the token is valid for 365 days
-
-**`.mcp.json` config** (token is loaded from `.env`, which is gitignored):
-```json
-{
-  "mcpServers": {
-    "todo": {
-      "command": "bash",
-      "args": ["-c", "set -a; source /home/whlapinel/todo/.env; set +a; exec node /home/whlapinel/todo/mcp-server/dist/index.js"]
-    }
-  }
-}
-```
-
-**`.env` file** (gitignored — create at project root):
-```
-TODO_API_URL=https://todo.lapinel-fam.club
-TODO_API_TOKEN=<paste JWT here>
-```
-
-**Project tools** (see `docs/project-abstraction-plan.md`, stage B7): `list_projects`/`create_project`/`get_project`/`update_project`/`delete_project`/`list_project_members`/`set_project_member_role`/`attach_team_to_project`/`detach_team_from_project`, mirroring `prl projects`' shape. `list_items`/`get_item`/`create_item`/`update_item`/`delete_item` have a `projectId` parameter, **required** as of Stage C3 (`projectId` is in each tool's JSON-Schema `required` list in `mcp-server/src/index.ts`) — those five route exclusively through the `ProjectItem` operations now, mirroring `prl items`' own `--project` above. `list_items_due`/`list_assigned_items` have no `projectId` variant, same reasoning as `prl items due`/`assigned`. `create_item`/`update_item`'s `assignedToUserId`/`points` are plain optional parameters now (no longer conditionally required on `projectId`, since `projectId` is unconditionally required for everything else on those tools).
-
-A separate, older set of tools — `list_team_items`/`get_team_item`/`create_team_item`/`update_team_item`/`delete_team_item` — used to exist here and call `/teams/:teamId/items...` REST paths; that route was never re-wired to anything after `TeamItem`'s Smithy surface was removed in Stage C3, so every call from those five 404ed against the live server (evidently missed when Stage B7 "repoint[ed] item tools at `ProjectItem`" — only the personal-item-shaped tools were repointed, not this team-item-shaped set). Removed rather than repointed, since the `list_items`/`get_item`/`create_item`/`update_item`/`delete_item` family above already covers team-backed projects via `projectId`.
+MCP Server (`mcp-server/`): see `mcp-server/CLAUDE.md`.
 
 ---
 
