@@ -11,8 +11,8 @@ use crate::storage::sqlite::{
     ActivityLogRepo, DueItem, ItemRepo, ItemSeriesRepo, ProjectRepo, TeamRepo, UserRepo,
 };
 use askama::Template;
-use axum::extract::{Extension, Form, Path, Query};
-use axum::response::Html;
+use axum::extract::{Extension, Form, Path, Query, RawQuery};
+use axum::response::{Html, Redirect};
 use chrono::{DateTime, Datelike, Duration, NaiveDate, Utc};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -611,6 +611,22 @@ pub(crate) fn dashboard_items_inner_html(rows: &[String]) -> String {
         "<li class=\"py-3 text-sm text-gray-500 dark:text-gray-400\">No items.</li>".to_string()
     } else {
         rows.concat()
+    }
+}
+
+/// Stage 6 of docs/calendar-day-drawer-plan.md: `.../dashboard/calendar` used to be this
+/// screen's calendar view — now that the calendar lives at the base `.../dashboard` path
+/// instead, this is kept alive only as a redirect (cheap insurance against a stale link or
+/// bookmark), forwarding whatever query string it was given so a bookmarked
+/// `?year=...&date=...` still lands on the same day.
+pub async fn redirect_project_dashboard_calendar(
+    Path(project_id): Path<String>,
+    RawQuery(query): RawQuery,
+) -> Redirect {
+    let base = format!("/web/projects/{project_id}/dashboard");
+    match query {
+        Some(q) if !q.is_empty() => Redirect::to(&format!("{base}?{q}")),
+        _ => Redirect::to(&base),
     }
 }
 

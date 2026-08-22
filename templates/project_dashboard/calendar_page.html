@@ -8,7 +8,7 @@
     </h1>
     <div class="flex items-center gap-x-3">
       <div class="flex items-center rounded-md bg-white shadow-xs outline -outline-offset-1 outline-gray-300 dark:bg-white/10 dark:shadow-none dark:outline-white/5">
-        <a href="/web/projects/{{ project_id }}/dashboard/calendar?year={{ prev_year }}&month={{ prev_month }}{% if assigned_to_any %}&assignedToAny=1{% endif %}"
+        <a href="/web/projects/{{ project_id }}/dashboard?year={{ prev_year }}&month={{ prev_month }}{% if assigned_to_any %}&assignedToAny=1{% endif %}"
            class="flex h-9 w-9 items-center justify-center rounded-l-md text-gray-400 hover:bg-gray-50 hover:text-gray-500 dark:hover:bg-white/10 dark:hover:text-white">
           <span class="sr-only">Previous month</span>
           <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" class="size-5">
@@ -16,7 +16,7 @@
           </svg>
         </a>
         <span class="h-5 w-px bg-gray-300 dark:bg-white/10"></span>
-        <a href="/web/projects/{{ project_id }}/dashboard/calendar?year={{ next_year }}&month={{ next_month }}{% if assigned_to_any %}&assignedToAny=1{% endif %}"
+        <a href="/web/projects/{{ project_id }}/dashboard?year={{ next_year }}&month={{ next_month }}{% if assigned_to_any %}&assignedToAny=1{% endif %}"
            class="flex h-9 w-9 items-center justify-center rounded-r-md text-gray-400 hover:bg-gray-50 hover:text-gray-500 dark:hover:bg-white/10 dark:hover:text-white">
           <span class="sr-only">Next month</span>
           <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" class="size-5">
@@ -33,12 +33,12 @@
       </div>
       <label class="text-sm text-gray-600 flex items-center gap-x-1 dark:text-gray-400">
         <input type="checkbox" name="assignedToAny" value="1" {% if assigned_to_any %}checked{% endif %}
-          hx-get="/web/projects/{{ project_id }}/dashboard/calendar?year={{ year }}&month={{ month }}{% if let Some(d) = selected_date_iso %}&date={{ d }}&type={{ active_type }}{% endif %}"
+          hx-get="/web/projects/{{ project_id }}/dashboard?year={{ year }}&month={{ month }}{% if let Some(d) = selected_date_iso %}&date={{ d }}&type={{ active_type }}{% endif %}"
           hx-trigger="change" hx-target="#page" hx-select="#page" hx-swap="innerHTML" hx-push-url="true"
           class="size-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-600 dark:border-white/20 dark:bg-white/5" />
         Assigned to Any
       </label>
-      <a href="/web/projects/{{ project_id }}/dashboard{% if assigned_to_any %}?assignedToAny=1{% endif %}" hx-target="#page" hx-select="#page" hx-swap="innerHTML"
+      <a href="/web/projects/{{ project_id }}/dashboard/list{% if assigned_to_any %}?assignedToAny=1{% endif %}" hx-target="#page" hx-select="#page" hx-swap="innerHTML"
          class="inline-flex items-center justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-xs inset-ring inset-ring-gray-300 hover:bg-gray-50 dark:bg-white/10 dark:text-white dark:shadow-none dark:inset-ring-white/5 dark:hover:bg-white/20">List view</a>
     </div>
   </div>
@@ -63,7 +63,7 @@
       <button type="button" data-date="{{ day.date }}"
         hx-get="/web/projects/{{ project_id }}/dashboard/calendar/day?date={{ day.date }}{% if assigned_to_any %}&assignedToAny=1{% endif %}"
         hx-target="#day-drawer" hx-select="unset" hx-swap="innerHTML"
-        hx-push-url="/web/projects/{{ project_id }}/dashboard/calendar?year={{ year }}&month={{ month }}&date={{ day.date }}{% if assigned_to_any %}&assignedToAny=1{% endif %}"
+        hx-push-url="/web/projects/{{ project_id }}/dashboard?year={{ year }}&month={{ month }}&date={{ day.date }}{% if assigned_to_any %}&assignedToAny=1{% endif %}"
         class="relative flex min-h-24 w-full flex-col items-start px-2 py-2 text-left {% if day.is_current_month %}bg-white dark:bg-gray-900{% else %}bg-gray-50 dark:bg-gray-800/50{% endif %} hover:bg-gray-100 focus:z-10 focus:outline-none dark:hover:bg-white/5 {% if day.is_selected %}ring-2 ring-inset ring-indigo-500{% endif %}">
         <time datetime="{{ day.date }}"
               class="relative {% if !day.is_current_month %}opacity-50{% endif %} {% if day.is_today %}flex size-6 items-center justify-center rounded-full bg-indigo-600 font-semibold text-white dark:bg-indigo-500{% endif %}">{{ day.day_number }}</time>

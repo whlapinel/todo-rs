@@ -67,8 +67,9 @@ use web_ui::teams::*;
 
 fn build_web_router() -> Router {
     Router::new()
-        .route("/dashboard", get(main_dashboard_page))
-        .route("/dashboard/calendar", get(main_dashboard_calendar_page))
+        .route("/dashboard", get(main_dashboard_calendar_page))
+        .route("/dashboard/list", get(main_dashboard_page))
+        .route("/dashboard/calendar", get(redirect_main_dashboard_calendar))
         .route(
             "/dashboard/calendar/day",
             get(main_dashboard_calendar_day_fragment),
@@ -301,11 +302,15 @@ fn build_web_router() -> Router {
         )
         .route(
             "/projects/:project_id/dashboard",
+            get(project_dashboard_calendar_page),
+        )
+        .route(
+            "/projects/:project_id/dashboard/list",
             get(project_dashboard_page),
         )
         .route(
             "/projects/:project_id/dashboard/calendar",
-            get(project_dashboard_calendar_page),
+            get(redirect_project_dashboard_calendar),
         )
         .route(
             "/projects/:project_id/dashboard/calendar/day",
