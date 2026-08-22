@@ -736,4 +736,100 @@ This is the piece `family-board` never had to solve (it doesn't expand recurrenc
 
 ### Implementation notes
 
-_(empty until Stage 7 is actually done)_
+Done as planned, with the API details confirmed against this repo's own already-vendored
+`rrule = "0.14.0"` (already a dependency, already used by `src/domain/recurrence.rs` for
+the English-phrase recurrence parser's own expansion — no new crate added, contrary to
+the plan's expectation that this would need a fresh dependency) rather than assumed from
+memory or docs.rs summaries — the crate's real source was read directly from
+`~/.cargo/registry/src/.../rrule-0.14.0/` to confirm `RRuleSet`'s exact builder shape
+(`RRuleSet::new(dt_start).rrule(validated).exdate(...).after(...).before(...).all(limit)`)
+and `rrule::Tz`'s `From<chrono_tz::Tz>` impl, before writing any expansion code:
+
+- **`ParsedIcalEvent` gained five fields**, exactly as sketched: `rrule: Option<String>`
+  (raw `RRULE` value), `exdates: Vec<DateTime<Utc>>`, `tz: chrono_tz::Tz` (the zone
+  `DTSTART` resolved in — needed so expansion respects local wall-clock time across DST,
+  not a fixed UTC offset), `recurrence_id: Option<DateTime<Utc>>` (`Some` only on a
+  `RECURRENCE-ID`-bearing override VEVENT, holding that occurrence's *original* unmodified
+  timestamp), and `cancelled: bool` (`true` only for a cancelled *override* — a plain
+  cancelled non-override event is still dropped entirely at parse time, unchanged from
+  Stage 3).
+- **`parse_dt_property` refactored into a shared `parse_dt_value(value, params)`** so the
+  same TZID-aware parsing logic (unchanged from Stage 3) is reusable for `DTSTART`/`DTEND`/
+  `RECURRENCE-ID` (single value) and `EXDATE` (a property whose value can be a
+  comma-separated list of instants sharing one set of params — RFC 5545 permits this
+  and real feeds use it). Return type widened from `(DateTime<Utc>, bool)` to
+  `(DateTime<Utc>, bool, chrono_tz::Tz)`, the third element being the resolved zone
+  (`Tz::UTC` for an all-day date, a `Z`-suffixed value, or a `TZID`-less/unresolvable
+  local value — matching Stage 3's existing UTC-fallback precedent exactly).
+- **`parse_vevent`'s cancellation check narrowed**: `STATUS:CANCELLED` still drops a
+  plain/master event entirely (`recurrence_id.is_none()`, unchanged behavior — confirmed
+  by the pre-existing `skips_a_cancelled_event` test still passing unmodified), but a
+  cancelled *override* (`RECURRENCE-ID` present) is now parsed fully with `cancelled: true`
+  rather than filtered out — `sync_subscription` needs that data to know which slot to
+  drop, the same way an `EXDATE` does.
+- **`expand_master_event(master, overrides, now) -> Result<Vec<ParsedIcalEvent>, String>`**
+  (new, `src/service/calendar_sync.rs`): builds an `RRuleSet` from `master.rrule` parsed
+  via `rrule::RRule<Unvalidated>::from_str` + `.build(dt_start)` (confirmed this one-step
+  `build` — validate-and-construct-the-set together — exists on `RRule<Unvalidated>`
+  directly, simpler than the plan's sketched two-step `validate` + `RRuleSet::new(...).rrule(...)`),
+  adds every `master.exdates` entry via `.exdate(...)`, then queries
+  `.after(window_start).before(window_end).all(RECURRING_MAX_OCCURRENCES)` where the
+  window is `now - 7d` to `now + 180d` (`RECURRING_WINDOW_PAST_DAYS`/
+  `RECURRING_WINDOW_FUTURE_DAYS`, exactly the constants the Context section specified).
+  Each returned occurrence's *original* timestamp becomes
+  `"{uid}::{original_start.to_rfc3339()}"`; if an override matches that original timestamp
+  in `overrides` its fields replace the generated ones (same synthetic id) unless
+  `ov.cancelled`, in which case the slot is dropped (`filter_map` returning `None`) —
+  exactly the plan's override/cancellation semantics. `RECURRING_MAX_OCCURRENCES = 500` is
+  a generous safety cap (not expected to bind — the ~187-day window holds ~187 occurrences
+  even at daily frequency) with a `tracing::warn!` if `RRuleResult::limited` ever fires.
+  `Err(String)` only for an unparseable/invalid `RRULE`; the caller counts this into
+  `SyncSummary::skipped_recurring` (redefined from Stage 3's "every recurring event,
+  unconditionally" to "recurring events whose RRULE failed to expand") rather than
+  failing the whole sync.
+- **`sync_subscription` partitions `parse_ical`'s flat output three ways** — a
+  `recurrence_id.is_some()` VEVENT into an `overrides: HashMap<(uid, recurrence_id),
+  ParsedIcalEvent>`, an `has_rrule` VEVENT into `masters`, everything else into
+  `non_recurring` — then calls `expand_master_event` per master and appends every
+  expansion's output straight into `importable` alongside the (still separately
+  window-filtered) non-recurring events. **No changes to `run_diff` at all** — the plan's
+  central claim that expanded occurrences' deterministic synthetic ids let the existing
+  `google_event_id`-keyed diff handle create/update/delete unchanged held exactly as
+  predicted, confirmed by `run_diff_creates_items_for_each_expanded_recurring_occurrence`
+  (a `FREQ=WEEKLY;COUNT=3` master's 3 expanded occurrences flow through `run_diff`
+  unmodified and produce 3 plain creates).
+- **Window sliding needed no special-casing**, per the plan's own prediction: an aged-out
+  occurrence simply isn't regenerated by the next sync's `expand_master_event` call, so it
+  falls out of `importable` and is deleted via the ordinary diff-delete path — nothing
+  added to `run_diff` to recognize this as "expected churn" versus a real deletion, since
+  from the diff's perspective they're identical and that's fine (a code comment on the two
+  window constants notes this instead of touching the diff logic).
+- **9 new tests**, all against the pure `expand_master_event`/`parse_ical` functions (no
+  network, following Stage 3's own precedent of not abstracting `fetch_ical` behind a
+  trait): weekly expansion within the window (asserts count, exact 7-day spacing, synthetic
+  id format, and every occurrence falling inside `[now-7d, now+180d]` rather than a
+  brittle magic-number count), `EXDATE` exclusion, a `RECURRENCE-ID` override (moved
+  time + renamed summary, matched and re-keyed under the *original* timestamp), a
+  cancelled-override slot drop, an unparseable-`RRULE` error case, plus 4 pure `parse_ical`
+  fixture tests (`RRULE` value capture, multi-value comma-separated `EXDATE` + a
+  `RECURRENCE-ID` override VEVENT parsed together from one feed, and a cancelled override
+  surviving parse with `cancelled: true`) — and the one `run_diff` integration test above.
+- **The DST correctness case the plan flagged as the highest-risk part of this whole
+  stage got its own dedicated test**
+  (`expand_master_event_respects_local_wall_clock_across_a_dst_transition`): a weekly 9am
+  `America/New_York` master spanning the 2026-11-01 fall-back transition is asserted to
+  stay pinned to 9am *local* time on both sides (13:00 UTC before the transition during
+  EDT, 14:00 UTC after during EST) rather than drifting to a fixed UTC offset — this is
+  exactly the bug class `family-board`'s own non-recurring-only `parse_ical_dt` never had
+  to face, and confirms `rrule::Tz`'s `chrono::TimeZone` impl normalizes correctly across
+  the transition without any extra handling needed in this module's own code.
+- **Verified**: `cargo test` — 455 passed, 0 failed (446 pre-stage + 9 new). `task check`/
+  `cargo check` — clean, the same 13 pre-existing warnings as every prior stage, none new.
+  No live smoke test against a real Google Calendar recurring event was done this stage
+  (the plan's own verification note suggested one) — flagging this as a worthwhile
+  follow-up before fully trusting this against production feeds, since fixture-`.ics`
+  coverage, however thorough, can't rule out a real calendar exporting an `RRULE`/
+  `EXDATE`/`RECURRENCE-ID` shape these tests didn't anticipate.
+- Nothing else discovered that changes any downstream assumption — this was the last
+  planned stage; the whole `docs/google-calendar-import-plan.md` feature is now
+  code-complete pending that live smoke test.

@@ -1,4 +1,4 @@
-//! Google Calendar (iCal) import — see docs/google-calendar-import-plan.md, Stage 3.
+//! Google Calendar (iCal) import — see docs/google-calendar-import-plan.md, Stages 3 & 7.
 //!
 //! Fetches a project admin's private iCal feed, parses it, and diffs it against the
 //! `Item` rows already imported from that `CalendarSubscription` (keyed on
@@ -8,15 +8,25 @@
 //! process, and Stage 4's read-only guard on those functions would otherwise reject
 //! the sync's own writes to an already-imported item.
 //!
-//! RRULE-bearing (recurring) events are parsed but never imported here — they're
-//! counted into `SyncSummary::skipped_recurring` and otherwise ignored until Stage 7
-//! adds RRULE expansion.
+//! RRULE-bearing (recurring) master events are expanded into one synthetic pseudo-event
+//! per occurrence (`expand_master_event`, Stage 7) within a tight, sliding window
+//! (`RECURRING_WINDOW_PAST_DAYS`/`RECURRING_WINDOW_FUTURE_DAYS`) — each occurrence gets a
+//! deterministic `"{uid}::{occurrence_start_rfc3339}"` id derived from its own
+//! *unmodified* RRULE-computed timestamp, so the existing `google_event_id`-keyed diff in
+//! `run_diff` handles create/update/delete for expanded occurrences with no changes of its
+//! own. `RECURRENCE-ID`-bearing override VEVENTs (RFC 5545's "this one occurrence was
+//! moved/renamed/cancelled" mechanism) are matched to their slot by that same original
+//! timestamp and swapped in before the diff runs; a `STATUS:CANCELLED` override removes
+//! its slot entirely, the same as an `EXDATE`. `SyncSummary::skipped_recurring` counts
+//! master events whose `RRULE` failed to parse/expand (not, as in Stage 3, every
+//! recurring event unconditionally).
 
 use crate::domain::calendar_subscription::CalendarSubscription;
 use crate::domain::item::{Item, ItemType, Recurrence, Schedule};
 use crate::storage::sqlite::{CalendarSubscriptionRepo, ItemRepo, RepoError};
 use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use chrono_tz::Tz;
+use rrule::{RRule, RRuleError, Tz as RTz, Unvalidated};
 use std::collections::{HashMap, HashSet};
 use std::io::BufReader;
 use std::str::FromStr;
@@ -31,6 +41,24 @@ const IMPORT_WINDOW_PAST_DAYS: i64 = 30;
 /// expansions — unlike Stage 7's much tighter recurring-occurrence window.
 const IMPORT_WINDOW_FUTURE_DAYS: i64 = 365;
 
+/// Recurring-event occurrences older than this (relative to "now" at sync time) stop
+/// being expanded/tracked. Much tighter than the non-recurring window above since a
+/// recurring series generates one row *per occurrence* — an aged-out occurrence simply
+/// falls out of `run_diff`'s freshly-parsed set and is deleted via the ordinary
+/// diff-delete path, exactly like any other no-longer-present event (expected, routine
+/// churn for a recurring series, not a sign of anything wrong).
+const RECURRING_WINDOW_PAST_DAYS: i64 = 7;
+/// Recurring-event occurrences further in the future than this are not expanded. On the
+/// next sync the window has slid forward, so newly-in-range future occurrences appear —
+/// no special "window sliding" logic needed beyond re-running the same fixed-width query
+/// relative to the new "now".
+const RECURRING_WINDOW_FUTURE_DAYS: i64 = 180;
+/// Upper bound passed to `RRuleSet::all` — the widest plausible recurring window
+/// (187 days) expanded at a daily frequency is ~187 occurrences, so this is a generous
+/// safety cap against a degenerate/malformed RRULE (e.g. sub-hourly), not a limit
+/// expected to bind in practice. `RRuleResult::limited` is logged if it ever does.
+const RECURRING_MAX_OCCURRENCES: u16 = 500;
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParsedIcalEvent {
     pub uid: String,
@@ -39,9 +67,31 @@ pub struct ParsedIcalEvent {
     pub start: DateTime<Utc>,
     pub end: Option<DateTime<Utc>>,
     pub all_day: bool,
-    /// `true` if the VEVENT carries an `RRULE` — Stage 3 never imports these, only
-    /// counts them (see `SyncSummary::skipped_recurring`). Stage 7 expands them.
+    /// `true` if the VEVENT carries an `RRULE` — this is the *master* event of a
+    /// recurring series, expanded by `expand_master_event` rather than imported as-is.
     pub has_rrule: bool,
+    /// The raw `RRULE` value string, present only when `has_rrule`. Stage 7.
+    pub rrule: Option<String>,
+    /// `EXDATE` instants (UTC), present only when `has_rrule` — occurrences to exclude
+    /// from this master's expansion. Stage 7.
+    pub exdates: Vec<DateTime<Utc>>,
+    /// The zone `DTSTART` (and so `RRULE`/`EXDATE`) was resolved in. Recurrence must
+    /// expand against local wall-clock time, not a fixed UTC offset, so e.g. a weekly
+    /// 9am `America/New_York` event stays 9am local across a DST transition rather than
+    /// drifting by an hour in UTC. Stage 7.
+    pub tz: Tz,
+    /// `Some(original_occurrence_start)` when this VEVENT is a `RECURRENCE-ID`-bearing
+    /// override of one occurrence of a recurring series sharing the same `uid` — the
+    /// value is that occurrence's *original*, unmodified start time, which is how it's
+    /// matched back to the expanded slot it overrides. Stage 7.
+    pub recurrence_id: Option<DateTime<Utc>>,
+    /// `true` for a `RECURRENCE-ID`-bearing override whose own `STATUS` is `CANCELLED` —
+    /// meaning this one occurrence should be dropped from its series, like an implicit
+    /// `EXDATE`. Never `true` on anything else: a `STATUS:CANCELLED` VEVENT with no
+    /// `RECURRENCE-ID` is filtered out of `parse_ical`'s output entirely (unchanged from
+    /// Stage 3 — see `parse_vevent`), since only an override's cancellation needs to
+    /// survive as data (to know *which* slot to drop). Stage 7.
+    pub cancelled: bool,
 }
 
 #[derive(Debug)]
@@ -106,7 +156,16 @@ fn parse_vevent(vevent: &ical::parser::ical::component::IcalEvent) -> Option<Par
     let find_prop = |name: &str| vevent.properties.iter().find(|p| p.name == name);
     let prop_value = |name: &str| find_prop(name).and_then(|p| p.value.as_deref());
 
-    if prop_value("STATUS") == Some("CANCELLED") {
+    let recurrence_id = find_prop("RECURRENCE-ID")
+        .and_then(parse_dt_property)
+        .map(|(dt, _, _)| dt);
+    let is_cancelled = prop_value("STATUS") == Some("CANCELLED");
+    // A plain (non-override) cancelled event is dropped entirely, same as Stage 3 — it
+    // was never imported and shouldn't be now. A cancelled *override* (RECURRENCE-ID
+    // set) has to survive as data, though: `sync_subscription` needs it to know which
+    // occurrence of the series to drop, so it's parsed fully with `cancelled: true`
+    // rather than filtered out here.
+    if is_cancelled && recurrence_id.is_none() {
         return None;
     }
 
@@ -116,15 +175,23 @@ fn parse_vevent(vevent: &ical::parser::ical::component::IcalEvent) -> Option<Par
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string());
     let has_rrule = find_prop("RRULE").is_some();
+    let rrule = prop_value("RRULE").map(str::to_string);
 
-    let (start, all_day) = parse_dt_property(find_prop("DTSTART")?)?;
+    let (start, all_day, tz) = parse_dt_property(find_prop("DTSTART")?)?;
 
     let parsed_end = find_prop("DTEND")
         .and_then(parse_dt_property)
-        .map(|(dt, _)| dt);
+        .map(|(dt, _, _)| dt);
     // RFC 5545: an all-day VEVENT with no DTEND defaults to a 1-day duration — its
     // (exclusive) end is simply the day after DTSTART.
     let end = parsed_end.or_else(|| all_day.then(|| start + Duration::days(1)));
+
+    let exdates = vevent
+        .properties
+        .iter()
+        .filter(|p| p.name == "EXDATE")
+        .flat_map(parse_exdate_values)
+        .collect();
 
     Some(ParsedIcalEvent {
         uid,
@@ -134,44 +201,69 @@ fn parse_vevent(vevent: &ical::parser::ical::component::IcalEvent) -> Option<Par
         end,
         all_day,
         has_rrule,
+        rrule,
+        exdates,
+        tz,
+        recurrence_id,
+        cancelled: is_cancelled,
     })
 }
 
-/// Resolves one `DTSTART`/`DTEND`-shaped property to (UTC instant, is-all-day).
+/// Resolves one `DTSTART`/`DTEND`/`RECURRENCE-ID`-shaped property to (UTC instant,
+/// is-all-day, resolved zone).
 ///
 /// TZID handling is the actual fix over `family-board`'s `parse_ical_dt` (which
 /// silently treated any non-`Z` local time as UTC): a `TZID` param, when present, is
 /// resolved via `chrono_tz` and the naive local time is localized in that zone before
 /// converting to UTC. Falls back to treating the naive value as UTC only when the
 /// value already ends in `Z`, or there's no usable `TZID` at all.
-fn parse_dt_property(prop: &ical::property::Property) -> Option<(DateTime<Utc>, bool)> {
-    let val = prop.value.as_deref()?;
+fn parse_dt_property(prop: &ical::property::Property) -> Option<(DateTime<Utc>, bool, Tz)> {
+    parse_dt_value(prop.value.as_deref()?, prop.params.as_ref())
+}
 
-    let is_all_day = prop
-        .params
-        .as_ref()
+/// A single comma-separated `EXDATE` value can list multiple instants sharing the same
+/// `TZID`/`VALUE` params — this parses every one of them (an `EXDATE` property with a
+/// single value is just the one-element case).
+fn parse_exdate_values(prop: &ical::property::Property) -> Vec<DateTime<Utc>> {
+    let Some(val) = prop.value.as_deref() else {
+        return Vec::new();
+    };
+    val.split(',')
+        .filter_map(|part| parse_dt_value(part.trim(), prop.params.as_ref()))
+        .map(|(dt, _, _)| dt)
+        .collect()
+}
+
+fn parse_dt_value(
+    val: &str,
+    params: Option<&Vec<(String, Vec<String>)>>,
+) -> Option<(DateTime<Utc>, bool, Tz)> {
+    let is_all_day = params
         .and_then(|params| params.iter().find(|(k, _)| k == "VALUE"))
         .map(|(_, vals)| vals.iter().any(|v| v == "DATE"))
         .unwrap_or(val.len() == 8);
 
     if is_all_day {
         let date = NaiveDate::parse_from_str(val, "%Y%m%d").ok()?;
-        return Some((Utc.from_utc_datetime(&date.and_hms_opt(0, 0, 0)?), true));
+        return Some((
+            Utc.from_utc_datetime(&date.and_hms_opt(0, 0, 0)?),
+            true,
+            Tz::UTC,
+        ));
     }
 
     if let Some(stripped) = val.strip_suffix('Z') {
         let naive = NaiveDateTime::parse_from_str(stripped, "%Y%m%dT%H%M%S").ok()?;
-        return Some((Utc.from_utc_datetime(&naive), false));
+        return Some((Utc.from_utc_datetime(&naive), false, Tz::UTC));
     }
 
     let naive = NaiveDateTime::parse_from_str(val, "%Y%m%dT%H%M%S").ok()?;
-    let tzid = prop
-        .params
-        .as_ref()
+    let tzid = params
         .and_then(|params| params.iter().find(|(k, _)| k == "TZID"))
         .and_then(|(_, vals)| vals.first());
+    let resolved_tz = tzid.and_then(|tzid| Tz::from_str(tzid).ok());
 
-    let localized = tzid.and_then(|tzid| Tz::from_str(tzid).ok()).and_then(|tz| {
+    let localized = resolved_tz.and_then(|tz| {
         match tz.from_local_datetime(&naive) {
             chrono::LocalResult::Single(dt) => Some(dt.with_timezone(&Utc)),
             // A local time that maps to two UTC instants (a fall-back DST transition) —
@@ -182,7 +274,11 @@ fn parse_dt_property(prop: &ical::property::Property) -> Option<(DateTime<Utc>, 
         }
     });
 
-    Some((localized.unwrap_or_else(|| Utc.from_utc_datetime(&naive)), false))
+    Some((
+        localized.unwrap_or_else(|| Utc.from_utc_datetime(&naive)),
+        false,
+        resolved_tz.unwrap_or(Tz::UTC),
+    ))
 }
 
 fn within_import_window(start: DateTime<Utc>, now: DateTime<Utc>) -> bool {
@@ -196,7 +292,107 @@ pub struct SyncSummary {
     pub created: usize,
     pub updated: usize,
     pub deleted: usize,
+    /// Master events whose `RRULE` failed to parse or expand — every other recurring
+    /// event is expanded into per-occurrence pseudo-events and imported normally (Stage
+    /// 7). Not a count of "recurring events, unconditionally skipped" the way it was in
+    /// Stage 3.
     pub skipped_recurring: usize,
+}
+
+/// Expands one `RRULE`-bearing master event into its individual occurrences within the
+/// recurring import window, applying any `RECURRENCE-ID` override (and dropping any
+/// `STATUS:CANCELLED` override's slot) along the way. Each occurrence comes back as an
+/// already-"final" `ParsedIcalEvent` — `has_rrule: false`, `uid` replaced with a
+/// deterministic `"{uid}::{original_occurrence_start_rfc3339}"` synthetic id — so
+/// `run_diff`'s existing `google_event_id`-keyed diff needs no changes to create/update/
+/// delete these exactly like any plain, non-recurring imported event.
+///
+/// `Err` only when the `RRULE` string itself can't be parsed/validated by the `rrule`
+/// crate (a malformed feed) — the caller counts this into `SyncSummary::skipped_recurring`
+/// rather than failing the whole sync.
+fn expand_master_event(
+    master: &ParsedIcalEvent,
+    overrides: &HashMap<(String, DateTime<Utc>), ParsedIcalEvent>,
+    now: DateTime<Utc>,
+) -> Result<Vec<ParsedIcalEvent>, String> {
+    let rrule_str = master
+        .rrule
+        .as_deref()
+        .ok_or_else(|| "master event has no RRULE".to_string())?;
+    let rtz: RTz = master.tz.into();
+    let dt_start = master.start.with_timezone(&rtz);
+
+    let unvalidated: RRule<Unvalidated> = rrule_str
+        .parse()
+        .map_err(|e: RRuleError| format!("invalid RRULE {rrule_str:?}: {e}"))?;
+    let mut set = unvalidated
+        .build(dt_start)
+        .map_err(|e| format!("invalid RRULE {rrule_str:?} for DTSTART {dt_start}: {e}"))?;
+    for exdate in &master.exdates {
+        set = set.exdate(exdate.with_timezone(&rtz));
+    }
+
+    let window_start = (now - Duration::days(RECURRING_WINDOW_PAST_DAYS)).with_timezone(&rtz);
+    let window_end = (now + Duration::days(RECURRING_WINDOW_FUTURE_DAYS)).with_timezone(&rtz);
+    let result = set
+        .after(window_start)
+        .before(window_end)
+        .all(RECURRING_MAX_OCCURRENCES);
+    if result.limited {
+        tracing::warn!(
+            uid = %master.uid,
+            cap = RECURRING_MAX_OCCURRENCES,
+            "recurring calendar event hit the expansion cap within its import window"
+        );
+    }
+
+    // A master's own DTEND (if any) is a fixed offset from its DTSTART — each generated
+    // occurrence's end is that same offset applied to its own (possibly overridden)
+    // start, not the master's literal DTEND instant.
+    let duration = master.end.map(|end| end - master.start);
+
+    Ok(result
+        .dates
+        .into_iter()
+        .filter_map(|occurrence| {
+            let original_start = occurrence.with_timezone(&Utc);
+            let synthetic_id = format!("{}::{}", master.uid, original_start.to_rfc3339());
+
+            match overrides.get(&(master.uid.clone(), original_start)) {
+                // A cancelled override removes this one occurrence from the series,
+                // exactly like an EXDATE would have.
+                Some(ov) if ov.cancelled => None,
+                Some(ov) => Some(ParsedIcalEvent {
+                    uid: synthetic_id,
+                    summary: ov.summary.clone(),
+                    description: ov.description.clone(),
+                    start: ov.start,
+                    end: ov.end,
+                    all_day: ov.all_day,
+                    has_rrule: false,
+                    rrule: None,
+                    exdates: Vec::new(),
+                    tz: ov.tz,
+                    recurrence_id: None,
+                    cancelled: false,
+                }),
+                None => Some(ParsedIcalEvent {
+                    uid: synthetic_id,
+                    summary: master.summary.clone(),
+                    description: master.description.clone(),
+                    start: original_start,
+                    end: duration.map(|d| original_start + d),
+                    all_day: master.all_day,
+                    has_rrule: false,
+                    rrule: None,
+                    exdates: Vec::new(),
+                    tz: master.tz,
+                    recurrence_id: None,
+                    cancelled: false,
+                }),
+            }
+        })
+        .collect())
 }
 
 fn build_imported_item(subscription: &CalendarSubscription, event: &ParsedIcalEvent) -> Item {
@@ -251,14 +447,44 @@ pub async fn sync_subscription(
     };
 
     let parsed = parse_ical(&content);
-    let (recurring, non_recurring): (Vec<_>, Vec<_>) =
-        parsed.into_iter().partition(|e| e.has_rrule);
-    let skipped_recurring = recurring.len();
 
-    let importable: Vec<ParsedIcalEvent> = non_recurring
+    let mut masters: Vec<ParsedIcalEvent> = Vec::new();
+    let mut overrides: HashMap<(String, DateTime<Utc>), ParsedIcalEvent> = HashMap::new();
+    let mut non_recurring: Vec<ParsedIcalEvent> = Vec::new();
+    for event in parsed {
+        if let Some(recurrence_id) = event.recurrence_id {
+            overrides.insert((event.uid.clone(), recurrence_id), event);
+        } else if event.has_rrule {
+            masters.push(event);
+        } else {
+            non_recurring.push(event);
+        }
+    }
+
+    let mut skipped_recurring = 0usize;
+    let mut expanded: Vec<ParsedIcalEvent> = Vec::new();
+    for master in &masters {
+        match expand_master_event(master, &overrides, now) {
+            Ok(occurrences) => expanded.extend(occurrences),
+            Err(e) => {
+                tracing::warn!(
+                    uid = %master.uid,
+                    error = %e,
+                    "failed to expand recurring calendar event, skipping"
+                );
+                skipped_recurring += 1;
+            }
+        }
+    }
+
+    // Expanded occurrences are already window-filtered by `expand_master_event`'s own
+    // `after`/`before` query (the tighter recurring-occurrence window) — only the plain,
+    // non-recurring events need the wider `within_import_window` check here.
+    let mut importable: Vec<ParsedIcalEvent> = non_recurring
         .into_iter()
         .filter(|e| within_import_window(e.start, now))
         .collect();
+    importable.extend(expanded);
 
     let sync_result = run_diff(subscription, &importable, item_repo).await;
 
@@ -468,7 +694,10 @@ mod tests {
     }
 
     #[test]
-    fn flags_but_does_not_expand_an_rrule_bearing_event() {
+    fn flags_an_rrule_bearing_event_and_captures_its_rrule_string() {
+        // `parse_ical` only flags/captures a recurring master event — expansion into
+        // per-occurrence pseudo-events is `expand_master_event`'s job (exercised
+        // separately below), so this only asserts the parse step.
         let ics = concat!(
             "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:evt-recurring\r\n",
             "DTSTART:20260901T140000Z\r\nRRULE:FREQ=WEEKLY\r\nSUMMARY:Standup\r\n",
@@ -477,6 +706,104 @@ mod tests {
         let events = parse_ical(ics);
         assert_eq!(events.len(), 1);
         assert!(events[0].has_rrule);
+        assert_eq!(events[0].rrule.as_deref(), Some("FREQ=WEEKLY"));
+    }
+
+    #[test]
+    fn captures_exdates_and_a_recurrence_id_override() {
+        let ics = concat!(
+            "BEGIN:VCALENDAR\r\nVERSION:2.0\r\n",
+            "BEGIN:VEVENT\r\nUID:evt-recurring\r\nDTSTART:20260901T140000Z\r\n",
+            "RRULE:FREQ=WEEKLY\r\nEXDATE:20260908T140000Z,20260915T140000Z\r\n",
+            "SUMMARY:Standup\r\nEND:VEVENT\r\n",
+            "BEGIN:VEVENT\r\nUID:evt-recurring\r\nRECURRENCE-ID:20260922T140000Z\r\n",
+            "DTSTART:20260922T150000Z\r\nSUMMARY:Standup (moved)\r\nEND:VEVENT\r\n",
+            "END:VCALENDAR\r\n"
+        );
+        let events = parse_ical(ics);
+        assert_eq!(events.len(), 2);
+
+        let master = events.iter().find(|e| e.has_rrule).unwrap();
+        assert_eq!(
+            master.exdates,
+            vec![
+                Utc.with_ymd_and_hms(2026, 9, 8, 14, 0, 0).unwrap(),
+                Utc.with_ymd_and_hms(2026, 9, 15, 14, 0, 0).unwrap(),
+            ]
+        );
+
+        let over_ride = events.iter().find(|e| e.recurrence_id.is_some()).unwrap();
+        assert_eq!(
+            over_ride.recurrence_id,
+            Some(Utc.with_ymd_and_hms(2026, 9, 22, 14, 0, 0).unwrap())
+        );
+        assert_eq!(over_ride.start, Utc.with_ymd_and_hms(2026, 9, 22, 15, 0, 0).unwrap());
+        assert_eq!(over_ride.summary, "Standup (moved)");
+        assert!(!over_ride.cancelled);
+    }
+
+    #[test]
+    fn keeps_a_cancelled_recurrence_id_override_as_data() {
+        // Unlike a plain cancelled event (dropped entirely, see `skips_a_cancelled_event`
+        // above), a cancelled *override* has to survive parsing so the expansion step
+        // knows which occurrence to drop.
+        let ics = concat!(
+            "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:evt-recurring\r\n",
+            "RECURRENCE-ID:20260922T140000Z\r\nDTSTART:20260922T140000Z\r\n",
+            "STATUS:CANCELLED\r\nSUMMARY:Standup\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+        );
+        let events = parse_ical(ics);
+        assert_eq!(events.len(), 1);
+        assert!(events[0].cancelled);
+        assert!(events[0].recurrence_id.is_some());
+    }
+
+    /// A minimal plain (non-recurring) `ParsedIcalEvent` for `run_diff` tests, with every
+    /// Stage-7-only field at its "not recurring" default.
+    fn plain_event(
+        uid: &str,
+        summary: &str,
+        start: DateTime<Utc>,
+        end: Option<DateTime<Utc>>,
+    ) -> ParsedIcalEvent {
+        ParsedIcalEvent {
+            uid: uid.to_string(),
+            summary: summary.to_string(),
+            description: None,
+            start,
+            end,
+            all_day: false,
+            has_rrule: false,
+            rrule: None,
+            exdates: Vec::new(),
+            tz: Tz::UTC,
+            recurrence_id: None,
+            cancelled: false,
+        }
+    }
+
+    /// A minimal `RRULE`-bearing master `ParsedIcalEvent` for `expand_master_event` tests.
+    fn recurring_master(
+        uid: &str,
+        rrule: &str,
+        start: DateTime<Utc>,
+        end: Option<DateTime<Utc>>,
+        tz: Tz,
+    ) -> ParsedIcalEvent {
+        ParsedIcalEvent {
+            uid: uid.to_string(),
+            summary: "Standup".to_string(),
+            description: None,
+            start,
+            end,
+            all_day: false,
+            has_rrule: true,
+            rrule: Some(rrule.to_string()),
+            exdates: Vec::new(),
+            tz,
+            recurrence_id: None,
+            cancelled: false,
+        }
     }
 
     fn imported_item(id: &str, uid: &str, sub_id: &str, start: DateTime<Utc>) -> Item {
@@ -524,15 +851,12 @@ mod tests {
             .withf(|id, _, error| id == "sub-1" && error.is_none())
             .returning(|_, _, _| Ok(()));
 
-        let event = ParsedIcalEvent {
-            uid: "evt-1".to_string(),
-            summary: "Test Event".to_string(),
-            description: None,
-            start: Utc::now() + Duration::days(1),
-            end: Some(Utc::now() + Duration::days(1) + Duration::hours(1)),
-            all_day: false,
-            has_rrule: false,
-        };
+        let event = plain_event(
+            "evt-1",
+            "Test Event",
+            Utc::now() + Duration::days(1),
+            Some(Utc::now() + Duration::days(1) + Duration::hours(1)),
+        );
         // Exercise run_diff directly (the pure diff, no network fetch) via the public
         // sync_subscription would require mocking `fetch_ical`'s reqwest call, which
         // this module deliberately doesn't abstract behind a trait (see Stage 3 plan) —
@@ -559,15 +883,12 @@ mod tests {
             .withf(|item: &Item| item.id == "item-1" && item.name == "Renamed Event")
             .returning(|_| Ok(()));
 
-        let event = ParsedIcalEvent {
-            uid: "evt-1".to_string(),
-            summary: "Renamed Event".to_string(),
-            description: None,
+        let event = plain_event(
+            "evt-1",
+            "Renamed Event",
             start,
-            end: Some(start + Duration::hours(1)),
-            all_day: false,
-            has_rrule: false,
-        };
+            Some(start + Duration::hours(1)),
+        );
         let (created, updated, deleted) = run_diff(&sub, &[event], &item_repo).await.unwrap();
         assert_eq!((created, updated, deleted), (0, 1, 0));
     }
@@ -586,15 +907,7 @@ mod tests {
         // No `expect_update_by_project`/`expect_create` set up at all — a call to
         // either would panic the mock, which is exactly the assertion here.
 
-        let event = ParsedIcalEvent {
-            uid: "evt-1".to_string(),
-            summary: "Test Event".to_string(),
-            description: None,
-            start,
-            end: Some(start + Duration::hours(1)),
-            all_day: false,
-            has_rrule: false,
-        };
+        let event = plain_event("evt-1", "Test Event", start, Some(start + Duration::hours(1)));
         let (created, updated, deleted) = run_diff(&sub, &[event], &item_repo).await.unwrap();
         assert_eq!((created, updated, deleted), (0, 0, 0));
     }
@@ -626,5 +939,197 @@ mod tests {
         assert!(!within_import_window(now + Duration::days(366), now));
         assert!(within_import_window(now - Duration::days(29), now));
         assert!(!within_import_window(now - Duration::days(31), now));
+    }
+
+    #[test]
+    fn expand_master_event_generates_weekly_occurrences_within_the_window() {
+        let now = Utc.with_ymd_and_hms(2026, 9, 1, 0, 0, 0).unwrap();
+        let start = Utc.with_ymd_and_hms(2026, 9, 1, 14, 0, 0).unwrap();
+        let master = recurring_master(
+            "evt-recurring",
+            "FREQ=WEEKLY",
+            start,
+            Some(start + Duration::hours(1)),
+            Tz::UTC,
+        );
+
+        let occurrences = expand_master_event(&master, &HashMap::new(), now).unwrap();
+
+        assert!(
+            occurrences.len() > 20,
+            "expected many weekly occurrences within a ~187-day window, got {}",
+            occurrences.len()
+        );
+        assert_eq!(occurrences[0].start, start);
+        assert_eq!(occurrences[0].end, Some(start + Duration::hours(1)));
+        assert_eq!(
+            occurrences[0].uid,
+            format!("evt-recurring::{}", start.to_rfc3339())
+        );
+        assert!(!occurrences[0].has_rrule);
+        for pair in occurrences.windows(2) {
+            assert_eq!(pair[1].start - pair[0].start, Duration::days(7));
+        }
+        let window_start = now - Duration::days(RECURRING_WINDOW_PAST_DAYS);
+        let window_end = now + Duration::days(RECURRING_WINDOW_FUTURE_DAYS);
+        for occ in &occurrences {
+            assert!(occ.start >= window_start && occ.start <= window_end);
+        }
+    }
+
+    #[test]
+    fn expand_master_event_skips_exdate_occurrences() {
+        let now = Utc.with_ymd_and_hms(2026, 9, 1, 0, 0, 0).unwrap();
+        let start = Utc.with_ymd_and_hms(2026, 9, 1, 14, 0, 0).unwrap();
+        let excluded = start + Duration::days(7);
+        let mut master = recurring_master("evt-recurring", "FREQ=WEEKLY", start, None, Tz::UTC);
+        master.exdates = vec![excluded];
+
+        let occurrences = expand_master_event(&master, &HashMap::new(), now).unwrap();
+
+        assert!(occurrences.iter().all(|o| o.start != excluded));
+        assert!(occurrences.iter().any(|o| o.start == start));
+        assert!(occurrences
+            .iter()
+            .any(|o| o.start == start + Duration::days(14)));
+    }
+
+    #[test]
+    fn expand_master_event_applies_a_recurrence_id_override() {
+        let now = Utc.with_ymd_and_hms(2026, 9, 1, 0, 0, 0).unwrap();
+        let start = Utc.with_ymd_and_hms(2026, 9, 1, 14, 0, 0).unwrap();
+        let original_occurrence = start + Duration::days(7);
+        let master = recurring_master(
+            "evt-recurring",
+            "FREQ=WEEKLY",
+            start,
+            Some(start + Duration::hours(1)),
+            Tz::UTC,
+        );
+
+        let moved_start = original_occurrence + Duration::hours(1);
+        let mut overrides = HashMap::new();
+        overrides.insert(
+            ("evt-recurring".to_string(), original_occurrence),
+            ParsedIcalEvent {
+                uid: "evt-recurring".to_string(),
+                summary: "Standup (moved)".to_string(),
+                description: None,
+                start: moved_start,
+                end: Some(moved_start + Duration::hours(1)),
+                all_day: false,
+                has_rrule: false,
+                rrule: None,
+                exdates: Vec::new(),
+                tz: Tz::UTC,
+                recurrence_id: Some(original_occurrence),
+                cancelled: false,
+            },
+        );
+
+        let occurrences = expand_master_event(&master, &overrides, now).unwrap();
+
+        // The overridden slot keeps the id derived from its ORIGINAL timestamp (not the
+        // moved one) — that's what lets `run_diff` update the existing imported item in
+        // place instead of creating a duplicate.
+        let overridden = occurrences
+            .iter()
+            .find(|o| o.uid == format!("evt-recurring::{}", original_occurrence.to_rfc3339()))
+            .expect("overridden slot should still be present under its original-timestamp id");
+        assert_eq!(overridden.start, moved_start);
+        assert_eq!(overridden.summary, "Standup (moved)");
+        // Every other occurrence is untouched.
+        assert!(occurrences.iter().any(|o| o.start == start));
+    }
+
+    #[test]
+    fn expand_master_event_drops_a_cancelled_override_slot() {
+        let now = Utc.with_ymd_and_hms(2026, 9, 1, 0, 0, 0).unwrap();
+        let start = Utc.with_ymd_and_hms(2026, 9, 1, 14, 0, 0).unwrap();
+        let cancelled_occurrence = start + Duration::days(7);
+        let master = recurring_master("evt-recurring", "FREQ=WEEKLY", start, None, Tz::UTC);
+
+        let mut overrides = HashMap::new();
+        overrides.insert(
+            ("evt-recurring".to_string(), cancelled_occurrence),
+            ParsedIcalEvent {
+                uid: "evt-recurring".to_string(),
+                summary: "Standup".to_string(),
+                description: None,
+                start: cancelled_occurrence,
+                end: None,
+                all_day: false,
+                has_rrule: false,
+                rrule: None,
+                exdates: Vec::new(),
+                tz: Tz::UTC,
+                recurrence_id: Some(cancelled_occurrence),
+                cancelled: true,
+            },
+        );
+
+        let occurrences = expand_master_event(&master, &overrides, now).unwrap();
+
+        assert!(occurrences.iter().all(|o| o.start != cancelled_occurrence));
+        assert!(occurrences.iter().any(|o| o.start == start));
+    }
+
+    /// The correctness case this stage's own plan flagged as easy to get subtly wrong:
+    /// a weekly local-time event must stay pinned to the same wall-clock hour across a
+    /// DST transition, not drift by an hour in UTC.
+    #[test]
+    fn expand_master_event_respects_local_wall_clock_across_a_dst_transition() {
+        let ny = Tz::America__New_York;
+        let now = Utc.with_ymd_and_hms(2026, 10, 25, 0, 0, 0).unwrap();
+        // 2026-10-27 09:00 America/New_York (EDT, UTC-4) == 13:00 UTC.
+        let start = Utc.with_ymd_and_hms(2026, 10, 27, 13, 0, 0).unwrap();
+        let master = recurring_master("evt-standup", "FREQ=WEEKLY", start, None, ny);
+
+        let occurrences = expand_master_event(&master, &HashMap::new(), now).unwrap();
+
+        assert!(occurrences.iter().any(|o| o.start == start));
+        // A week later (2026-11-03), America/New_York has fallen back to EST (UTC-5):
+        // 09:00 local == 14:00 UTC — NOT 13:00 UTC, which would be the wrong,
+        // fixed-UTC-offset behavior `family-board`'s own version doesn't guard against.
+        let after_transition = Utc.with_ymd_and_hms(2026, 11, 3, 14, 0, 0).unwrap();
+        assert!(
+            occurrences.iter().any(|o| o.start == after_transition),
+            "expected the Nov 3 occurrence pinned to 9am America/New_York (14:00 UTC \
+             after the fall-back); got starts: {:?}",
+            occurrences.iter().map(|o| o.start).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn expand_master_event_returns_err_for_an_unparseable_rrule() {
+        let now = Utc::now();
+        let master = recurring_master("evt-bad", "NOT-A-VALID-RRULE", now, None, Tz::UTC);
+        assert!(expand_master_event(&master, &HashMap::new(), now).is_err());
+    }
+
+    #[tokio::test]
+    async fn run_diff_creates_items_for_each_expanded_recurring_occurrence() {
+        // Demonstrates the plan's core claim: expanded occurrences carry a deterministic
+        // synthetic `google_event_id`, so `run_diff`'s existing uid-keyed diff needs no
+        // changes of its own to create/update/delete them.
+        let sub = subscription();
+        let now = Utc.with_ymd_and_hms(2026, 9, 1, 0, 0, 0).unwrap();
+        let start = Utc.with_ymd_and_hms(2026, 9, 1, 14, 0, 0).unwrap();
+        let master = recurring_master("evt-recurring", "FREQ=WEEKLY;COUNT=3", start, None, Tz::UTC);
+        let occurrences = expand_master_event(&master, &HashMap::new(), now).unwrap();
+        assert_eq!(occurrences.len(), 3);
+
+        let mut item_repo = MockItemRepo::new();
+        item_repo
+            .expect_list_by_calendar_subscription()
+            .with(eq("sub-1"))
+            .returning(|_| Ok(vec![]));
+        item_repo
+            .expect_create()
+            .times(3)
+            .returning(|_| Ok("new-id".to_string()));
+
+        let (created, updated, deleted) = run_diff(&sub, &occurrences, &item_repo).await.unwrap();
+        assert_eq!((created, updated, deleted), (3, 0, 0));
     }
 }
