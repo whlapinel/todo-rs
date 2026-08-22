@@ -1,4 +1,5 @@
 pub mod activity_log;
+pub mod calendar_subscriptions;
 pub mod item_series;
 pub mod items;
 pub mod projects;
@@ -6,6 +7,7 @@ pub mod teams;
 pub mod users;
 use crate::domain::{
     activity_log::ActivityLogEntry,
+    calendar_subscription::CalendarSubscription,
     item::{Item, ItemKind, ItemType, Recurrence, Schedule, TeamAssignment},
     item_series::{ItemOccurrence, ItemSeries},
     project::Project,
@@ -88,6 +90,16 @@ pub trait ItemRepo: Send + Sync {
     ) -> Result<Vec<Item>, RepoError>;
     async fn list_children(&self, parent_item_id: &str) -> Result<Vec<Item>, RepoError>;
     async fn list_by_source_event(&self, source_event_id: &str) -> Result<Vec<Item>, RepoError>;
+    /// The full current set of imported items for one calendar subscription — what
+    /// the Stage 3 sync diff (docs/google-calendar-import-plan.md) compares a
+    /// freshly-parsed iCal feed against. `calendar_subscription_id`/`google_event_id`
+    /// aren't domain fields yet (that's Stage 4) — this method exists now so Stage 3
+    /// isn't blocked on it, but its `WHERE` clause is the only place either raw column
+    /// is touched until Stage 4 lands.
+    async fn list_by_calendar_subscription(
+        &self,
+        calendar_subscription_id: &str,
+    ) -> Result<Vec<Item>, RepoError>;
     async fn create(&self, item: &Item) -> Result<String, RepoError>;
     async fn update(&self, item: &Item) -> Result<(), RepoError>;
     /// Stage B3's unified write primitive, keyed on `project_id` — carries the full
@@ -211,6 +223,34 @@ pub trait ProjectRepo: Send + Sync {
         user_id: &str,
         delta: i32,
     ) -> Result<i64, RepoError>;
+}
+
+/// A project's subscriptions to external (Google Calendar) iCal feeds — see
+/// docs/google-calendar-import-plan.md. Not yet called from anywhere in the running
+/// app (Stage 2) — no service layer, no HTTP surface, no background sync (that's
+/// Stages 3/5).
+#[cfg_attr(test, mockall::automock)]
+#[async_trait]
+pub trait CalendarSubscriptionRepo: Send + Sync {
+    async fn create(
+        &self,
+        project_id: &str,
+        ical_url: &str,
+        created_by_user_id: &str,
+    ) -> Result<CalendarSubscription, RepoError>;
+    async fn get(&self, id: &str) -> Result<CalendarSubscription, RepoError>;
+    async fn list_by_project(&self, project_id: &str)
+    -> Result<Vec<CalendarSubscription>, RepoError>;
+    async fn delete(&self, id: &str) -> Result<(), RepoError>;
+    /// Every subscription across every project — the Stage 5 background sweep's
+    /// entry point.
+    async fn list_all(&self) -> Result<Vec<CalendarSubscription>, RepoError>;
+    async fn record_sync_result(
+        &self,
+        id: &str,
+        synced_at: DateTime<Utc>,
+        error: Option<String>,
+    ) -> Result<(), RepoError>;
 }
 
 /// Append-mostly completion/points log, kept separate from `ItemRepo`/`TeamRepo`
@@ -516,6 +556,24 @@ fn row_to_activity_log_entry(row: &sqlx::sqlite::SqliteRow) -> ActivityLogEntry 
         created_at: chrono::DateTime::from_timestamp(created_at_secs, 0)
             .unwrap_or_default()
             .with_timezone(&chrono::Utc),
+    }
+}
+
+fn row_to_calendar_subscription(row: &sqlx::sqlite::SqliteRow) -> CalendarSubscription {
+    let created_at_secs: i64 = row.get("created_at");
+    let last_synced_at_secs: Option<i64> = row.get("last_synced_at");
+    CalendarSubscription {
+        id: row.get("id"),
+        project_id: row.get("project_id"),
+        ical_url: row.get("ical_url"),
+        created_by_user_id: row.get("created_by_user_id"),
+        created_at: chrono::DateTime::from_timestamp(created_at_secs, 0)
+            .unwrap_or_default()
+            .with_timezone(&chrono::Utc),
+        last_synced_at: last_synced_at_secs
+            .and_then(|s| chrono::DateTime::from_timestamp(s, 0))
+            .map(|dt| dt.with_timezone(&chrono::Utc)),
+        last_sync_error: row.get("last_sync_error"),
     }
 }
 

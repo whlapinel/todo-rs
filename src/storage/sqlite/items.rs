@@ -65,6 +65,22 @@ impl ItemRepo for SqliteItemRepo {
             .map(|rows| rows.iter().map(row_to_item).collect())
     }
 
+    async fn list_by_calendar_subscription(
+        &self,
+        calendar_subscription_id: &str,
+    ) -> Result<Vec<Item>, RepoError> {
+        let q = format!(
+            "{ITEM_SELECT} FROM items WHERE calendar_subscription_id = ? \
+             ORDER BY COALESCE(due_date, 9999999999999) ASC"
+        );
+        sqlx::query(&q)
+            .bind(calendar_subscription_id)
+            .fetch_all(&self.0)
+            .await
+            .map_err(db_err)
+            .map(|rows| rows.iter().map(row_to_item).collect())
+    }
+
     async fn get_by_project(&self, project_id: &str, item_id: &str) -> Result<Item, RepoError> {
         let q = format!("{ITEM_SELECT} FROM items WHERE id = ? AND project_id = ?");
         sqlx::query(&q)
@@ -396,7 +412,9 @@ mod tests {
                 points INTEGER,
                 source_event_id TEXT,
                 project_id TEXT,
-                series_id TEXT
+                series_id TEXT,
+                google_event_id TEXT,
+                calendar_subscription_id TEXT
             )",
         )
         .execute(&pool)
@@ -539,6 +557,48 @@ mod tests {
 
         let updated = repo.get_by_project("p1", &id).await.unwrap();
         assert_eq!(updated.series_id.as_deref(), Some("series-1"));
+    }
+
+    #[tokio::test]
+    async fn list_by_calendar_subscription_scopes_to_that_subscription() {
+        // `calendar_subscription_id` isn't a domain `Item` field yet (Stage 4 of
+        // docs/google-calendar-import-plan.md), so this seeds the column directly via
+        // raw SQL rather than through `repo.create`.
+        let pool = test_pool().await;
+        let repo = SqliteItemRepo(pool.clone());
+        let in_sub = repo.create(&item_in_project("p1", "Dentist")).await.unwrap();
+        let other_sub = repo
+            .create(&item_in_project("p1", "Other subscription"))
+            .await
+            .unwrap();
+        let not_imported = repo
+            .create(&item_in_project("p1", "Not imported"))
+            .await
+            .unwrap();
+        sqlx::query("UPDATE items SET calendar_subscription_id = 'sub1' WHERE id = ?")
+            .bind(&in_sub)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE items SET calendar_subscription_id = 'sub2' WHERE id = ?")
+            .bind(&other_sub)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let _ = not_imported;
+
+        let items = repo.list_by_calendar_subscription("sub1").await.unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].name, "Dentist");
+    }
+
+    #[tokio::test]
+    async fn list_by_calendar_subscription_returns_empty_for_unknown_subscription() {
+        let pool = test_pool().await;
+        let repo = SqliteItemRepo(pool);
+
+        let items = repo.list_by_calendar_subscription("missing").await.unwrap();
+        assert!(items.is_empty());
     }
 
     #[tokio::test]

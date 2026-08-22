@@ -183,6 +183,62 @@ _(empty until Stage 2 is actually done)_
 
 ---
 
+### Implementation notes
+
+Done as planned, with a couple of small signature deviations from the sketch above
+(neither changes behavior, both just match this codebase's actual conventions more
+closely than the plan's pseudocode did):
+
+- `src/domain/calendar_subscription.rs` (new) — `CalendarSubscription` struct exactly
+  as specified.
+- `src/domain/mod.rs` — `pub mod calendar_subscription;` added.
+- `src/storage/sqlite/mod.rs`:
+  - `CalendarSubscriptionRepo` trait added alongside `ProjectRepo`/before
+    `ActivityLogRepo`, `#[cfg_attr(test, mockall::automock)]` like every other repo
+    trait. **Deviation**: none of its methods needed the explicit `<'a>` lifetime
+    dance `ProjectRepo::create` required — that fix was specifically for a param
+    wrapped in `Option<&'a str>` (elision doesn't reach inside `Option`); this trait's
+    `create` takes three plain `&str`s (no `Option`), which elides fine on its own,
+    matching `ItemRepo::get`'s two-plain-`&str`-params precedent instead.
+  - `record_sync_result`'s `error` param stayed `Option<String>` (owned), exactly as
+    planned — no lifetime issue there either since it's owned, not borrowed.
+  - `ItemRepo::list_by_calendar_subscription` added exactly as planned, with a doc
+    comment flagging that `calendar_subscription_id`/`google_event_id` aren't domain
+    `Item` fields yet (Stage 4) — this method's `WHERE` clause is the only place either
+    raw DB column is touched until then.
+  - `row_to_calendar_subscription` helper added alongside `row_to_activity_log_entry`,
+    same `DateTime::from_timestamp`-conversion pattern.
+- `src/storage/sqlite/calendar_subscriptions.rs` (new) — `SqliteCalendarSubscriptionRepo`,
+  following `projects.rs`'s query-building conventions (`SELECT` constant + `format!`,
+  `db_err`/`not_found` helpers). 8 unit tests: create/get round-trip, get-missing,
+  list-by-project (scoping + ordering), list-all (cross-project), delete + delete-missing,
+  record-sync-result (both the error-recorded and success-clears-error cases) +
+  record-sync-result-missing.
+- `src/storage/sqlite/items.rs` — `list_by_calendar_subscription` implemented following
+  `list_by_source_event`'s exact shape (same `ITEM_SELECT` constant, same
+  `ORDER BY COALESCE(due_date, ...)`). Its two new tests seed
+  `calendar_subscription_id` via a raw `UPDATE items SET ...` (not through
+  `repo.create`), since the domain `Item` struct has no such field yet — Stage 4 will
+  make this natural; until then this is the only way to exercise the column at the
+  repo-test level. The test-only in-memory `items` table in this file's `test_pool()`
+  gained `google_event_id`/`calendar_subscription_id` columns (both nullable, matching
+  the real schema) so those raw-SQL test inserts have somewhere to write.
+- **Not wired anywhere**: no `Arc<dyn CalendarSubscriptionRepo>` was added to
+  `main.rs`'s `server::Extension` wiring — per the plan, Stage 2 stays unreachable from
+  any service/handler code. `cargo check` shows the expected new "never used"
+  warnings for the whole new trait/impl/struct (same shape as pre-existing
+  `UserRepo::create`/`delete` warnings), nothing unexpected.
+- **Verified**: `cargo test` — 421 passed, 0 failed (up from Stage 1's 411, +10: 8 new
+  `calendar_subscriptions.rs` tests + 2 new `items.rs` tests). `cargo check` — clean,
+  no new warnings beyond the expected "never used" ones noted above.
+- Nothing discovered that changes Stage 3/4/5's assumptions. The Stage 3/4 ordering
+  dependency flagged in this stage's own planning section above (Stage 3's sync writes
+  need Stage 4's domain-struct fields to actually persist `google_event_id`/
+  `calendar_subscription_id`) still stands, untouched by this stage — Stage 2 only
+  added the repo methods/trait, not the domain fields themselves.
+
+---
+
 ## Stage 3 — Sync engine (service layer, not yet reachable via HTTP)
 
 New file `src/service/calendar_sync.rs`. New Cargo dependencies: `ical = "0.10"` and `chrono-tz` (matching the versions `family-board` already uses successfully). `reqwest` is already a dependency here (used for OAuth) — reuse it for the iCal fetch.
