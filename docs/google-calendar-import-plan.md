@@ -84,7 +84,52 @@ Also update, per the "Adding a DB column" workflow in this repo's `CLAUDE.md`:
 
 ### Implementation notes (fill in before ending this stage)
 
-_(empty until Stage 1 is actually done)_
+Done as planned, no deviations from the design above. Concretely:
+
+- `src/storage/migrations/add_calendar_subscriptions.rs` — version **25**, name
+  `AddCalendarSubscriptions`. Registered in `all_migrations()` in
+  `src/storage/migrations/mod.rs` (mod + use + push, alphabetical-ish position
+  matching the existing list's rough ordering).
+- Table + both `items` columns + all three new indexes exactly as specified, including
+  the partial unique index `idx_items_calsub_google_event_id` on
+  `(calendar_subscription_id, google_event_id) WHERE calendar_subscription_id IS NOT
+  NULL`.
+- Followed `AddProjects`'s precedent exactly on the index-ordering question (this
+  plan's own §Stage 1 already flagged this correctly, confirmed against the real
+  `add_projects.rs`/`add_item_series_id.rs` source before writing): a brand-new table
+  (`calendar_subscriptions`) is safe to create — table *and* its index — directly in
+  both the migration and the `create_pool()` baseline, since a `CREATE TABLE IF NOT
+  EXISTS` is a no-op either way. An index on a column added to an *existing* table
+  (`items.calendar_subscription_id`, `items.google_event_id`) must only ever be
+  created inside the migration itself, never the baseline — baseline `CREATE INDEX`
+  statements run unconditionally before `run_migrations()`, so a baseline index on a
+  not-yet-existing column breaks any DB that predates the migration. Both new `items`
+  indexes therefore live only in `add_calendar_subscriptions.rs::up()`, not in
+  `create_pool()`. The two new `items` *columns* themselves (not their indexes) were
+  still added to the baseline `CREATE TABLE items` in `src/storage/sqlite/mod.rs`, so a
+  fresh DB is correct without ever touching the migration, per the standard "Adding a
+  DB column" workflow in CLAUDE.md.
+- `src/storage/migrations/mod.rs`'s three `#[cfg(test)]` fixtures/assertions updated:
+  `current_schema_pool()` now includes `google_event_id`/`calendar_subscription_id` on
+  its `items` table (it does **not** include a `calendar_subscriptions` table itself —
+  that's consistent with this fixture's existing pattern, e.g. it also has no
+  `item_series_rotation_members` table even though that migration predates this one;
+  the fixture isn't a strict mirror of the true current schema, migrations for
+  brand-new tables just create them fresh when run against it, and the
+  no-op/idempotency tests only assert on `_migrations` row count, not on absence of
+  schema change). All three `assert_eq!(applied_count, 24)` bumped to `25`.
+- New migration file's own tests (3): create-table-and-columns + idempotency (run
+  `up()` three times), plus one exercising the partial unique index directly at the
+  SQL level (`rejects_double_importing_the_same_google_event_into_the_same_subscription`)
+  — confirms both that a duplicate `(calendar_subscription_id, google_event_id)` pair
+  is rejected and that ordinary `NULL`-subscription items are never constrained by it.
+- **Verified**: `cargo test` — 411 passed, 0 failed (up from 408 pre-stage; +3 new
+  migration tests). `task check` — clean, no new warnings introduced (only
+  pre-existing unrelated dead-code warnings elsewhere in the crate).
+- Nothing discovered that changes any later stage's assumptions. Stage 2's own note
+  about the Stage 2/3/4 field-plumbing ordering dependency (see that section above)
+  still stands as originally written — this stage only added the raw columns, nothing
+  in the domain `Item` struct or any repo method reads/writes them yet.
 
 ---
 

@@ -555,7 +555,9 @@ pub async fn create_pool(url: &str) -> Result<SqlitePool, sqlx::Error> {
             points INTEGER,
             source_event_id TEXT,
             project_id TEXT,
-            series_id TEXT
+            series_id TEXT,
+            google_event_id TEXT,
+            calendar_subscription_id TEXT
         )",
     )
     .execute(&pool)
@@ -753,6 +755,36 @@ pub async fn create_pool(url: &str) -> Result<SqlitePool, sqlx::Error> {
     )
     .execute(&pool)
     .await?;
+
+    // See docs/google-calendar-import-plan.md, Stage 1. Brand-new table, so (like
+    // `projects`/`project_members` above) it's safe to create — table and index both —
+    // directly in the baseline; `AddCalendarSubscriptions` creates the identical pair
+    // again for a DB that predates this migration.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS calendar_subscriptions (
+            id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            ical_url TEXT NOT NULL,
+            created_by_user_id TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            last_synced_at INTEGER,
+            last_sync_error TEXT
+        )",
+    )
+    .execute(&pool)
+    .await?;
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_calendar_subscriptions_project_id \
+         ON calendar_subscriptions (project_id)",
+    )
+    .execute(&pool)
+    .await?;
+    // idx_items_calendar_subscription_id / idx_items_calsub_google_event_id are
+    // deliberately NOT created here — same index-ordering reason as idx_items_project_id
+    // below: `items.calendar_subscription_id`/`items.google_event_id` are added to an
+    // *existing* table by `AddCalendarSubscriptions`, so both indexes live inside that
+    // migration, not the baseline.
+
     // idx_items_project_id is deliberately NOT created here — see add_projects.rs's
     // doc comment: an index on a column added to an *existing* table via a migration
     // must live inside that migration, not the baseline, since baseline indexes run
