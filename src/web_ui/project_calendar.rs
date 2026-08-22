@@ -389,7 +389,11 @@ fn render_rows(
     let mut items: Vec<&DueItem> = items
         .iter()
         .filter(|di| di.item.kind() != ItemKind::Simple)
-        .filter(|di| assigned_to_any || di.item.assigned_to_user_id() == Some(user_id.to_string()))
+        .filter(|di| {
+            !is_team_project
+                || assigned_to_any
+                || di.item.assigned_to_user_id() == Some(user_id.to_string())
+        })
         .filter(|di| {
             show_complete
                 || !di.item.complete
@@ -448,7 +452,11 @@ fn render_rows(
     let filtered_occurrences: Vec<&ProjectOccurrence> = virtual_occurrences
         .iter()
         .filter(|occ| !matches!(occ.state, OccurrenceState::Materialized { .. }))
-        .filter(|occ| assigned_to_any || occ.assigned_to_user_id == Some(user_id.to_string()))
+        .filter(|occ| {
+            !is_team_project
+                || assigned_to_any
+                || occ.assigned_to_user_id == Some(user_id.to_string())
+        })
         .collect();
     let list_query = calendar_list_query(preset, show_complete, assigned_to_any);
     for occ in filtered_occurrences {
