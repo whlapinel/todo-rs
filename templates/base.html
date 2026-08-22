@@ -107,8 +107,8 @@
     });
 
     // Stage 2 of docs/calendar-day-drawer-plan.md: keeps the month grid's selected-day ring
-    // highlight in sync with the day-drawer (#day-drawer, project_dashboard/calendar_page.html
-    // and main_dashboard's own port in a later stage) without ever re-fetching or re-rendering
+    // highlight in sync with the day-drawer (#day-drawer, project_calendar/calendar_page.html
+    // and main_calendar's own port in a later stage) without ever re-fetching or re-rendering
     // the grid itself. Every day-cell button carries `data-date`; every drawer fragment's root
     // wrapper carries `data-date` too (calendar_day_panel.html) — so a day-cell click or a
     // drawer prev/next-day arrow click (both of which swap #day-drawer's innerHTML) lands here,

@@ -158,13 +158,13 @@ struct TeamDetailPageTemplate {
     invite_candidates: Vec<(String, String)>,
     is_active_member: bool,
     is_admin: bool,
-    /// Stage B5e/B5f: retargets at the team's backing project's Tasks/Dashboard/Activity
+    /// Stage B5e/B5f: retargets at the team's backing project's Tasks/Calendar/Activity
     /// screens (`/web/projects/:project_id/...`) — every team has had a backing project since
     /// `ensure_team_project`/stage B1's backfill, but all three fall back to the `/web/projects`
     /// list page defensively if somehow none exists yet (the legacy per-type/team-dashboard/
     /// team-activity URLs these used to fall back to were removed in stage B5f).
     view_items_href: String,
-    dashboard_href: String,
+    calendar_href: String,
     activity_href: String,
     nav_html: String,
 }
@@ -222,10 +222,10 @@ async fn render_team_detail(
         .get_by_team(team_id)
         .await
         .map_err(ItemError::from)?;
-    let (view_items_href, dashboard_href, activity_href, active) = match &backing_project {
+    let (view_items_href, calendar_href, activity_href, active) = match &backing_project {
         Some(project) => (
             format!("/web/projects/{}/tasks", project.id),
-            format!("/web/projects/{}/dashboard", project.id),
+            format!("/web/projects/{}/calendar", project.id),
             format!("/web/projects/{}/activity", project.id),
             ActiveContext::Project(project.id.clone()),
         ),
@@ -248,7 +248,7 @@ async fn render_team_detail(
         is_active_member,
         is_admin: viewer_is_admin,
         view_items_href,
-        dashboard_href,
+        calendar_href,
         activity_href,
         nav_html,
     })

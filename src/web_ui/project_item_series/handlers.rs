@@ -28,7 +28,8 @@ fn active_context(project_id: &str) -> ActiveContext {
 
 /// Stage B of `docs/unify-virtual-materialized-occurrences-plan.md` — Skip/Unskip act on a
 /// single occurrence but are wired identically onto five different screens (Tasks list/
-/// calendar, Dashboard list/calendar, Events calendar), each showing a different slice of
+/// calendar (retired), the Calendar screen's list/calendar, Events calendar), each showing a
+/// different slice of
 /// the project. Rather than teaching this generic series-scoped route how to render a
 /// fragment matching whichever screen the request came from, this redirects back to
 /// `HX-Current-URL` — the URL htmx automatically sends on every request — so the origin
@@ -48,7 +49,7 @@ fn redirect_to_current_page(headers: &HeaderMap, project_id: &str) -> Response {
 /// :occurrence_ts`, sharing its path with the existing POST materialize route below. No side
 /// effect — never calls `get_or_materialize_occurrence`. If `occurrence_date` is already
 /// materialized, redirects to the item's real, permanent detail URL (`/tasks/{id}` or
-/// `/events/{id}`, via `project_dashboard::detail_url`) rather than rendering anything here —
+/// `/events/{id}`, via `project_calendar::detail_url`) rather than rendering anything here —
 /// this route only ever renders a synthesized view for a still-`Virtual`/`Skipped`
 /// occurrence. Otherwise dispatches to the Task- or Event-flavored renderer by
 /// `series.item_type` (an `ItemSeries` is restricted to one of those two kinds — see
@@ -82,7 +83,7 @@ pub async fn project_item_series_occurrence_detail_page(
         let item =
             crate::service::project_items::get_project_item_unchecked(&repo, &project_id, &item_id)
                 .await?;
-        return Ok(Redirect::to(&crate::web_ui::project_dashboard::detail_url(
+        return Ok(Redirect::to(&crate::web_ui::project_calendar::detail_url(
             &item,
             &project_id,
         ))
@@ -157,7 +158,7 @@ pub async fn project_item_series_occurrence_edit_page(
                 .await?;
         let edit_url = format!(
             "{}/edit",
-            crate::web_ui::project_dashboard::detail_url(&item, &project_id,)
+            crate::web_ui::project_calendar::detail_url(&item, &project_id,)
         );
         return Ok(Redirect::to(&edit_url).into_response());
     }
@@ -448,8 +449,8 @@ pub async fn create_project_item_series_form(
 /// returns the existing one if already materialized) and redirects to its detail page.
 ///
 /// The redirect target depends on the materialized item's own kind, via
-/// `project_dashboard::detail_url` — Stage 7c added Task-typed series, so this route is no
-/// longer Event-only, and reusing the dashboard's existing kind-to-URL mapping keeps this in
+/// `project_calendar::detail_url` — Stage 7c added Task-typed series, so this route is no
+/// longer Event-only, and reusing the Calendar screen's existing kind-to-URL mapping keeps this in
 /// sync with every other screen's own routing rather than hand-rolling a narrower one here.
 ///
 /// The `get_series` + project_id match check below is defense-in-depth for predictability,
@@ -496,7 +497,7 @@ pub async fn materialize_project_item_series_occurrence_form(
     Ok((
         [(
             HeaderName::from_static("hx-redirect"),
-            crate::web_ui::project_dashboard::detail_url(&item, &project_id),
+            crate::web_ui::project_calendar::detail_url(&item, &project_id),
         )],
         Html(String::new()),
     )
@@ -514,15 +515,16 @@ pub struct OccurrenceRowActionQuery {
     view: Option<String>,
     show_complete: Option<String>,
     /// See `project_tasks::handlers::OccurrenceRowActionQuery::preset`'s identical rationale —
-    /// only meaningful for `view=project-dashboard`/`main-dashboard`.
+    /// only meaningful for `view=project-calendar`/`main-calendar`.
     preset: Option<String>,
     /// See `project_tasks::handlers::OccurrenceRowActionQuery::assigned_to_any`'s identical
-    /// rationale — only meaningful for `view=project-dashboard`.
+    /// rationale — only meaningful for `view=project-calendar`.
     assigned_to_any: Option<String>,
 }
 
 /// Stage 6 of docs/recurring-events-virtual-occurrences-rough-plan.md — the "Skip" button
-/// wired onto occurrences (Tasks list/calendar, Dashboard list/calendar, Events calendar; see
+/// wired onto occurrences (Tasks list/calendar, the Calendar screen's list/calendar, Events
+/// calendar; see
 /// each screen's own row/entry template). As of Stage B of
 /// `docs/unify-virtual-materialized-occurrences-plan.md`, this works whether the occurrence
 /// is still virtual or already materialized (`skip_or_delete_series_occurrence` deletes the
@@ -592,8 +594,8 @@ pub async fn skip_project_item_series_occurrence_form(
         )
         .await?);
     }
-    if q.view.as_deref() == Some("project-dashboard") {
-        return Ok(rebuild_dashboard_list_response(
+    if q.view.as_deref() == Some("project-calendar") {
+        return Ok(rebuild_project_calendar_list_response(
             &repo,
             &projects,
             &teams,
@@ -608,8 +610,8 @@ pub async fn skip_project_item_series_occurrence_form(
         )
         .await?);
     }
-    if q.view.as_deref() == Some("main-dashboard") {
-        return Ok(rebuild_main_dashboard_list_response(
+    if q.view.as_deref() == Some("main-calendar") {
+        return Ok(rebuild_main_calendar_list_response(
             &repo,
             &projects,
             &users,
@@ -676,8 +678,8 @@ pub async fn unskip_project_item_series_occurrence_form(
         )
         .await?);
     }
-    if q.view.as_deref() == Some("project-dashboard") {
-        return Ok(rebuild_dashboard_list_response(
+    if q.view.as_deref() == Some("project-calendar") {
+        return Ok(rebuild_project_calendar_list_response(
             &repo,
             &projects,
             &teams,
@@ -692,8 +694,8 @@ pub async fn unskip_project_item_series_occurrence_form(
         )
         .await?);
     }
-    if q.view.as_deref() == Some("main-dashboard") {
-        return Ok(rebuild_main_dashboard_list_response(
+    if q.view.as_deref() == Some("main-calendar") {
+        return Ok(rebuild_main_calendar_list_response(
             &repo,
             &projects,
             &users,
@@ -727,7 +729,8 @@ async fn rebuild_tasks_list_response(
     show_complete: bool,
     tz: i32,
 ) -> Result<Response, ItemError> {
-    let project = project_service::get_project(projects, teams, project_id, requester_user_id).await?;
+    let project =
+        project_service::get_project(projects, teams, project_id, requester_user_id).await?;
     let rows = crate::web_ui::project_tasks::list_task_rows_for_project(
         repo,
         teams,
@@ -744,12 +747,12 @@ async fn rebuild_tasks_list_response(
     Ok(Html(crate::web_ui::project_tasks::items_list_inner_html(&rows)).into_response())
 }
 
-/// Shared by the `view=project-dashboard` branch of both Skip and Unskip — rebuilds
-/// `#project-dashboard-list` exactly as `project_dashboard::list_dashboard_rows_for_project`
+/// Shared by the `view=project-calendar` branch of both Skip and Unskip — rebuilds
+/// `#project-calendar-list` exactly as `project_calendar::list_calendar_rows_for_project`
 /// would for a fresh page load, with no row singled out for a confirmation badge (same
 /// rationale as `rebuild_tasks_list_response` above).
 #[allow(clippy::too_many_arguments)]
-async fn rebuild_dashboard_list_response(
+async fn rebuild_project_calendar_list_response(
     repo: &Arc<dyn ItemRepo>,
     projects: &Arc<dyn ProjectRepo>,
     teams: &Arc<dyn TeamRepo>,
@@ -762,7 +765,7 @@ async fn rebuild_dashboard_list_response(
     assigned_to_any: bool,
     tz: i32,
 ) -> Result<Response, ItemError> {
-    let rows = crate::web_ui::project_dashboard::list_dashboard_rows_for_project(
+    let rows = crate::web_ui::project_calendar::list_calendar_rows_for_project(
         repo,
         projects,
         teams,
@@ -777,14 +780,19 @@ async fn rebuild_dashboard_list_response(
         None,
     )
     .await?;
-    Ok(Html(crate::web_ui::project_dashboard::dashboard_items_inner_html(&rows)).into_response())
+    Ok(
+        Html(crate::web_ui::project_calendar::calendar_items_inner_html(
+            &rows,
+        ))
+        .into_response(),
+    )
 }
 
-/// Shared by the `view=main-dashboard` branch of both Skip and Unskip — rebuilds
-/// `#main-dashboard-list` exactly as `main_dashboard::list_main_dashboard_rows` would for a
+/// Shared by the `view=main-calendar` branch of both Skip and Unskip — rebuilds
+/// `#main-calendar-list` exactly as `main_calendar::list_main_calendar_rows` would for a
 /// fresh page load, same no-confirmation-badge rationale as `rebuild_tasks_list_response`.
 #[allow(clippy::too_many_arguments)]
-async fn rebuild_main_dashboard_list_response(
+async fn rebuild_main_calendar_list_response(
     repo: &Arc<dyn ItemRepo>,
     projects: &Arc<dyn ProjectRepo>,
     users: &Arc<dyn UserRepo>,
@@ -795,7 +803,7 @@ async fn rebuild_main_dashboard_list_response(
     show_complete: bool,
     tz: i32,
 ) -> Result<Response, ItemError> {
-    let rows = crate::web_ui::main_dashboard::list_main_dashboard_rows(
+    let rows = crate::web_ui::main_calendar::list_main_calendar_rows(
         repo,
         projects,
         users,
@@ -808,7 +816,7 @@ async fn rebuild_main_dashboard_list_response(
         None,
     )
     .await?;
-    Ok(Html(crate::web_ui::main_dashboard::main_dashboard_items_inner_html(&rows)).into_response())
+    Ok(Html(crate::web_ui::main_calendar::main_calendar_items_inner_html(&rows)).into_response())
 }
 
 pub async fn edit_project_item_series_page(

@@ -15,10 +15,10 @@
         <div class="border-b border-gray-200 p-6 dark:border-white/10">
           <div class="flex items-start justify-between gap-3">
             <div class="flex items-center gap-x-1">
-              <a href="/web/projects/{{ project_id }}/dashboard?year={{ drawer.prev_year }}&month={{ drawer.prev_month }}&date={{ drawer.prev_date }}&type={{ drawer.active_type }}{% if drawer.assigned_to_any %}&assignedToAny=1{% endif %}"
-                hx-get="/web/projects/{{ project_id }}/dashboard/calendar/day?date={{ drawer.prev_date }}&type={{ drawer.active_type }}{% if drawer.assigned_to_any %}&assignedToAny=1{% endif %}"
+              <a href="/web/projects/{{ project_id }}/calendar?year={{ drawer.prev_year }}&month={{ drawer.prev_month }}&date={{ drawer.prev_date }}&type={{ drawer.active_type }}{% if drawer.assigned_to_any %}&assignedToAny=1{% endif %}"
+                hx-get="/web/projects/{{ project_id }}/calendar/day?date={{ drawer.prev_date }}&type={{ drawer.active_type }}{% if drawer.assigned_to_any %}&assignedToAny=1{% endif %}"
                 hx-target="#day-drawer" hx-select="unset" hx-swap="innerHTML"
-                hx-push-url="/web/projects/{{ project_id }}/dashboard?year={{ drawer.prev_year }}&month={{ drawer.prev_month }}&date={{ drawer.prev_date }}&type={{ drawer.active_type }}{% if drawer.assigned_to_any %}&assignedToAny=1{% endif %}"
+                hx-push-url="/web/projects/{{ project_id }}/calendar?year={{ drawer.prev_year }}&month={{ drawer.prev_month }}&date={{ drawer.prev_date }}&type={{ drawer.active_type }}{% if drawer.assigned_to_any %}&assignedToAny=1{% endif %}"
                 class="flex h-8 w-8 items-center justify-center rounded-md text-gray-400 hover:bg-gray-100 hover:text-gray-500 dark:hover:bg-white/10 dark:hover:text-white">
                 <span class="sr-only">Previous day</span>
                 <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" class="size-5">
@@ -27,10 +27,10 @@
               </a>
               <h2 id="day-drawer-title" class="px-1 text-base font-semibold text-gray-900 dark:text-white">
                 {{ drawer.selected_date_label }}</h2>
-              <a href="/web/projects/{{ project_id }}/dashboard?year={{ drawer.next_year }}&month={{ drawer.next_month }}&date={{ drawer.next_date }}&type={{ drawer.active_type }}{% if drawer.assigned_to_any %}&assignedToAny=1{% endif %}"
-                hx-get="/web/projects/{{ project_id }}/dashboard/calendar/day?date={{ drawer.next_date }}&type={{ drawer.active_type }}{% if drawer.assigned_to_any %}&assignedToAny=1{% endif %}"
+              <a href="/web/projects/{{ project_id }}/calendar?year={{ drawer.next_year }}&month={{ drawer.next_month }}&date={{ drawer.next_date }}&type={{ drawer.active_type }}{% if drawer.assigned_to_any %}&assignedToAny=1{% endif %}"
+                hx-get="/web/projects/{{ project_id }}/calendar/day?date={{ drawer.next_date }}&type={{ drawer.active_type }}{% if drawer.assigned_to_any %}&assignedToAny=1{% endif %}"
                 hx-target="#day-drawer" hx-select="unset" hx-swap="innerHTML"
-                hx-push-url="/web/projects/{{ project_id }}/dashboard?year={{ drawer.next_year }}&month={{ drawer.next_month }}&date={{ drawer.next_date }}&type={{ drawer.active_type }}{% if drawer.assigned_to_any %}&assignedToAny=1{% endif %}"
+                hx-push-url="/web/projects/{{ project_id }}/calendar?year={{ drawer.next_year }}&month={{ drawer.next_month }}&date={{ drawer.next_date }}&type={{ drawer.active_type }}{% if drawer.assigned_to_any %}&assignedToAny=1{% endif %}"
                 class="flex h-8 w-8 items-center justify-center rounded-md text-gray-400 hover:bg-gray-100 hover:text-gray-500 dark:hover:bg-white/10 dark:hover:text-white">
                 <span class="sr-only">Next day</span>
                 <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" class="size-5">
@@ -55,20 +55,20 @@
                page). `assignedToAny` is carried forward from `drawer.assigned_to_any` so a tab
                switch never silently drops the current mine/everyone filter. -->
           <nav class="mt-4 -mb-px flex gap-x-6 text-sm font-medium" aria-label="Item type">
-            <a href="/web/projects/{{ project_id }}/dashboard?year={{ drawer.date_year }}&month={{ drawer.date_month }}&date={{ drawer.date_iso }}&type=all{% if drawer.assigned_to_any %}&assignedToAny=1{% endif %}"
-              hx-get="/web/projects/{{ project_id }}/dashboard/calendar/day?date={{ drawer.date_iso }}&type=all{% if drawer.assigned_to_any %}&assignedToAny=1{% endif %}"
+            <a href="/web/projects/{{ project_id }}/calendar?year={{ drawer.date_year }}&month={{ drawer.date_month }}&date={{ drawer.date_iso }}&type=all{% if drawer.assigned_to_any %}&assignedToAny=1{% endif %}"
+              hx-get="/web/projects/{{ project_id }}/calendar/day?date={{ drawer.date_iso }}&type=all{% if drawer.assigned_to_any %}&assignedToAny=1{% endif %}"
               hx-target="#day-drawer-list" hx-select="#day-drawer-list" hx-swap="outerHTML"
-              hx-push-url="/web/projects/{{ project_id }}/dashboard?year={{ drawer.date_year }}&month={{ drawer.date_month }}&date={{ drawer.date_iso }}&type=all{% if drawer.assigned_to_any %}&assignedToAny=1{% endif %}"
+              hx-push-url="/web/projects/{{ project_id }}/calendar?year={{ drawer.date_year }}&month={{ drawer.date_month }}&date={{ drawer.date_iso }}&type=all{% if drawer.assigned_to_any %}&assignedToAny=1{% endif %}"
               class="border-b-2 pb-2 {% if drawer.active_type == "all" %}border-indigo-500 text-indigo-600 dark:border-indigo-400 dark:text-indigo-400{% else %}border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300{% endif %}">All</a>
-            <a href="/web/projects/{{ project_id }}/dashboard?year={{ drawer.date_year }}&month={{ drawer.date_month }}&date={{ drawer.date_iso }}&type=task{% if drawer.assigned_to_any %}&assignedToAny=1{% endif %}"
-              hx-get="/web/projects/{{ project_id }}/dashboard/calendar/day?date={{ drawer.date_iso }}&type=task{% if drawer.assigned_to_any %}&assignedToAny=1{% endif %}"
+            <a href="/web/projects/{{ project_id }}/calendar?year={{ drawer.date_year }}&month={{ drawer.date_month }}&date={{ drawer.date_iso }}&type=task{% if drawer.assigned_to_any %}&assignedToAny=1{% endif %}"
+              hx-get="/web/projects/{{ project_id }}/calendar/day?date={{ drawer.date_iso }}&type=task{% if drawer.assigned_to_any %}&assignedToAny=1{% endif %}"
               hx-target="#day-drawer-list" hx-select="#day-drawer-list" hx-swap="outerHTML"
-              hx-push-url="/web/projects/{{ project_id }}/dashboard?year={{ drawer.date_year }}&month={{ drawer.date_month }}&date={{ drawer.date_iso }}&type=task{% if drawer.assigned_to_any %}&assignedToAny=1{% endif %}"
+              hx-push-url="/web/projects/{{ project_id }}/calendar?year={{ drawer.date_year }}&month={{ drawer.date_month }}&date={{ drawer.date_iso }}&type=task{% if drawer.assigned_to_any %}&assignedToAny=1{% endif %}"
               class="border-b-2 pb-2 {% if drawer.active_type == "task" %}border-indigo-500 text-indigo-600 dark:border-indigo-400 dark:text-indigo-400{% else %}border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300{% endif %}">Tasks</a>
-            <a href="/web/projects/{{ project_id }}/dashboard?year={{ drawer.date_year }}&month={{ drawer.date_month }}&date={{ drawer.date_iso }}&type=event{% if drawer.assigned_to_any %}&assignedToAny=1{% endif %}"
-              hx-get="/web/projects/{{ project_id }}/dashboard/calendar/day?date={{ drawer.date_iso }}&type=event{% if drawer.assigned_to_any %}&assignedToAny=1{% endif %}"
+            <a href="/web/projects/{{ project_id }}/calendar?year={{ drawer.date_year }}&month={{ drawer.date_month }}&date={{ drawer.date_iso }}&type=event{% if drawer.assigned_to_any %}&assignedToAny=1{% endif %}"
+              hx-get="/web/projects/{{ project_id }}/calendar/day?date={{ drawer.date_iso }}&type=event{% if drawer.assigned_to_any %}&assignedToAny=1{% endif %}"
               hx-target="#day-drawer-list" hx-select="#day-drawer-list" hx-swap="outerHTML"
-              hx-push-url="/web/projects/{{ project_id }}/dashboard?year={{ drawer.date_year }}&month={{ drawer.date_month }}&date={{ drawer.date_iso }}&type=event{% if drawer.assigned_to_any %}&assignedToAny=1{% endif %}"
+              hx-push-url="/web/projects/{{ project_id }}/calendar?year={{ drawer.date_year }}&month={{ drawer.date_month }}&date={{ drawer.date_iso }}&type=event{% if drawer.assigned_to_any %}&assignedToAny=1{% endif %}"
               class="border-b-2 pb-2 {% if drawer.active_type == "event" %}border-indigo-500 text-indigo-600 dark:border-indigo-400 dark:text-indigo-400{% else %}border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300{% endif %}">Events</a>
           </nav>
         </div>

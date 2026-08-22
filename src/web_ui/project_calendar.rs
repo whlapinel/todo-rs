@@ -69,14 +69,14 @@ const PRESETS: [&str; 6] = [
 /// e.g. `project_tasks/mod.rs`'s identical rationale). Merges `dashboard.rs`'s combined
 /// Task/Event date semantics with `team_dashboard.rs`'s assignee display — see CLAUDE.md's
 /// Scheduled start/end section for why Events are `scheduled_date`-primary here.
-fn dashboard_date(item: &Item) -> Option<DateTime<Utc>> {
+fn calendar_date(item: &Item) -> Option<DateTime<Utc>> {
     match item.kind() {
         ItemKind::Event => item.scheduled_date().or(item.due_date()),
         _ => item.due_date(),
     }
 }
 
-fn dashboard_has_time(item: &Item) -> bool {
+fn calendar_has_time(item: &Item) -> bool {
     match item.kind() {
         ItemKind::Event if item.scheduled_date().is_some() => item.has_scheduled_time(),
         ItemKind::Event => item.has_due_time(),
@@ -145,8 +145,8 @@ async fn names_for(
 }
 
 #[derive(Template)]
-#[template(path = "project_dashboard/row.html")]
-struct ProjectDashboardRow {
+#[template(path = "project_calendar/row.html")]
+struct ProjectCalendarRow {
     item_id: String,
     name: String,
     complete: bool,
@@ -170,15 +170,15 @@ struct ProjectDashboardRow {
     /// `components::row::Row`-style confirm-then-fade badge — see that struct's identical
     /// fields. Only ever set by `render_rows`'s `just_completed_item_id` force-include, when
     /// this row is the materialized result of completing a virtual series occurrence from
-    /// this same screen (see `ProjectDashboardVirtualRow::complete_url`) — `None` everywhere
-    /// else, including `toggle_project_dashboard_item_complete`'s own direct-item checkbox,
+    /// this same screen (see `ProjectCalendarVirtualRow::complete_url`) — `None` everywhere
+    /// else, including `toggle_project_calendar_item_complete`'s own direct-item checkbox,
     /// which is unrelated to this pass. See the archived "dashboard checkbox parity" follow-up
     /// (2026-08-21).
     confirmation: Option<String>,
     dismiss_after_ms: Option<u32>,
 }
 
-impl ProjectDashboardRow {
+impl ProjectCalendarRow {
     #[allow(clippy::too_many_arguments)]
     fn from_due_item(
         di: &DueItem,
@@ -190,9 +190,9 @@ impl ProjectDashboardRow {
         dismiss_after_ms: Option<u32>,
     ) -> Self {
         let item = &di.item;
-        let date_label = dashboard_date(item).map(|d| {
+        let date_label = calendar_date(item).map(|d| {
             let local = to_local(d, tz);
-            if dashboard_has_time(item) {
+            if calendar_has_time(item) {
                 local.format("%Y-%m-%d %H:%M").to_string()
             } else {
                 local.format("%Y-%m-%d").to_string()
@@ -221,7 +221,7 @@ impl ProjectDashboardRow {
                 .and_then(|id| names.get(&id).cloned()),
             can_delete: !is_team_project,
             toggle_target: (item.kind() != ItemKind::Event)
-                .then(|| format!("/web/projects/{project_id}/dashboard/items/{}", item.id)),
+                .then(|| format!("/web/projects/{project_id}/calendar/items/{}", item.id)),
             detail_link: detail_url(item, project_id),
             toggle_complete_json: (!item.complete).to_string(),
             confirmation,
@@ -231,8 +231,8 @@ impl ProjectDashboardRow {
 }
 
 #[derive(Template)]
-#[template(path = "project_dashboard/virtual_row.html")]
-struct ProjectDashboardVirtualRow {
+#[template(path = "project_calendar/virtual_row.html")]
+struct ProjectCalendarVirtualRow {
     series_id: String,
     occurrence_ts: i64,
     name: String,
@@ -251,8 +251,8 @@ struct ProjectDashboardVirtualRow {
     is_skipped: bool,
     unskip_url: String,
     /// `Some` only for a Task-typed occurrence (`Item::validate` rejects `complete: true` for
-    /// Events, mirroring `ProjectDashboardRow::toggle_target`'s identical `None`-for-Event
-    /// convention above) that's also `is_current`, giving the dashboard's virtual row the same
+    /// Events, mirroring `ProjectCalendarRow::toggle_target`'s identical `None`-for-Event
+    /// convention above) that's also `is_current`, giving the calendar's virtual row the same
     /// completability the Tasks list's `ProjectTaskVirtualRow` already has for the one
     /// occurrence per series that's actually completable. Unlike the flat Tasks list (which
     /// only ever lists the current occurrence to begin with — see
@@ -262,28 +262,33 @@ struct ProjectDashboardVirtualRow {
     /// order" — confirmed live) instead of doing anything, so the gate keeps this from being a
     /// checkbox that predictably errors on every click but one. Reuses the exact same route
     /// `ProjectTaskVirtualRow::complete_url` points at (`complete_project_item_series_
-    /// occurrence_form`) — that handler's `view=project-dashboard` branch (see its doc comment)
-    /// rebuilds `#project-dashboard-list` in place via `list_query`/`in_list_view` below,
+    /// occurrence_form`) — that handler's `view=project-calendar` branch (see its doc comment)
+    /// rebuilds `#project-calendar-list` in place via `list_query`/`in_list_view` below,
     /// mirroring the flat Tasks list's own `view=tasks-list` treatment (see the archived
     /// "extend confirm-then-fade to virtual occurrences" entry, 2026-08-21) now that this
     /// screen's `preset`/`show_complete`/`assigned_to_any` filter state is baked into the URL
     /// too, closing the gap the original "dashboard checkbox parity" follow-up (2026-08-21)
     /// left open.
     complete_url: Option<String>,
-    /// `true` only when this row is being rendered for the flat Dashboard list (`render_rows`),
+    /// `true` only when this row is being rendered for the flat Calendar list (`render_rows`),
     /// never the calendar day panel (`day_list_rows`) — gates whether the checkbox/Skip/Unskip
-    /// carry `hx-target="#project-dashboard-list"` at all, mirroring `ProjectTaskVirtualRow::
+    /// carry `hx-target="#project-calendar-list"` at all, mirroring `ProjectTaskVirtualRow::
     /// in_list_view`'s identical rationale. The calendar day panel has no such container in its
     /// DOM, so those buttons there fall back to the pre-existing whole-page `redirect_to_
     /// current_page` behavior.
     in_list_view: bool,
 }
 
-impl ProjectDashboardVirtualRow {
-    /// `list_query` is `Some(&query_string)` (baked from `dashboard_list_query`) only when
+impl ProjectCalendarVirtualRow {
+    /// `list_query` is `Some(&query_string)` (baked from `calendar_list_query`) only when
     /// rendering for the flat list — `None` for the calendar day panel, matching
     /// `ProjectTaskVirtualRow::from_occurrence`'s identical `in_list_view`-gated pattern.
-    fn from_occurrence(occ: &ProjectOccurrence, project_id: &str, tz: i32, list_query: Option<&str>) -> Self {
+    fn from_occurrence(
+        occ: &ProjectOccurrence,
+        project_id: &str,
+        tz: i32,
+        list_query: Option<&str>,
+    ) -> Self {
         let local = to_local(occ.occurrence_date, tz);
         let kind_name = if occ.item_type == ItemKind::Event {
             "Event"
@@ -317,8 +322,8 @@ impl ProjectDashboardVirtualRow {
 }
 
 #[derive(Template)]
-#[template(path = "project_dashboard/page.html")]
-struct ProjectDashboardPageTemplate {
+#[template(path = "project_calendar/page.html")]
+struct ProjectCalendarListPageTemplate {
     project_id: String,
     rows: Vec<String>,
     show_complete: bool,
@@ -329,24 +334,24 @@ struct ProjectDashboardPageTemplate {
 
 #[derive(serde::Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
-pub struct DashboardQuery {
+pub struct ProjectCalendarListQuery {
     preset: Option<String>,
     show_complete: Option<String>,
     assigned_to_any: Option<String>,
 }
 
 /// Bakes this screen's three filter dimensions into a query-string suffix for a virtual row's
-/// checkbox/Skip/Unskip URLs, so an in-place `#project-dashboard-list` rebuild
-/// (`complete_project_item_series_occurrence_form`'s/Skip's/Unskip's `view=project-dashboard`
+/// checkbox/Skip/Unskip URLs, so an in-place `#project-calendar-list` rebuild
+/// (`complete_project_item_series_occurrence_form`'s/Skip's/Unskip's `view=project-calendar`
 /// branch) knows how to re-render "the same view" — mirrors `ProjectTaskVirtualRow::
 /// from_occurrence`'s `list_query`, extended with this screen's two extra filters (`preset`,
 /// `assignedToAny`) since, unlike the flat Tasks list, this view has more than one filter
 /// dimension to round-trip. `preset`'s value is a closed, hardcoded set (`PRESETS` above) of
 /// plain-ASCII-plus-spaces strings, so a bare space-to-%20 substitution is sufficient escaping
 /// — no general percent-encoding is needed for this fixed vocabulary.
-fn dashboard_list_query(preset: &str, show_complete: bool, assigned_to_any: bool) -> String {
+fn calendar_list_query(preset: &str, show_complete: bool, assigned_to_any: bool) -> String {
     let mut params = vec![
-        "view=project-dashboard".to_string(),
+        "view=project-calendar".to_string(),
         format!("preset={}", preset.replace(' ', "%20")),
     ];
     if show_complete {
@@ -359,7 +364,7 @@ fn dashboard_list_query(preset: &str, show_complete: bool, assigned_to_any: bool
 }
 
 /// Same Rust-side filtering rationale as `dashboard::render_rows` — an unfiltered SQL fetch
-/// (both `after`/`before` `None`) followed by filtering against `dashboard_date` here, so an
+/// (both `after`/`before` `None`) followed by filtering against `calendar_date` here, so an
 /// Event showing up by `scheduled_date` isn't excluded for lacking a `due_date`.
 #[allow(clippy::too_many_arguments)]
 fn render_rows(
@@ -386,16 +391,18 @@ fn render_rows(
         .filter(|di| di.item.kind() != ItemKind::Simple)
         .filter(|di| assigned_to_any || di.item.assigned_to_user_id() == Some(user_id.to_string()))
         .filter(|di| {
-            show_complete || !di.item.complete || Some(di.item.id.as_str()) == just_completed_item_id
+            show_complete
+                || !di.item.complete
+                || Some(di.item.id.as_str()) == just_completed_item_id
         })
-        .filter(|di| preset != "All with due date" || dashboard_date(&di.item).is_some())
-        .filter(|di| match dashboard_date(&di.item) {
+        .filter(|di| preset != "All with due date" || calendar_date(&di.item).is_some())
+        .filter(|di| match calendar_date(&di.item) {
             Some(d) => after.is_none_or(|a| d >= a) && before.is_none_or(|b| d <= b),
             None => after.is_none() && before.is_none(),
         })
         .collect();
     items.sort_by_key(|di| {
-        dashboard_date(&di.item)
+        calendar_date(&di.item)
             .map(|d| d.timestamp())
             .unwrap_or(i64::MAX)
     });
@@ -403,13 +410,13 @@ fn render_rows(
     let mut entries: Vec<(i64, String)> = items
         .iter()
         .map(|di| {
-            let ts = dashboard_date(&di.item)
+            let ts = calendar_date(&di.item)
                 .map(|d| d.timestamp())
                 .unwrap_or(i64::MAX);
             let just_completed = Some(di.item.id.as_str()) == just_completed_item_id;
             let confirmation = just_completed.then(|| "Completed".to_string());
             let dismiss_after_ms = (just_completed && !show_complete).then_some(1800u32);
-            ProjectDashboardRow::from_due_item(
+            ProjectCalendarRow::from_due_item(
                 di,
                 project_id,
                 names,
@@ -443,11 +450,11 @@ fn render_rows(
         .filter(|occ| !matches!(occ.state, OccurrenceState::Materialized { .. }))
         .filter(|occ| assigned_to_any || occ.assigned_to_user_id == Some(user_id.to_string()))
         .collect();
-    let list_query = dashboard_list_query(preset, show_complete, assigned_to_any);
+    let list_query = calendar_list_query(preset, show_complete, assigned_to_any);
     for occ in filtered_occurrences {
         entries.push((
             occ.occurrence_date.timestamp(),
-            ProjectDashboardVirtualRow::from_occurrence(occ, project_id, tz, Some(&list_query))
+            ProjectCalendarVirtualRow::from_occurrence(occ, project_id, tz, Some(&list_query))
                 .render()?,
         ));
     }
@@ -457,10 +464,10 @@ fn render_rows(
 }
 
 /// The calendar's per-day panel — see `project_tasks::day_list_rows`'s identical rationale.
-/// Unlike `render_rows` above (the flat dashboard page's preset-filtered view), this shows
+/// Unlike `render_rows` above (the flat calendar page's preset-filtered view), this shows
 /// every item/occurrence on `date`, optionally narrowed by the drawer's own All/Tasks/Events
 /// tab (`type_filter`) and assigned-to-me toggle (`assigned_to_any`) — reusing
-/// `ProjectDashboardRow`/`ProjectDashboardVirtualRow` as-is (no feature upgrade to virtual-row
+/// `ProjectCalendarRow`/`ProjectCalendarVirtualRow` as-is (no feature upgrade to virtual-row
 /// completability; that's tracked separately in docs/issues_and_features.md).
 ///
 /// The assigned-to-me filter is gated on `is_team_project` — deliberately *not* a literal
@@ -491,16 +498,22 @@ fn day_list_rows(
         .filter(|di| di.item.kind() != ItemKind::Simple)
         .filter(|di| type_filter.is_none_or(|k| di.item.kind() == k))
         .filter(|di| mine(di.item.assigned_to_user_id()))
-        .filter(|di| {
-            dashboard_date(&di.item).map(|d| to_local(d, tz).date_naive()) == Some(date)
-        })
+        .filter(|di| calendar_date(&di.item).map(|d| to_local(d, tz).date_naive()) == Some(date))
         .map(|di| {
-            let ts = dashboard_date(&di.item)
+            let ts = calendar_date(&di.item)
                 .map(|d| d.timestamp())
                 .unwrap_or(i64::MAX);
-            ProjectDashboardRow::from_due_item(di, project_id, names, is_team_project, tz, None, None)
-                .render()
-                .map(|html| (ts, html))
+            ProjectCalendarRow::from_due_item(
+                di,
+                project_id,
+                names,
+                is_team_project,
+                tz,
+                None,
+                None,
+            )
+            .render()
+            .map(|html| (ts, html))
         })
         .collect::<Result<Vec<_>, _>>()?;
     for occ in virtual_occurrences
@@ -512,7 +525,7 @@ fn day_list_rows(
     {
         entries.push((
             occ.occurrence_date.timestamp(),
-            ProjectDashboardVirtualRow::from_occurrence(occ, project_id, tz, None).render()?,
+            ProjectCalendarVirtualRow::from_occurrence(occ, project_id, tz, None).render()?,
         ));
     }
     entries.sort_by_key(|(ts, _)| *ts);
@@ -542,14 +555,14 @@ fn virtual_occurrence_window(
     )
 }
 
-/// The flat Dashboard list's row assembly, shared between the initial page load
-/// (`project_dashboard_page`) and the in-place `#project-dashboard-list` rebuild the
-/// checkbox/Skip/Unskip handlers do on `view=project-dashboard` (`complete_project_item_series_
+/// The flat Calendar list's row assembly, shared between the initial page load
+/// (`project_calendar_list_page`) and the in-place `#project-calendar-list` rebuild the
+/// checkbox/Skip/Unskip handlers do on `view=project-calendar` (`complete_project_item_series_
 /// occurrence_form`, `skip_project_item_series_occurrence_form`, `unskip_project_item_series_
 /// occurrence_form`) — mirrors `project_tasks::list_task_rows_for_project`'s identical
 /// rationale, so a mutation's response and a fresh reload can never drift apart.
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn list_dashboard_rows_for_project(
+pub(crate) async fn list_calendar_rows_for_project(
     repo: &Arc<dyn ItemRepo>,
     projects: &Arc<dyn ProjectRepo>,
     teams: &Arc<dyn TeamRepo>,
@@ -563,10 +576,12 @@ pub(crate) async fn list_dashboard_rows_for_project(
     tz: i32,
     just_completed_item_id: Option<&str>,
 ) -> Result<Vec<String>, ItemError> {
-    let project = project_service::get_project(projects, teams, project_id, requester_user_id).await?;
+    let project =
+        project_service::get_project(projects, teams, project_id, requester_user_id).await?;
     let (after, before) = preset_range(preset, Utc::now(), tz);
     let due_items =
-        project_item_service::list_due_project_items_unchecked(repo, project_id, None, None).await?;
+        project_item_service::list_due_project_items_unchecked(repo, project_id, None, None)
+            .await?;
     let (virtual_after, virtual_before) = virtual_occurrence_window(after, before, Utc::now());
     let virtual_occurrences = if virtual_after <= virtual_before {
         series_service::list_occurrence_states_for_project(
@@ -602,11 +617,11 @@ pub(crate) async fn list_dashboard_rows_for_project(
     )
 }
 
-/// The `#project-dashboard-list` innerHTML swap body — see `project_tasks::
-/// items_list_inner_html`'s identical rationale, matching `project_dashboard/page.html`'s own
+/// The `#project-calendar-list` innerHTML swap body — see `project_tasks::
+/// items_list_inner_html`'s identical rationale, matching `project_calendar/page.html`'s own
 /// empty-state markup so an in-place rebuild that empties the list looks identical to a fresh
 /// load that finds nothing.
-pub(crate) fn dashboard_items_inner_html(rows: &[String]) -> String {
+pub(crate) fn calendar_items_inner_html(rows: &[String]) -> String {
     if rows.is_empty() {
         "<li class=\"py-3 text-sm text-gray-500 dark:text-gray-400\">No items.</li>".to_string()
     } else {
@@ -614,23 +629,36 @@ pub(crate) fn dashboard_items_inner_html(rows: &[String]) -> String {
     }
 }
 
-/// Stage 6 of docs/calendar-day-drawer-plan.md: `.../dashboard/calendar` used to be this
-/// screen's calendar view — now that the calendar lives at the base `.../dashboard` path
-/// instead, this is kept alive only as a redirect (cheap insurance against a stale link or
-/// bookmark), forwarding whatever query string it was given so a bookmarked
-/// `?year=...&date=...` still lands on the same day.
-pub async fn redirect_project_dashboard_calendar(
+/// Stage 8 of docs/calendar-day-drawer-plan.md: `.../dashboard`/`.../dashboard/calendar` were
+/// this screen's base/legacy-calendar paths before the "Dashboard" → "Calendar" route rename —
+/// kept alive only as redirects (cheap insurance against a stale link or bookmark), forwarding
+/// whatever query string it was given so a bookmarked `?year=...&date=...` still lands on the
+/// same day.
+pub async fn redirect_project_dashboard(
     Path(project_id): Path<String>,
     RawQuery(query): RawQuery,
 ) -> Redirect {
-    let base = format!("/web/projects/{project_id}/dashboard");
+    let base = format!("/web/projects/{project_id}/calendar");
     match query {
         Some(q) if !q.is_empty() => Redirect::to(&format!("{base}?{q}")),
         _ => Redirect::to(&base),
     }
 }
 
-pub async fn project_dashboard_page(
+/// Stage 8: `.../dashboard/list` was this screen's list-view path before the rename — kept
+/// alive as a redirect to `.../calendar/list`, same rationale as `redirect_project_dashboard`.
+pub async fn redirect_project_dashboard_list(
+    Path(project_id): Path<String>,
+    RawQuery(query): RawQuery,
+) -> Redirect {
+    let base = format!("/web/projects/{project_id}/calendar/list");
+    match query {
+        Some(q) if !q.is_empty() => Redirect::to(&format!("{base}?{q}")),
+        _ => Redirect::to(&base),
+    }
+}
+
+pub async fn project_calendar_list_page(
     Path(project_id): Path<String>,
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
@@ -639,13 +667,13 @@ pub async fn project_dashboard_page(
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
     TzOffset(tz_offset): TzOffset,
-    Query(q): Query<DashboardQuery>,
+    Query(q): Query<ProjectCalendarListQuery>,
 ) -> Result<Html<String>, ItemError> {
     let preset = q.preset.unwrap_or_else(|| "Today".to_string());
     let show_complete = q.show_complete.is_some();
     let assigned_to_any = q.assigned_to_any.is_some();
 
-    let rows = list_dashboard_rows_for_project(
+    let rows = list_calendar_rows_for_project(
         &repo,
         &projects,
         &teams,
@@ -669,7 +697,7 @@ pub async fn project_dashboard_page(
         SidebarSection::None,
     )
     .await?;
-    render(ProjectDashboardPageTemplate {
+    render(ProjectCalendarListPageTemplate {
         project_id,
         rows,
         show_complete,
@@ -680,10 +708,9 @@ pub async fn project_dashboard_page(
 }
 
 /// Redesign per docs/issues_and_features.md's calendar-view entry: a day cell only shows a
-/// count hint now, not the items themselves — see `ProjectDashboardCalendarPageTemplate`'s
-/// doc comment for where the full list moved to, mirroring
-/// `project_tasks::templates::CalendarDay`.
-struct ProjectDashboardCalendarDay {
+/// count hint now, not the items themselves — see `ProjectCalendarPageTemplate`'s doc comment
+/// for where the full list moved to, mirroring `project_tasks::templates::CalendarDay`.
+struct ProjectCalendarDay {
     date: String,
     day_number: u32,
     is_current_month: bool,
@@ -693,8 +720,8 @@ struct ProjectDashboardCalendarDay {
 }
 
 #[derive(Template)]
-#[template(path = "project_dashboard/calendar_page.html")]
-struct ProjectDashboardCalendarPageTemplate {
+#[template(path = "project_calendar/calendar_page.html")]
+struct ProjectCalendarPageTemplate {
     project_id: String,
     month_label: String,
     month_iso: String,
@@ -704,12 +731,12 @@ struct ProjectDashboardCalendarPageTemplate {
     prev_month: u32,
     next_year: i32,
     next_month: u32,
-    days: Vec<ProjectDashboardCalendarDay>,
+    days: Vec<ProjectCalendarDay>,
     /// Stage 2: whether the day-drawer fragment below actually has a day to show — gates the
     /// inline `showModal()` script (a hard/bookmarked load of `?date=...` needs to open the
     /// drawer without any htmx swap ever firing `htmx:afterSwap`, so nothing else would open it).
     has_selected_date: bool,
-    /// The `#day-drawer` dialog's initial innerHTML — rendered via `ProjectDashboardCalendarDayPanelTemplate`
+    /// The `#day-drawer` dialog's initial innerHTML — rendered via `ProjectCalendarDayPanelTemplate`
     /// the same way `day_rows` renders individual rows, so the page template doesn't need to
     /// duplicate the drawer's own fields (header, arrows, list) itself.
     day_drawer_html: String,
@@ -757,16 +784,16 @@ struct DayDrawerData {
 /// for both, matching `#action-dialog`/`#error-dialog`'s existing "swap innerHTML of a persistent
 /// dialog" convention).
 #[derive(Template)]
-#[template(path = "project_dashboard/calendar_day_panel.html")]
-struct ProjectDashboardCalendarDayPanelTemplate {
+#[template(path = "project_calendar/calendar_day_panel.html")]
+struct ProjectCalendarDayPanelTemplate {
     project_id: String,
     drawer: Option<DayDrawerData>,
     day_rows: Vec<String>,
 }
 
 /// Builds the `#day-drawer` dialog's innerHTML, shared between the calendar page's initial embed
-/// and the `.../calendar/day` fragment route — see `ProjectDashboardCalendarDayPanelTemplate`'s
-/// doc comment.
+/// and the `.../calendar/day` fragment route — see `ProjectCalendarDayPanelTemplate`'s doc
+/// comment.
 fn render_day_drawer(
     project_id: &str,
     date: Option<NaiveDate>,
@@ -792,7 +819,7 @@ fn render_day_drawer(
             assigned_to_any,
         }
     });
-    Ok(ProjectDashboardCalendarDayPanelTemplate {
+    Ok(ProjectCalendarDayPanelTemplate {
         project_id: project_id.to_string(),
         drawer,
         day_rows,
@@ -848,7 +875,7 @@ fn end_of_day() -> chrono::NaiveTime {
 /// Mirrors `project_tasks::build_calendar_days`'s identical redesign rationale (per
 /// docs/issues_and_features.md's calendar-view entry): a cell only needs a tally now, the full
 /// list for a clicked day renders separately via `day_list_rows`. Unlike the list view
-/// (`project_dashboard_page`'s `show_complete` filter), this never filters out completed
+/// (`project_calendar_list_page`'s `show_complete` filter), this never filters out completed
 /// items — matching the tally this replaced, which also counted them. A materialized
 /// occurrence never appears in `virtual_occurrences` — it's already a real `items` row
 /// covered by `due_items` (see `series::list_virtual_occurrences_for_project_unchecked`).
@@ -871,20 +898,19 @@ fn build_calendar_days(
     user_id: &str,
     assigned_to_any: bool,
     is_team_project: bool,
-) -> Vec<ProjectDashboardCalendarDay> {
+) -> Vec<ProjectCalendarDay> {
     let grid_start = grid_start_for(year, month);
     let mine = |assigned: Option<String>| {
         !is_team_project || assigned_to_any || assigned == Some(user_id.to_string())
     };
 
-    let mut counts: std::collections::HashMap<NaiveDate, usize> =
-        std::collections::HashMap::new();
+    let mut counts: std::collections::HashMap<NaiveDate, usize> = std::collections::HashMap::new();
     for di in due_items {
         let item = &di.item;
         if item.kind() == ItemKind::Simple || !mine(item.assigned_to_user_id()) {
             continue;
         }
-        if let Some(dt) = dashboard_date(item) {
+        if let Some(dt) = calendar_date(item) {
             *counts.entry(to_local(dt, tz).date_naive()).or_default() += 1;
         }
     }
@@ -899,7 +925,7 @@ fn build_calendar_days(
     let mut days = Vec::with_capacity(42);
     for i in 0..42i64 {
         let date = grid_start + Duration::days(i);
-        days.push(ProjectDashboardCalendarDay {
+        days.push(ProjectCalendarDay {
             date: date.format("%Y-%m-%d").to_string(),
             day_number: date.day(),
             is_current_month: date.month() == month && date.year() == year,
@@ -913,7 +939,7 @@ fn build_calendar_days(
 
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CalendarQuery {
+pub struct ProjectCalendarQuery {
     year: Option<i32>,
     month: Option<u32>,
     /// See `project_tasks::handlers::CalendarQuery::date`'s identical rationale.
@@ -922,7 +948,7 @@ pub struct CalendarQuery {
     /// Only meaningful alongside `date`; ignored when no day is selected.
     r#type: Option<String>,
     /// Stage 3's assigned-to-me toggle — same `None`/absent = mine, present = everyone's
-    /// convention as `DashboardQuery::assigned_to_any` above.
+    /// convention as `ProjectCalendarListQuery::assigned_to_any` above.
     assigned_to_any: Option<String>,
 }
 
@@ -931,7 +957,7 @@ fn day_panel_label(date: NaiveDate) -> String {
     date.format("%A, %B %d, %Y").to_string()
 }
 
-pub async fn project_dashboard_calendar_page(
+pub async fn project_calendar_page(
     Path(project_id): Path<String>,
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
@@ -940,7 +966,7 @@ pub async fn project_dashboard_calendar_page(
     Extension(users): Extension<Arc<dyn UserRepo>>,
     Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
     TzOffset(tz): TzOffset,
-    Query(q): Query<CalendarQuery>,
+    Query(q): Query<ProjectCalendarQuery>,
 ) -> Result<Html<String>, ItemError> {
     let project =
         project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
@@ -1034,7 +1060,7 @@ pub async fn project_dashboard_calendar_page(
         assigned_to_any,
     )?;
 
-    render(ProjectDashboardCalendarPageTemplate {
+    render(ProjectCalendarPageTemplate {
         project_id,
         month_label: NaiveDate::from_ymd_opt(year, month, 1)
             .unwrap()
@@ -1057,7 +1083,7 @@ pub async fn project_dashboard_calendar_page(
     })
 }
 
-pub async fn project_dashboard_calendar_day_fragment(
+pub async fn project_calendar_day_fragment(
     Path(project_id): Path<String>,
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
@@ -1066,7 +1092,7 @@ pub async fn project_dashboard_calendar_day_fragment(
     Extension(users): Extension<Arc<dyn UserRepo>>,
     Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
     TzOffset(tz): TzOffset,
-    Query(q): Query<CalendarQuery>,
+    Query(q): Query<ProjectCalendarQuery>,
 ) -> Result<Html<String>, ItemError> {
     let project =
         project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
@@ -1128,11 +1154,11 @@ pub async fn project_dashboard_calendar_day_fragment(
 
 #[derive(serde::Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
-pub struct ToggleForm {
+pub struct ProjectCalendarToggleForm {
     complete: Option<String>,
 }
 
-pub async fn toggle_project_dashboard_item_complete(
+pub async fn toggle_project_calendar_item_complete(
     Path((project_id, item_id)): Path<(String, String)>,
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
@@ -1141,7 +1167,7 @@ pub async fn toggle_project_dashboard_item_complete(
     Extension(activity_log): Extension<Arc<dyn ActivityLogRepo>>,
     Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
     TzOffset(tz): TzOffset,
-    Form(form): Form<ToggleForm>,
+    Form(form): Form<ProjectCalendarToggleForm>,
 ) -> Result<Html<String>, ItemError> {
     let current = project_item_service::get_project_item(
         &repo,
@@ -1190,7 +1216,7 @@ pub async fn toggle_project_dashboard_item_complete(
         None => HashMap::new(),
     };
     match project_item_service::get_project_item_unchecked(&repo, &project_id, &item_id).await {
-        Ok(updated) => render(ProjectDashboardRow::from_due_item(
+        Ok(updated) => render(ProjectCalendarRow::from_due_item(
             &DueItem {
                 parent_name: String::new(),
                 item: updated,

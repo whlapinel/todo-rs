@@ -53,10 +53,10 @@ use tower_cookies::CookieManagerLayer;
 use tower_http::services::ServeDir;
 use web_ui::assigned_items::assigned_items_page;
 use web_ui::login::login_page;
-use web_ui::main_dashboard::*;
+use web_ui::main_calendar::*;
 use web_ui::project_activity::*;
+use web_ui::project_calendar::*;
 use web_ui::project_calendar_subscriptions::*;
-use web_ui::project_dashboard::*;
 use web_ui::project_events::handlers::*;
 use web_ui::project_item_series::handlers::*;
 use web_ui::project_simple_lists::handlers::*;
@@ -67,17 +67,19 @@ use web_ui::teams::*;
 
 fn build_web_router() -> Router {
     Router::new()
-        .route("/dashboard", get(main_dashboard_calendar_page))
-        .route("/dashboard/list", get(main_dashboard_page))
-        .route("/dashboard/calendar", get(redirect_main_dashboard_calendar))
+        .route("/calendar", get(main_calendar_page))
+        .route("/calendar/list", get(main_calendar_list_page))
+        .route("/calendar/day", get(main_calendar_day_fragment))
         .route(
-            "/dashboard/calendar/day",
-            get(main_dashboard_calendar_day_fragment),
+            "/calendar/projects/:project_id/items/:item_id",
+            put(toggle_main_calendar_item_complete),
         )
-        .route(
-            "/dashboard/projects/:project_id/items/:item_id",
-            put(toggle_main_dashboard_item_complete),
-        )
+        // Stage 8 of docs/calendar-day-drawer-plan.md: legacy "Dashboard"-named paths, kept
+        // alive only as redirects (cheap insurance against a stale link/bookmark) — see
+        // `redirect_main_dashboard`/`redirect_main_dashboard_list`'s doc comments.
+        .route("/dashboard", get(redirect_main_dashboard))
+        .route("/dashboard/list", get(redirect_main_dashboard_list))
+        .route("/dashboard/calendar", get(redirect_main_dashboard))
         .route("/projects", get(projects_page).post(create_project_form))
         .route(
             "/projects/:project_id/tasks",
@@ -165,7 +167,8 @@ fn build_web_router() -> Router {
         )
         .route(
             "/projects/:project_id/calendar-subscriptions",
-            get(project_calendar_subscriptions_page).post(create_project_calendar_subscription_form),
+            get(project_calendar_subscriptions_page)
+                .post(create_project_calendar_subscription_form),
         )
         .route(
             "/projects/:project_id/calendar-subscriptions/:subscription_id",
@@ -300,25 +303,33 @@ fn build_web_router() -> Router {
             "/projects/:project_id/series/:series_id/occurrences/:occurrence_ts/unskip",
             post(unskip_project_item_series_occurrence_form),
         )
+        .route("/projects/:project_id/calendar", get(project_calendar_page))
+        .route(
+            "/projects/:project_id/calendar/list",
+            get(project_calendar_list_page),
+        )
+        .route(
+            "/projects/:project_id/calendar/day",
+            get(project_calendar_day_fragment),
+        )
+        .route(
+            "/projects/:project_id/calendar/items/:item_id",
+            put(toggle_project_calendar_item_complete),
+        )
+        // Stage 8 of docs/calendar-day-drawer-plan.md: legacy "Dashboard"-named paths, kept
+        // alive only as redirects — see `redirect_project_dashboard`/
+        // `redirect_project_dashboard_list`'s doc comments.
         .route(
             "/projects/:project_id/dashboard",
-            get(project_dashboard_calendar_page),
+            get(redirect_project_dashboard),
         )
         .route(
             "/projects/:project_id/dashboard/list",
-            get(project_dashboard_page),
+            get(redirect_project_dashboard_list),
         )
         .route(
             "/projects/:project_id/dashboard/calendar",
-            get(redirect_project_dashboard_calendar),
-        )
-        .route(
-            "/projects/:project_id/dashboard/calendar/day",
-            get(project_dashboard_calendar_day_fragment),
-        )
-        .route(
-            "/projects/:project_id/dashboard/items/:item_id",
-            put(toggle_project_dashboard_item_complete),
+            get(redirect_project_dashboard),
         )
         .route("/projects/:project_id/activity", get(project_activity_page))
         .route(
@@ -367,7 +378,8 @@ async fn main() {
     let team_repo = Arc::new(SqliteTeamRepo(pool.clone())) as Arc<dyn TeamRepo>;
     let project_repo = Arc::new(SqliteProjectRepo(pool.clone())) as Arc<dyn ProjectRepo>;
     let series_repo = Arc::new(SqliteItemSeriesRepo(pool.clone())) as Arc<dyn ItemSeriesRepo>;
-    let activity_log_repo = Arc::new(SqliteActivityLogRepo(pool.clone())) as Arc<dyn ActivityLogRepo>;
+    let activity_log_repo =
+        Arc::new(SqliteActivityLogRepo(pool.clone())) as Arc<dyn ActivityLogRepo>;
     let calendar_repo =
         Arc::new(SqliteCalendarSubscriptionRepo(pool)) as Arc<dyn CalendarSubscriptionRepo>;
 
@@ -485,7 +497,7 @@ async fn main() {
             let public_web_router = build_public_web_router();
 
             Router::new()
-                .route("/", get(|| async { Redirect::to("/web/dashboard") }))
+                .route("/", get(|| async { Redirect::to("/web/calendar") }))
                 .nest("/api", api_router)
                 .nest("/auth", auth_router)
                 .nest("/web", web_router.merge(public_web_router))
@@ -553,7 +565,7 @@ async fn main() {
             let public_web_router = build_public_web_router();
 
             Router::new()
-                .route("/", get(|| async { Redirect::to("/web/dashboard") }))
+                .route("/", get(|| async { Redirect::to("/web/calendar") }))
                 .nest("/auth", auth_router)
                 .nest("/api", api_router)
                 .nest("/web", web_router.merge(public_web_router))

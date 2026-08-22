@@ -218,7 +218,7 @@ impl QuickAssignDialog {
 }
 
 /// Stage 10 gap 2: a Task series' `current_occurrence_date`, rendered as a distinct virtual
-/// row in the flat `/tasks` list — mirrors `project_dashboard::ProjectDashboardVirtualRow` and
+/// row in the flat `/tasks` list — mirrors `project_calendar::ProjectCalendarVirtualRow` and
 /// the Tasks calendar's `CalendarVirtualTaskEntry`, minus the type badge (this list is
 /// Task-only already). Every row built from this struct is current by construction (callers
 /// filter for `is_current` before constructing one), so the template has no "Planned" branch.

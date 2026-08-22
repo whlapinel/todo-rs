@@ -1,10 +1,10 @@
-<li id="main-dash-virtual-{{ series_id }}-{{ occurrence_ts }}" class="py-2">
+<li id="proj-dash-virtual-{{ series_id }}-{{ occurrence_ts }}" class="py-2">
   <div class="flex items-center gap-x-3">
     {% if is_skipped %}
     <span class="shrink-0 size-4"></span>
     {% else if let Some(url) = complete_url %}
     <input type="checkbox" hx-post="{{ url }}"
-      {% if in_list_view %}hx-target="#main-dashboard-list" hx-select="unset" hx-swap="innerHTML"{% endif %}
+      {% if in_list_view %}hx-target="#project-calendar-list" hx-select="unset" hx-swap="innerHTML"{% endif %}
       class="shrink-0 size-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-600 dark:border-white/20 dark:bg-white/5" />
     {% else %}
     <span class="shrink-0 size-4"></span>
@@ -27,16 +27,15 @@
     {% endif %}
   </div>
   <div class="mt-1 flex items-center gap-x-3 pl-7 text-xs text-gray-500 dark:text-gray-400">
-    <span class="rounded bg-gray-100 px-1.5 py-0.5 text-gray-600 dark:bg-white/10 dark:text-gray-300">{{ project_name }}</span>
     {% if let Some(a) = assignee_name %}<span class="text-indigo-600 dark:text-indigo-400">{{ a }}</span>{% endif %}
     <span class="flex-1">{{ date_kind_label }}: {{ date_label }}</span>
     {% if is_skipped %}
     <button hx-post="{{ unskip_url }}"
-      {% if in_list_view %}hx-target="#main-dashboard-list" hx-select="unset" hx-swap="innerHTML"{% endif %}
+      {% if in_list_view %}hx-target="#project-calendar-list" hx-select="unset" hx-swap="innerHTML"{% endif %}
       class="shrink-0 cursor-pointer text-gray-400 hover:text-indigo-500 dark:text-gray-500 dark:hover:text-indigo-400">Unskip</button>
     {% else %}
     <button hx-post="{{ skip_url }}" hx-confirm="Skip this occurrence?"
-      {% if in_list_view %}hx-target="#main-dashboard-list" hx-select="unset" hx-swap="innerHTML"{% endif %}
+      {% if in_list_view %}hx-target="#project-calendar-list" hx-select="unset" hx-swap="innerHTML"{% endif %}
       class="shrink-0 cursor-pointer text-gray-400 hover:text-red-500 dark:text-gray-500 dark:hover:text-red-400">Skip</button>
     {% endif %}
   </div>

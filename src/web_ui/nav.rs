@@ -45,7 +45,7 @@ struct SectionLink {
 struct NavTemplate {
     project_pills: Vec<ProjectPill>,
     section_links: Vec<SectionLink>,
-    dashboard_href: Option<String>,
+    calendar_href: Option<String>,
     activity_href: Option<String>,
 }
 
@@ -57,7 +57,7 @@ struct NavTemplate {
 /// section" fall out for free rather than needing special-case code — same property the
 /// Personal/Team switcher this replaces already had.
 ///
-/// `SidebarSection::None` maps to that project's Dashboard — the closest analog of the old
+/// `SidebarSection::None` maps to that project's Calendar — the closest analog of the old
 /// Personal/Team switcher's "no single section" fallback.
 fn section_href(section: SidebarSection, project_id: &str) -> String {
     let path = match section {
@@ -66,7 +66,7 @@ fn section_href(section: SidebarSection, project_id: &str) -> String {
         SidebarSection::SimpleLists => "simple-lists",
         SidebarSection::Templates => "templates",
         SidebarSection::ItemSeries => "series",
-        SidebarSection::None => "dashboard",
+        SidebarSection::None => "calendar",
     };
     format!("/web/projects/{project_id}/{path}")
 }
@@ -90,11 +90,11 @@ pub async fn build_nav_html(
         })
         .collect();
 
-    // The 4 section links and the Dashboard/Activity fixed links only make sense once a
+    // The 4 section links and the Calendar/Activity fixed links only make sense once a
     // project is actually active — a page like the projects list or the teams list has no
     // single project to scope them to, so they're simply omitted there rather than pointing
     // at an arbitrary project.
-    let (section_links, dashboard_href, activity_href) = match &active {
+    let (section_links, calendar_href, activity_href) = match &active {
         ActiveContext::Project(project_id) => {
             let links = [
                 (SidebarSection::Tasks, "Tasks"),
@@ -122,7 +122,7 @@ pub async fn build_nav_html(
     Ok(NavTemplate {
         project_pills,
         section_links,
-        dashboard_href,
+        calendar_href,
         activity_href,
     }
     .render()?)

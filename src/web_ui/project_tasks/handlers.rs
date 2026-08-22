@@ -69,7 +69,7 @@ pub async fn project_tasks_page(
     // series' current occurrence is never itself materialized or skipped, so the trailing
     // `!Materialized` filter never has anything to exclude here in practice. A just-skipped
     // occurrence stops being current the instant it's settled, so it (correctly) has nothing
-    // to show in this current-only view — see the calendar/dashboard views for where a
+    // to show in this current-only view — see the Calendar screens for where a
     // skipped occurrence's struck-through Unskip row actually appears.
     //
     // The actual assembly now lives in `super::list_task_rows_for_project`, shared with the
@@ -465,24 +465,25 @@ fn redirect_to_current_page(headers: &HeaderMap, project_id: &str) -> Response {
 #[derive(serde::Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct OccurrenceRowActionQuery {
-    /// `"tasks-list"`, `"project-dashboard"`, or `"main-dashboard"` — set only by
-    /// `ProjectTaskVirtualRow`/`ProjectDashboardVirtualRow`/`MainDashboardVirtualRow`'s
+    /// `"tasks-list"`, `"project-calendar"`, or `"main-calendar"` — set only by
+    /// `ProjectTaskVirtualRow`/`ProjectCalendarVirtualRow`/`MainCalendarVirtualRow`'s
     /// `from_occurrence` when rendering for that screen's own flat list (never the calendar day
     /// panel — see each struct's `in_list_view` doc comment). Every other caller of this same
     /// route falls back to the pre-existing `redirect_to_current_page` behavior below.
     view: Option<String>,
     show_complete: Option<String>,
-    /// Only meaningful for `view=project-dashboard`/`main-dashboard` — baked in by
-    /// `dashboard_list_query`/`main_dashboard_list_query`, `None` for `view=tasks-list` (the
+    /// Only meaningful for `view=project-calendar`/`main-calendar` — baked in by
+    /// `calendar_list_query` (in each of `project_calendar.rs`/`main_calendar.rs`), `None` for
+    /// `view=tasks-list` (the
     /// flat Tasks list has no preset of its own).
     preset: Option<String>,
-    /// Only meaningful for `view=project-dashboard` — `main-dashboard` has no `assignedToAny`
+    /// Only meaningful for `view=project-calendar` — `main-calendar` has no `assignedToAny`
     /// toggle of its own (see `is_included`'s cross-project assignment rule).
     assigned_to_any: Option<String>,
 }
 
 /// The row-checkbox counterpart to Skip/Unskip (`project_item_series::handlers`) — completes a
-/// Task-series occurrence directly from a list/dashboard row's checkbox, whether it's still
+/// Task-series occurrence directly from a list/calendar row's checkbox, whether it's still
 /// virtual or already materialized doesn't matter to the caller: materializes it first if
 /// needed (`get_or_materialize_occurrence`, a no-op if already materialized), then completes it
 /// via the exact same `update_project_item` path a real item's own checkbox already uses — so
@@ -571,8 +572,8 @@ pub async fn complete_project_item_series_occurrence_form(
         .await?;
         return Ok(Html(super::items_list_inner_html(&rows)).into_response());
     }
-    if q.view.as_deref() == Some("project-dashboard") {
-        let rows = crate::web_ui::project_dashboard::list_dashboard_rows_for_project(
+    if q.view.as_deref() == Some("project-calendar") {
+        let rows = crate::web_ui::project_calendar::list_calendar_rows_for_project(
             &repo,
             &projects,
             &teams,
@@ -588,12 +589,14 @@ pub async fn complete_project_item_series_occurrence_form(
         )
         .await?;
         return Ok(
-            Html(crate::web_ui::project_dashboard::dashboard_items_inner_html(&rows))
-                .into_response(),
+            Html(crate::web_ui::project_calendar::calendar_items_inner_html(
+                &rows,
+            ))
+            .into_response(),
         );
     }
-    if q.view.as_deref() == Some("main-dashboard") {
-        let rows = crate::web_ui::main_dashboard::list_main_dashboard_rows(
+    if q.view.as_deref() == Some("main-calendar") {
+        let rows = crate::web_ui::main_calendar::list_main_calendar_rows(
             &repo,
             &projects,
             &users,
@@ -607,7 +610,7 @@ pub async fn complete_project_item_series_occurrence_form(
         )
         .await?;
         return Ok(
-            Html(crate::web_ui::main_dashboard::main_dashboard_items_inner_html(&rows))
+            Html(crate::web_ui::main_calendar::main_calendar_items_inner_html(&rows))
                 .into_response(),
         );
     }

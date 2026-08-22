@@ -267,7 +267,7 @@ pub(crate) fn render_rows(
 /// Sane forward window for the virtual/skipped Event-series occurrences the (otherwise
 /// unbounded) flat list view now shows too, as of Stage D of
 /// `docs/unify-virtual-materialized-occurrences-plan.md` — matches
-/// `project_dashboard::VIRTUAL_OCCURRENCE_DEFAULT_WINDOW_DAYS`'s identical rationale and
+/// `project_calendar::VIRTUAL_OCCURRENCE_DEFAULT_WINDOW_DAYS`'s identical rationale and
 /// value; duplicated per this module's own convention of not sharing small per-screen
 /// helpers rather than importing it.
 const VIRTUAL_OCCURRENCE_WINDOW_DAYS: i64 = 90;

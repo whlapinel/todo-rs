@@ -114,7 +114,7 @@ pub trait ItemRepo: Send + Sync {
         deadline_before: Option<i64>,
     ) -> Result<Vec<DueItem>, RepoError>;
     /// Stage B5e's project-scoped counterpart to `list_due` — keyed on `project_id`
-    /// instead of `team_id`, so `project_dashboard.rs` doesn't have to special-case
+    /// instead of `team_id`, so `project_calendar.rs` doesn't have to special-case
     /// personal vs. team-backed projects the way `dashboard.rs`/`team_dashboard.rs`
     /// used to be two separate screens.
     async fn list_due_by_project(
@@ -239,8 +239,10 @@ pub trait CalendarSubscriptionRepo: Send + Sync {
         created_by_user_id: &str,
     ) -> Result<CalendarSubscription, RepoError>;
     async fn get(&self, id: &str) -> Result<CalendarSubscription, RepoError>;
-    async fn list_by_project(&self, project_id: &str)
-    -> Result<Vec<CalendarSubscription>, RepoError>;
+    async fn list_by_project(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<CalendarSubscription>, RepoError>;
     async fn delete(&self, id: &str) -> Result<(), RepoError>;
     /// Every subscription across every project — the Stage 5 background sweep's
     /// entry point.

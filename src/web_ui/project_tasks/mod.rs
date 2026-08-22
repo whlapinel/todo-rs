@@ -358,7 +358,7 @@ pub(crate) fn render_rows(
 
 /// Stage 10 gap 2: the flat Tasks list's own version of `render_rows`, merging in each
 /// Task-typed series' single current virtual occurrence (if any) alongside real items —
-/// mirrors `project_dashboard::render_rows`'s exact merge pattern (render each kind to
+/// mirrors `project_calendar::render_rows`'s exact merge pattern (render each kind to
 /// `(timestamp, html)` pairs, concatenate, sort by timestamp, discard the timestamp). Kept
 /// separate from `render_rows` rather than adding a parameter to it, since `render_rows` has
 /// three other call sites in this module (children/subordinate task lists) where virtual
@@ -415,8 +415,14 @@ pub(crate) fn render_rows_with_virtual(
     for occ in virtual_occurrences {
         entries.push((
             occ.occurrence_date.timestamp(),
-            ProjectTaskVirtualRow::from_occurrence(occ, project_id, tz, show_complete, in_list_view)
-                .render()?,
+            ProjectTaskVirtualRow::from_occurrence(
+                occ,
+                project_id,
+                tz,
+                show_complete,
+                in_list_view,
+            )
+            .render()?,
         ));
     }
     entries.sort_by_key(|(ts, _)| *ts);
@@ -474,8 +480,7 @@ pub(crate) async fn list_task_rows_for_project(
     .collect();
     let mut skip_urls: HashMap<String, String> = HashMap::new();
     for item in &items {
-        if let Some(url) = item_series_service::skip_url_for_item(series, item, project_id).await?
-        {
+        if let Some(url) = item_series_service::skip_url_for_item(series, item, project_id).await? {
             skip_urls.insert(item.id.clone(), url);
         }
     }
