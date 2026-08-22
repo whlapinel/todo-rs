@@ -74,7 +74,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "list_items",
       description:
-        "List a project's items. Optionally filter by parent item to get sub-tasks.",
+        "List a project's items. Optionally filter by parent item to get sub-tasks. Each item's googleEventId is set (and read-only) if it was imported from a Google Calendar subscription.",
       inputSchema: {
         type: "object",
         properties: {
@@ -92,7 +92,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "get_item",
-      description: "Get a single todo item by ID from a project.",
+      description:
+        "Get a single todo item by ID from a project. googleEventId is set (and read-only) if the item was imported from a Google Calendar subscription.",
       inputSchema: {
         type: "object",
         properties: {
@@ -227,7 +228,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "update_item",
-      description: "Update a todo item in a project.",
+      description:
+        "Update a todo item in a project. Rejected with an error if the item was imported from a Google Calendar subscription (googleEventId is set) — those items are read-only and only change via the next sync.",
       inputSchema: {
         type: "object",
         properties: {
@@ -279,7 +281,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "delete_item",
-      description: "Delete a todo item and all its sub-tasks from a project.",
+      description:
+        "Delete a todo item and all its sub-tasks from a project. Rejected with an error if the item was imported from a Google Calendar subscription (googleEventId is set) — unsubscribe the calendar instead to remove those.",
       inputSchema: {
         type: "object",
         properties: {

@@ -50,10 +50,14 @@ impl ProjectEventRow {
             assignee_name: None,
             complete_url: None,
             duplicate_url: None,
-            reschedule_url: Some(format!(
-                "/web/projects/{project_id}/events/{}/reschedule",
-                item.id
-            )),
+            reschedule_url: if item.google_event_id.is_some() {
+                None
+            } else {
+                Some(format!(
+                    "/web/projects/{project_id}/events/{}/reschedule",
+                    item.id
+                ))
+            },
             assign_url: None,
             skip_url,
             toggle_complete_json: String::new(),
@@ -62,6 +66,7 @@ impl ProjectEventRow {
             show_complete: false,
             confirmation: None,
             dismiss_after_ms: None,
+            is_imported: item.google_event_id.is_some(),
         }
     }
 }
@@ -503,6 +508,11 @@ pub struct ProjectEventDetailPageTemplate {
     pub name: String,
     pub view: String,
     pub nav_html: String,
+    /// Hides the "Edit" link — see `templates/project_events/detail_page.html` and
+    /// CLAUDE.md's read-only-enforcement note. `service::project_items::update_project_item`
+    /// rejects any edit of an imported item regardless, so this is purely to avoid showing a
+    /// link that would only ever lead to an error.
+    pub is_imported: bool,
 }
 
 #[derive(Template)]

@@ -15,6 +15,10 @@
         <span class="toast-fade shrink-0 text-xs font-medium text-green-600 dark:text-green-400">&#10003; {{ msg
             }}</span>
         {% endif %}
+        {% if is_imported %}
+        <span title="Imported from Google Calendar — read-only"
+            class="shrink-0 text-xs text-gray-400 dark:text-gray-500">&#128197; Google Calendar</span>
+        {% endif %}
         {% if let Some(url) = reschedule_url %}
         <button hx-get="{{ url }}" hx-target="#action-dialog" hx-select="unset" hx-swap="innerHTML"
             class="shrink-0 cursor-pointer text-red-600 hover:text-red-500 dark:text-red-400 dark:hover:text-red-300">
@@ -40,12 +44,14 @@
             Skip
         </button>
         {% endif %}
+        {% if !is_imported %}
         <button hx-delete="{{ item_url }}"
             hx-confirm="Delete {{ name }}{% if has_children %} and all its sub-items{% endif %}?"
             hx-target="#item-{{ id }}" hx-select="unset" hx-swap="outerHTML swap:200ms"
             class="shrink-0 cursor-pointer text-red-600 hover:text-red-500 dark:text-red-400 dark:hover:text-red-300">
             {% include "icons/delete.html" %}
         </button>
+        {% endif %}
     </div>
     {% if expanded_row %}
     <div class="mt-1 flex items-center gap-x-3 pl-7 text-xs text-gray-500 dark:text-gray-400">

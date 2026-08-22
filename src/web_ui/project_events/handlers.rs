@@ -296,12 +296,14 @@ pub async fn project_event_detail_page(
         SidebarSection::Events,
     )
     .await?;
+    let is_imported = item.google_event_id.is_some();
     render(ProjectEventDetailPageTemplate {
         id: item.id,
         project_id,
         name: item.name,
         view,
         nav_html,
+        is_imported,
     })
 }
 
@@ -711,6 +713,7 @@ pub async fn update_project_event_form(
             name: updated.name.clone(),
             view,
             nav_html,
+            is_imported: updated.google_event_id.is_some(),
         })?
         .into_response());
     }

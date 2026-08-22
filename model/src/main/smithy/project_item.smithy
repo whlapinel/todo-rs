@@ -35,6 +35,8 @@ resource ProjectItem {
         assignedToUserId: String
         points: Integer
         sourceEventId: String
+        googleEventId: String
+        calendarSubscriptionId: String
     }
     read: GetProjectItem
     list: ListProjectItems
@@ -146,6 +148,10 @@ operation GetProjectItem {
         $points
 
         $sourceEventId
+
+        $googleEventId
+
+        $calendarSubscriptionId
     }
 
     errors: [
@@ -254,6 +260,8 @@ structure ProjectItemSummary for ProjectItem {
     assignedToUserName: String
     $points
     $sourceEventId
+    $googleEventId
+    $calendarSubscriptionId
 }
 
 @input

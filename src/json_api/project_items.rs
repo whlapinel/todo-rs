@@ -125,6 +125,8 @@ pub async fn get_project_item(
         assigned_to_user_id: item.assigned_to_user_id(),
         points: item.points(),
         source_event_id: item.source_event_id(),
+        google_event_id: item.google_event_id.clone(),
+        calendar_subscription_id: item.calendar_subscription_id.clone(),
     })
 }
 
@@ -278,6 +280,8 @@ pub async fn list_project_items(
                 .map(|id| names.get(&id).unwrap_or(&"<Name>".to_string()).clone()),
             points: i.points(),
             source_event_id: i.source_event_id(),
+            google_event_id: i.google_event_id.clone(),
+            calendar_subscription_id: i.calendar_subscription_id.clone(),
         })
         .collect();
     Ok(output::ListProjectItemsOutput { items })

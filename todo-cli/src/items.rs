@@ -151,11 +151,13 @@ pub async fn cmd_items(client: &Client, cmd: ItemsCommand, user_id: Option<Strin
                 };
                 let due = fmt_date_opt(i.due_date());
                 let assignee = i.assigned_to_user_name().unwrap_or("-");
-                let suffix = if i.has_children().unwrap_or(false) {
-                    " ▸"
-                } else {
-                    ""
-                };
+                let mut suffix = String::new();
+                if i.has_children().unwrap_or(false) {
+                    suffix.push_str(" ▸");
+                }
+                if i.google_event_id().is_some() {
+                    suffix.push_str(" [gcal]");
+                }
                 println!(
                     "{:<36}  {:<4}  {:<12}  {:<20}  {}{}",
                     id, done, due, assignee, name, suffix
@@ -404,6 +406,7 @@ pub async fn cmd_items(client: &Client, cmd: ItemsCommand, user_id: Option<Strin
             println!("item type:  {:?}", item.item_type());
             println!("event type: {}", item.event_type().unwrap_or("-"));
             println!("src event:  {}", item.source_event_id().unwrap_or("-"));
+            println!("gcal event: {}", item.google_event_id().unwrap_or("-"));
         }
         ItemsCommand::Due { after, before } => {
             let uid = require_user(user_id);

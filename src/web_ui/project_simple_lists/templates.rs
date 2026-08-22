@@ -43,6 +43,8 @@ impl ProjectSimpleItemRow {
             show_complete: false,
             confirmation: None,
             dismiss_after_ms: None,
+            // Simple items are never Google-Calendar-imported (only Events are).
+            is_imported: false,
         }
     }
 }

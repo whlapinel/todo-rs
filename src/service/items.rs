@@ -233,6 +233,12 @@ pub async fn update_item(
 
     let current = repo.get(&params.user_id, &params.item_id).await?;
 
+    if current.google_event_id.is_some() {
+        return Err(ItemError::Invalid(
+            "this item was imported from Google Calendar and cannot be edited".to_string(),
+        ));
+    }
+
     if params.complete
         && !current.complete
         && has_incomplete_children(repo, &params.item_id).await?
@@ -367,7 +373,12 @@ pub async fn delete_item(
     user_id: &str,
     item_id: &str,
 ) -> Result<(), ItemError> {
-    repo.get(user_id, item_id).await?;
+    let current = repo.get(user_id, item_id).await?;
+    if current.google_event_id.is_some() {
+        return Err(ItemError::Invalid(
+            "this item was imported from Google Calendar and cannot be deleted".to_string(),
+        ));
+    }
 
     let mut queue = vec![item_id.to_string()];
     while let Some(parent_id) = queue.first().cloned() {
@@ -1089,6 +1100,57 @@ mod tests {
         )
         .await
         .expect_err("should reject end before start");
+
+        assert!(matches!(err, ItemError::Invalid(_)));
+    }
+
+    #[tokio::test]
+    async fn update_item_rejects_editing_a_google_calendar_imported_item() {
+        let mut mock = MockItemRepo::new();
+        mock.expect_get().returning(|_, _| {
+            Ok(Item {
+                id: "item1".to_string(),
+                google_event_id: Some("gcal-uid-1".to_string()),
+                calendar_subscription_id: Some("sub1".to_string()),
+                ..Item::default()
+            })
+        });
+        let repo: Arc<dyn ItemRepo> = Arc::new(mock);
+
+        let err = update_item(
+            &repo,
+            &no_personal_project(),
+            &no_op_activity_log(),
+            UpdateItemParams {
+                user_id: "u1".to_string(),
+                item_id: "item1".to_string(),
+                name: "Trying to rename".to_string(),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect_err("should reject editing an imported item");
+
+        assert!(matches!(err, ItemError::Invalid(_)));
+    }
+
+    #[tokio::test]
+    async fn delete_item_rejects_deleting_a_google_calendar_imported_item() {
+        let mut mock = MockItemRepo::new();
+        mock.expect_get().returning(|_, _| {
+            Ok(Item {
+                id: "item1".to_string(),
+                google_event_id: Some("gcal-uid-1".to_string()),
+                calendar_subscription_id: Some("sub1".to_string()),
+                ..Item::default()
+            })
+        });
+        let repo: Arc<dyn ItemRepo> = Arc::new(mock);
+        let series: Arc<dyn ItemSeriesRepo> = Arc::new(MockItemSeriesRepo::new());
+
+        let err = delete_item(&repo, &series, "u1", "item1")
+            .await
+            .expect_err("should reject deleting an imported item");
 
         assert!(matches!(err, ItemError::Invalid(_)));
     }

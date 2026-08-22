@@ -114,6 +114,9 @@ impl ProjectTaskRow {
             show_complete,
             confirmation,
             dismiss_after_ms,
+            // Only an Event can ever be Google-Calendar-imported (see CLAUDE.md's Points/
+            // Recurrence sections — imported items are always `ItemType::Event`).
+            is_imported: false,
         }
     }
 }

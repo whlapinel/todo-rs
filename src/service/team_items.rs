@@ -285,7 +285,12 @@ pub async fn delete_team_item(
     item_id: &str,
 ) -> Result<(), ItemError> {
     require_project_member(projects, teams, project_id, requester_user_id).await?;
-    repo.get_by_project(project_id, item_id).await?;
+    let current = repo.get_by_project(project_id, item_id).await?;
+    if current.google_event_id.is_some() {
+        return Err(ItemError::Invalid(
+            "this item was imported from Google Calendar and cannot be deleted".to_string(),
+        ));
+    }
 
     let mut queue = vec![item_id.to_string()];
     while let Some(parent_id) = queue.first().cloned() {
@@ -394,6 +399,12 @@ pub async fn update_team_item(
     let current = repo
         .get_by_project(&params.project_id, &params.item_id)
         .await?;
+
+    if current.google_event_id.is_some() {
+        return Err(ItemError::Invalid(
+            "this item was imported from Google Calendar and cannot be edited".to_string(),
+        ));
+    }
 
     if params.complete
         && !current.complete
@@ -592,7 +603,7 @@ mod tests {
     use crate::domain::activity_log::ActivityLogEntry;
     use crate::domain::team::TeamRole;
     use crate::storage::sqlite::{
-        MockActivityLogRepo, MockItemRepo, MockProjectRepo, MockTeamRepo,
+        MockActivityLogRepo, MockItemRepo, MockItemSeriesRepo, MockProjectRepo, MockTeamRepo,
     };
 
     /// A `ProjectRepo` resolving `project_id` as a team-backed project (`team_id`)
@@ -753,6 +764,69 @@ mod tests {
             },
             ..Item::default()
         }
+    }
+
+    #[tokio::test]
+    async fn update_team_item_rejects_editing_a_google_calendar_imported_item() {
+        let mut items = MockItemRepo::new();
+        items.expect_get_by_project().returning(|_, _| {
+            Ok(Item {
+                id: "item1".to_string(),
+                project_id: Some("p1".to_string()),
+                google_event_id: Some("gcal-uid-1".to_string()),
+                calendar_subscription_id: Some("sub1".to_string()),
+                ..Item::default()
+            })
+        });
+
+        let items: Arc<dyn ItemRepo> = Arc::new(items);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+        let projects: Arc<dyn ProjectRepo> =
+            Arc::new(project_with_role("p1", "t1", TeamRole::Member));
+
+        let err = update_team_item(
+            &items,
+            &ctx_with(teams, projects),
+            "member1",
+            "t1",
+            UpdateTeamItemParams {
+                project_id: "p1".to_string(),
+                item_id: "item1".to_string(),
+                name: "Trying to rename".to_string(),
+                complete: false,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect_err("should reject editing an imported item");
+
+        assert!(matches!(err, ItemError::Invalid(_)));
+    }
+
+    #[tokio::test]
+    async fn delete_team_item_rejects_deleting_a_google_calendar_imported_item() {
+        let mut items = MockItemRepo::new();
+        items.expect_get_by_project().returning(|_, _| {
+            Ok(Item {
+                id: "item1".to_string(),
+                project_id: Some("p1".to_string()),
+                google_event_id: Some("gcal-uid-1".to_string()),
+                calendar_subscription_id: Some("sub1".to_string()),
+                ..Item::default()
+            })
+        });
+
+        let items: Arc<dyn ItemRepo> = Arc::new(items);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+        let projects: Arc<dyn ProjectRepo> =
+            Arc::new(project_with_role("p1", "t1", TeamRole::Member));
+        let series: Arc<dyn ItemSeriesRepo> = Arc::new(MockItemSeriesRepo::new());
+
+        let err = delete_team_item(&items, &series, &teams, &projects, "member1", "p1", "item1")
+            .await
+            .expect_err("should reject deleting an imported item");
+
+        assert!(matches!(err, ItemError::Invalid(_)));
     }
 
     #[tokio::test]

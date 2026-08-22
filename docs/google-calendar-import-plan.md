@@ -401,7 +401,88 @@ Done as planned, with one deliberate scope merge and a couple of structural devi
 
 ### Implementation notes
 
-_(empty until Stage 4 is actually done)_
+Done as planned. The domain-struct/storage-row-mapping half was already merged into Stage 3
+(see that section's own note), so this stage was Smithy + service-layer guards + web UI only:
+
+- **Smithy**: `googleEventId`/`calendarSubscriptionId` added to `ProjectItem`'s
+  `properties`, referenced only in `GetProjectItem`'s `output` and `ProjectItemSummary` —
+  exactly as planned, **not** referenced in `CreateProjectItem`'s or `UpdateProjectItem`'s
+  `input`, so no client can ever set them via a request body. `task codegen` run;
+  `json_api::project_items::get_project_item`/`list_project_items` updated to populate the two
+  new output fields from the domain `Item` (`google_event_id`/`calendar_subscription_id`,
+  already present on the struct since Stage 3).
+- **Service-layer guard**: reused `ItemError::Invalid` rather than adding a new
+  `ImportedItemReadOnly` variant (the plan flagged this as the two options — went with the
+  `TEMPLATE`-rejection precedent's existing shape, no new variant needed). Placed directly in
+  `service::items::update_item`/`delete_item` and `service::team_items::update_team_item`/
+  `delete_team_item` — the functions that actually fetch+mutate — rather than adding a
+  redundant second fetch+check in `service::project_items::update_project_item`/
+  `delete_project_item`. Those two already delegate straight into the guarded functions and
+  propagate their `Result` via `?`, so the rejection surfaces correctly through the
+  `project_items` dispatch layer with no changes needed there at all — confirmed by every
+  existing `project_items` test still passing unmodified (mock items default
+  `google_event_id: None`, so the new guard is a no-op for all of them). Each guard sits right
+  after that function's existing `current`/`repo.get(...)`-style fetch, before any other
+  validation, mirroring where the `TEMPLATE`-rejection check already sits in `create_item`.
+  4 new unit tests (one edit + one delete rejection per module) confirm the guard fires;
+  `cargo test` — 437 passed, 0 failed (433 pre-stage + 4).
+- **Not needed**: a defensive strip/reject in `project_items::duplicate_project_item` (raised
+  while planning this stage, since a naive clone would copy `google_event_id`/
+  `calendar_subscription_id` onto the duplicate and collide with the Stage 1 partial unique
+  index). Turned out to be moot — `ProjectEventRow::from_item` already hardcodes
+  `duplicate_url: None` for every Event (Events never exposed a duplicate action in the UI to
+  begin with — only Tasks have a `/tasks/:id/duplicate` route registered in `main.rs`), and
+  since imported items are always Events (Context section above), `duplicate_project_item` is
+  never actually reachable for one. Left `duplicate_project_item` itself unchanged.
+- **Web UI**: added `is_imported: bool` to the shared `web_ui::components::row::Row` (used by
+  `ProjectTaskRow`/`ProjectEventRow`/`ProjectSimpleItemRow` — the only three call sites, both
+  found and updated; `main_dashboard.rs`/`project_dashboard.rs` have their own unrelated
+  `MainDashboardRow`/`ProjectDashboardRow` structs, not `Row`). `ProjectEventRow::from_item`
+  sets it from `item.google_event_id.is_some()` and also nulls out `reschedule_url` for an
+  imported row (would otherwise open a dialog whose save PUT the new guard rejects);
+  `ProjectTaskRow`/`ProjectSimpleItemRow` hardcode `false` (imported items are always Events,
+  per the Context section, so this is provably always correct for them, not just a stopgap).
+  `templates/components/row.html` shows a small "📅 Google Calendar" badge and hides the
+  delete button when `is_imported` — reschedule/duplicate/assign buttons already naturally
+  disappear too since their `Option<String>` fields are `None` for an imported row. The
+  Events calendar-view day panel (`day_list_rows` in `project_events/mod.rs`) reuses this same
+  `ProjectEventRow::from_item`, so it's covered for free — no separate change needed there.
+  `ProjectEventDetailPageTemplate` gained the same `is_imported` field (set from
+  `item.google_event_id.is_some()` at both its call sites in `handlers.rs`); the detail page
+  template hides the "Edit" link and shows the same badge text instead. Did **not** block the
+  `GET .../:id/edit` route itself for an imported item (only hid the link to it) — matches this
+  app's existing precedent for the analogous `complete == true` case (checked
+  `project_tasks/handlers.rs`: no route-level guard exists there either, only the link is
+  hidden) — the PUT-side service guard is what actually enforces read-only either way.
+  Child add-form under an imported Event (`.../:id/children`) was deliberately left untouched:
+  a manually-added child task is never itself imported (`google_event_id` stays `None` on it),
+  so it's fully editable/deletable like any other item — only the imported Event row itself is
+  locked.
+- **CLI/MCP display-only surfacing**: `prl items get` gained a `gcal event: <id or ->` line;
+  `prl items list`'s row now appends a `[gcal]` suffix when `google_event_id` is set (mirroring
+  the existing `▸`-for-has-children suffix convention). `prl items update`/`create_item` needed
+  no change, exactly as the plan predicted (the Smithy input shapes simply don't carry the
+  field). MCP: no output-schema change needed — `list_items`/`get_item` return the API's raw
+  JSON pass-through, so `googleEventId`/`calendarSubscriptionId` already flow through
+  automatically once the server started returning them; only the four tool **descriptions**
+  (`list_items`, `get_item`, `update_item`, `delete_item`) were updated to document the
+  read-only behavior so a caller doesn't have to discover the rejection by trial and error.
+  `npm run build` run to confirm the TS still compiles (it's description-string-only, so this
+  was never really in doubt, but confirmed anyway).
+- **Verified**: `cargo test` (437 passed), `cargo check`/`task check` (only the same
+  pre-existing Stage 2/3 dead-code warnings, no new ones), `task web-styles` (picked up the new
+  Tailwind classes in `row.html`/`detail_page.html` with no errors), `cd todo-cli && cargo
+  check` (clean), `cd mcp-server && npm run build` (clean). No live/browser smoke test done
+  this stage — nothing built here is reachable via HTTP yet (`CreateCalendarSubscription`
+  doesn't exist until Stage 5), so there's no way to actually produce an imported item to click
+  through; worth a real click-through once Stage 5 lands.
+- Nothing discovered that changes Stage 5/6's assumptions. Stage 5's own sync-engine writes
+  (`calendar_sync::sync_subscription`, from Stage 3) go straight through
+  `item_repo.create`/`update`/`delete` rather than the `service::items`/`team_items` functions
+  guarded in this stage — confirmed by re-reading Stage 3's own note on this — so the new
+  read-only guards in this stage never block the sync's own writes, only end-user edit/delete
+  attempts. Stage 5 can wire `CreateCalendarSubscription`/background sync/web UI management
+  screen exactly as sketched with no changes needed to this stage's work.
 
 ---
 
