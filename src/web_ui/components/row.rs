@@ -30,6 +30,11 @@ pub struct Row {
     /// personal project (no assignment concept) or an unassigned team item.
     pub assignee_name: Option<String>,
     pub complete_url: Option<String>,
+    /// Row-actions-menu-only (see `components/row_actions_menu.html`) — the item's edit-page
+    /// route, `None` where editing isn't currently allowed (e.g. a completed task, an
+    /// imported event) even though the item itself has an edit route in principle. Distinct
+    /// from `item_url`, which always points at the read-only detail page.
+    pub edit_url: Option<String>,
     pub duplicate_url: Option<String>,
     pub reschedule_url: Option<String>,
     /// `Some(...)` only on a team-backed project (assignment has no meaning on a personal

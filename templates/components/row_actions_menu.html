@@ -1,0 +1,51 @@
+<!-- A row's "⋮" actions menu — copied into #action-dialog's innerHTML by openRowActionsMenu()
+     (base.html), not fetched from the server: the `Row` that owns this fragment already
+     carries every URL below, so there's nothing a round trip would add. #action-dialog is the
+     same persistent <dialog> reschedule_dialog.html/quick_assign_dialog.html swap into — this
+     fragment reuses its `group/dialog` backdrop/transition shell rather than defining its own.
+     Reschedule/Assign hx-get into #action-dialog itself exactly like the row's old per-icon
+     buttons did (swaps this menu for the existing dialog-shaped form); Duplicate/Delete hx-post/
+     hx-delete exactly like the old inline buttons did. Visually modeled on
+     ~/tailwind-ui-html/html/overlays/drawers/08-contact-list-example.html's el-menu popover
+     (rounded panel, divide-y, hover states) but plain markup, not the <el-menu> custom element
+     — see docs/calendar-day-drawer-plan.md's Confirmed design decisions. -->
+<div id="dialog-backdrop"
+    class="fixed inset-0 bg-gray-500/75 dark:bg-gray-900/50 transition-opacity duration-300 ease-out opacity-0 group-open/dialog:opacity-100">
+</div>
+
+<div tabindex="0"
+    class="relative z-10 flex min-h-full items-end justify-center p-4 text-center focus:outline-none sm:items-center sm:p-0">
+    <div class="relative w-full max-w-xs transform overflow-hidden rounded-lg bg-white dark:bg-gray-800 text-left shadow-xl transition-all duration-300 ease-out translate-y-4 opacity-0 scale-95 group-open/dialog:translate-y-0 group-open/dialog:opacity-100 group-open/dialog:scale-100 sm:my-8 dark:outline dark:-outline-offset-1 dark:outline-white/10">
+        <div class="divide-y divide-gray-100 dark:divide-white/10">
+            {% if let Some(url) = edit_url %}
+            <a href="{{ url }}" hx-target="#page" hx-select="#page" hx-swap="innerHTML"
+                onclick="document.getElementById('action-dialog').close()"
+                class="block px-4 py-3 text-sm text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-white/5">Edit</a>
+            {% endif %}
+            {% if let Some(url) = reschedule_url %}
+            <button type="button" hx-get="{{ url }}" hx-target="#action-dialog" hx-select="unset" hx-swap="innerHTML"
+                class="block w-full cursor-pointer px-4 py-3 text-left text-sm text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-white/5">Reschedule</button>
+            {% endif %}
+            {% if let Some(url) = assign_url %}
+            <button type="button" hx-get="{{ url }}" hx-target="#action-dialog" hx-select="unset" hx-swap="innerHTML"
+                class="block w-full cursor-pointer px-4 py-3 text-left text-sm text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-white/5">Assign</button>
+            {% endif %}
+            {% if let Some(url) = duplicate_url %}
+            <button type="button" hx-post="{{ url }}"
+                hx-confirm="Copy {{ name }}{% if has_children %} and all its sub-items{% endif %}?"
+                hx-target="#page" hx-select="#page" hx-swap="outerHTML"
+                class="block w-full cursor-pointer px-4 py-3 text-left text-sm text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-white/5">Duplicate</button>
+            {% endif %}
+            {% if !is_imported %}
+            <button type="button" hx-delete="{{ item_url }}"
+                hx-confirm="Delete {{ name }}{% if has_children %} and all its sub-items{% endif %}?"
+                hx-target="#item-{{ id }}" hx-select="unset" hx-swap="outerHTML swap:200ms"
+                class="block w-full cursor-pointer px-4 py-3 text-left text-sm text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-500/10">Delete</button>
+            {% endif %}
+        </div>
+        <div class="border-t border-gray-100 px-4 py-2 dark:border-white/10">
+            <button type="button" onclick="document.getElementById('action-dialog').close()"
+                class="w-full cursor-pointer rounded-md px-3 py-1.5 text-center text-sm text-gray-500 hover:bg-gray-50 dark:text-gray-400 dark:hover:bg-white/5">Cancel</button>
+        </div>
+    </div>
+</div>

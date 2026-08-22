@@ -49,7 +49,22 @@ impl ProjectEventRow {
             offset_label: None,
             assignee_name: None,
             complete_url: None,
-            duplicate_url: None,
+            edit_url: if item.google_event_id.is_some() {
+                None
+            } else {
+                Some(format!(
+                    "/web/projects/{project_id}/events/{}/edit",
+                    item.id
+                ))
+            },
+            duplicate_url: if item.google_event_id.is_some() {
+                None
+            } else {
+                Some(format!(
+                    "/web/projects/{project_id}/events/{}/duplicate",
+                    item.id
+                ))
+            },
             reschedule_url: if item.google_event_id.is_some() {
                 None
             } else {

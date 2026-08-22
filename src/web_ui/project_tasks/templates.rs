@@ -93,6 +93,8 @@ impl ProjectTaskRow {
             offset_label,
             assignee_name,
             complete_url: Some(format!("/web/projects/{project_id}/tasks/{}", item.id)),
+            edit_url: (!item.complete)
+                .then(|| format!("/web/projects/{project_id}/tasks/{}/edit", item.id)),
             duplicate_url: Some(format!(
                 "/web/projects/{project_id}/tasks/{}/duplicate",
                 item.id

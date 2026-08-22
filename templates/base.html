@@ -106,6 +106,37 @@
       if (dialog && !dialog.open) dialog.showModal();
     });
 
+    // A row's "⋮" button (components/row.html) calls this instead of hx-get-ing a menu from
+    // the server: the row's own <template id="row-actions-menu-{id}"> (rendered by
+    // components/row_actions_menu.html, right next to the button) already has every URL the
+    // menu needs, so there's nothing a round trip would add. htmx.process() is required here
+    // because htmx only auto-binds hx-* attributes on elements it swaps in itself (or that
+    // were present at initial page load) — a plain innerHTML assignment like this one leaves
+    // the menu's own Reschedule/Assign/Duplicate/Delete buttons inert without it.
+    function openRowActionsMenu(rowId) {
+      const tpl = document.getElementById('row-actions-menu-' + rowId);
+      const dialog = document.getElementById('action-dialog');
+      if (!tpl || !dialog) return;
+      dialog.innerHTML = tpl.innerHTML;
+      htmx.process(dialog);
+      if (!dialog.open) dialog.showModal();
+    }
+
+    // The row-actions menu's Delete button (components/row_actions_menu.html) targets
+    // #item-{id}, not #action-dialog, since deleting should also remove the row — so unlike
+    // Reschedule/Assign/Duplicate (which swap #action-dialog's own content and therefore
+    // don't need this), a successful delete leaves the dialog open over a page it no longer
+    // has anything to say about. Closes it whenever the element that triggered a successful
+    // request was inside an open #action-dialog and used hx-delete.
+    document.body.addEventListener('htmx:afterRequest', function (evt) {
+      var dialog = document.getElementById('action-dialog');
+      var elt = evt.detail.elt;
+      if (evt.detail.successful && dialog && dialog.open && elt &&
+        elt.hasAttribute && elt.hasAttribute('hx-delete') && dialog.contains(elt)) {
+        dialog.close();
+      }
+    });
+
     // Rows/fragments the server marks with data-dismiss-after="<ms>" (styles/input.css,
     // components/row.html) fade out and remove themselves that many ms after being swapped
     // in — e.g. a freshly-completed task row when "Show completed" is off, giving the user a

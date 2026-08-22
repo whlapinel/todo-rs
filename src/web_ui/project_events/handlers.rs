@@ -758,6 +758,40 @@ pub async fn delete_project_event_form(
     Ok(Html(String::new()))
 }
 
+/// Events-duplicate parity — see `project_tasks::handlers::duplicate_project_task_form`'s
+/// identical shape. `ProjectEventRow::from_item` gates `duplicate_url` to `None` for an
+/// imported event (`google_event_id.is_some()`), so this is never reached for one — but
+/// `duplicate_project_item` has no imported-item awareness of its own, so nothing here
+/// additionally checks that.
+pub async fn duplicate_project_event_form(
+    Path((project_id, item_id)): Path<(String, String)>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+) -> Result<Response, ItemError> {
+    let item = project_item_service::get_project_item(
+        &repo,
+        &projects,
+        &teams,
+        &project_id,
+        &auth_user.user_id,
+        &item_id,
+    )
+    .await?;
+    require_event(item)?;
+    project_item_service::duplicate_project_item(
+        &repo,
+        &projects,
+        &teams,
+        &auth_user.user_id,
+        &project_id,
+        &item_id,
+    )
+    .await?;
+    Ok(hx_redirect(format!("/web/projects/{project_id}/events")))
+}
+
 pub async fn save_project_event_as_template(
     Path((project_id, item_id)): Path<(String, String)>,
     Extension(auth_user): Extension<AuthUser>,

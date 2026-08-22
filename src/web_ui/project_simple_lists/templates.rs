@@ -29,6 +29,10 @@ impl ProjectSimpleItemRow {
             offset_label: None,
             assignee_name: None,
             complete_url: None,
+            edit_url: Some(format!(
+                "/web/projects/{project_id}/simple-lists/{}/edit",
+                item.id
+            )),
             duplicate_url: None,
             reschedule_url: None,
             assign_url: None,

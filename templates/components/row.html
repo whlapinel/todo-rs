@@ -19,38 +19,25 @@
         <span title="Imported from Google Calendar — read-only"
             class="shrink-0 text-xs text-gray-400 dark:text-gray-500">&#128197; Google Calendar</span>
         {% endif %}
-        {% if let Some(url) = reschedule_url %}
-        <button hx-get="{{ url }}" hx-target="#action-dialog" hx-select="unset" hx-swap="innerHTML"
-            class="shrink-0 cursor-pointer text-red-600 hover:text-red-500 dark:text-red-400 dark:hover:text-red-300">
-            {% include "icons/calendar.html" %}
-        </button>
-        {% endif %}
-        {% if let Some(url) = assign_url %}
-        <button hx-get="{{ url }}" hx-target="#action-dialog" hx-select="unset" hx-swap="innerHTML"
-            class="shrink-0 cursor-pointer text-red-600 hover:text-red-500 dark:text-red-400 dark:hover:text-red-300">
-            {% include "icons/assign.html" %}
-        </button>
-        {% endif %}
-        {% if let Some(url) = duplicate_url %}
-        <button hx-post="{{ url }}" hx-confirm="Copy {{ name }}{% if has_children %} and all its sub-items{% endif %}?"
-            hx-target="#page" hx-select="#page" hx-swap="outerHTML"
-            class="shrink-0 cursor-pointer text-red-600 hover:text-red-500 dark:text-red-400 dark:hover:text-red-300">
-            {% include "icons/duplicate.html" %}
-        </button>
-        {% endif %}
         {% if let Some(url) = skip_url %}
         <button hx-post="{{ url }}" hx-confirm="Skip this occurrence?"
             class="shrink-0 cursor-pointer text-xs text-gray-400 hover:text-red-500 dark:text-gray-500 dark:hover:text-red-400">
             Skip
         </button>
         {% endif %}
-        {% if !is_imported %}
-        <button hx-delete="{{ item_url }}"
-            hx-confirm="Delete {{ name }}{% if has_children %} and all its sub-items{% endif %}?"
-            hx-target="#item-{{ id }}" hx-select="unset" hx-swap="outerHTML swap:200ms"
-            class="shrink-0 cursor-pointer text-red-600 hover:text-red-500 dark:text-red-400 dark:hover:text-red-300">
-            {% include "icons/delete.html" %}
+        {% if edit_url.is_some() || reschedule_url.is_some() || assign_url.is_some() || duplicate_url.is_some() || !is_imported %}
+        <button type="button" onclick="openRowActionsMenu('{{ id }}')"
+            class="shrink-0 cursor-pointer text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300">
+            {% include "icons/ellipses.html" %}
         </button>
+        <!-- Pre-rendered, hidden — this row already carries every URL the menu needs, so
+             openRowActionsMenu() (base.html) copies this markup into #action-dialog and calls
+             htmx.process() on it rather than round-tripping to the server just to open a menu
+             built entirely from data already on the page. Reschedule/Assign inside the menu
+             still hx-get into #action-dialog itself, same as the old per-icon buttons did. -->
+        <template id="row-actions-menu-{{ id }}">
+            {% include "components/row_actions_menu.html" %}
+        </template>
         {% endif %}
     </div>
     {% if expanded_row %}
