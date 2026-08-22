@@ -953,13 +953,24 @@ pub async fn update_project_item_series_form(
 /// Orphan, not cascade — see `item_series_service::delete_series`'s doc comment. Already-
 /// materialized occurrences survive as plain standalone items; only the series row and its
 /// `item_occurrences` rows go away.
+#[derive(serde::Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteSeriesQuery {
+    /// Set only by the series' own edit page's Delete button (`edit_page.html`) — the
+    /// row-level "⋮" delete already lives on the list page and swaps its own row out in
+    /// place; the edit page has no list to swap into, so it needs a full-page redirect back
+    /// to the list instead.
+    redirect: Option<String>,
+}
+
 pub async fn delete_project_item_series_form(
-    Path((_project_id, series_id)): Path<(String, String)>,
+    Path((project_id, series_id)): Path<(String, String)>,
     Extension(auth_user): Extension<AuthUser>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(item_series): Extension<Arc<dyn ItemSeriesRepo>>,
-) -> Result<Html<String>, ItemError> {
+    Query(q): Query<DeleteSeriesQuery>,
+) -> Result<Response, ItemError> {
     item_series_service::delete_series(
         &projects,
         &teams,
@@ -968,7 +979,10 @@ pub async fn delete_project_item_series_form(
         &series_id,
     )
     .await?;
-    Ok(Html(String::new()))
+    if q.redirect.is_some() {
+        return Ok(hx_redirect(format!("/web/projects/{project_id}/series")));
+    }
+    Ok(Html(String::new()).into_response())
 }
 
 pub async fn duplicate_project_item_series_form(

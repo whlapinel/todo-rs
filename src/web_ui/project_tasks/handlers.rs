@@ -1050,6 +1050,16 @@ pub async fn update_project_task_form(
     }
 }
 
+#[derive(serde::Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteItemQuery {
+    /// Set only by the item's own read-only detail page's Delete button
+    /// (`detail_page.html`) — the row-level "⋮" delete already lives on the list page and
+    /// swaps its own row out in place; the detail page has no list to swap into, so it needs
+    /// a full-page redirect back to the list instead.
+    redirect: Option<String>,
+}
+
 pub async fn delete_project_task_form(
     Path((project_id, item_id)): Path<(String, String)>,
     Extension(auth_user): Extension<AuthUser>,
@@ -1057,7 +1067,8 @@ pub async fn delete_project_task_form(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
-) -> Result<Html<String>, ItemError> {
+    Query(q): Query<DeleteItemQuery>,
+) -> Result<Response, ItemError> {
     let current = project_item_service::get_project_item(
         &repo,
         &projects,
@@ -1078,7 +1089,17 @@ pub async fn delete_project_task_form(
         &item_id,
     )
     .await?;
-    Ok(Html(String::new()))
+    if q.redirect.is_some() {
+        return Ok((
+            [(
+                axum::http::header::HeaderName::from_static("hx-redirect"),
+                project_tasks_list_url(&project_id),
+            )],
+            Html(String::new()),
+        )
+            .into_response());
+    }
+    Ok(Html(String::new()).into_response())
 }
 
 pub async fn duplicate_project_task_form(
