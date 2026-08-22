@@ -2,9 +2,6 @@
 
 Open issues and feature requests, merged from the former `docs/issues.md` and `docs/features.md` (2026-08-20) into a single unsorted list. Completed or superseded items — including ones from the old files that were already resolved but hadn't been moved out yet — live in `docs/archived/archived_issues_and_features.md`.
 
-- Allow anyone to complete tasks not assigned to them.
-- Remove restriction that unassigned items cannot be completed
-- Remove restriction that only admin can assign items
 - Make Sunday the first day of the week instead of Monday in monthly calendar view
 - Put link to parent in child task detail view
 - Allow Delete any item from its details page - event, series, task, simple list (currently only available from the row-level UI, not the detail page itself).

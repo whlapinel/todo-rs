@@ -514,27 +514,15 @@ pub async fn update_team_item(
         ));
     }
 
-    // Team completion validation — unconditional for every team item, not just
-    // points-bearing ones (a real behavior change from before Stage 6; see
-    // CLAUDE.md's Points plan). Checked against the just-resolved `item`, not
-    // `current`, since a request can assign and complete in the same PUT.
+    // Completion is no longer gated on assignment: any project member may complete
+    // any team item (assigned to them, assigned to someone else, or unassigned) —
+    // see the "Allow anyone to complete tasks not assigned to them"/"Remove
+    // restriction that unassigned items cannot be completed" entries in
+    // docs/archived/archived_issues_and_features.md. Points still only ever go to
+    // the item's `assigned_to_user_id` (never whoever clicked complete), so an
+    // unassigned completion simply has no one to log/award against below.
     let just_completed = !current.complete && item.complete;
     let just_uncompleted = current.complete && !item.complete;
-    if just_completed {
-        match item.assigned_to_user_id() {
-            None => {
-                return Err(ItemError::Invalid(
-                    "cannot complete an unassigned team item; assign it first".to_string(),
-                ));
-            }
-            Some(assignee) if assignee != requester_user_id => {
-                return Err(ItemError::Invalid(
-                    "only the assigned user can complete this item".to_string(),
-                ));
-            }
-            _ => {}
-        }
-    }
 
     // Logging/reversal must run against `current`'s captured identity, strictly before
     // the recurrence branch below deletes it and creates a successor under a fresh id
@@ -545,12 +533,12 @@ pub async fn update_team_item(
     // ones (see docs/archived/archived_issues_and_features.md's "unify completion-undo" note) — logging and
     // point-awarding are two separate steps, so a 0-point completion still creates an
     // entry the activity feed's Undo button can act on, it just never touches the
-    // project's point balance.
-    if just_completed && item.parent_item_id.is_none() {
-        // Guarded by the match above: a just-completed item always has an assignee.
-        let assignee = item
-            .assigned_to_user_id()
-            .expect("just-completed team item must be assigned");
+    // project's point balance. An unassigned item has no one to credit, so it's
+    // skipped entirely (no log entry, nothing for the activity feed to undo).
+    if just_completed
+        && item.parent_item_id.is_none()
+        && let Some(assignee) = item.assigned_to_user_id()
+    {
         let points = item.points().unwrap_or(0);
         activity_log
             .log_activity(
@@ -1087,21 +1075,36 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn update_team_item_rejects_completion_of_unassigned_item() {
+    async fn update_team_item_allows_completion_of_unassigned_item() {
+        // No assignee to credit, so there's nothing to log/award — but the
+        // completion itself is no longer rejected (see the "Remove restriction that
+        // unassigned items cannot be completed" entry in
+        // docs/archived/archived_issues_and_features.md).
         let mut items = MockItemRepo::new();
         items
             .expect_get_by_project()
             .returning(|_, _| Ok(team_item_with_points("item1", Some(20))));
         items.expect_list_children().returning(|_| Ok(vec![]));
+        items
+            .expect_update_by_project()
+            .times(1)
+            .returning(|_| Ok(()));
+
+        let mut activity_log = MockActivityLogRepo::new();
+        activity_log.expect_log_activity().never();
 
         let items: Arc<dyn ItemRepo> = Arc::new(items);
         let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
-        let projects: Arc<dyn ProjectRepo> =
-            Arc::new(project_with_role("p1", "t1", TeamRole::Member));
+        let mut projects_mock = project_with_role("p1", "t1", TeamRole::Member);
+        projects_mock.expect_add_project_points().never();
 
-        let err = update_team_item(
+        update_team_item(
             &items,
-            &ctx_with(teams, projects),
+            &UpdateTeamItemContext {
+                teams,
+                projects: Arc::new(projects_mock),
+                activity_log: Arc::new(activity_log),
+            },
             "member1",
             "t1",
             UpdateTeamItemParams {
@@ -1113,13 +1116,15 @@ mod tests {
             },
         )
         .await
-        .expect_err("should reject completing an unassigned team item");
-
-        assert!(matches!(err, ItemError::Invalid(_)));
+        .expect("completing an unassigned team item should now be allowed");
     }
 
     #[tokio::test]
-    async fn update_team_item_rejects_completion_by_non_assignee() {
+    async fn update_team_item_allows_completion_by_non_assignee_awards_assignee() {
+        // Anyone (any project member) may now complete an item that's assigned to
+        // someone else; points still go to the assignee, never the completer (see
+        // the "Allow anyone to complete tasks not assigned to them" entry in
+        // docs/archived/archived_issues_and_features.md).
         let mut items = MockItemRepo::new();
         items.expect_get_by_project().returning(|_, _| {
             Ok(team_item_with_points_and_assignee(
@@ -1129,15 +1134,36 @@ mod tests {
             ))
         });
         items.expect_list_children().returning(|_| Ok(vec![]));
+        items
+            .expect_update_by_project()
+            .times(1)
+            .returning(|_| Ok(()));
+
+        let mut activity_log = MockActivityLogRepo::new();
+        activity_log
+            .expect_log_activity()
+            .withf(|_, _, user_id, _, _, points_delta| user_id == "member1" && *points_delta == 20)
+            .times(1)
+            .returning(|_, _, _, _, _, _| Ok("entry1".to_string()));
 
         let items: Arc<dyn ItemRepo> = Arc::new(items);
         let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
-        let projects: Arc<dyn ProjectRepo> =
-            Arc::new(project_with_role("p1", "t1", TeamRole::Member));
+        let mut projects_mock = project_with_role("p1", "t1", TeamRole::Member);
+        projects_mock
+            .expect_add_project_points()
+            .withf(|project_id, user_id, delta| {
+                project_id == "p1" && user_id == "member1" && *delta == 20
+            })
+            .times(1)
+            .returning(|_, _, _| Ok(20));
 
-        let err = update_team_item(
+        update_team_item(
             &items,
-            &ctx_with(teams, projects),
+            &UpdateTeamItemContext {
+                teams,
+                projects: Arc::new(projects_mock),
+                activity_log: Arc::new(activity_log),
+            },
             "someone-else",
             "t1",
             UpdateTeamItemParams {
@@ -1150,9 +1176,7 @@ mod tests {
             },
         )
         .await
-        .expect_err("should reject completion attempted by someone other than the assignee");
-
-        assert!(matches!(err, ItemError::Invalid(_)));
+        .expect("completion by a non-assignee project member should now be allowed");
     }
 
     #[tokio::test]
