@@ -2,13 +2,16 @@
 
 Open issues and feature requests, merged from the former `docs/issues.md` and `docs/features.md` (2026-08-20) into a single unsorted list. Completed or superseded items — including ones from the old files that were already resolved but hadn't been moved out yet — live in `docs/archived/archived_issues_and_features.md`.
 
-- Allow Delete any item from its details page - event, series, task, simple list (currently only available from the row-level UI, not the detail page itself).
 - Put link to parent in child task detail view
+- Allow Delete any item from its details page - event, series, task, simple list (currently only available from the row-level UI, not the detail page itself).
+- Allow copying a task or event to another project (distinct from the same-project "duplicate" action above).
+- Need button on each row with vertical elipses icon that gets dialog with row actions (reschedule/duplicate/delete/assign/move(for when we implement move item)edit/etc.) — `#action-dialog` in `base.html`.
+- Calendar should have same filter as list - assigned to user should be default, can select assigned to any.  
+- Clicking cell in calendar will render the correct day but the highlighted cell doesn't update properly for some reason. 
 - Allow a project admin to complete tasks not assigned to them.
 - Let's shrink the calendar view by at least 50% so that the list has plenty of room. Also, if it's fairly straighforward: On small screens i.e. mobile portrait width, they probably need to stay vertically arranged but on desktop/(ipad landscape?) let's put the month beside the list.
-- Allow copying a task or event to another project (distinct from the same-project "duplicate" action above).
-- Need a pop-up dialog component generalized for row actions (duplicate/delete/assign/etc.) — `#action-dialog` in `base.html` exists today but is only wired up for the quick-reschedule flow.
 - Add a `priority` field to task items and task series; sort first by priority, then by due date.
+- Consider visibly disabling inputs that will result in error. Specifically, recurring tasks that aren't current should have complete and skip grayed out, and skipped recurring tasks and events that aren't cursor should have unskip grayed out.
 - Add metadata fields to `Item`: `created_at`, `created_by`, `deleted_at`, `deleted_by` (tag for deletion instead of deleting outright, allowing recovery), with a TTL after which the item is actually deleted. Depends on the soft-delete design question mentioned elsewhere.
     - Open design question: should delete mark a `deleted` column true instead of actually deleting, to allow undo within a timeframe and easy viewing of recently-deleted items? Unsure this is the right pattern — wants a tradeoffs discussion before deciding. If adopted, pairs with the metadata-fields item.
 - Add reminder schema and UI to tasks, series, and events. 
