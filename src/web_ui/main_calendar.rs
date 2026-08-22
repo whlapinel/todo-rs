@@ -656,7 +656,7 @@ fn next_month(year: i32, month: u32) -> (i32, u32) {
 
 fn grid_start_for(year: i32, month: u32) -> NaiveDate {
     let first_of_month = NaiveDate::from_ymd_opt(year, month, 1).unwrap();
-    let leading = first_of_month.weekday().num_days_from_monday();
+    let leading = first_of_month.weekday().num_days_from_sunday();
     first_of_month - Duration::days(leading as i64)
 }
 

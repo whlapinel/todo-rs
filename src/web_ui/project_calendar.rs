@@ -843,12 +843,12 @@ fn next_month(year: i32, month: u32) -> (i32, u32) {
     }
 }
 
-/// The first (Monday-start) cell of the 6-row grid for `year`/`month` — hoisted out of
+/// The first (Sunday-start) cell of the 6-row grid for `year`/`month` — hoisted out of
 /// `build_calendar_days` so the handler can compute the same grid's UTC date range before
 /// calling it (to bound the virtual-occurrence lookup).
 fn grid_start_for(year: i32, month: u32) -> NaiveDate {
     let first_of_month = NaiveDate::from_ymd_opt(year, month, 1).unwrap();
-    let leading = first_of_month.weekday().num_days_from_monday();
+    let leading = first_of_month.weekday().num_days_from_sunday();
     first_of_month - Duration::days(leading as i64)
 }
 
