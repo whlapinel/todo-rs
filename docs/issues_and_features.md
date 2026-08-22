@@ -2,17 +2,21 @@
 
 Open issues and feature requests, merged from the former `docs/issues.md` and `docs/features.md` (2026-08-20) into a single unsorted list. Completed or superseded items — including ones from the old files that were already resolved but hadn't been moved out yet — live in `docs/archived/archived_issues_and_features.md`.
 
+- Need button on each row with vertical elipses icon that gets dialog with row actions (reschedule/duplicate/delete/assign/move(for when we implement move item)edit/etc.) — `#action-dialog` in `base.html`.
+- Clicking cell in calendar will render the correct day but the highlighted cell doesn't update properly for some reason. 
+- Events list rows still lack the "duplicate" action that Tasks and Series already have (`duplicate_url: None` in `ProjectEventRow`, `src/web_ui/project_events/templates.rs`) — add duplicate support for Events to reach parity. Fold into a vertical-ellipses menu alongside edit/delete/assign once that exists (see the pop-up dialog item below).
+- Make Sunday the first day of the week instead of Monday in monthly calendar view
+- Imported all-day calendar events are showing as scheduled on the previous day from what they should show. Should not have an end date, only a start date, and the start date should match what's in google calendar
+- Allow anyone to complete tasks not assigned to them.
+- Remove restriction that unassigned items cannot be completed
+- Remove restriction that only admin can assign items
 - Put link to parent in child task detail view
 - Allow Delete any item from its details page - event, series, task, simple list (currently only available from the row-level UI, not the detail page itself).
 - Allow copying a task or event to another project (distinct from the same-project "duplicate" action above).
-- Need button on each row with vertical elipses icon that gets dialog with row actions (reschedule/duplicate/delete/assign/move(for when we implement move item)edit/etc.) — `#action-dialog` in `base.html`.
 - Calendar should have same filter as list - assigned to user should be default, can select assigned to any.  
-- Clicking cell in calendar will render the correct day but the highlighted cell doesn't update properly for some reason. 
-- Allow a project admin to complete tasks not assigned to them.
-- Let's shrink the calendar view by at least 50% so that the list has plenty of room. Also, if it's fairly straighforward: On small screens i.e. mobile portrait width, they probably need to stay vertically arranged but on desktop/(ipad landscape?) let's put the month beside the list.
 - Add a `priority` field to task items and task series; sort first by priority, then by due date.
 - Consider visibly disabling inputs that will result in error. Specifically, recurring tasks that aren't current should have complete and skip grayed out, and skipped recurring tasks and events that aren't cursor should have unskip grayed out.
-- Add metadata fields to `Item`: `created_at`, `created_by`, `deleted_at`, `deleted_by` (tag for deletion instead of deleting outright, allowing recovery), with a TTL after which the item is actually deleted. Depends on the soft-delete design question mentioned elsewhere.
+- Add metadata fields to `Item`: `created_at`, `created_by`, `deleted_at`, `deleted_by` (tag for deletion instead of deleting outright, allowing recovery), with a TTL after which the item is actually deleted. Depends on the soft-delete design question mentioned elsewhere. Add completed_by field to activity log.
     - Open design question: should delete mark a `deleted` column true instead of actually deleting, to allow undo within a timeframe and easy viewing of recently-deleted items? Unsure this is the right pattern — wants a tradeoffs discussion before deciding. If adopted, pairs with the metadata-fields item.
 - Add reminder schema and UI to tasks, series, and events. 
 - Default value is reminders pushed on the instant they're scheduled for (for tasks and events), and on the instant they're due (for tasks)
@@ -32,7 +36,6 @@ Open issues and feature requests, merged from the former `docs/issues.md` and `d
 - Another big feature addition: project journals. Allow end-to-end encryption of journal for personal journal privacy. Low-priority and half-baked.
 - Audit `src/storage/migrations/` for `CREATE INDEX` statements that run before the column-adding migration they depend on — only the `source_event_id` one is confirmed fixed; there may be others in the same wrong position.
 - Contrast issue for the series "Children Template" select box: reported as white text on white background. The current markup (`templates/project_item_series/new_page.html`) already uses the standard dark-mode-aware select classes used everywhere else in the app, so this may already be fixed or may be browser/theme-specific — re-verify live in both themes before scoping any code change.
-- Events list rows still lack the "duplicate" action that Tasks and Series already have (`duplicate_url: None` in `ProjectEventRow`, `src/web_ui/project_events/templates.rs`) — add duplicate support for Events to reach parity. Fold into a vertical-ellipses menu alongside edit/delete/assign once that exists (see the pop-up dialog item below).
 - Ctrl+click or tap+hold should select rows, allowing bulk actions: "delete-selected", "reschedule-selected", "assign-selected".
 - Mass rescheduling ("skip current" without completing), across projects. The single-row version already shipped (`bd000b1`, "Finish the quick-reschedule dialog and extend it to Events") — see the archived doc. The mass/bulk version is fully designed in `docs/scheduled-catchup-plan.md` but not yet built: needs a new cross-project screen, a new repo method, and a bulk-action pattern this codebase doesn't have precedent for yet. **Before implementing:** that plan doc predates the item_series redesign and has zero series-awareness in its "overdue" query — add a `series_id IS NULL` guard (or equivalent) before implementing, or it will desync a stale materialized series occurrence from its cursor.
 - Need a plan for deleting old data to keep the DB from growing infinitely (completed recurring/series occurrences, activity log rows), likely via a user-configurable retention/row-limit policy. No design doc exists yet — needs its own planning pass (retention shape, global vs. per-user config, delete vs. archive) before implementation.

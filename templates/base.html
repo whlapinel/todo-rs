@@ -106,6 +106,27 @@
       if (dialog && !dialog.open) dialog.showModal();
     });
 
+    // Stage 2 of docs/calendar-day-drawer-plan.md: keeps the month grid's selected-day ring
+    // highlight in sync with the day-drawer (#day-drawer, project_dashboard/calendar_page.html
+    // and main_dashboard's own port in a later stage) without ever re-fetching or re-rendering
+    // the grid itself. Every day-cell button carries `data-date`; every drawer fragment's root
+    // wrapper carries `data-date` too (calendar_day_panel.html) — so a day-cell click or a
+    // drawer prev/next-day arrow click (both of which swap #day-drawer's innerHTML) lands here,
+    // and the listener just moves the ring classes to the grid cell matching the swapped-in
+    // date. Scoped to `#day-drawer` specifically so an unrelated #page boost (which also fires
+    // htmx:afterSwap) never mistakes some other `[data-date]` element for a selection change.
+    document.addEventListener('htmx:afterSwap', function (e) {
+      if (e.detail.target.id !== 'day-drawer') return;
+      var marker = e.detail.target.querySelector('[data-date]');
+      if (!marker) return;
+      var date = marker.getAttribute('data-date');
+      document.querySelectorAll('[data-date].ring-2').forEach(function (el) {
+        el.classList.remove('ring-2', 'ring-inset', 'ring-indigo-500');
+      });
+      var cell = document.querySelector('button[data-date="' + date + '"]');
+      if (cell) cell.classList.add('ring-2', 'ring-inset', 'ring-indigo-500');
+    });
+
     // A row's "⋮" button (components/row.html) calls this instead of hx-get-ing a menu from
     // the server: the row's own <template id="row-actions-menu-{id}"> (rendered by
     // components/row_actions_menu.html, right next to the button) already has every URL the
@@ -113,27 +134,53 @@
     // because htmx only auto-binds hx-* attributes on elements it swaps in itself (or that
     // were present at initial page load) — a plain innerHTML assignment like this one leaves
     // the menu's own Reschedule/Assign/Duplicate/Delete buttons inert without it.
-    function openRowActionsMenu(rowId) {
+    //
+    // Unlike #action-dialog/#error-dialog (centered, modal <dialog>s), this menu is a native
+    // Popover-API element (`popover` attribute — Chrome 114+/Safari 17+/Firefox 125+, no
+    // library needed): non-modal, and closes itself on outside click/Escape for free, which is
+    // exactly the "pop up beside the button" behavior the old centered #action-dialog treatment
+    // didn't have. `btn` is the ⋮ button that was clicked, used to anchor the popover next to it.
+    function openRowActionsMenu(rowId, btn) {
       const tpl = document.getElementById('row-actions-menu-' + rowId);
-      const dialog = document.getElementById('action-dialog');
-      if (!tpl || !dialog) return;
-      dialog.innerHTML = tpl.innerHTML;
-      htmx.process(dialog);
-      if (!dialog.open) dialog.showModal();
+      const popover = document.getElementById('action-menu-popover');
+      if (!tpl || !popover) return;
+      popover.innerHTML = tpl.innerHTML;
+      htmx.process(popover);
+      popover.showPopover();
+      positionActionMenuPopover(popover, btn);
     }
 
-    // The row-actions menu's Delete button (components/row_actions_menu.html) targets
-    // #item-{id}, not #action-dialog, since deleting should also remove the row — so unlike
-    // Reschedule/Assign/Duplicate (which swap #action-dialog's own content and therefore
-    // don't need this), a successful delete leaves the dialog open over a page it no longer
-    // has anything to say about. Closes it whenever the element that triggered a successful
-    // request was inside an open #action-dialog and used hx-delete.
+    // Plain viewport-relative positioning rather than CSS anchor positioning (which is even
+    // newer and less widely supported than the Popover API itself) — right-aligns the popover
+    // to the button's right edge, below it, flipping above when there isn't room below, and
+    // clamping horizontally so it never runs off-screen.
+    function positionActionMenuPopover(popover, btn) {
+      const anchor = btn.getBoundingClientRect();
+      const menu = popover.getBoundingClientRect();
+      const margin = 8;
+      let left = anchor.right - menu.width;
+      left = Math.max(margin, Math.min(left, window.innerWidth - menu.width - margin));
+      let top = anchor.bottom + margin;
+      if (top + menu.height > window.innerHeight - margin) {
+        top = anchor.top - menu.height - margin;
+      }
+      popover.style.left = left + 'px';
+      popover.style.top = top + 'px';
+    }
+
+    // The row-actions popover's Reschedule/Assign (which hx-get #action-dialog, a separate
+    // modal <dialog>, to show a full form) and Duplicate/Delete (which act directly) should all
+    // close the popover once they've done something — unlike Reschedule/Assign's own target
+    // (#action-dialog), the popover itself isn't touched by any of those requests' swaps, so it
+    // would otherwise just sit open over whatever's underneath. Scoped to "successful request
+    // whose triggering element lives inside the open popover" rather than per-button markup, so
+    // it covers all four actions (plus Edit's own boosted navigation) with one listener.
     document.body.addEventListener('htmx:afterRequest', function (evt) {
-      var dialog = document.getElementById('action-dialog');
+      var popover = document.getElementById('action-menu-popover');
       var elt = evt.detail.elt;
-      if (evt.detail.successful && dialog && dialog.open && elt &&
-        elt.hasAttribute && elt.hasAttribute('hx-delete') && dialog.contains(elt)) {
-        dialog.close();
+      if (evt.detail.successful && popover && popover.matches(':popover-open') && elt &&
+        popover.contains(elt)) {
+        popover.hidePopover();
       }
     });
 
@@ -177,6 +224,16 @@
   <dialog id="action-dialog"
     class="group/dialog fixed inset-0 size-auto max-h-none max-w-none overflow-y-auto bg-transparent backdrop:bg-transparent">
   </dialog>
+
+  <!-- Persistent row-actions popover — components/row.html's "⋮" button copies
+       components/row_actions_menu.html's markup into this via openRowActionsMenu() above rather
+       than swapping it in from the server. `popover` (no value = "auto") gets native light-dismiss
+       (outside click/Escape) and top-layer stacking for free; `m-0 p-0 border-0 fixed inset-auto`
+       strip the UA popover default styling (centered, bordered, padded) so openRowActionsMenu()'s
+       own top/left positioning is what actually places it next to the clicked button. -->
+  <div id="action-menu-popover" popover
+    class="m-0 max-h-none w-56 fixed inset-auto overflow-hidden rounded-md border-0 bg-white p-0 shadow-lg outline-1 outline-black/5 dark:bg-gray-800 dark:-outline-offset-1 dark:outline-white/10">
+  </div>
 </body>
 
 </html>

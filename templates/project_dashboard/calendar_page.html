@@ -46,9 +46,9 @@
     </div>
     <div class="grid grid-cols-7 grid-rows-6 gap-px bg-gray-200 text-xs/6 text-gray-700 dark:bg-white/10 dark:text-gray-300">
       {% for day in days %}
-      <button type="button"
+      <button type="button" data-date="{{ day.date }}"
         hx-get="/web/projects/{{ project_id }}/dashboard/calendar/day?date={{ day.date }}"
-        hx-target="#calendar-day-list" hx-select="unset" hx-swap="innerHTML"
+        hx-target="#day-drawer" hx-select="unset" hx-swap="innerHTML"
         hx-push-url="/web/projects/{{ project_id }}/dashboard/calendar?year={{ year }}&month={{ month }}&date={{ day.date }}"
         class="relative flex min-h-24 w-full flex-col items-start px-2 py-2 text-left {% if day.is_current_month %}bg-white dark:bg-gray-900{% else %}bg-gray-50 dark:bg-gray-800/50{% endif %} hover:bg-gray-100 focus:z-10 focus:outline-none dark:hover:bg-white/5 {% if day.is_selected %}ring-2 ring-inset ring-indigo-500{% endif %}">
         <time datetime="{{ day.date }}"
@@ -61,8 +61,27 @@
     </div>
   </div>
 
-  <div id="calendar-day-list" class="rounded-lg">
-    {% include "project_dashboard/calendar_day_panel.html" %}
-  </div>
+  <!-- Persistent day-drawer dialog (Stage 2 of docs/calendar-day-drawer-plan.md) — day-cell
+       clicks above and the drawer's own prev/next-day arrows (calendar_day_panel.html) all
+       hx-get into this dialog's innerHTML, following the same "persistent <dialog>, only its
+       content changes" convention as base.html's #action-dialog/#error-dialog. Unlike those,
+       the fragment swapped in here re-renders the whole backdrop+sliding-panel wrapper each
+       time (not just an inner content div) since the drawer needs the outer group/dialog
+       transition classes present on every swap, not just the first. -->
+  <dialog id="day-drawer"
+    class="group/dialog fixed inset-0 size-auto max-h-none max-w-none overflow-hidden bg-transparent backdrop:bg-transparent">
+    {{ day_drawer_html|safe }}
+  </dialog>
+  {% if has_selected_date %}
+  <script>
+    // A hard/bookmarked load of `?date=...` needs the drawer open from the start, but nothing
+    // ever swaps into #day-drawer on such a load (that only happens via htmx), so base.html's
+    // htmx:afterSwap-driven auto-open never fires for it — this covers that one case directly.
+    (function () {
+      var d = document.getElementById('day-drawer');
+      if (d && !d.open) d.showModal();
+    })();
+  </script>
+  {% endif %}
 </div>
 {% endblock %}

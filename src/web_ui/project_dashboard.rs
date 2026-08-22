@@ -650,19 +650,73 @@ struct ProjectDashboardCalendarPageTemplate {
     next_year: i32,
     next_month: u32,
     days: Vec<ProjectDashboardCalendarDay>,
-    /// See `project_tasks::templates::ProjectTasksCalendarPageTemplate::selected_date_label`'s
-    /// identical rationale.
-    selected_date_label: Option<String>,
-    day_rows: Vec<String>,
+    /// Stage 2: whether the day-drawer fragment below actually has a day to show — gates the
+    /// inline `showModal()` script (a hard/bookmarked load of `?date=...` needs to open the
+    /// drawer without any htmx swap ever firing `htmx:afterSwap`, so nothing else would open it).
+    has_selected_date: bool,
+    /// The `#day-drawer` dialog's initial innerHTML — rendered via `ProjectDashboardCalendarDayPanelTemplate`
+    /// the same way `day_rows` renders individual rows, so the page template doesn't need to
+    /// duplicate the drawer's own fields (header, arrows, list) itself.
+    day_drawer_html: String,
     nav_html: String,
 }
 
-/// See `project_tasks::templates::ProjectTasksCalendarDayPanelTemplate`'s identical rationale.
+/// Stage 2: the day-drawer's header data (date label + prev/next-day arrows) — `None` renders
+/// nothing (the drawer starts closed with empty content until a day is actually picked), `Some`
+/// only when a date is selected, so every field below is guaranteed present together rather than
+/// requiring a separate `{% if let Some(..) %}` per field in the template.
+struct DayDrawerData {
+    date_iso: String,
+    selected_date_label: String,
+    prev_date: String,
+    prev_year: i32,
+    prev_month: u32,
+    next_date: String,
+    next_year: i32,
+    next_month: u32,
+}
+
+/// See `project_tasks::templates::ProjectTasksCalendarDayPanelTemplate`'s identical rationale —
+/// this is also the `#day-drawer` dialog's own innerHTML for the `.../calendar/day` fragment
+/// route, not just the calendar page's initial embed (Stage 2's drawer shell reuses one template
+/// for both, matching `#action-dialog`/`#error-dialog`'s existing "swap innerHTML of a persistent
+/// dialog" convention).
 #[derive(Template)]
 #[template(path = "project_dashboard/calendar_day_panel.html")]
 struct ProjectDashboardCalendarDayPanelTemplate {
-    selected_date_label: Option<String>,
+    project_id: String,
+    drawer: Option<DayDrawerData>,
     day_rows: Vec<String>,
+}
+
+/// Builds the `#day-drawer` dialog's innerHTML, shared between the calendar page's initial embed
+/// and the `.../calendar/day` fragment route — see `ProjectDashboardCalendarDayPanelTemplate`'s
+/// doc comment.
+fn render_day_drawer(
+    project_id: &str,
+    date: Option<NaiveDate>,
+    day_rows: Vec<String>,
+) -> Result<String, ItemError> {
+    let drawer = date.map(|d| {
+        let prev = d - Duration::days(1);
+        let next = d + Duration::days(1);
+        DayDrawerData {
+            date_iso: d.format("%Y-%m-%d").to_string(),
+            selected_date_label: day_panel_label(d),
+            prev_date: prev.format("%Y-%m-%d").to_string(),
+            prev_year: prev.year(),
+            prev_month: prev.month(),
+            next_date: next.format("%Y-%m-%d").to_string(),
+            next_year: next.year(),
+            next_month: next.month(),
+        }
+    });
+    Ok(ProjectDashboardCalendarDayPanelTemplate {
+        project_id: project_id.to_string(),
+        drawer,
+        day_rows,
+    }
+    .render()?)
 }
 
 fn prev_month(year: i32, month: u32) -> (i32, u32) {
@@ -859,6 +913,7 @@ pub async fn project_dashboard_calendar_page(
         )?,
         None => Vec::new(),
     };
+    let day_drawer_html = render_day_drawer(&project_id, selected_date, day_rows)?;
 
     render(ProjectDashboardCalendarPageTemplate {
         project_id,
@@ -874,8 +929,8 @@ pub async fn project_dashboard_calendar_page(
         next_year,
         next_month,
         days,
-        selected_date_label: selected_date.map(day_panel_label),
-        day_rows,
+        has_selected_date: selected_date.is_some(),
+        day_drawer_html,
         nav_html,
     })
 }
@@ -935,10 +990,7 @@ pub async fn project_dashboard_calendar_day_fragment(
         date,
         tz,
     )?;
-    render(ProjectDashboardCalendarDayPanelTemplate {
-        selected_date_label: Some(day_panel_label(date)),
-        day_rows,
-    })
+    Ok(Html(render_day_drawer(&project_id, Some(date), day_rows)?))
 }
 
 #[derive(serde::Deserialize, Default)]

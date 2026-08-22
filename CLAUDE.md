@@ -18,6 +18,8 @@ set -a; source .env; set +a; ./scripts/smoke-test.sh
 
 For UI-only changes (no Smithy or Rust changes): edit `templates/*.html`, then `cargo build` picks it up (Askama embeds templates at compile time). If Tailwind classes changed, also run `task web-styles`.
 
+**Don't use Playwright (or any other browser-automation tool) to click-through/verify UI changes** — the user does that verification themselves; it burns tokens for no benefit here. Verify with `cargo build`/`cargo test`/`task check` and a careful read of the template/handler diff instead, and say so explicitly if live-in-browser behavior can't actually be confirmed that way.
+
 `task codegen` requires JDK 11+. It compiles the smithy-rs Kotlin codegen from source via a Gradle composite build — first run takes several minutes, subsequent runs are cached in `~/.gradle/caches/`.
 
 ## Architecture

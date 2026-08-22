@@ -26,7 +26,7 @@
         </button>
         {% endif %}
         {% if edit_url.is_some() || reschedule_url.is_some() || assign_url.is_some() || duplicate_url.is_some() || !is_imported %}
-        <button type="button" onclick="openRowActionsMenu('{{ id }}')"
+        <button type="button" onclick="openRowActionsMenu('{{ id }}', this)"
             class="shrink-0 cursor-pointer text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300">
             {% include "icons/ellipses.html" %}
         </button>
