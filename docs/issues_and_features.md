@@ -2,11 +2,12 @@
 
 Open issues and feature requests, merged from the former `docs/issues.md` and `docs/features.md` (2026-08-20) into a single unsorted list. Completed or superseded items — including ones from the old files that were already resolved but hadn't been moved out yet — live in `docs/archived/archived_issues_and_features.md`.
 
-- Make Sunday the first day of the week instead of Monday in monthly calendar view
+- Bug in which the dates nor any other link or buttons are not clickable after clicking "assigned to any" until you refresh the page. Also happens going from List View to Calendar view. nothing clickable. It appears the drawer dialog is open.
 - Imported all-day calendar events are showing as scheduled on the previous day from what they should show. Should not have an end date, only a start date, and the start date should match what's in google calendar
 - Allow anyone to complete tasks not assigned to them.
 - Remove restriction that unassigned items cannot be completed
 - Remove restriction that only admin can assign items
+- Make Sunday the first day of the week instead of Monday in monthly calendar view
 - Put link to parent in child task detail view
 - Allow Delete any item from its details page - event, series, task, simple list (currently only available from the row-level UI, not the detail page itself).
 - Allow copying a task or event to another project (distinct from the same-project "duplicate" action above).
