@@ -84,6 +84,26 @@ fn type_symbol(kind: ItemKind) -> &'static str {
     }
 }
 
+/// Stage 4's All/Tasks/Events drawer tab filter — see `project_dashboard::parse_type_filter`'s
+/// identical rationale (duplicated rather than shared, matching this file's own established
+/// precedent of duplicating small per-screen helpers rather than widening a sibling module's
+/// visibility).
+fn parse_type_filter(raw: Option<&str>) -> Option<ItemKind> {
+    match raw {
+        Some("task") => Some(ItemKind::Task),
+        Some("event") => Some(ItemKind::Event),
+        _ => None,
+    }
+}
+
+fn active_type_label(type_filter: Option<ItemKind>) -> &'static str {
+    match type_filter {
+        Some(ItemKind::Task) => "task",
+        Some(ItemKind::Event) => "event",
+        _ => "all",
+    }
+}
+
 async fn names_for(
     teams: &Arc<dyn TeamRepo>,
     team_id: &str,
@@ -110,15 +130,23 @@ async fn names_for(
 /// project" purpose. Simple/Template items never carry a due/scheduled date worth showing
 /// here at all (mirrors `project_dashboard::render_rows`'s own `ItemKind::Simple` exclusion,
 /// widened to also exclude Template).
+///
+/// `assigned_to_any` (added Stage 4 of docs/calendar-day-drawer-plan.md, for the calendar's own
+/// assigned-to-me toggle) *relaxes* the team-backed-project Task restriction when set — it has
+/// no effect on personal-project tasks, which were never restricted in the first place, and no
+/// effect on Events, which were never restricted either. The flat list view
+/// (`list_main_dashboard_rows`) has no such toggle and always passes `false` here, preserving
+/// its existing behavior exactly.
 fn is_included(
     kind: ItemKind,
     is_team_project: bool,
     assigned_to: Option<&str>,
     user_id: &str,
+    assigned_to_any: bool,
 ) -> bool {
     match kind {
         ItemKind::Event => true,
-        ItemKind::Task => !is_team_project || assigned_to == Some(user_id),
+        ItemKind::Task => !is_team_project || assigned_to_any || assigned_to == Some(user_id),
         ItemKind::Simple | ItemKind::Template => false,
     }
 }
@@ -371,6 +399,7 @@ pub(crate) async fn list_main_dashboard_rows(
                 is_team_project,
                 item.assigned_to_user_id().as_deref(),
                 requester_user_id,
+                false,
             ) {
                 continue;
             }
@@ -413,6 +442,7 @@ pub(crate) async fn list_main_dashboard_rows(
                 is_team_project,
                 occ.assigned_to_user_id.as_deref(),
                 requester_user_id,
+                false,
             ) {
                 continue;
             }
@@ -513,19 +543,80 @@ struct MainDashboardCalendarPageTemplate {
     next_year: i32,
     next_month: u32,
     days: Vec<MainDashboardCalendarDay>,
-    /// See `project_tasks::templates::ProjectTasksCalendarPageTemplate::selected_date_label`'s
-    /// identical rationale.
-    selected_date_label: Option<String>,
-    day_rows: Vec<String>,
+    /// Stage 4 (docs/calendar-day-drawer-plan.md): whether the day-drawer fragment below
+    /// actually has a day to show — see `project_dashboard::ProjectDashboardCalendarPageTemplate::
+    /// has_selected_date`'s identical rationale (gates the inline `showModal()` script for a
+    /// hard/bookmarked `?date=...` load).
+    has_selected_date: bool,
+    /// The `#day-drawer` dialog's initial innerHTML — see `project_dashboard::
+    /// ProjectDashboardCalendarPageTemplate::day_drawer_html`'s identical rationale.
+    day_drawer_html: String,
+    /// The page-level assigned-to-me toggle — see `project_dashboard`'s identical field.
+    assigned_to_any: bool,
+    /// Selected day's ISO date, `None` when no day is selected — same rationale as
+    /// `project_dashboard`'s identical field.
+    selected_date_iso: Option<String>,
+    active_type: &'static str,
     nav_html: String,
 }
 
-/// See `project_tasks::templates::ProjectTasksCalendarDayPanelTemplate`'s identical rationale.
+/// Stage 4's day-drawer header data — see `project_dashboard::DayDrawerData`'s identical
+/// rationale. No `project_id` field here (unlike that struct): this screen's URLs are all
+/// `/web/dashboard/calendar...`, not project-scoped, so the template needs no project id to
+/// build them.
+struct DayDrawerData {
+    date_iso: String,
+    date_year: i32,
+    date_month: u32,
+    selected_date_label: String,
+    prev_date: String,
+    prev_year: i32,
+    prev_month: u32,
+    next_date: String,
+    next_year: i32,
+    next_month: u32,
+    active_type: &'static str,
+    assigned_to_any: bool,
+}
+
+/// See `project_dashboard::ProjectDashboardCalendarDayPanelTemplate`'s identical rationale —
+/// also the `#day-drawer` dialog's own innerHTML for the `.../calendar/day` fragment route, not
+/// just the calendar page's initial embed.
 #[derive(Template)]
 #[template(path = "main_dashboard/calendar_day_panel.html")]
 struct MainDashboardCalendarDayPanelTemplate {
-    selected_date_label: Option<String>,
+    drawer: Option<DayDrawerData>,
     day_rows: Vec<String>,
+}
+
+/// Builds the `#day-drawer` dialog's innerHTML, shared between the calendar page's initial
+/// embed and the `.../calendar/day` fragment route — see `project_dashboard::render_day_drawer`'s
+/// identical rationale.
+fn render_day_drawer(
+    date: Option<NaiveDate>,
+    day_rows: Vec<String>,
+    type_filter: Option<ItemKind>,
+    assigned_to_any: bool,
+) -> Result<String, ItemError> {
+    let drawer = date.map(|d| {
+        let prev = d - Duration::days(1);
+        let next = d + Duration::days(1);
+        DayDrawerData {
+            date_iso: d.format("%Y-%m-%d").to_string(),
+            date_year: d.year(),
+            date_month: d.month(),
+            selected_date_label: day_panel_label(d),
+            prev_date: prev.format("%Y-%m-%d").to_string(),
+            prev_year: prev.year(),
+            prev_month: prev.month(),
+            next_date: next.format("%Y-%m-%d").to_string(),
+            next_year: next.year(),
+            next_month: next.month(),
+            active_type: active_type_label(type_filter),
+            assigned_to_any,
+        }
+    });
+    Ok(MainDashboardCalendarDayPanelTemplate { drawer, day_rows }.render()?)
 }
 
 fn prev_month(year: i32, month: u32) -> (i32, u32) {
@@ -611,17 +702,25 @@ fn build_calendar_days(
 
 /// The calendar's per-day panel — see `project_tasks::day_list_rows`'s identical rationale.
 /// `due_items`/`virtual_occurrences` are the same pre-tagged, `is_included`-filtered buckets
-/// `build_calendar_days` takes, just narrowed to `date`.
+/// `build_calendar_days` takes, just narrowed to `date`. `type_filter` is Stage 4's All/Tasks/
+/// Events drawer tab — unlike `project_dashboard::day_list_rows`, there's no separate `mine`
+/// closure here: `is_included`'s `assigned_to_any`-aware filtering already happened once in
+/// `gather_calendar_data` (the caller), so `due_items`/`virtual_occurrences` arrive pre-filtered
+/// for both the caller and this function.
 fn day_list_rows(
     due_items: &[(DueItem, String, String)],
     virtual_occurrences: &[(ProjectOccurrence, String, String)],
     names_by_project: &HashMap<String, HashMap<String, String>>,
     date: NaiveDate,
     tz: i32,
+    type_filter: Option<ItemKind>,
 ) -> Result<Vec<String>, ItemError> {
     let mut entries: Vec<(i64, String)> = Vec::new();
     for (di, project_id, project_name) in due_items {
         let item = &di.item;
+        if type_filter.is_some_and(|k| item.kind() != k) {
+            continue;
+        }
         let Some(dt) = dashboard_date(item) else {
             continue;
         };
@@ -637,6 +736,9 @@ fn day_list_rows(
         ));
     }
     for (occ, project_id, project_name) in virtual_occurrences {
+        if type_filter.is_some_and(|k| occ.item_type != k) {
+            continue;
+        }
         if to_local(occ.occurrence_date, tz).date_naive() != date {
             continue;
         }
@@ -651,11 +753,18 @@ fn day_list_rows(
 }
 
 #[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CalendarQuery {
     year: Option<i32>,
     month: Option<u32>,
     /// See `project_tasks::handlers::CalendarQuery::date`'s identical rationale.
     date: Option<String>,
+    /// Stage 4's drawer type tab (`all`/`task`/`event`) — parsed via `parse_type_filter`. Only
+    /// meaningful alongside `date`; ignored when no day is selected.
+    r#type: Option<String>,
+    /// Stage 4's assigned-to-me toggle — `None`/absent = mine, present = everyone's, matching
+    /// `project_dashboard::DashboardQuery::assigned_to_any`'s convention.
+    assigned_to_any: Option<String>,
 }
 
 /// See `project_tasks::handlers::day_panel_label`'s identical rationale.
@@ -677,6 +786,7 @@ async fn gather_calendar_data(
     range_start: DateTime<Utc>,
     range_end: DateTime<Utc>,
     tz: i32,
+    assigned_to_any: bool,
 ) -> Result<
     (
         Vec<(DueItem, String, String)>,
@@ -708,6 +818,7 @@ async fn gather_calendar_data(
                 is_team_project,
                 di.item.assigned_to_user_id().as_deref(),
                 requester_user_id,
+                assigned_to_any,
             ) {
                 due_bucket.push((di, project.id.clone(), project.name.clone()));
             }
@@ -729,6 +840,7 @@ async fn gather_calendar_data(
                 is_team_project,
                 occ.assigned_to_user_id.as_deref(),
                 requester_user_id,
+                assigned_to_any,
             )
         });
         for occ in occurrences {
@@ -758,6 +870,8 @@ pub async fn main_dashboard_calendar_page(
         .date
         .as_deref()
         .and_then(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").ok());
+    let assigned_to_any = q.assigned_to_any.is_some();
+    let type_filter = parse_type_filter(q.r#type.as_deref());
 
     let grid_start = grid_start_for(year, month);
     let range_start = local_date_to_utc(grid_start, start_of_day(), tz);
@@ -773,6 +887,7 @@ pub async fn main_dashboard_calendar_page(
         range_start,
         range_end,
         tz,
+        assigned_to_any,
     )
     .await?;
 
@@ -795,9 +910,17 @@ pub async fn main_dashboard_calendar_page(
     )
     .await?;
     let day_rows = match selected_date {
-        Some(date) => day_list_rows(&due_bucket, &occ_bucket, &names_by_project, date, tz)?,
+        Some(date) => day_list_rows(
+            &due_bucket,
+            &occ_bucket,
+            &names_by_project,
+            date,
+            tz,
+            type_filter,
+        )?,
         None => Vec::new(),
     };
+    let day_drawer_html = render_day_drawer(selected_date, day_rows, type_filter, assigned_to_any)?;
 
     render(MainDashboardCalendarPageTemplate {
         year,
@@ -812,8 +935,11 @@ pub async fn main_dashboard_calendar_page(
         next_year,
         next_month,
         days,
-        selected_date_label: selected_date.map(day_panel_label),
-        day_rows,
+        has_selected_date: selected_date.is_some(),
+        day_drawer_html,
+        assigned_to_any,
+        selected_date_iso: selected_date.map(|d| d.format("%Y-%m-%d").to_string()),
+        active_type: active_type_label(type_filter),
         nav_html,
     })
 }
@@ -833,6 +959,8 @@ pub async fn main_dashboard_calendar_day_fragment(
         .as_deref()
         .and_then(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").ok())
         .ok_or(ItemError::Invalid("date is required".to_string()))?;
+    let assigned_to_any = q.assigned_to_any.is_some();
+    let type_filter = parse_type_filter(q.r#type.as_deref());
     let range_start = local_date_to_utc(date, start_of_day(), tz);
     let range_end = local_date_to_utc(date, end_of_day(), tz);
     let (due_bucket, occ_bucket, names_by_project) = gather_calendar_data(
@@ -845,13 +973,23 @@ pub async fn main_dashboard_calendar_day_fragment(
         range_start,
         range_end,
         tz,
+        assigned_to_any,
     )
     .await?;
-    let day_rows = day_list_rows(&due_bucket, &occ_bucket, &names_by_project, date, tz)?;
-    render(MainDashboardCalendarDayPanelTemplate {
-        selected_date_label: Some(day_panel_label(date)),
+    let day_rows = day_list_rows(
+        &due_bucket,
+        &occ_bucket,
+        &names_by_project,
+        date,
+        tz,
+        type_filter,
+    )?;
+    Ok(Html(render_day_drawer(
+        Some(date),
         day_rows,
-    })
+        type_filter,
+        assigned_to_any,
+    )?))
 }
 
 #[derive(serde::Deserialize, Default)]

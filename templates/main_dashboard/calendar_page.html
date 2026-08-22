@@ -8,7 +8,7 @@
     </h1>
     <div class="flex items-center gap-x-3">
       <div class="flex items-center rounded-md bg-white shadow-xs outline -outline-offset-1 outline-gray-300 dark:bg-white/10 dark:shadow-none dark:outline-white/5">
-        <a href="/web/dashboard/calendar?year={{ prev_year }}&month={{ prev_month }}"
+        <a href="/web/dashboard/calendar?year={{ prev_year }}&month={{ prev_month }}{% if assigned_to_any %}&assignedToAny=1{% endif %}"
            class="flex h-9 w-9 items-center justify-center rounded-l-md text-gray-400 hover:bg-gray-50 hover:text-gray-500 dark:hover:bg-white/10 dark:hover:text-white">
           <span class="sr-only">Previous month</span>
           <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" class="size-5">
@@ -16,7 +16,7 @@
           </svg>
         </a>
         <span class="h-5 w-px bg-gray-300 dark:bg-white/10"></span>
-        <a href="/web/dashboard/calendar?year={{ next_year }}&month={{ next_month }}"
+        <a href="/web/dashboard/calendar?year={{ next_year }}&month={{ next_month }}{% if assigned_to_any %}&assignedToAny=1{% endif %}"
            class="flex h-9 w-9 items-center justify-center rounded-r-md text-gray-400 hover:bg-gray-50 hover:text-gray-500 dark:hover:bg-white/10 dark:hover:text-white">
           <span class="sr-only">Next month</span>
           <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" class="size-5">
@@ -24,7 +24,14 @@
           </svg>
         </a>
       </div>
-      <a href="/web/dashboard" hx-target="#page" hx-select="#page" hx-swap="innerHTML"
+      <label class="text-sm text-gray-600 flex items-center gap-x-1 dark:text-gray-400">
+        <input type="checkbox" name="assignedToAny" value="1" {% if assigned_to_any %}checked{% endif %}
+          hx-get="/web/dashboard/calendar?year={{ year }}&month={{ month }}{% if let Some(d) = selected_date_iso %}&date={{ d }}&type={{ active_type }}{% endif %}"
+          hx-trigger="change" hx-target="#page" hx-select="#page" hx-swap="innerHTML" hx-push-url="true"
+          class="size-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-600 dark:border-white/20 dark:bg-white/5" />
+        Assigned to Any
+      </label>
+      <a href="/web/dashboard{% if assigned_to_any %}?assignedToAny=1{% endif %}" hx-target="#page" hx-select="#page" hx-swap="innerHTML"
          class="inline-flex items-center justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-xs inset-ring inset-ring-gray-300 hover:bg-gray-50 dark:bg-white/10 dark:text-white dark:shadow-none dark:inset-ring-white/5 dark:hover:bg-white/20">List view</a>
     </div>
   </div>
@@ -46,10 +53,10 @@
     </div>
     <div class="grid grid-cols-7 grid-rows-6 gap-px bg-gray-200 text-xs/6 text-gray-700 dark:bg-white/10 dark:text-gray-300">
       {% for day in days %}
-      <button type="button"
-        hx-get="/web/dashboard/calendar/day?date={{ day.date }}"
-        hx-target="#calendar-day-list" hx-select="unset" hx-swap="innerHTML"
-        hx-push-url="/web/dashboard/calendar?year={{ year }}&month={{ month }}&date={{ day.date }}"
+      <button type="button" data-date="{{ day.date }}"
+        hx-get="/web/dashboard/calendar/day?date={{ day.date }}{% if assigned_to_any %}&assignedToAny=1{% endif %}"
+        hx-target="#day-drawer" hx-select="unset" hx-swap="innerHTML"
+        hx-push-url="/web/dashboard/calendar?year={{ year }}&month={{ month }}&date={{ day.date }}{% if assigned_to_any %}&assignedToAny=1{% endif %}"
         class="relative flex min-h-24 w-full flex-col items-start px-2 py-2 text-left {% if day.is_current_month %}bg-white dark:bg-gray-900{% else %}bg-gray-50 dark:bg-gray-800/50{% endif %} hover:bg-gray-100 focus:z-10 focus:outline-none dark:hover:bg-white/5 {% if day.is_selected %}ring-2 ring-inset ring-indigo-500{% endif %}">
         <time datetime="{{ day.date }}"
               class="relative {% if !day.is_current_month %}opacity-50{% endif %} {% if day.is_today %}flex size-6 items-center justify-center rounded-full bg-indigo-600 font-semibold text-white dark:bg-indigo-500{% endif %}">{{ day.day_number }}</time>
@@ -61,8 +68,21 @@
     </div>
   </div>
 
-  <div id="calendar-day-list" class="rounded-lg">
-    {% include "main_dashboard/calendar_day_panel.html" %}
-  </div>
+  <!-- Persistent day-drawer dialog — see project_dashboard/calendar_page.html's identical
+       #day-drawer convention (Stage 2 of docs/calendar-day-drawer-plan.md), ported here in
+       Stage 4. base.html's htmx:afterSwap highlight listener is scoped by id (#day-drawer),
+       not path, so it works unmodified against this page too. -->
+  <dialog id="day-drawer"
+    class="group/dialog fixed inset-0 size-auto max-h-none max-w-none overflow-hidden bg-transparent backdrop:bg-transparent">
+    {{ day_drawer_html|safe }}
+  </dialog>
+  {% if has_selected_date %}
+  <script>
+    (function () {
+      var d = document.getElementById('day-drawer');
+      if (d && !d.open) d.showModal();
+    })();
+  </script>
+  {% endif %}
 </div>
 {% endblock %}
