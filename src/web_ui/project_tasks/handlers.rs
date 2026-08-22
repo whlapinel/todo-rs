@@ -171,6 +171,7 @@ pub async fn project_task_detail_page(
         Some(team_id) => names_for(&teams, team_id, &auth_user.user_id).await?,
         None => HashMap::new(),
     };
+    let parent_link = resolve_parent_link(&repo, &project_id, &item).await?;
     let linked_event = resolve_linked_event(&repo, &project_id, &item).await?;
     let series_link = resolve_series_link(&series, &project_id, &item).await?;
     let view = ProjectTaskDetailView::from_item(
@@ -179,6 +180,7 @@ pub async fn project_task_detail_page(
         project.team_id.is_some(),
         &names,
         tz,
+        parent_link,
         linked_event,
         series_link,
     )
@@ -930,6 +932,7 @@ pub async fn update_project_task_form(
                 Some(team_id) => names_for(&teams, team_id, &auth_user.user_id).await?,
                 None => HashMap::new(),
             };
+            let parent_link = resolve_parent_link(&repo, &project_id, &updated).await?;
             let linked_event = resolve_linked_event(&repo, &project_id, &updated).await?;
             let series_link = resolve_series_link(&series, &project_id, &updated).await?;
             let view = ProjectTaskDetailView::from_item(
@@ -938,6 +941,7 @@ pub async fn update_project_task_form(
                 project.team_id.is_some(),
                 &names,
                 tz,
+                parent_link,
                 linked_event,
                 series_link,
             )
@@ -1015,6 +1019,7 @@ pub async fn update_project_task_form(
                 true,
             )
             .render()?;
+            let parent_link = resolve_parent_link(&repo, &project_id, &updated).await?;
             let linked_event = resolve_linked_event(&repo, &project_id, &updated).await?;
             let series_link = resolve_series_link(&series, &project_id, &updated).await?;
             let view = ProjectTaskDetailView::from_item(
@@ -1023,6 +1028,7 @@ pub async fn update_project_task_form(
                 project.team_id.is_some(),
                 &names,
                 tz,
+                parent_link,
                 linked_event,
                 series_link,
             )

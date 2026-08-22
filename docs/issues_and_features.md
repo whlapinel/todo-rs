@@ -2,7 +2,6 @@
 
 Open issues and feature requests, merged from the former `docs/issues.md` and `docs/features.md` (2026-08-20) into a single unsorted list. Completed or superseded items — including ones from the old files that were already resolved but hadn't been moved out yet — live in `docs/archived/archived_issues_and_features.md`.
 
-- Put link to parent in child task detail view
 - Allow Delete any item from its details page - event, series, task, simple list (currently only available from the row-level UI, not the detail page itself).
 - Allow copying a task or event to another project (distinct from the same-project "duplicate" action above).
 - Add a `priority` field to task items and task series; sort first by priority, then by due date.

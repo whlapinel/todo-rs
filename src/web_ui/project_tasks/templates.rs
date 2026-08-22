@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::domain::item::Item;
+use crate::domain::item::{Item, ItemKind};
 use crate::service::error::ItemError;
 use crate::service::item_series::ProjectOccurrence;
 use crate::storage::sqlite::ItemRepo;
@@ -419,6 +419,12 @@ pub struct ProjectTaskDetailView {
     pub offset_label: Option<String>,
     pub is_team_project: bool,
     pub assignee_name: Option<String>,
+    /// `Some((parent_name, parent_url))` when this item has a `parent_item_id` — closes
+    /// `docs/issues_and_features.md`'s "Put link to parent in child task detail view".
+    /// `parent_url` routes to `/tasks/`, `/events/`, or `/simple-lists/` depending on the
+    /// parent's own `ItemKind` — see `resolve_parent_link`. `None` for a top-level item, or
+    /// (gracefully, not an error) if the parent has since been deleted.
+    pub parent_link: Option<(String, String)>,
     /// See `tasks::TaskDetailView`'s identical field.
     pub linked_event: Option<(String, String)>,
     /// Stage B of `docs/unify-virtual-materialized-occurrences-plan.md` — `Some((series_name,
@@ -437,6 +443,7 @@ impl ProjectTaskDetailView {
         is_team_project: bool,
         names: &HashMap<String, String>,
         tz: i32,
+        parent_link: Option<(String, String)>,
         linked_event: Option<(String, String)>,
         series_link: Option<(String, String)>,
     ) -> Self {
@@ -481,6 +488,7 @@ impl ProjectTaskDetailView {
             assignee_name: item
                 .assigned_to_user_id()
                 .map(|id| names.get(&id).cloned().unwrap_or(id)),
+            parent_link,
             linked_event,
             series_link,
         }
@@ -690,6 +698,38 @@ pub struct ProjectTaskSeriesOccurrenceEditPageTemplate {
 /// stage it fell back to the event's *legacy* detail URL (`dashboard::detail_url`); the event
 /// is guaranteed to already belong to `project_id` (fetched via `get_by_project` below), so
 /// building the URL locally needs no extra lookup.
+/// Resolves the (parent_name, parent_url) of this item's structural parent, if it has one —
+/// closes `docs/issues_and_features.md`'s "Put link to parent in child task detail view".
+/// The parent can be a Task or an Event (see `docs/CLAUDE.md`'s Events section: an
+/// auto-triggered or manually-added task lives under its Event parent the same as any other
+/// child), so the URL segment is picked from the parent's own `ItemKind` rather than assumed.
+/// Mirrors `resolve_series_link`'s graceful-`NotFound` handling: a parent can be deleted
+/// without cascading to its children (see `service::project_items::delete_project_item`), so a
+/// missing parent here means "no link to show," not "this item doesn't exist."
+pub async fn resolve_parent_link(
+    repo: &Arc<dyn ItemRepo>,
+    project_id: &str,
+    item: &Item,
+) -> Result<Option<(String, String)>, ItemError> {
+    let Some(parent_id) = &item.parent_item_id else {
+        return Ok(None);
+    };
+    let parent = match repo.get_by_project(project_id, parent_id).await {
+        Ok(parent) => parent,
+        Err(crate::storage::sqlite::RepoError::NotFound) => return Ok(None),
+        Err(e) => return Err(e.into()),
+    };
+    let segment = match parent.item_type.kind() {
+        ItemKind::Event => "events",
+        ItemKind::Simple => "simple-lists",
+        ItemKind::Task | ItemKind::Template => "tasks",
+    };
+    Ok(Some((
+        parent.name.clone(),
+        format!("/web/projects/{project_id}/{segment}/{}", parent.id),
+    )))
+}
+
 pub async fn resolve_linked_event(
     repo: &Arc<dyn ItemRepo>,
     project_id: &str,
@@ -796,7 +836,69 @@ pub struct ProjectTaskEditPageTemplate {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::sqlite::{ItemSeriesRepo, MockItemSeriesRepo, RepoError};
+    use crate::domain::item::ItemType;
+    use crate::storage::sqlite::{ItemSeriesRepo, MockItemRepo, MockItemSeriesRepo, RepoError};
+
+    #[tokio::test]
+    async fn resolve_parent_link_returns_none_when_item_is_top_level() {
+        let item = Item::default();
+        let repo: Arc<dyn ItemRepo> = Arc::new(MockItemRepo::new());
+
+        let result = resolve_parent_link(&repo, "p1", &item).await;
+
+        assert_eq!(result.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn resolve_parent_link_returns_none_when_parent_was_deleted() {
+        // A parent can be deleted without cascading to its children (see
+        // `service::project_items::delete_project_item`), so a dangling `parent_item_id`
+        // must degrade to "no link," not a 500.
+        let item = Item {
+            parent_item_id: Some("deleted-parent".to_string()),
+            ..Item::default()
+        };
+        let mut mock = MockItemRepo::new();
+        mock.expect_get_by_project()
+            .returning(|_, _| Err(RepoError::NotFound));
+        let repo: Arc<dyn ItemRepo> = Arc::new(mock);
+
+        let result = resolve_parent_link(&repo, "p1", &item).await;
+
+        assert_eq!(result.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn resolve_parent_link_routes_to_events_for_an_event_parent() {
+        let item = Item {
+            parent_item_id: Some("parent1".to_string()),
+            ..Item::default()
+        };
+        let mut mock = MockItemRepo::new();
+        mock.expect_get_by_project().returning(|_, _| {
+            Ok(Item {
+                id: "parent1".to_string(),
+                name: "Company Picnic".to_string(),
+                item_type: ItemType::Event {
+                    schedule: Default::default(),
+                    recurrence: Default::default(),
+                    event_type: None,
+                },
+                ..Item::default()
+            })
+        });
+        let repo: Arc<dyn ItemRepo> = Arc::new(mock);
+
+        let result = resolve_parent_link(&repo, "p1", &item).await.unwrap();
+
+        assert_eq!(
+            result,
+            Some((
+                "Company Picnic".to_string(),
+                "/web/projects/p1/events/parent1".to_string()
+            ))
+        );
+    }
 
     #[tokio::test]
     async fn resolve_series_link_returns_none_when_parent_series_was_deleted() {
