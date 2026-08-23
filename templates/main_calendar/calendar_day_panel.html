@@ -25,7 +25,7 @@
                   <path fill-rule="evenodd" clip-rule="evenodd" d="M11.78 5.22a.75.75 0 0 1 0 1.06L8.06 10l3.72 3.72a.75.75 0 1 1-1.06 1.06l-4.25-4.25a.75.75 0 0 1 0-1.06l4.25-4.25a.75.75 0 0 1 1.06 0Z" />
                 </svg>
               </a>
-              <h2 id="day-drawer-title" class="px-1 text-base font-semibold text-gray-900 dark:text-white">
+              <h2 id="day-drawer-title" class="w-28 shrink-0 px-1 text-center text-base font-semibold tabular-nums text-gray-900 dark:text-white">
                 {{ drawer.selected_date_label }}</h2>
               <a href="/web/calendar?year={{ drawer.next_year }}&month={{ drawer.next_month }}&date={{ drawer.next_date }}&type={{ drawer.active_type }}{% if drawer.assigned_to_any %}&assignedToAny=1{% endif %}"
                 hx-get="/web/calendar/day?date={{ drawer.next_date }}&type={{ drawer.active_type }}{% if drawer.assigned_to_any %}&assignedToAny=1{% endif %}"
@@ -47,23 +47,29 @@
             </button>
           </div>
           <!-- All/Tasks/Events tabs — see project_calendar/calendar_day_panel.html's identical
-               rationale. Each hx-gets the same day-fragment route with an added `type` param but
-               targets/selects only #day-drawer-list below, so a tab click never re-fetches the
-               header (date label, arrows). -->
+               rationale. Each hx-gets the same day-fragment route with an added `type` param.
+               Previously this targeted/selected only #day-drawer-list below so a tab click
+               wouldn't re-fetch the header (date label, arrows) — but that meant the response's
+               freshly-rendered <nav> (with the new active-tab highlight below) was discarded by
+               hx-select before ever reaching the DOM, so the highlighted tab never actually
+               changed (docs/issues_and_features.md). Fixed by matching the prev/next-day arrows'
+               own swap shape exactly (hx-target="#day-drawer" hx-select="unset"
+               hx-swap="innerHTML") — the whole panel, including this nav, re-renders on every tab
+               click, same as it already does on every day change. -->
           <nav class="mt-4 -mb-px flex gap-x-6 text-sm font-medium" aria-label="Item type">
             <a href="/web/calendar?year={{ drawer.date_year }}&month={{ drawer.date_month }}&date={{ drawer.date_iso }}&type=all{% if drawer.assigned_to_any %}&assignedToAny=1{% endif %}"
               hx-get="/web/calendar/day?date={{ drawer.date_iso }}&type=all{% if drawer.assigned_to_any %}&assignedToAny=1{% endif %}"
-              hx-target="#day-drawer-list" hx-select="#day-drawer-list" hx-swap="outerHTML"
+              hx-target="#day-drawer" hx-select="unset" hx-swap="innerHTML"
               hx-push-url="/web/calendar?year={{ drawer.date_year }}&month={{ drawer.date_month }}&date={{ drawer.date_iso }}&type=all{% if drawer.assigned_to_any %}&assignedToAny=1{% endif %}"
               class="border-b-2 pb-2 {% if drawer.active_type == "all" %}border-indigo-500 text-indigo-600 dark:border-indigo-400 dark:text-indigo-400{% else %}border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300{% endif %}">All</a>
             <a href="/web/calendar?year={{ drawer.date_year }}&month={{ drawer.date_month }}&date={{ drawer.date_iso }}&type=task{% if drawer.assigned_to_any %}&assignedToAny=1{% endif %}"
               hx-get="/web/calendar/day?date={{ drawer.date_iso }}&type=task{% if drawer.assigned_to_any %}&assignedToAny=1{% endif %}"
-              hx-target="#day-drawer-list" hx-select="#day-drawer-list" hx-swap="outerHTML"
+              hx-target="#day-drawer" hx-select="unset" hx-swap="innerHTML"
               hx-push-url="/web/calendar?year={{ drawer.date_year }}&month={{ drawer.date_month }}&date={{ drawer.date_iso }}&type=task{% if drawer.assigned_to_any %}&assignedToAny=1{% endif %}"
               class="border-b-2 pb-2 {% if drawer.active_type == "task" %}border-indigo-500 text-indigo-600 dark:border-indigo-400 dark:text-indigo-400{% else %}border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300{% endif %}">Tasks</a>
             <a href="/web/calendar?year={{ drawer.date_year }}&month={{ drawer.date_month }}&date={{ drawer.date_iso }}&type=event{% if drawer.assigned_to_any %}&assignedToAny=1{% endif %}"
               hx-get="/web/calendar/day?date={{ drawer.date_iso }}&type=event{% if drawer.assigned_to_any %}&assignedToAny=1{% endif %}"
-              hx-target="#day-drawer-list" hx-select="#day-drawer-list" hx-swap="outerHTML"
+              hx-target="#day-drawer" hx-select="unset" hx-swap="innerHTML"
               hx-push-url="/web/calendar?year={{ drawer.date_year }}&month={{ drawer.date_month }}&date={{ drawer.date_iso }}&type=event{% if drawer.assigned_to_any %}&assignedToAny=1{% endif %}"
               class="border-b-2 pb-2 {% if drawer.active_type == "event" %}border-indigo-500 text-indigo-600 dark:border-indigo-400 dark:text-indigo-400{% else %}border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300{% endif %}">Events</a>
           </nav>

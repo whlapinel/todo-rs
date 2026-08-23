@@ -598,9 +598,13 @@ pub struct ProjectCalendarQuery {
     assigned_to_any: Option<String>,
 }
 
-/// See `project_tasks::handlers::day_panel_label`'s identical rationale.
+/// See `main_calendar::day_panel_label`'s identical rationale. Shortened from
+/// `"%A, %B %d, %Y"` (e.g. "Saturday, August 21, 2026") to `"%a, %-d %b"` (e.g. "Sat, 21 Aug")
+/// per docs/issues_and_features.md, so the day-drawer title fits on mobile without wrapping or
+/// forcing the fixed-width title element (see the `#day-drawer-title` class in
+/// calendar_day_panel.html) wider than necessary.
 fn day_panel_label(date: NaiveDate) -> String {
-    date.format("%A, %B %d, %Y").to_string()
+    date.format("%a, %-d %b").to_string()
 }
 
 pub async fn project_calendar_page(

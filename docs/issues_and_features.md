@@ -2,8 +2,6 @@
 
 Open issues and feature requests, merged from the former `docs/issues.md` and `docs/features.md` (2026-08-20) into a single sorted list. Completed or superseded items — including ones from the old files that were already resolved but hadn't been moved out yet — live in `docs/archived/archived_issues_and_features.md`.
 
-- Highlighted tab of day-drawer in calendar pages doesn't update with tab selection, stuck on 'All'.
-- Calendar view day-drawer date element needs to be fixed-width so we don't have layout shift - the buttons on either side shift around when moving between dates. And let's shorten the string to e.g. Sat, 21 Aug so it fits on mobile more easily.
 - Need filtering for all lists.
     - see ../tailwind-ui-html/e-commerce/category-filters.html for an example. needs to be given dark mode support 
     - However I'd like you to TRY to use the new customizable select instead, if possible. I am hoping it will be simpler. I believe you can multi-select with these. Style this to look like other input elements in this app if possible.
