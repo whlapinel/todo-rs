@@ -87,6 +87,9 @@ impl ProjectEventRow {
             type_badge: None,
             parent_name: None,
             project_name: None,
+            // Not yet converted to dialog fragments — see Stage 2 of
+            // docs/dialog-item-forms-plan.md.
+            detail_via_dialog: false,
         }
     }
 }

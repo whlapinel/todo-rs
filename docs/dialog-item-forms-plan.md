@@ -1,6 +1,6 @@
 # New/edit item forms as dialogs, all-projects creation, and the canonical Personal project
 
-Status: **planned, not yet implemented**. Written 2026-08-23 from the first entry in `docs/issues_and_features.md`, which bundles several tenuously-related asks and explicitly invites splitting into stages — this doc does that split and records the design decisions made along the way.
+Status: **in progress** — Stage 0 and Stage 1 done, Stages 2–3 planned/not yet implemented. Written 2026-08-23 from the first entry in `docs/issues_and_features.md`, which bundles several tenuously-related asks and explicitly invites splitting into stages — this doc does that split and records the design decisions made along the way.
 
 ## Workflow across stages
 
@@ -44,6 +44,89 @@ What actually landed, for Stage 3 (and anyone resuming after a context clear) to
 - No enforcement, no UI change — this stage only makes the id available for Stage 3 to read. `cargo build` clean (only pre-existing warnings); `cargo test` 465 passed / 0 failed (462 pre-existing + 3 new `ensure_default_project` tests).
 
 ## Stage 1 — Proof of concept: Project Tasks new/edit as a dialog
+
+**Status: done** (2026-08-23). `cargo build`/`cargo fmt`/`cargo test` clean (465 passed, same
+count as Stage 0 — no new tests added, this stage is template/wiring restructuring over
+already-tested service/handler logic); `task web-styles` run, no CSS diff (every class used was
+already present from `reschedule_dialog.html`/`quick_assign_dialog.html`). Not yet verified live
+in a browser — that's the user's own pass per this repo's standing "no Playwright click-through"
+policy (see CLAUDE.md).
+
+What actually landed, differing from or adding detail to the plan below:
+
+- **`#dialog-fragment` is the actual convention name** (the plan below said "shaped like
+  `reschedule_dialog.html`" but didn't name a wrapper id) — every new/edit/detail dialog
+  fragment across every screen wraps its backdrop+panel markup in `<div id="dialog-fragment">`.
+  This one shared id (not a per-screen/per-item id) is what lets `row.html`, `row_actions_menu.
+  html`, and each screen's own trigger buttons all use the same `hx-select="#dialog-fragment"`
+  regardless of which screen or item they're opening a dialog for.
+- **Direct-URL/bookmark auto-open (Decision 3) works by *moving*, not copying**, `#dialog-
+  fragment`'s children into base.html's persistent `#action-dialog` via a small inline
+  `<script>` (`while (frag.firstChild) dialog.appendChild(frag.firstChild); frag.remove();`),
+  then `htmx.process(dialog)` + `showModal()`. Copying (leaving the original `#dialog-fragment`
+  div sitting inert in `#page`) was considered and rejected: that div carries `fixed inset-0`
+  backdrop styling that, even at `opacity-0`, would sit over the whole viewport and could
+  intercept clicks once the dialog later closes. The script is a plain sibling of `#dialog-
+  fragment` in each page's `{% block content %}` — since an htmx-triggered open already
+  `hx-select`s out just `#dialog-fragment` itself, that sibling script is never part of what
+  gets swapped in on that path, so it only ever runs on an actual full-page load. This exact
+  three-line script is duplicated verbatim in `new_page.html`/`edit_page.html`/`detail_page.
+  html` rather than factored out, matching this codebase's established "duplicate small
+  per-screen helpers" precedent (see CLAUDE.md's Web UI section).
+- **The detail dialog is deliberately smaller than the full detail page** — it wraps
+  `ProjectTaskDetailView`'s already-rendered `view` HTML (a new `ProjectTaskDetailDialog`
+  struct/`detail_dialog.html` template takes the pre-rendered `view: String` rather than
+  re-deriving it) plus Edit/Close buttons, with **no Sub-items management, no Save-as-template,
+  no Delete** — those stay full-page-only for now. Delete is unaffected in practice (it's
+  already on the row's own "⋮" menu, untouched by this stage). Sub-items/Save-as-template are a
+  real, if narrow, gap: added a **"View full page" link** on the detail dialog (not in the
+  original plan text) as the escape hatch — a plain boosted `<a>` to the same URL, closing the
+  dialog first via `onclick`. `detail_page.html` itself is otherwise unchanged (still shows the
+  full header/Edit/Delete/Sub-items exactly as before) — it now *additionally* embeds the same
+  detail-dialog fragment (auto-opened on load per Decision 3), so a direct URL visit shows both
+  the auto-opened dialog and, once closed, the full page underneath unchanged.
+- **A real, temporary regression, matching what the plan text below already flagged**:
+  `row_actions_menu.html`'s Edit link now always targets `#action-dialog` with
+  `hx-select="#dialog-fragment"`, and that link is shared by every screen. Until Stage 2
+  converts them, clicking Edit from the row-actions menu on `project_events`/
+  `project_simple_lists`/`project_templates` (children)/`project_item_series` opens an **empty**
+  dialog (their `edit_url` still serves the old, non-`#dialog-fragment`-wrapped page, so nothing
+  matches the selector). Those screens' edit pages still work fine via direct URL nav (unaffected
+  by this selector). **Stage 2 should land promptly** to close this gap — don't leave Stage 1
+  alone deployed for long. `row.html`'s `detail_via_dialog` is opt-in per-row (not a shared
+  selector), so it doesn't have this same blast radius — only `project_tasks` rows set it `true`
+  this stage; every other screen's rows (Events, Simple Lists, Templates, series, and every
+  calendar/all-projects/assigned-items screen that builds a `Row` via `ProjectTaskRow::from_item`
+  or `ProjectEventRow::from_item` and overrides fields) explicitly set/leave it `false`, with an
+  inline comment at each override site pointing at this doc.
+- **Known, accepted gaps** (both documented inline in the templates, not fixed this stage): (1)
+  saving an edit, or creating a new task, from a *direct-URL-loaded* `/tasks/:id/edit` or
+  `/tasks/new` — i.e. no Tasks list page underneath the dialog — targets `#item-{id}` /
+  `#items-list` respectively, neither of which exists in that DOM; the submit silently no-ops
+  visually (htmx logs "no matching element", dialog stays open showing stale content) rather
+  than erroring. The common path (dialog opened from a list page you're already on) is
+  unaffected. (2) `assigned_to_user_id`/`points`/`due_offset_days` handling, `is_offset_driven`
+  gating, and every other field-level behavior in `detail_fields.html`/`new_page.html` are
+  untouched from before this stage — only the wrapper markup and submit-target attributes
+  changed, not the Rust-side form-parsing/overlay logic (`ProjectTaskForm`, `create_params_from_
+  form`, `update_params_from_form`).
+- **Files touched**: `src/web_ui/components/row.rs` (`Row.detail_via_dialog: bool`, new field);
+  `templates/components/row.html` (conditional name-click link vs. dialog-opening button);
+  `templates/components/row_actions_menu.html` (Edit link retargeted); `src/web_ui/project_tasks/
+  templates.rs` (`ProjectTaskRow::from_item` sets `detail_via_dialog: true`; new
+  `ProjectTaskDetailDialog` struct; `ProjectTaskDetailPageTemplate` gained a `dialog: String`
+  field; `ProjectTaskEditPageTemplate` lost its now-unused `id`/`project_id` fields);
+  `src/web_ui/project_tasks/handlers.rs` (`project_task_detail_page` and `update_project_task_
+  form`'s close branch each now also build `dialog` alongside `view`); `templates/project_tasks/
+  {new_page,edit_page,detail_page,detail_fields}.html` (restructured into dialog fragments +
+  auto-open scripts, per above); `templates/project_tasks/detail_dialog.html` (new);
+  `templates/project_tasks/list_page.html` (`+ Task` link → dialog-opening button). Also touched,
+  purely to keep the new `Row.detail_via_dialog` field's default explicit and `false` outside
+  `project_tasks`: `src/web_ui/project_events/templates.rs`, `src/web_ui/project_simple_lists/
+  templates.rs`, `src/web_ui/main_calendar.rs`, `src/web_ui/project_calendar.rs`,
+  `src/web_ui/all_projects_tasks.rs` (one `row.detail_via_dialog = false;` override each, with a
+  comment pointing here or at Stage 2/3 as appropriate) — no behavior change at any of those
+  sites, just explicit opt-out.
 
 Do this screen first, get it reviewed/working end to end, then replicate mechanically in Stage 2.
 

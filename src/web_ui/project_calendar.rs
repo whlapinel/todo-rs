@@ -159,6 +159,10 @@ pub(crate) fn calendar_row(
     row.type_badge = Some(type_symbol(item.kind()));
     row.parent_name = parent_name;
     row.expanded_row = true;
+    // Out of scope for Stage 1 of docs/dialog-item-forms-plan.md (see its Out of scope
+    // section) — the calendar keeps today's page-nav behavior even though `ProjectTaskRow::
+    // from_item` now defaults this `true` for its own screen.
+    row.detail_via_dialog = false;
     // Re-point the checkbox at this screen's own toggle route (rather than the item's own
     // resource PUT route `ProjectTaskRow::from_item` sets by default) so a subsequent toggle
     // keeps re-rendering with this function's calendar-flavored row instead of reverting to the

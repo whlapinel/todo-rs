@@ -124,6 +124,9 @@ impl ProjectTaskRow {
             type_badge: None,
             parent_name: None,
             project_name: None,
+            // Stage 1 of docs/dialog-item-forms-plan.md — project_tasks is the proof-of-concept
+            // screen whose detail/edit/new pages were converted into dialog fragments.
+            detail_via_dialog: true,
         }
     }
 }
@@ -832,6 +835,31 @@ pub struct NewProjectTaskPageTemplate {
     pub nav_html: String,
 }
 
+/// Stage 1 of docs/dialog-item-forms-plan.md — the read-only detail dialog wrapping
+/// `ProjectTaskDetailView`'s already-rendered `view` HTML. See `detail_dialog.html`'s own doc
+/// comment for why this is deliberately lighter than the full detail page.
+#[derive(Template)]
+#[template(path = "project_tasks/detail_dialog.html")]
+pub struct ProjectTaskDetailDialog {
+    pub name: String,
+    pub complete: bool,
+    pub view: String,
+    pub edit_url: String,
+    pub full_page_url: String,
+}
+
+impl ProjectTaskDetailDialog {
+    pub fn new(id: &str, project_id: &str, name: &str, complete: bool, view: String) -> Self {
+        Self {
+            name: name.to_string(),
+            complete,
+            view,
+            edit_url: format!("/web/projects/{project_id}/tasks/{id}/edit"),
+            full_page_url: format!("/web/projects/{project_id}/tasks/{id}"),
+        }
+    }
+}
+
 #[derive(Template)]
 #[template(path = "project_tasks/detail_page.html")]
 pub struct ProjectTaskDetailPageTemplate {
@@ -840,14 +868,16 @@ pub struct ProjectTaskDetailPageTemplate {
     pub name: String,
     pub complete: bool,
     pub view: String,
+    /// See `ProjectTaskDetailDialog` — rendered separately from `view` and embedded alongside
+    /// it (Decision 3: a direct-URL/bookmark load of this page auto-opens the same dialog an
+    /// interactive row-click would have opened).
+    pub dialog: String,
     pub nav_html: String,
 }
 
 #[derive(Template)]
 #[template(path = "project_tasks/edit_page.html")]
 pub struct ProjectTaskEditPageTemplate {
-    pub id: String,
-    pub project_id: String,
     pub name: String,
     pub fields: String,
     pub nav_html: String,

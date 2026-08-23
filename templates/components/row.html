@@ -12,10 +12,23 @@
             class="shrink-0 inline-flex size-4 items-center justify-center rounded-full bg-gray-200 text-[10px] font-semibold text-gray-600 dark:bg-white/10 dark:text-gray-300">{{
             badge }}</span>
         {% endif %}
+        {% if detail_via_dialog %}
+        <!-- Selects out #dialog-fragment (the conventional wrapper id every new/edit/detail
+             dialog fragment uses — see docs/dialog-item-forms-plan.md Stage 1) rather than the
+             whole (full-page) response, since this route also serves direct-URL/bookmark
+             access and would otherwise render the entire document (nav, scripts, ...) into
+             #action-dialog. -->
+        <button type="button" hx-get="{{ item_url }}" hx-target="#action-dialog" hx-select="#dialog-fragment"
+            hx-swap="innerHTML"
+            class="min-w-0 flex-1 truncate text-left cursor-pointer {% if complete %}line-through text-gray-400 dark:text-gray-500{% else %}text-gray-900 dark:text-white{% endif %}">
+            {% if has_children %}<span class="text-gray-400 dark:text-gray-500">&#9656;</span>{% endif %} {{ name }}
+        </button>
+        {% else %}
         <a href="{{ item_url }}" hx-target="#page" hx-select="#page" hx-swap="innerHTML"
             class="min-w-0 flex-1 truncate {% if complete %}line-through text-gray-400 dark:text-gray-500{% else %}text-gray-900 dark:text-white{% endif %}">
             {% if has_children %}<span class="text-gray-400 dark:text-gray-500">&#9656;</span>{% endif %} {{ name }}
         </a>
+        {% endif %}
         {% if let Some(msg) = confirmation %}
         <span class="toast-fade shrink-0 text-xs font-medium text-green-600 dark:text-green-400">&#10003; {{ msg
             }}</span>

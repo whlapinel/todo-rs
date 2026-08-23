@@ -97,4 +97,12 @@ pub struct Row {
     /// `all_projects_tasks`/`all_projects_events`, the screens that mix rows from more than one
     /// project at once.
     pub project_name: Option<String>,
+    /// Decision 1 of `docs/dialog-item-forms-plan.md`'s Stage 1 — when `true`, the row's
+    /// name-click opens the read-only detail dialog (`hx-get` into `#action-dialog`) instead of
+    /// today's boosted navigation to the detail page. Opt-in per screen (defaults `false`):
+    /// only a screen whose detail/edit pages have actually been converted into dialog
+    /// fragments should set this, since a screen that hasn't (calendar day-drawer,
+    /// `assigned_items`, `project_activity` — see the plan doc's Out of scope section, plus any
+    /// screen not yet reached by Stage 2) has no dialog fragment for this to open.
+    pub detail_via_dialog: bool,
 }

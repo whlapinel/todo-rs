@@ -144,6 +144,10 @@ pub(crate) fn all_projects_task_row(
     );
     row.expanded_row = true;
     row.project_name = Some(project_name.to_string());
+    // Deferred to Stage 3 of docs/dialog-item-forms-plan.md (Decision 1 names this screen as
+    // a later opt-in, alongside its own "+ New" dialog work), even though the detail dialog
+    // fragment itself already works at this row's `item_url` unchanged from Stage 1.
+    row.detail_via_dialog = false;
     row.complete_url = row
         .complete_url
         .as_ref()

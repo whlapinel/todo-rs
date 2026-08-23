@@ -148,6 +148,10 @@ pub(crate) fn calendar_row(
     row.parent_name = parent_name;
     row.project_name = Some(project_name.to_string());
     row.expanded_row = true;
+    // Out of scope for Stage 1 of docs/dialog-item-forms-plan.md (see its Out of scope
+    // section) — the calendar keeps today's page-nav behavior even though `ProjectTaskRow::
+    // from_item` now defaults this `true` for its own screen.
+    row.detail_via_dialog = false;
     row.complete_url = row
         .complete_url
         .as_ref()

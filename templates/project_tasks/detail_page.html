@@ -1,6 +1,26 @@
 {% extends "base.html" %}
 {% block title %}{{ name }} · Todo{% endblock %}
 {% block content %}
+{{ dialog|safe }}
+<!-- Direct-URL/bookmark access (Decision 3 of docs/dialog-item-forms-plan.md) — an
+     htmx-triggered open (a row's name-click) already selected just #dialog-fragment out of
+     this response, so this sibling <script> is never part of what gets swapped in that path;
+     it only runs on an actual full-page load. Moves (not copies) #dialog-fragment's children
+     into base.html's persistent #action-dialog so nothing inert is left behind in #page once
+     the dialog is showing — the full page's own content (below) stays visible underneath it,
+     same as it always has. -->
+<script>
+  (function () {
+    var dialog = document.getElementById('action-dialog');
+    var frag = document.getElementById('dialog-fragment');
+    if (dialog && frag && !dialog.open) {
+      while (frag.firstChild) dialog.appendChild(frag.firstChild);
+      frag.remove();
+      htmx.process(dialog);
+      dialog.showModal();
+    }
+  })();
+</script>
 <div class="space-y-6">
   <div class="md:flex md:items-center md:justify-between">
     <div class="min-w-0 flex-1">

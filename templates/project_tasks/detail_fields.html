@@ -1,77 +1,108 @@
 {% import "macros.html" as macros %}
-<div id="item-{{ id }}-fields" class="rounded-lg border border-gray-200 bg-white p-6 space-y-3 dark:border-white/10 dark:bg-gray-800/50">
-  <form hx-put="/web/projects/{{ project_id }}/tasks/{{ id }}" hx-target="#page" hx-select="#page" hx-swap="innerHTML" hx-push-url="/web/projects/{{ project_id }}/tasks/{{ id }}" class="space-y-3">
-    <input type="hidden" name="redirect" value="true" />
-    <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Name <span class="text-red-500" aria-hidden="true">*</span>
-      <div class="mt-2">
-        <input type="text" name="name" value="{{ name }}" required maxlength="200"
-               class="block w-full rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 placeholder:text-gray-400 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:placeholder:text-gray-500 dark:focus:outline-indigo-500" />
-      </div>
-    </label>
-    {% call macros::description_field(description) %}{% endcall %}
-    {% if is_offset_driven %}
-    <div>
-      <p class="block text-sm/6 font-medium text-gray-900 dark:text-white">Due date</p>
-      <p class="mt-2 text-sm text-gray-700 dark:text-gray-300">
-        {% if due_date_input.is_empty() %}Not set{% else %}{{ due_date_input }}{% if !due_time_input.is_empty() %} {{ due_time_input }}{% endif %}{% endif %}
-        (computed from the offset below)
-      </p>
-    </div>
-    {% else %}
-    <div class="flex items-end gap-x-4">
-      <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Due date
-        <div class="mt-2">
-          <input type="date" name="dueDate" value="{{ due_date_input }}"
-                 class="block rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:focus:outline-indigo-500" />
-        </div>
-      </label>
-      <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Due time
-        <div class="mt-2">
-          <input type="time" name="dueTime" value="{{ due_time_input }}"
-                 class="block rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:focus:outline-indigo-500" />
-        </div>
-      </label>
-    </div>
-    {% call macros::scheduled_fields(scheduled_date_input, scheduled_time_input, scheduled_end_date_input, scheduled_end_time_input) %}{% endcall %}
-    {% endif %}
-    {% if is_team_project %}
-    <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Assign to
-      <div class="mt-2 grid grid-cols-1">
-        <select name="assignedToUserId"
-                class="col-start-1 row-start-1 block w-full appearance-none rounded-md bg-white py-1.5 pr-8 pl-3 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:*:bg-gray-800 dark:focus:outline-indigo-500">
-          <option value="" {% if assigned_to_user_id.is_none() %}selected{% endif %}>Unassigned</option>
-          {% for opt in assignee_options %}
-          <option value="{{ opt.0 }}" {% if assigned_to_user_id.as_deref() == Some(opt.0.as_str()) %}selected{% endif %}>{{ opt.1 }}</option>
-          {% endfor %}
-        </select>
-      </div>
-    </label>
-    {% endif %}
-    <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Status
-      <div class="mt-2 grid grid-cols-1">
-        <select name="complete"
-                class="col-start-1 row-start-1 block w-full appearance-none rounded-md bg-white py-1.5 pr-8 pl-3 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:*:bg-gray-800 dark:focus:outline-indigo-500">
-          {% if complete %}
-          <option value="false">Not done</option>
-          <option value="true" selected>Done</option>
+<!-- Stage 1 of docs/dialog-item-forms-plan.md: this fragment is both (a) swapped whole into
+     base.html's persistent #action-dialog (via #dialog-fragment, the conventional wrapper id
+     every new/edit/detail dialog fragment uses) when opened from a row's "⋮ Edit" or the
+     detail dialog's own Edit button, and (b) embedded directly by edit_page.html for
+     direct-URL/bookmark access — see that template's own auto-open script. No <dialog> tag of
+     its own; base.html's #action-dialog supplies that. -->
+<div id="dialog-fragment">
+  <div id="dialog-backdrop"
+    class="fixed inset-0 bg-gray-500/75 dark:bg-gray-900/50 transition-opacity duration-300 ease-out opacity-0 group-open/dialog:opacity-100">
+  </div>
+  <div tabindex="0"
+    class="relative z-10 flex min-h-full items-end justify-center p-4 text-center focus:outline-none sm:items-center sm:p-0">
+    <div class="relative transform overflow-hidden rounded-lg bg-white dark:bg-gray-800 px-4 pt-5 pb-4 text-left shadow-xl transition-all duration-300 ease-out translate-y-4 opacity-0 scale-95 group-open/dialog:translate-y-0 group-open/dialog:opacity-100 group-open/dialog:scale-100 sm:my-8 sm:w-full sm:max-w-lg sm:p-6 dark:outline dark:-outline-offset-1 dark:outline-white/10">
+      <div id="item-{{ id }}-fields" class="space-y-3">
+        <!-- Submits in place against the row on whatever list page is underneath this dialog
+             (hx-select="#item-{{ id }}" plucks just the row out of update_project_task_form's
+             row+fields+view response) — see the plan doc's Stage 1 "Submit behavior" notes.
+             Saving from a direct-URL-loaded edit page (no list page underneath, so no
+             #item-{{ id }} to find) is a known, accepted gap — see that same section. -->
+        <form hx-put="/web/projects/{{ project_id }}/tasks/{{ id }}" hx-target="#item-{{ id }}"
+          hx-select="#item-{{ id }}" hx-swap="outerHTML"
+          hx-on::after-request="if(event.detail.successful) document.getElementById('action-dialog').close()"
+          class="space-y-3">
+          <h3 class="text-base font-semibold text-gray-900 dark:text-white">Edit task</h3>
+          <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Name <span
+              class="text-red-500" aria-hidden="true">*</span>
+            <div class="mt-2">
+              <input type="text" name="name" value="{{ name }}" required maxlength="200"
+                class="block w-full rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 placeholder:text-gray-400 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:placeholder:text-gray-500 dark:focus:outline-indigo-500" />
+            </div>
+          </label>
+          {% call macros::description_field(description) %}{% endcall %}
+          {% if is_offset_driven %}
+          <div>
+            <p class="block text-sm/6 font-medium text-gray-900 dark:text-white">Due date</p>
+            <p class="mt-2 text-sm text-gray-700 dark:text-gray-300">
+              {% if due_date_input.is_empty() %}Not set{% else %}{{ due_date_input }}{% if
+              !due_time_input.is_empty() %} {{ due_time_input }}{% endif %}{% endif %}
+              (computed from the offset below)
+            </p>
+          </div>
           {% else %}
-          <option value="false" selected>Not done</option>
-          <option value="true">Done</option>
+          <div class="flex items-end gap-x-4">
+            <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Due date
+              <div class="mt-2">
+                <input type="date" name="dueDate" value="{{ due_date_input }}"
+                  class="block rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:focus:outline-indigo-500" />
+              </div>
+            </label>
+            <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Due time
+              <div class="mt-2">
+                <input type="time" name="dueTime" value="{{ due_time_input }}"
+                  class="block rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:focus:outline-indigo-500" />
+              </div>
+            </label>
+          </div>
+          {% call macros::scheduled_fields(scheduled_date_input, scheduled_time_input, scheduled_end_date_input,
+          scheduled_end_time_input) %}{% endcall %}
           {% endif %}
-        </select>
+          {% if is_team_project %}
+          <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Assign to
+            <div class="mt-2 grid grid-cols-1">
+              <select name="assignedToUserId"
+                class="col-start-1 row-start-1 block w-full appearance-none rounded-md bg-white py-1.5 pr-8 pl-3 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:*:bg-gray-800 dark:focus:outline-indigo-500">
+                <option value="" {% if assigned_to_user_id.is_none() %}selected{% endif %}>Unassigned</option>
+                {% for opt in assignee_options %}
+                <option value="{{ opt.0 }}" {% if assigned_to_user_id.as_deref()==Some(opt.0.as_str()) %}selected{%
+                  endif %}>{{ opt.1 }}</option>
+                {% endfor %}
+              </select>
+            </div>
+          </label>
+          {% endif %}
+          <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Status
+            <div class="mt-2 grid grid-cols-1">
+              <select name="complete"
+                class="col-start-1 row-start-1 block w-full appearance-none rounded-md bg-white py-1.5 pr-8 pl-3 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:*:bg-gray-800 dark:focus:outline-indigo-500">
+                {% if complete %}
+                <option value="false">Not done</option>
+                <option value="true" selected>Done</option>
+                {% else %}
+                <option value="false" selected>Not done</option>
+                <option value="true">Done</option>
+                {% endif %}
+              </select>
+            </div>
+          </label>
+          {% if !is_top_level || is_offset_driven %}
+          {% call macros::due_offset_days_field(due_offset_days_input) %}{% endcall %}
+          {% endif %}
+          {% if is_team_project %}
+          {% call macros::points_field(is_team_admin, is_top_level, points_input) %}{% endcall %}
+          {% endif %}
+          <div class="mt-5 sm:mt-6 sm:grid sm:grid-flow-row-dense sm:grid-cols-2 sm:gap-3">
+            <button type="submit"
+              class="inline-flex w-full justify-center rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-xs hover:bg-indigo-500 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600 sm:col-start-2 dark:bg-indigo-500 dark:shadow-none dark:hover:bg-indigo-400 dark:focus-visible:outline-indigo-500">Save</button>
+            <button type="button" onclick="document.getElementById('action-dialog').close()"
+              class="mt-3 inline-flex w-full justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-xs inset-ring-1 inset-ring-gray-300 hover:bg-gray-50 sm:col-start-1 sm:mt-0 dark:bg-white/10 dark:text-white dark:shadow-none dark:inset-ring-white/5 dark:hover:bg-white/20">Cancel</button>
+          </div>
+          {% if just_saved %}
+          <span class="toast-fade text-sm text-green-600">&#10003; Saved</span>
+          {% endif %}
+        </form>
       </div>
-    </label>
-    {% if !is_top_level || is_offset_driven %}
-    {% call macros::due_offset_days_field(due_offset_days_input) %}{% endcall %}
-    {% endif %}
-    {% if is_team_project %}
-    {% call macros::points_field(is_team_admin, is_top_level, points_input) %}{% endcall %}
-    {% endif %}
-    <div class="flex items-center gap-x-3">
-      {% call macros::button_primary("Save and close") %}{% endcall %}
-      {% if just_saved %}
-      <span class="toast-fade text-sm text-green-600">&#10003; Saved</span>
-      {% endif %}
     </div>
-  </form>
+  </div>
 </div>

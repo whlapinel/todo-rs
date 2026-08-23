@@ -20,10 +20,11 @@
           class="size-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-600 dark:border-white/20 dark:bg-white/5" />
         Show completed
       </label>
-      <a href="/web/projects/{{ project_id }}/tasks/new" hx-target="#page" hx-select="#page" hx-swap="innerHTML"
+      <button type="button" hx-get="/web/projects/{{ project_id }}/tasks/new{% if show_complete %}?showComplete=1{% endif %}"
+        hx-target="#action-dialog" hx-select="#dialog-fragment" hx-swap="innerHTML"
         class="inline-flex items-center justify-center rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-xs hover:bg-indigo-500 dark:bg-indigo-500 dark:shadow-none dark:hover:bg-indigo-400">
         {% include "icons/add.html" %}
-      </a>
+      </button>
     </div>
   </div>
 

@@ -1,0 +1,33 @@
+<!-- Stage 1 of docs/dialog-item-forms-plan.md — the read-only detail dialog (Decision 1):
+     reuses whatever detail_view.html already rendered (`view`, computed once by the handler,
+     see ProjectTaskDetailDialog::new) plus Edit/Close buttons. Deliberately lighter than the
+     full detail_page.html (no Sub-items management, no Save-as-template, no Delete — those stay
+     reachable via "View full page" below, or via the row's own "⋮" menu for Delete) — see the
+     plan doc's Stage 1 notes on this being a deliberate scope reduction for the quick-look
+     dialog, not an oversight. #dialog-fragment is the conventional wrapper id every
+     new/edit/detail dialog fragment uses. -->
+<div id="dialog-fragment">
+  <div id="dialog-backdrop"
+    class="fixed inset-0 bg-gray-500/75 dark:bg-gray-900/50 transition-opacity duration-300 ease-out opacity-0 group-open/dialog:opacity-100">
+  </div>
+  <div tabindex="0"
+    class="relative z-10 flex min-h-full items-end justify-center p-4 text-center focus:outline-none sm:items-center sm:p-0">
+    <div class="relative transform overflow-hidden rounded-lg bg-white dark:bg-gray-800 px-4 pt-5 pb-4 text-left shadow-xl transition-all duration-300 ease-out translate-y-4 opacity-0 scale-95 group-open/dialog:translate-y-0 group-open/dialog:opacity-100 group-open/dialog:scale-100 sm:my-8 sm:w-full sm:max-w-lg sm:p-6 dark:outline dark:-outline-offset-1 dark:outline-white/10">
+      <h3 class="mb-3 text-base font-semibold text-gray-900 dark:text-white">{{ name }}</h3>
+      {{ view|safe }}
+      <div class="mt-5 sm:mt-6 flex flex-wrap items-center gap-3">
+        {% if !complete %}
+        <button type="button" hx-get="{{ edit_url }}" hx-target="#action-dialog" hx-select="#dialog-fragment"
+          hx-swap="innerHTML"
+          class="inline-flex items-center justify-center rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-xs hover:bg-indigo-500 dark:bg-indigo-500 dark:shadow-none dark:hover:bg-indigo-400">Edit</button>
+        {% endif %}
+        <a href="{{ full_page_url }}" hx-target="#page" hx-select="#page" hx-swap="innerHTML"
+          onclick="document.getElementById('action-dialog').close()"
+          class="inline-flex items-center justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-xs inset-ring-1 inset-ring-gray-300 hover:bg-gray-50 dark:bg-white/10 dark:text-white dark:shadow-none dark:inset-ring-white/5 dark:hover:bg-white/20">View
+          full page</a>
+        <button type="button" onclick="document.getElementById('action-dialog').close()"
+          class="ml-auto inline-flex items-center justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-xs inset-ring-1 inset-ring-gray-300 hover:bg-gray-50 dark:bg-white/10 dark:text-white dark:shadow-none dark:inset-ring-white/5 dark:hover:bg-white/20">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
