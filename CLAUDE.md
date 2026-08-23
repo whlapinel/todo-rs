@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Do not add `Co-Authored-By` trailers to commits.
 
+Before creating any commit, run plain `cargo fmt` (no path arguments) from the repo root, then stage any resulting formatting changes as part of the commit. Keeping the whole repo uniformly formatted this way means there's never a partially-formatted file left for a later scoped `rustfmt <file>` or `cargo fmt -- <file>` invocation to collide with — which is what caused repeated formatting breakage in the past (a scoped invocation on a crate-root file like `src/main.rs` reformats every file transitively reachable through `mod` declarations, producing a huge unrelated diff). Always use plain `cargo fmt` with no arguments; never invoke the `rustfmt` binary directly or pass specific files to `cargo fmt --`.
+
 ## Commands
 
 See `Taskfile.yml` for the full task list (`codegen`, `run`, `build`, `check`, `web-styles`, `cli-build`, `cli-install`) plus `cargo test` for the Rust test suite.
@@ -20,7 +22,7 @@ For UI-only changes (no Smithy or Rust changes): edit `templates/*.html`, then `
 
 **Don't use Playwright (or any other browser-automation tool) to click-through/verify UI changes** — the user does that verification themselves; it burns tokens for no benefit here. Verify with `cargo build`/`cargo test`/`task check` and a careful read of the template/handler diff instead, and say so explicitly if live-in-browser behavior can't actually be confirmed that way.
 
-**Never invoke the `rustfmt` binary directly (`rustfmt src/main.rs ...`), and never pass `src/main.rs` (or any other crate-root file) as a `cargo fmt -- <files>` argument.** This has broken formatting-only edits multiple times: rustfmt treats a crate-root file as the root of its module tree and reformats every file transitively reachable through `mod` declarations, not just the file(s) named on the command line — so a scoped fix touches dozens of unrelated files (visible as unexpected diffs across the repo), and a bare `rustfmt <file>` invocation additionally ignores the project's own rustfmt/edition config, producing import-ordering that then conflicts with `cargo fmt`'s own output. If a build/edit sequence has caused a large batch of unrelated formatting drift, `git checkout --` those specific files back to their committed state rather than trying to hand-revert the diff. To format specific non-root files, use plain `cargo fmt -- <path> <path> ...` with only those files (never `src/main.rs`); to format everything intentionally, use plain `cargo fmt` with no arguments. Either way, diff the result against `git status`/`git diff --stat` afterward and revert anything outside the files you meant to touch.
+Formatting policy (never invoke `rustfmt` directly or scope `cargo fmt` to specific files) is covered in the Git section above.
 
 `task codegen` requires JDK 11+. It compiles the smithy-rs Kotlin codegen from source via a Gradle composite build — first run takes several minutes, subsequent runs are cached in `~/.gradle/caches/`.
 
