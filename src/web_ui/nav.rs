@@ -12,6 +12,10 @@ use std::sync::Arc;
 #[derive(Clone, PartialEq)]
 pub enum ActiveContext {
     Project(String),
+    /// The cross-project Tasks/Events/Calendar screens (`/web/tasks`, `/web/events`,
+    /// `/web/calendar`) — the all-projects counterpart to `Project(id)`, with its own fixed
+    /// (not `section_href`-derived) sidebar section links. See `build_nav_html`.
+    AllProjects,
     None,
 }
 
@@ -115,6 +119,20 @@ pub async fn build_nav_html(
                 Some(section_href(SidebarSection::None, project_id)),
                 Some(format!("/web/projects/{project_id}/activity")),
             )
+        }
+        ActiveContext::AllProjects => {
+            let links = [
+                (SidebarSection::Tasks, "Tasks", "/web/tasks"),
+                (SidebarSection::Events, "Events", "/web/events"),
+            ]
+            .into_iter()
+            .map(|(s, label, href)| SectionLink {
+                label,
+                href: href.to_string(),
+                is_active: s == section,
+            })
+            .collect();
+            (links, Some("/web/calendar".to_string()), None)
         }
         ActiveContext::None => (Vec::new(), None, None),
     };

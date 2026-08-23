@@ -51,6 +51,8 @@ use todo_server_sdk::{PeoplesRepublicOfLists, PeoplesRepublicOfListsConfig};
 use tower::ServiceBuilder;
 use tower_cookies::CookieManagerLayer;
 use tower_http::services::ServeDir;
+use web_ui::all_projects_events::all_projects_events_page;
+use web_ui::all_projects_tasks::all_projects_tasks_page;
 use web_ui::assigned_items::assigned_items_page;
 use web_ui::login::login_page;
 use web_ui::main_calendar::*;
@@ -67,6 +69,10 @@ use web_ui::teams::*;
 
 fn build_web_router() -> Router {
     Router::new()
+        // Stage 1 of docs/all-projects-landing-plan.md: placeholder handlers, replaced by
+        // Stages 2/3 with the real cross-project Tasks/Events screens.
+        .route("/tasks", get(all_projects_tasks_page))
+        .route("/events", get(all_projects_events_page))
         .route("/calendar", get(main_calendar_page))
         .route("/calendar/list", get(main_calendar_list_page))
         .route("/calendar/day", get(main_calendar_day_fragment))
@@ -502,7 +508,7 @@ async fn main() {
             let public_web_router = build_public_web_router();
 
             Router::new()
-                .route("/", get(|| async { Redirect::to("/web/calendar") }))
+                .route("/", get(|| async { Redirect::to("/web/tasks") }))
                 .nest("/api", api_router)
                 .nest("/auth", auth_router)
                 .nest("/web", web_router.merge(public_web_router))
@@ -570,7 +576,7 @@ async fn main() {
             let public_web_router = build_public_web_router();
 
             Router::new()
-                .route("/", get(|| async { Redirect::to("/web/calendar") }))
+                .route("/", get(|| async { Redirect::to("/web/tasks") }))
                 .nest("/auth", auth_router)
                 .nest("/api", api_router)
                 .nest("/web", web_router.merge(public_web_router))

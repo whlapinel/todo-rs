@@ -471,11 +471,13 @@ pub async fn redirect_main_dashboard(RawQuery(query): RawQuery) -> Redirect {
 }
 
 /// Stage 8: `.../dashboard/list` was this screen's list-view path before the rename — kept
-/// alive as a redirect to `.../calendar/list`, same rationale as `redirect_main_dashboard`.
+/// alive as a redirect, same rationale as `redirect_main_dashboard`. Stage 1 of
+/// docs/all-projects-landing-plan.md retargeted this from the now-removed cross-project
+/// calendar list (`.../calendar/list`) to `/web/tasks`, the new landing page.
 pub async fn redirect_main_dashboard_list(RawQuery(query): RawQuery) -> Redirect {
     match query {
-        Some(q) if !q.is_empty() => Redirect::to(&format!("/web/calendar/list?{q}")),
-        _ => Redirect::to("/web/calendar/list"),
+        Some(q) if !q.is_empty() => Redirect::to(&format!("/web/tasks?{q}")),
+        _ => Redirect::to("/web/tasks"),
     }
 }
 
@@ -510,7 +512,7 @@ pub async fn main_calendar_list_page(
     let nav_html = nav::build_nav_html(
         &projects,
         &auth_user.user_id,
-        ActiveContext::None,
+        ActiveContext::AllProjects,
         SidebarSection::None,
     )
     .await?;
@@ -924,7 +926,7 @@ pub async fn main_calendar_page(
     let nav_html = nav::build_nav_html(
         &projects,
         &auth_user.user_id,
-        ActiveContext::None,
+        ActiveContext::AllProjects,
         SidebarSection::None,
     )
     .await?;

@@ -656,12 +656,14 @@ pub async fn redirect_project_dashboard(
 }
 
 /// Stage 8: `.../dashboard/list` was this screen's list-view path before the rename — kept
-/// alive as a redirect to `.../calendar/list`, same rationale as `redirect_project_dashboard`.
+/// alive as a redirect, same rationale as `redirect_project_dashboard`. Stage 1 of
+/// docs/all-projects-landing-plan.md retargeted this from the now-removed per-project
+/// calendar list (`.../calendar/list`) to that project's Tasks screen.
 pub async fn redirect_project_dashboard_list(
     Path(project_id): Path<String>,
     RawQuery(query): RawQuery,
 ) -> Redirect {
-    let base = format!("/web/projects/{project_id}/calendar/list");
+    let base = format!("/web/projects/{project_id}/tasks");
     match query {
         Some(q) if !q.is_empty() => Redirect::to(&format!("{base}?{q}")),
         _ => Redirect::to(&base),

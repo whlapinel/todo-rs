@@ -1,3 +1,5 @@
+pub mod all_projects_events;
+pub mod all_projects_tasks;
 pub mod assigned_items;
 pub mod components;
 pub mod error;
