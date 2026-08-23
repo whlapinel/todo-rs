@@ -37,7 +37,7 @@
     <select name="showComplete"
       class="rounded-md bg-white py-1.5 pr-8 pl-3 text-sm text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:*:bg-gray-800 dark:focus:outline-indigo-500">
       <option value="1" {% if show_complete %}selected{% endif %}>Complete</option>
-      <option value="0" {% if show_complete %}selected{% endif %}>Incomplete</option>
+      <option value="0" {% if !show_complete %}selected{% endif %}>Incomplete</option>
     </select>
     {% if is_team_project %}
     <select name="assignedTo"
