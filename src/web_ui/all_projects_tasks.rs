@@ -144,10 +144,9 @@ pub(crate) fn all_projects_task_row(
     );
     row.expanded_row = true;
     row.project_name = Some(project_name.to_string());
-    // Deferred to Stage 3 of docs/dialog-item-forms-plan.md (Decision 1 names this screen as
-    // a later opt-in, alongside its own "+ New" dialog work), even though the detail dialog
-    // fragment itself already works at this row's `item_url` unchanged from Stage 1.
-    row.detail_via_dialog = false;
+    // Stage 3 of docs/dialog-item-forms-plan.md: opted in — `ProjectTaskRow::from_item`
+    // already sets `detail_via_dialog: true`, so no override is needed here (unlike
+    // `main_calendar`/`project_calendar`'s own rows, which explicitly opt back out).
     row.complete_url = row
         .complete_url
         .as_ref()
@@ -315,6 +314,102 @@ pub async fn all_projects_tasks_page(
     render(AllProjectsTasksListPageTemplate {
         rows,
         show_complete,
+        nav_html,
+    })
+}
+
+/// Stage 3 of `docs/dialog-item-forms-plan.md` — the all-projects counterpart to
+/// `project_tasks::templates::NewProjectTaskPageTemplate`, with a project `<select>` prepended.
+/// `project_options` is `(id, name, is_selected)`; the form's own `hx-post` is baked to whatever
+/// project is currently selected (`project_id`), so no client-side URL rewriting is needed —
+/// only the select's own `hx-get` back to this same route (see `new_page.html`) re-renders the
+/// whole fragment server-side when the selection changes, per the plan's "simplest correct
+/// approach" note.
+#[derive(Template)]
+#[template(path = "all_projects_tasks/new_page.html")]
+struct AllProjectsNewTaskPageTemplate {
+    project_id: String,
+    project_options: Vec<(String, String, bool)>,
+    show_complete: bool,
+    is_team_project: bool,
+    assignee_options: Vec<(String, String)>,
+    blank_scheduled_date_input: String,
+    blank_scheduled_time_input: String,
+    blank_scheduled_end_date_input: String,
+    blank_scheduled_end_time_input: String,
+    blank_due_date_input: String,
+    blank_due_time_input: String,
+    is_team_admin: bool,
+    blank_points_input: String,
+    nav_html: String,
+}
+
+#[derive(serde::Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct NewAllProjectsTaskQuery {
+    project: Option<String>,
+    show_complete: Option<String>,
+}
+
+/// `GET /web/tasks/new` — Stage 3. Resolves the selected project (query param, else
+/// `personal_project_id`, else the first project) via `crate::web_ui::resolve_new_item_project`,
+/// then renders the dialog fragment for that project. Both the initial "+ New Task" click and
+/// the dialog's own project-select `onchange` hit this same route (see `new_page.html`).
+pub async fn new_all_projects_task_dialog(
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
+    Extension(users): Extension<Arc<dyn UserRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Query(q): Query<NewAllProjectsTaskQuery>,
+) -> Result<Html<String>, ItemError> {
+    let user_projects = project_service::list_projects(&projects, &auth_user.user_id).await?;
+    let user = users.get(&auth_user.user_id).await?;
+    let selected = crate::web_ui::resolve_new_item_project(
+        &user_projects,
+        q.project.as_deref(),
+        user.personal_project_id.as_deref(),
+    )
+    .ok_or(ItemError::NotFound)?;
+    let project_id = selected.id.clone();
+    let is_team_project = selected.team_id.is_some();
+    let (assignee_options, is_team_admin) = match &selected.team_id {
+        Some(team_id) => (
+            crate::web_ui::project_tasks::active_member_options(
+                &teams,
+                team_id,
+                &auth_user.user_id,
+            )
+            .await?,
+            project_service::is_project_admin(&projects, &teams, &project_id, &auth_user.user_id)
+                .await,
+        ),
+        None => (Vec::new(), false),
+    };
+    let project_options = user_projects
+        .iter()
+        .map(|p| (p.id.clone(), p.name.clone(), p.id == project_id))
+        .collect();
+    let nav_html = nav::build_nav_html(
+        &projects,
+        &auth_user.user_id,
+        ActiveContext::AllProjects,
+        SidebarSection::Tasks,
+    )
+    .await?;
+    render(AllProjectsNewTaskPageTemplate {
+        project_id,
+        project_options,
+        show_complete: q.show_complete.is_some(),
+        is_team_project,
+        assignee_options,
+        blank_scheduled_date_input: String::new(),
+        blank_scheduled_time_input: String::new(),
+        blank_scheduled_end_date_input: String::new(),
+        blank_scheduled_end_time_input: String::new(),
+        blank_due_date_input: String::new(),
+        blank_due_time_input: String::new(),
+        is_team_admin,
+        blank_points_input: String::new(),
         nav_html,
     })
 }

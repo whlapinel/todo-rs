@@ -13,7 +13,7 @@ use crate::web_ui::project_events;
 use crate::web_ui::project_events::templates::ProjectEventRow;
 use crate::web_ui::to_local;
 use askama::Template;
-use axum::extract::Extension;
+use axum::extract::{Extension, Query};
 use axum::response::Html;
 use chrono::Utc;
 use std::sync::Arc;
@@ -196,4 +196,67 @@ pub async fn all_projects_events_page(
     )
     .await?;
     render(AllProjectsEventsListPageTemplate { rows, nav_html })
+}
+
+/// Stage 3 of `docs/dialog-item-forms-plan.md` — the all-projects counterpart to
+/// `project_events::templates::NewProjectEventPageTemplate`, with a project `<select>`
+/// prepended. Unlike Tasks, an Event's new-item form has no team-only fields to gate (see
+/// `project_events/new_page.html`), so nothing here varies with the selected project besides
+/// `project_id` itself.
+#[derive(Template)]
+#[template(path = "all_projects_events/new_page.html")]
+struct AllProjectsNewEventPageTemplate {
+    project_id: String,
+    project_options: Vec<(String, String, bool)>,
+    blank_event_type_input: String,
+    blank_scheduled_date_input: String,
+    blank_scheduled_time_input: String,
+    blank_scheduled_end_date_input: String,
+    blank_scheduled_end_time_input: String,
+    nav_html: String,
+}
+
+#[derive(serde::Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct NewAllProjectsEventQuery {
+    project: Option<String>,
+}
+
+/// `GET /web/events/new` — Stage 3, mirroring `all_projects_tasks::new_all_projects_task_dialog`.
+pub async fn new_all_projects_event_dialog(
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
+    Extension(users): Extension<Arc<dyn UserRepo>>,
+    Query(q): Query<NewAllProjectsEventQuery>,
+) -> Result<Html<String>, ItemError> {
+    let user_projects = project_service::list_projects(&projects, &auth_user.user_id).await?;
+    let user = users.get(&auth_user.user_id).await?;
+    let selected = crate::web_ui::resolve_new_item_project(
+        &user_projects,
+        q.project.as_deref(),
+        user.personal_project_id.as_deref(),
+    )
+    .ok_or(ItemError::NotFound)?;
+    let project_id = selected.id.clone();
+    let project_options = user_projects
+        .iter()
+        .map(|p| (p.id.clone(), p.name.clone(), p.id == project_id))
+        .collect();
+    let nav_html = nav::build_nav_html(
+        &projects,
+        &auth_user.user_id,
+        ActiveContext::AllProjects,
+        SidebarSection::Events,
+    )
+    .await?;
+    render(AllProjectsNewEventPageTemplate {
+        project_id,
+        project_options,
+        blank_event_type_input: String::new(),
+        blank_scheduled_date_input: String::new(),
+        blank_scheduled_time_input: String::new(),
+        blank_scheduled_end_date_input: String::new(),
+        blank_scheduled_end_time_input: String::new(),
+        nav_html,
+    })
 }

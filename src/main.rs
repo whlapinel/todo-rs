@@ -51,8 +51,10 @@ use todo_server_sdk::{PeoplesRepublicOfLists, PeoplesRepublicOfListsConfig};
 use tower::ServiceBuilder;
 use tower_cookies::CookieManagerLayer;
 use tower_http::services::ServeDir;
-use web_ui::all_projects_events::all_projects_events_page;
-use web_ui::all_projects_tasks::{all_projects_tasks_page, toggle_all_projects_task_complete};
+use web_ui::all_projects_events::{all_projects_events_page, new_all_projects_event_dialog};
+use web_ui::all_projects_tasks::{
+    all_projects_tasks_page, new_all_projects_task_dialog, toggle_all_projects_task_complete,
+};
 use web_ui::assigned_items::assigned_items_page;
 use web_ui::login::login_page;
 use web_ui::main_calendar::*;
@@ -72,11 +74,13 @@ fn build_web_router() -> Router {
         // Stage 2 of docs/all-projects-landing-plan.md: the real cross-project Tasks screen.
         // `/events` is still Stage 1's placeholder, replaced by Stage 3.
         .route("/tasks", get(all_projects_tasks_page))
+        .route("/tasks/new", get(new_all_projects_task_dialog))
         .route(
             "/tasks/projects/:project_id/items/:item_id",
             put(toggle_all_projects_task_complete),
         )
         .route("/events", get(all_projects_events_page))
+        .route("/events/new", get(new_all_projects_event_dialog))
         .route("/calendar", get(main_calendar_page))
         .route("/calendar/day", get(main_calendar_day_fragment))
         .route(
