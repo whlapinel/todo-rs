@@ -3,6 +3,7 @@ pub mod all_projects_tasks;
 pub mod assigned_items;
 pub mod components;
 pub mod error;
+pub mod list_filters;
 pub mod login;
 pub mod main_calendar;
 pub mod nav;

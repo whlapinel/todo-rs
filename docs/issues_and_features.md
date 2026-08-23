@@ -3,7 +3,7 @@
 Open issues and feature requests, merged from the former `docs/issues.md` and `docs/features.md` (2026-08-20) into a single sorted list. Completed or superseded items — including ones from the old files that were already resolved but hadn't been moved out yet — live in `docs/archived/archived_issues_and_features.md`.
 
 - Clicking the ellipses a second time still doesn't hide the popover menu, have to click somewhere else
-- Need filtering for all lists.
+- Need filtering for all lists. Scoped in `docs/list-filtering-plan.md` (2026-08-23) — that plan covers the Project Tasks screen only for now (shared filter vocabulary built for reuse, but the other four list screens and the `project` filter dimension are explicit follow-up, not yet scoped). Per a 2026-08-23 revision, `skipped` and multi-select/customizable-select are dropped from scope entirely (not deferred) — `assigned to` is a single-select with Me/Unassigned/All/one member. Implement from that doc once picked up.
     - see ../tailwind-ui-html/e-commerce/category-filters.html for an example. needs to be given dark mode support 
     - However I'd like you to TRY to use the new customizable select instead, if possible. I am hoping it will be simpler. I believe you can multi-select with these. Style this to look like other input elements in this app if possible.
     - Filter by: 
