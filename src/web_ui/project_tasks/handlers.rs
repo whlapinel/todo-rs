@@ -467,21 +467,12 @@ fn redirect_to_current_page(headers: &HeaderMap, project_id: &str) -> Response {
 #[derive(serde::Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct OccurrenceRowActionQuery {
-    /// `"tasks-list"`, `"project-calendar"`, or `"main-calendar"` — set only by
-    /// `ProjectTaskVirtualRow`/`ProjectCalendarVirtualRow`/`MainCalendarVirtualRow`'s
-    /// `from_occurrence` when rendering for that screen's own flat list (never the calendar day
-    /// panel — see each struct's `in_list_view` doc comment). Every other caller of this same
-    /// route falls back to the pre-existing `redirect_to_current_page` behavior below.
+    /// `"tasks-list"`, `"all-tasks"` — set only by `ProjectTaskVirtualRow`/
+    /// `AllProjectsTaskVirtualRow`'s `from_occurrence` when rendering for that screen's own flat
+    /// list (never the calendar day panel). Every other caller of this same route falls back to
+    /// the pre-existing `redirect_to_current_page` behavior below.
     view: Option<String>,
     show_complete: Option<String>,
-    /// Only meaningful for `view=project-calendar`/`main-calendar` — baked in by
-    /// `calendar_list_query` (in each of `project_calendar.rs`/`main_calendar.rs`), `None` for
-    /// `view=tasks-list` (the
-    /// flat Tasks list has no preset of its own).
-    preset: Option<String>,
-    /// Only meaningful for `view=project-calendar` — `main-calendar` has no `assignedToAny`
-    /// toggle of its own (see `is_included`'s cross-project assignment rule).
-    assigned_to_any: Option<String>,
 }
 
 /// The row-checkbox counterpart to Skip/Unskip (`project_item_series::handlers`) — completes a
@@ -588,48 +579,6 @@ pub async fn complete_project_item_series_occurrence_form(
         )
         .await?;
         return Ok(Html(super::items_list_inner_html(&rows)).into_response());
-    }
-    if q.view.as_deref() == Some("project-calendar") {
-        let rows = crate::web_ui::project_calendar::list_calendar_rows_for_project(
-            &repo,
-            &projects,
-            &teams,
-            &users,
-            &item_series,
-            &project_id,
-            &auth_user.user_id,
-            q.preset.as_deref().unwrap_or("Today"),
-            q.show_complete.is_some(),
-            q.assigned_to_any.is_some(),
-            tz,
-            Some(item.id.as_str()),
-        )
-        .await?;
-        return Ok(
-            Html(crate::web_ui::project_calendar::calendar_items_inner_html(
-                &rows,
-            ))
-            .into_response(),
-        );
-    }
-    if q.view.as_deref() == Some("main-calendar") {
-        let rows = crate::web_ui::main_calendar::list_main_calendar_rows(
-            &repo,
-            &projects,
-            &users,
-            &teams,
-            &item_series,
-            &auth_user.user_id,
-            q.preset.as_deref().unwrap_or("Today"),
-            q.show_complete.is_some(),
-            tz,
-            Some(item.id.as_str()),
-        )
-        .await?;
-        return Ok(
-            Html(crate::web_ui::main_calendar::main_calendar_items_inner_html(&rows))
-                .into_response(),
-        );
     }
     Ok(redirect_to_current_page(&headers, &project_id))
 }

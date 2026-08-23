@@ -4,7 +4,6 @@
     <span class="shrink-0 size-4"></span>
     {% else if let Some(url) = complete_url %}
     <input type="checkbox" hx-post="{{ url }}"
-      {% if in_list_view %}hx-target="#project-calendar-list" hx-select="unset" hx-swap="innerHTML"{% endif %}
       class="shrink-0 size-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-600 dark:border-white/20 dark:bg-white/5" />
     {% else %}
     <span class="shrink-0 size-4"></span>
@@ -31,11 +30,9 @@
     <span class="flex-1">{{ date_kind_label }}: {{ date_label }}</span>
     {% if is_skipped %}
     <button hx-post="{{ unskip_url }}"
-      {% if in_list_view %}hx-target="#project-calendar-list" hx-select="unset" hx-swap="innerHTML"{% endif %}
       class="shrink-0 cursor-pointer text-gray-400 hover:text-indigo-500 dark:text-gray-500 dark:hover:text-indigo-400">Unskip</button>
     {% else %}
     <button hx-post="{{ skip_url }}" hx-confirm="Skip this occurrence?"
-      {% if in_list_view %}hx-target="#project-calendar-list" hx-select="unset" hx-swap="innerHTML"{% endif %}
       class="shrink-0 cursor-pointer text-gray-400 hover:text-red-500 dark:text-gray-500 dark:hover:text-red-400">Skip</button>
     {% endif %}
   </div>

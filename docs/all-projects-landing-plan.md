@@ -462,3 +462,94 @@ with:
   `project_item_series/handlers.rs`'s skip/unskip handlers that this stage deliberately left in
   place (see the deviation note above) — they become genuinely dead only once Stage 5's page
   removal lands, and should come out in the same commit as that removal.
+
+**Stage 5 — done (2026-08-23).**
+- `src/web_ui/main_calendar.rs`: removed `main_calendar_list_page` (the `GET /web/calendar/list`
+  handler), `list_main_calendar_rows`, `main_calendar_items_inner_html`,
+  `MainCalendarListPageTemplate`, `MainCalendarListQuery`, `calendar_list_query`, `preset_range`,
+  `PRESETS`. `MainCalendarVirtualRow` lost its `in_list_view` field and `from_occurrence` lost its
+  `list_query: Option<&str>` parameter — the only remaining caller (`day_list_rows`, the day-drawer)
+  always passed `None`/`list_query.is_some() == false`, so both were dead weight once the flat list
+  was gone; `complete_url`/`skip_url`/`unskip_url` now call `occ.complete_url(project_id)` etc.
+  directly instead of suffix-formatting an always-empty string. Also removed
+  `VIRTUAL_OCCURRENCE_DEFAULT_WINDOW_DAYS`/`virtual_occurrence_window` — these were **not** in the
+  plan's explicit removal list, but grepping confirmed their only caller was
+  `list_main_calendar_rows` itself (the grid's own `gather_calendar_data` computes its UTC range
+  directly from the grid's month, no preset/window involved), so cargo flagged them as genuinely
+  dead code after the above removal; deleted rather than left as an unused-code warning.
+  `redirect_main_dashboard_list`'s target was already `/web/tasks` (Stage 1) — untouched.
+- `src/web_ui/project_calendar.rs`: identical shape — removed `project_calendar_list_page` (`GET
+  /projects/:project_id/calendar/list`), `list_calendar_rows_for_project`, `render_rows`,
+  `calendar_items_inner_html`, `ProjectCalendarListPageTemplate`, `ProjectCalendarListQuery`,
+  `calendar_list_query`, `preset_range`, `PRESETS`, and — same "confirmed dead by grep, not in the
+  plan's literal list" reasoning as `main_calendar.rs` — `virtual_occurrence_window` (only caller
+  was `list_calendar_rows_for_project`). `ProjectCalendarVirtualRow` lost `in_list_view`;
+  `from_occurrence` lost its `list_query` param, same rationale as `MainCalendarVirtualRow` above.
+- `templates/main_calendar/page.html` and `templates/project_calendar/page.html` (the list-page
+  templates) deleted outright. Both `calendar_page.html`s: removed the "List view" `<a>` link (no
+  other markup changes). Both `virtual_row.html`s: removed the `{% if in_list_view %}hx-target=...{%
+  endif %}` conditional from the checkbox/Skip/Unskip elements (dead now that `in_list_view` no
+  longer exists on either backing struct) — those elements now fall back to default whole-page htmx
+  behavior, matching every other calendar-day-panel row.
+- `src/main.rs`: removed the `GET /web/calendar/list` and `GET
+  /projects/:project_id/calendar/list` route registrations. All four legacy `/dashboard*` redirect
+  routes (from Stage 8 of `docs/calendar-day-drawer-plan.md`, retargeted in this plan's Stage 1)
+  were left untouched — they still 302 to real, live routes.
+- `src/web_ui/project_tasks/handlers.rs`: `complete_project_item_series_occurrence_form` lost its
+  `Some("project-calendar")`/`Some("main-calendar")` branches (the flat-list-rebuild ones — the
+  `update_project_task_form` row-render match's `Some("project-calendar")`/`Some("main-calendar")`
+  arms calling `calendar_row` for a single-row Reschedule/Assign re-render **stay**, per the plan's
+  explicit "must be kept — the day-drawer still needs it" note; confirmed still wired and unchanged
+  in this stage's diff). `OccurrenceRowActionQuery` lost its `preset`/`assigned_to_any` fields (only
+  meaningful for the two removed branches) and had its doc comment trimmed to drop the
+  `ProjectCalendarVirtualRow`/`MainCalendarVirtualRow`/`in_list_view` references.
+  `project_tasks/mod.rs::normalize_row_view` was **not** touched — it still forwards
+  `"project-calendar"`/`"main-calendar"` alongside `"all-tasks"`/`"all-events"`, correctly, since
+  those two values are still live for the single-row day-drawer re-render path.
+  `project_events/handlers.rs` was checked and needed **no changes**: it has no flat-list-rebuild
+  branch of its own (Events have no `"tasks-list"`-equivalent skip/unskip list to rebuild in this
+  file — that lives entirely in `project_item_series/handlers.rs`, see below), and its
+  `update_project_event_form`'s `"main-calendar"` single-row-render arm (added Stage 4, dispatches
+  through a `match` whose `_` fallback already covers `"project-calendar"`) is unaffected.
+- `src/web_ui/project_item_series/handlers.rs`: removed the `"project-calendar"`/`"main-calendar"`
+  branches (four total — two in `skip_project_item_series_occurrence_form`, two in
+  `unskip_project_item_series_occurrence_form`) deliberately left in place by Stage 4, plus their
+  backing `rebuild_project_calendar_list_response`/`rebuild_main_calendar_list_response` helper
+  functions. `OccurrenceRowActionQuery` (this file has its own copy, separate from
+  `project_tasks::handlers::OccurrenceRowActionQuery`) lost the same `preset`/`assigned_to_any`
+  fields, same rationale.
+- Verified via re-grep (per the plan's Verification section) for
+  `main_calendar_list_page|project_calendar_list_page|list_main_calendar_rows|
+  list_calendar_rows_for_project|main_calendar_items_inner_html|calendar_items_inner_html|
+  calendar_list_query|rebuild_project_calendar_list_response|rebuild_main_calendar_list_response|
+  MainCalendarListQuery|MainCalendarListPageTemplate|ProjectCalendarListQuery|
+  ProjectCalendarListPageTemplate|in_list_view` across `src/`/`templates/` — zero matches after
+  this stage's edits. A first pass of this grep turned up four stale doc-comment-only references
+  (no code) in `all_projects_tasks.rs`, `main_calendar.rs` (×2), and `project_calendar.rs`, each
+  naming a function/struct this stage had just deleted — reworded all four to describe the
+  behavior in place rather than pointing at dead names.
+- `task web-styles` **not** run — this stage only removed markup/classes (the "List view" links,
+  the `in_list_view` hx-target conditionals), never added any new Tailwind class.
+- Verified: `cargo build` clean (same 12 pre-existing unrelated dead-code warnings as every prior
+  stage, no new ones). `cargo test`: 464 passed, 0 failed (unchanged count). Ran plain `cargo fmt`
+  (repo root, no path args) per CLAUDE.md — confirmed via a `git stash`/`cargo fmt`/`git diff
+  --stat`/`git stash pop` round-trip against the pre-Stage-5 baseline that the baseline itself was
+  already fully formatted (zero diff), then ran `cargo fmt` for real against this stage's actual
+  changes and confirmed via `git status --short` that only files this stage had already touched
+  came back modified (one doc-comment reflow in `project_item_series/handlers.rs` — no unrelated
+  sweep-in, unlike Stage 4's experience). Rebuilt and retested after formatting: still clean, still
+  464/0.
+- Not verified (no browser): that the calendar grid pages (`/web/calendar`,
+  `/projects/:id/calendar`) still render correctly with the "List view" link gone, that a
+  Skip/Unskip/checkbox click from the day-drawer still round-trips correctly now that
+  `in_list_view`'s conditional `hx-target` was removed from both `virtual_row.html`s (should be a
+  no-op live, since `in_list_view` was already always-false for every day-drawer row before this
+  stage — but genuinely unverified in a browser), and that neither `/web/calendar/list` nor
+  `/projects/:id/calendar/list` still being linked from anywhere stale. Needs the user's own check
+  per CLAUDE.md's UI-verification rule.
+- **Next: Stage 6** — update `CLAUDE.md`'s Web UI section (note `main_calendar.rs` is no longer the
+  default landing/sole cross-project screen; note the two new `all_projects_tasks`/
+  `all_projects_events` screens/modules; note `ActiveContext::AllProjects`; note the list-view
+  removal), update `docs/issues_and_features.md` (move this entry to `archived_issues_and_features.md`;
+  update the "Add a New-item button..." entry at line 53 to reference `/web/tasks`/`/web/events`),
+  and once Stage 6 lands, this plan doc itself can be deleted or moved to `docs/archived/`.

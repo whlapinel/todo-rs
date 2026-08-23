@@ -23,44 +23,6 @@ fn render<T: Template>(t: T) -> Result<Html<String>, ItemError> {
     Ok(Html(t.render()?))
 }
 
-/// Duplicated from `project_calendar.rs` rather than shared — that module's own equivalents
-/// are private, following the same precedent its own doc comments cite (every B5 sub-stage
-/// duplicated small per-screen helpers rather than widening a sibling module's visibility just
-/// to reuse a handful of functions).
-fn preset_range(
-    preset: &str,
-    now: DateTime<Utc>,
-    tz_offset_minutes: i32,
-) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
-    let offset = Duration::minutes(tz_offset_minutes as i64);
-    let local_now = now - offset;
-    let local_date = local_now.date_naive();
-    let to_utc = |naive: chrono::NaiveDateTime| {
-        DateTime::<Utc>::from_naive_utc_and_offset(naive, Utc) + offset
-    };
-    let today_start = to_utc(local_date.and_hms_opt(0, 0, 0).unwrap());
-
-    match preset {
-        "Today" => (
-            Some(today_start),
-            Some(to_utc(local_date.and_hms_opt(23, 59, 59).unwrap())),
-        ),
-        "This Week" => (Some(today_start), Some(today_start + Duration::days(7))),
-        "Next 30 Days" => (Some(today_start), Some(today_start + Duration::days(30))),
-        "Overdue" => (None, Some(now)),
-        _ => (None, None),
-    }
-}
-
-const PRESETS: [&str; 6] = [
-    "All",
-    "All with due date",
-    "Today",
-    "This Week",
-    "Next 30 Days",
-    "Overdue",
-];
-
 fn calendar_date(item: &Item) -> Option<DateTime<Utc>> {
     match item.kind() {
         ItemKind::Event => item.scheduled_date().or(item.due_date()),
@@ -121,15 +83,12 @@ async fn names_for(
 /// but restricted to the requester's own assignment on a team-backed one — otherwise this
 /// screen would show every team member's tasks, defeating its "what's mine, across every
 /// project" purpose. Simple/Template items never carry a due/scheduled date worth showing
-/// here at all (mirrors `project_calendar::render_rows`'s own `ItemKind::Simple` exclusion,
-/// widened to also exclude Template).
+/// here at all.
 ///
 /// `assigned_to_any` (added Stage 4 of docs/calendar-day-drawer-plan.md, for the calendar's own
 /// assigned-to-me toggle) *relaxes* the team-backed-project Task restriction when set — it has
 /// no effect on personal-project tasks, which were never restricted in the first place, and no
-/// effect on Events, which were never restricted either. The flat list view
-/// (`list_main_calendar_rows`) has no such toggle and always passes `false` here, preserving
-/// its existing behavior exactly.
+/// effect on Events, which were never restricted either.
 fn is_included(
     kind: ItemKind,
     is_team_project: bool,
@@ -142,21 +101,6 @@ fn is_included(
         ItemKind::Task => !is_team_project || assigned_to_any || assigned_to == Some(user_id),
         ItemKind::Simple | ItemKind::Template => false,
     }
-}
-
-/// Same rationale as `project_calendar::virtual_occurrence_window` — bounds how far ahead an
-/// indefinitely-repeating series is expanded for display when a preset leaves the window open.
-const VIRTUAL_OCCURRENCE_DEFAULT_WINDOW_DAYS: i64 = 90;
-
-fn virtual_occurrence_window(
-    after: Option<DateTime<Utc>>,
-    before: Option<DateTime<Utc>>,
-    now: DateTime<Utc>,
-) -> (DateTime<Utc>, DateTime<Utc>) {
-    (
-        after.unwrap_or(now),
-        before.unwrap_or(now + Duration::days(VIRTUAL_OCCURRENCE_DEFAULT_WINDOW_DAYS)),
-    )
 }
 
 /// Cross-project counterpart to `project_calendar::calendar_row` — see that function's doc
@@ -235,28 +179,18 @@ struct MainCalendarVirtualRow {
     assignee_name: Option<String>,
     is_skipped: bool,
     unskip_url: String,
-    /// See `project_calendar::ProjectCalendarVirtualRow::complete_url`'s identical rationale
-    /// — same `is_current` gate (confirmed live: a non-current occurrence's checkbox otherwise
-    /// 400s every time via `item_series::require_current_occurrence`), same route reuse. Now
-    /// rebuilds `#main-calendar-list` in place via `list_query`/`in_list_view` below when
-    /// `complete_project_item_series_occurrence_form`'s `view=main-calendar` branch handles it
-    /// — this page's own row assembly (`list_main_calendar_rows`) spans every project the
-    /// requester belongs to, so that branch re-runs the full cross-project gather rather than a
-    /// single project's `list_calendar_rows_for_project`.
+    /// See `project_calendar::ProjectCalendarVirtualRow::complete_url`'s identical rationale —
+    /// same `is_current` gate (confirmed live: a non-current occurrence's checkbox otherwise
+    /// 400s every time via `item_series::require_current_occurrence`), same route reuse.
     complete_url: Option<String>,
-    /// See `project_calendar::ProjectCalendarVirtualRow::in_list_view`'s identical rationale.
-    in_list_view: bool,
 }
 
 impl MainCalendarVirtualRow {
-    /// `list_query` is `Some(&query_string)` (baked from `calendar_list_query`) only when
-    /// rendering for the flat list — `None` for the calendar day panel.
     fn from_occurrence(
         occ: &ProjectOccurrence,
         project_id: &str,
         project_name: &str,
         tz: i32,
-        list_query: Option<&str>,
     ) -> Self {
         let local = to_local(occ.occurrence_date, tz);
         let kind_name = if occ.item_type == ItemKind::Event {
@@ -264,7 +198,6 @@ impl MainCalendarVirtualRow {
         } else {
             "Task"
         };
-        let suffix = list_query.unwrap_or("");
         Self {
             series_id: occ.series_id.clone(),
             occurrence_ts: occ.occurrence_date.timestamp(),
@@ -279,182 +212,14 @@ impl MainCalendarVirtualRow {
             type_symbol: type_symbol(occ.item_type),
             title: format!("{kind_name} (not yet created)"),
             materialize_url: occ.materialize_url(project_id),
-            skip_url: format!("{}{suffix}", occ.skip_url(project_id)),
+            skip_url: occ.skip_url(project_id),
             is_current: occ.is_current,
             assignee_name: occ.assigned_to_user_name.clone(),
             is_skipped: occ.is_skipped(),
-            unskip_url: format!("{}{suffix}", occ.unskip_url(project_id)),
+            unskip_url: occ.unskip_url(project_id),
             complete_url: (occ.item_type == ItemKind::Task && occ.is_current)
-                .then(|| format!("{}{suffix}", occ.complete_url(project_id))),
-            in_list_view: list_query.is_some(),
+                .then(|| occ.complete_url(project_id)),
         }
-    }
-}
-
-/// Bakes `preset`/`show_complete` into a query-string suffix for a virtual row's checkbox/
-/// Skip/Unskip URLs — see `project_calendar::calendar_list_query`'s identical rationale, one
-/// filter dimension narrower (this screen has no `assignedToAny` toggle of its own).
-fn calendar_list_query(preset: &str, show_complete: bool) -> String {
-    let mut params = vec![
-        "view=main-calendar".to_string(),
-        format!("preset={}", preset.replace(' ', "%20")),
-    ];
-    if show_complete {
-        params.push("showComplete=1".to_string());
-    }
-    format!("?{}", params.join("&"))
-}
-
-#[derive(Template)]
-#[template(path = "main_calendar/page.html")]
-struct MainCalendarListPageTemplate {
-    rows: Vec<String>,
-    show_complete: bool,
-    presets: Vec<(&'static str, bool)>,
-    nav_html: String,
-}
-
-#[derive(serde::Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct MainCalendarListQuery {
-    preset: Option<String>,
-    show_complete: Option<String>,
-}
-
-/// Cross-project row assembly, shared between the initial page load (`main_calendar_list_page`)
-/// and the in-place `#main-calendar-list` rebuild the checkbox/Skip/Unskip handlers do on
-/// `view=main-calendar` — mirrors `project_calendar::list_calendar_rows_for_project`'s
-/// identical rationale, just re-running the full cross-project gather every time (this
-/// screen's own filtering already spans every project the requester belongs to, so there's no
-/// narrower single-project query to reuse).
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn list_main_calendar_rows(
-    repo: &Arc<dyn ItemRepo>,
-    projects: &Arc<dyn ProjectRepo>,
-    users: &Arc<dyn UserRepo>,
-    teams: &Arc<dyn TeamRepo>,
-    series: &Arc<dyn ItemSeriesRepo>,
-    requester_user_id: &str,
-    preset: &str,
-    show_complete: bool,
-    tz_offset: i32,
-    just_completed_item_id: Option<&str>,
-) -> Result<Vec<String>, ItemError> {
-    let (after, before) = preset_range(preset, Utc::now(), tz_offset);
-    let (virtual_after, virtual_before) = virtual_occurrence_window(after, before, Utc::now());
-    let list_query = calendar_list_query(preset, show_complete);
-
-    let user_projects = project_service::list_projects(projects, requester_user_id).await?;
-
-    let mut entries: Vec<(i64, String)> = Vec::new();
-    for project in &user_projects {
-        let is_team_project = project.team_id.is_some();
-        let names = match &project.team_id {
-            Some(team_id) => names_for(teams, team_id, requester_user_id).await?,
-            None => HashMap::new(),
-        };
-        let due_items =
-            project_item_service::list_due_project_items_unchecked(repo, &project.id, None, None)
-                .await?;
-        let virtual_occurrences = if virtual_after <= virtual_before {
-            series_service::list_occurrence_states_for_project(
-                series,
-                users,
-                &project.id,
-                virtual_after,
-                virtual_before,
-                tz_offset,
-            )
-            .await?
-        } else {
-            Vec::new()
-        };
-
-        for di in &due_items {
-            let item = &di.item;
-            let just_completed = Some(item.id.as_str()) == just_completed_item_id;
-            if !is_included(
-                item.kind(),
-                is_team_project,
-                item.assigned_to_user_id().as_deref(),
-                requester_user_id,
-                false,
-            ) {
-                continue;
-            }
-            if !show_complete && item.complete && !just_completed {
-                continue;
-            }
-            if preset == "All with due date" && calendar_date(item).is_none() {
-                continue;
-            }
-            let d = calendar_date(item);
-            let in_window = match d {
-                Some(d) => after.is_none_or(|a| d >= a) && before.is_none_or(|b| d <= b),
-                None => after.is_none() && before.is_none(),
-            };
-            if !in_window {
-                continue;
-            }
-            let ts = d.map(|d| d.timestamp()).unwrap_or(i64::MAX);
-            let confirmation = just_completed.then(|| "Completed".to_string());
-            let dismiss_after_ms = (just_completed && !show_complete).then_some(1800u32);
-            let skip_url = series_service::skip_url_for_item(series, item, &project.id).await?;
-            let parent_name = (!di.parent_name.is_empty()).then(|| di.parent_name.clone());
-            let html = calendar_row(
-                item,
-                parent_name,
-                &project.id,
-                &project.name,
-                &names,
-                is_team_project,
-                tz_offset,
-                skip_url,
-                confirmation,
-                dismiss_after_ms,
-            )?;
-            entries.push((ts, html));
-        }
-
-        for occ in &virtual_occurrences {
-            if matches!(occ.state, OccurrenceState::Materialized { .. }) {
-                continue;
-            }
-            if !is_included(
-                occ.item_type,
-                is_team_project,
-                occ.assigned_to_user_id.as_deref(),
-                requester_user_id,
-                false,
-            ) {
-                continue;
-            }
-            entries.push((
-                occ.occurrence_date.timestamp(),
-                MainCalendarVirtualRow::from_occurrence(
-                    occ,
-                    &project.id,
-                    &project.name,
-                    tz_offset,
-                    Some(&list_query),
-                )
-                .render()?,
-            ));
-        }
-    }
-
-    entries.sort_by_key(|(ts, _)| *ts);
-    Ok(entries.into_iter().map(|(_, html)| html).collect())
-}
-
-/// The `#main-calendar-list` innerHTML swap body — see `project_tasks::items_list_inner_html`'s
-/// identical rationale, matching `main_calendar/page.html`'s own empty-state markup.
-pub(crate) fn main_calendar_items_inner_html(rows: &[String]) -> String {
-    if rows.is_empty() {
-        "<li class=\"py-3 text-sm text-gray-500 dark:text-gray-400\">Nothing to show.</li>"
-            .to_string()
-    } else {
-        rows.concat()
     }
 }
 
@@ -479,49 +244,6 @@ pub async fn redirect_main_dashboard_list(RawQuery(query): RawQuery) -> Redirect
         Some(q) if !q.is_empty() => Redirect::to(&format!("/web/tasks?{q}")),
         _ => Redirect::to("/web/tasks"),
     }
-}
-
-pub async fn main_calendar_list_page(
-    Extension(auth_user): Extension<AuthUser>,
-    Extension(repo): Extension<Arc<dyn ItemRepo>>,
-    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
-    Extension(users): Extension<Arc<dyn UserRepo>>,
-    Extension(teams): Extension<Arc<dyn TeamRepo>>,
-    Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
-    TzOffset(tz_offset): TzOffset,
-    Query(q): Query<MainCalendarListQuery>,
-) -> Result<Html<String>, ItemError> {
-    let preset = q.preset.unwrap_or_else(|| "Today".to_string());
-    let show_complete = q.show_complete.is_some();
-
-    let rows = list_main_calendar_rows(
-        &repo,
-        &projects,
-        &users,
-        &teams,
-        &series,
-        &auth_user.user_id,
-        &preset,
-        show_complete,
-        tz_offset,
-        None,
-    )
-    .await?;
-
-    let presets = PRESETS.iter().map(|&p| (p, p == preset)).collect();
-    let nav_html = nav::build_nav_html(
-        &projects,
-        &auth_user.user_id,
-        ActiveContext::AllProjects,
-        SidebarSection::None,
-    )
-    .await?;
-    render(MainCalendarListPageTemplate {
-        rows,
-        show_complete,
-        presets,
-        nav_html,
-    })
 }
 
 /// Redesign per docs/issues_and_features.md's calendar-view entry: a day cell only shows a
@@ -765,8 +487,7 @@ async fn day_list_rows(
         }
         entries.push((
             occ.occurrence_date.timestamp(),
-            MainCalendarVirtualRow::from_occurrence(occ, project_id, project_name, tz, None)
-                .render()?,
+            MainCalendarVirtualRow::from_occurrence(occ, project_id, project_name, tz).render()?,
         ));
     }
     entries.sort_by_key(|(ts, _)| *ts);
@@ -783,8 +504,7 @@ pub struct MainCalendarQuery {
     /// Stage 4's drawer type tab (`all`/`task`/`event`) — parsed via `parse_type_filter`. Only
     /// meaningful alongside `date`; ignored when no day is selected.
     r#type: Option<String>,
-    /// Stage 4's assigned-to-me toggle — `None`/absent = mine, present = everyone's, matching
-    /// `project_calendar::ProjectCalendarListQuery::assigned_to_any`'s convention.
+    /// Stage 4's assigned-to-me toggle — `None`/absent = mine, present = everyone's.
     assigned_to_any: Option<String>,
 }
 

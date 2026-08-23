@@ -78,7 +78,6 @@ fn build_web_router() -> Router {
         )
         .route("/events", get(all_projects_events_page))
         .route("/calendar", get(main_calendar_page))
-        .route("/calendar/list", get(main_calendar_list_page))
         .route("/calendar/day", get(main_calendar_day_fragment))
         .route(
             "/calendar/projects/:project_id/items/:item_id",
@@ -314,10 +313,6 @@ fn build_web_router() -> Router {
             post(unskip_project_item_series_occurrence_form),
         )
         .route("/projects/:project_id/calendar", get(project_calendar_page))
-        .route(
-            "/projects/:project_id/calendar/list",
-            get(project_calendar_list_page),
-        )
         .route(
             "/projects/:project_id/calendar/day",
             get(project_calendar_day_fragment),

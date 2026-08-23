@@ -172,10 +172,9 @@ pub struct AllProjectsTasksQuery {
 /// `project_tasks::list_task_rows_for_project`'s own gather shape (top-level Task items + each
 /// Task series' current non-materialized occurrence) but across every project the requester
 /// belongs to, each row tagged with its project's name. Duplicated rather than shared, per
-/// this codebase's established "duplicate small per-screen helpers" precedent (see
-/// `main_calendar::list_main_calendar_rows`'s identical rationale) — this loop's per-project
-/// bucketing/filtering/tagging has no real overlap with the single-project function it
-/// otherwise resembles.
+/// this codebase's established "duplicate small per-screen helpers" precedent — this loop's
+/// per-project bucketing/filtering/tagging has no real overlap with the single-project function
+/// it otherwise resembles.
 ///
 /// `just_completed_item_id` mirrors `project_tasks::render_rows_with_virtual`'s own parameter —
 /// forces that one item's row to stay visible (with its "Completed" confirm-then-fade badge)
