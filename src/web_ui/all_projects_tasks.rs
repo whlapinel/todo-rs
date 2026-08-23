@@ -142,6 +142,7 @@ pub(crate) fn all_projects_task_row(
         confirmation,
         dismiss_after_ms,
     );
+    row.expanded_row = true;
     row.project_name = Some(project_name.to_string());
     row.complete_url = row
         .complete_url
