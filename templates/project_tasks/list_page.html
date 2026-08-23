@@ -13,6 +13,14 @@
       <a href="/web/projects" hx-boost="false"
         class="inline-flex items-center justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-xs inset-ring inset-ring-gray-300 hover:bg-gray-50 dark:bg-white/10 dark:text-white dark:shadow-none dark:inset-ring-white/5 dark:hover:bg-white/20">
         Up to projects</a>
+      <button type="button" onclick="document.getElementById('task-filters-dialog').showModal()"
+        class="relative inline-flex items-center justify-center gap-x-1.5 rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-xs inset-ring inset-ring-gray-300 hover:bg-gray-50 dark:bg-white/10 dark:text-white dark:shadow-none dark:inset-ring-white/5 dark:hover:bg-white/20">
+        {% include "icons/filter.html" %}
+        Filters
+        {% if !filters_query.is_empty() %}
+        <span class="absolute -top-1 -right-1 size-2.5 rounded-full bg-indigo-600 dark:bg-indigo-500"></span>
+        {% endif %}
+      </button>
       <button type="button"
         hx-get="/web/projects/{{ project_id }}/tasks/new{% if !filters_query.is_empty() %}?{{ filters_query }}{% endif %}"
         hx-target="#action-dialog" hx-select="#dialog-fragment" hx-swap="innerHTML"
@@ -22,46 +30,76 @@
     </div>
   </div>
 
-  <!-- Stage 2 of docs/list-filtering-plan.md: one shared hx-get for every filter control,
-       rather than each control repeating hx-get/hx-target/hx-select/hx-swap/hx-push-url the way
-       the old lone "Show completed" checkbox did — htmx serializes the whole form (every
-       control's current value) on any control's `change`. -->
-  <form id="filter-bar" hx-get="/web/projects/{{ project_id }}/tasks" hx-trigger="change" hx-target="#page"
-    hx-select="#page" hx-swap="innerHTML" hx-push-url="true" class="flex flex-wrap items-center gap-3">
-    <select name="showComplete"
-      class="rounded-md bg-white py-1.5 pr-8 pl-3 text-sm text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:*:bg-gray-800 dark:focus:outline-indigo-500">
-      <option value="1" {% if show_complete %}selected{% endif %}>Complete and Incomplete</option>
-      <option value="0" {% if !show_complete %}selected{% endif %}>Only Incomplete</option>
-    </select>
-    {% if is_team_project %}
-    <select name="assignedTo"
-      class="rounded-md bg-white py-1.5 pr-8 pl-3 text-sm text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:*:bg-gray-800 dark:focus:outline-indigo-500">
-      <option value="me" {% if assigned_to=="me" %}selected{% endif %}>Assigned to me</option>
-      <option value="unassigned" {% if assigned_to=="unassigned" %}selected{% endif %}>Unassigned</option>
-      <option value="all" {% if assigned_to=="all" %}selected{% endif %}>Everyone</option>
-      {% for opt in assignee_options %}
-      <option value="{{ opt.0 }}" {% if assigned_to==opt.0 %}selected{% endif %}>{{ opt.1 }}</option>
-      {% endfor %}
-    </select>
-    {% endif %}
-    <select name="dueDate"
-      class="rounded-md bg-white py-1.5 pr-8 pl-3 text-sm text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:*:bg-gray-800 dark:focus:outline-indigo-500">
-      <option value="" {% if due_date=="all" %}selected{% endif %}>Any due date</option>
-      <option value="overdue" {% if due_date=="overdue" %}selected{% endif %}>Overdue</option>
-      <option value="none" {% if due_date=="none" %}selected{% endif %}>No due date</option>
-    </select>
-    <select name="schedule"
-      class="rounded-md bg-white py-1.5 pr-8 pl-3 text-sm text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:*:bg-gray-800 dark:focus:outline-indigo-500">
-      <option value="" {% if schedule=="all" %}selected{% endif %}>Any schedule</option>
-      <option value="past" {% if schedule=="past" %}selected{% endif %}>Scheduled in the past</option>
-      <option value="none" {% if schedule=="none" %}selected{% endif %}>Not scheduled</option>
-    </select>
-    <select name="recurring"
-      class="rounded-md bg-white py-1.5 pr-8 pl-3 text-sm text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:*:bg-gray-800 dark:focus:outline-indigo-500">
-      <option value="" {% if recurring %}selected{% endif %}>Show recurring</option>
-      <option value="no" {% if !recurring %}selected{% endif %}>Hide recurring</option>
-    </select>
-  </form>
+  <!-- Stage 2 of docs/list-filtering-plan.md put every filter control inline in the page;
+       moved into this dialog per the follow-up request to keep the list page itself
+       uncluttered. A self-contained <dialog> (not the shared #action-dialog) embedded
+       directly in the page's own markup is safe from base.html's htmx:afterSwap auto-open
+       listener, which only checks whether the *swap target itself* is a <dialog> — see
+       ical_help_dialog.html's now-stale warning about this, predating that listener's
+       querySelector-fallback removal. Unlike the old instant-on-`change` submission, this
+       form applies via an explicit Apply button (matching every other dialog's Save/Cancel
+       convention) so multiple filters can be changed before triggering a request; the whole
+       #page swap on Apply naturally leaves the dialog closed (freshly rendered, un-opened)
+       without any extra JS to close it. Cancel is `type="reset"` so a reopen without
+       Applying reverts to the currently-applied selections (the `selected` attributes
+       below) rather than leaking an uncommitted in-progress choice. -->
+  <dialog id="task-filters-dialog"
+    class="group/dialog fixed inset-0 size-auto max-h-none max-w-none overflow-y-auto bg-transparent backdrop:bg-transparent">
+    <div id="task-filters-dialog-backdrop"
+      class="fixed inset-0 bg-gray-500/75 dark:bg-gray-900/50 transition-opacity duration-300 ease-out opacity-0 group-open/dialog:opacity-100">
+    </div>
+    <div tabindex="0"
+      class="relative z-10 flex min-h-full items-end justify-center p-4 text-center focus:outline-none sm:items-center sm:p-0">
+      <div
+        class="relative transform overflow-hidden rounded-lg bg-white dark:bg-gray-800 px-4 pt-5 pb-4 text-left shadow-xl transition-all duration-300 ease-out translate-y-4 opacity-0 scale-95 group-open/dialog:translate-y-0 group-open/dialog:opacity-100 group-open/dialog:scale-100 sm:my-8 sm:w-full sm:max-w-lg sm:p-6 dark:outline dark:-outline-offset-1 dark:outline-white/10">
+        <form id="filter-bar" hx-get="/web/projects/{{ project_id }}/tasks" hx-target="#page" hx-select="#page"
+          hx-swap="innerHTML" hx-push-url="true">
+          <h3 class="text-base font-semibold text-gray-900 dark:text-white">Filters</h3>
+          <div class="mt-3 flex flex-col gap-3">
+            <select name="showComplete"
+              class="rounded-md bg-white py-1.5 pr-8 pl-3 text-sm text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:*:bg-gray-800 dark:focus:outline-indigo-500">
+              <option value="1" {% if show_complete %}selected{% endif %}>Complete and Incomplete</option>
+              <option value="0" {% if !show_complete %}selected{% endif %}>Only Incomplete</option>
+            </select>
+            {% if is_team_project %}
+            <select name="assignedTo"
+              class="rounded-md bg-white py-1.5 pr-8 pl-3 text-sm text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:*:bg-gray-800 dark:focus:outline-indigo-500">
+              <option value="me" {% if assigned_to=="me" %}selected{% endif %}>Assigned to me</option>
+              <option value="unassigned" {% if assigned_to=="unassigned" %}selected{% endif %}>Unassigned</option>
+              <option value="all" {% if assigned_to=="all" %}selected{% endif %}>Everyone</option>
+              {% for opt in assignee_options %}
+              <option value="{{ opt.0 }}" {% if assigned_to==opt.0 %}selected{% endif %}>{{ opt.1 }}</option>
+              {% endfor %}
+            </select>
+            {% endif %}
+            <select name="dueDate"
+              class="rounded-md bg-white py-1.5 pr-8 pl-3 text-sm text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:*:bg-gray-800 dark:focus:outline-indigo-500">
+              <option value="" {% if due_date=="all" %}selected{% endif %}>Any due date</option>
+              <option value="overdue" {% if due_date=="overdue" %}selected{% endif %}>Overdue</option>
+              <option value="none" {% if due_date=="none" %}selected{% endif %}>No due date</option>
+            </select>
+            <select name="schedule"
+              class="rounded-md bg-white py-1.5 pr-8 pl-3 text-sm text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:*:bg-gray-800 dark:focus:outline-indigo-500">
+              <option value="" {% if schedule=="all" %}selected{% endif %}>Any schedule</option>
+              <option value="past" {% if schedule=="past" %}selected{% endif %}>Scheduled in the past</option>
+              <option value="none" {% if schedule=="none" %}selected{% endif %}>Not scheduled</option>
+            </select>
+            <select name="recurring"
+              class="rounded-md bg-white py-1.5 pr-8 pl-3 text-sm text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:*:bg-gray-800 dark:focus:outline-indigo-500">
+              <option value="" {% if recurring %}selected{% endif %}>Show recurring</option>
+              <option value="no" {% if !recurring %}selected{% endif %}>Hide recurring</option>
+            </select>
+          </div>
+          <div class="mt-5 sm:mt-6 sm:grid sm:grid-flow-row-dense sm:grid-cols-2 sm:gap-3">
+            <button type="submit"
+              class="inline-flex w-full justify-center rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-xs hover:bg-indigo-500 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600 sm:col-start-2 dark:bg-indigo-500 dark:shadow-none dark:hover:bg-indigo-400 dark:focus-visible:outline-indigo-500">Apply</button>
+            <button type="reset" onclick="document.getElementById('task-filters-dialog').close()"
+              class="mt-3 inline-flex w-full justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-xs inset-ring-1 inset-ring-gray-300 hover:bg-gray-50 sm:col-start-1 sm:mt-0 dark:bg-white/10 dark:text-white dark:shadow-none dark:inset-ring-white/5 dark:hover:bg-white/20">Cancel</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </dialog>
 
   <ul id="items-list"
     class="divide-y divide-gray-100 rounded-lg border border-gray-200 bg-white px-4 dark:divide-white/5 dark:border-white/10 dark:bg-gray-800/50">
