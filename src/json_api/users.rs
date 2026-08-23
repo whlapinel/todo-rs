@@ -37,6 +37,7 @@ pub async fn update_user(
         email: current.email,
         google_id: current.google_id,
         timezone: input.timezone.or(current.timezone),
+        personal_project_id: current.personal_project_id,
     };
     repo.update(&user).await.map_err(|e| match e {
         RepoError::NotFound => error::UpdateUserError::from(not_found()),

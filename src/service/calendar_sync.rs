@@ -1283,6 +1283,7 @@ mod tests {
             email: None,
             google_id: None,
             timezone: timezone.map(str::to_string),
+            personal_project_id: None,
         }
     }
 

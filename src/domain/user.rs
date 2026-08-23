@@ -10,6 +10,15 @@ pub struct User {
     /// `service::calendar_sync` to resolve an imported all-day event's date into the
     /// correct UTC instant — see root CLAUDE.md's Google Calendar import notes.
     pub timezone: Option<String>,
+    /// The id of this user's canonical default "Personal" project — set once, when that
+    /// project is first created/discovered by `service::projects::ensure_default_project`
+    /// (`docs/dialog-item-forms-plan.md`'s Stage 0). Unlike `ProjectRepo::find_personal_project`
+    /// (any team-less project the user owns, ambiguous once a user has more than one), this
+    /// is the single unambiguous answer to "which project is *the* Personal one" — currently
+    /// consumed only as the all-projects new-item dialog's default project selection. `None`
+    /// only for a user who predates this column and hasn't logged in since (self-heals on
+    /// next login).
+    pub personal_project_id: Option<String>,
 }
 
 impl User {
@@ -21,6 +30,7 @@ impl User {
             email: None,
             google_id: None,
             timezone: None,
+            personal_project_id: None,
         }
     }
 }

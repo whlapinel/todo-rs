@@ -2,12 +2,14 @@
 
 Open issues and feature requests, merged from the former `docs/issues.md` and `docs/features.md` (2026-08-20) into a single sorted list. Completed or superseded items — including ones from the old files that were already resolved but hadn't been moved out yet — live in `docs/archived/archived_issues_and_features.md`.
 
-
-- We should also have a new [item] action for each of these pages. For the all-projects view, Will need to add a project selector. I suppose the POST url will need to be built dynamically based on the project selected, since the url includes the project. instead of a separate page let's put the form in a dialog. we'll be applying this change to all per-project new-items and edit-items as well. No page/URL switching, just a dialog overlaid on the current page. I suppose this might be big enough to justify a multi-stage plan.
+- All Projects - Tasks list has no new-task button. Need this. Also, big change to new/edit [item] action for all pages. instead of a separate page let's put the form in a dialog. we'll be applying this change to all per-project new-items and edit-items. No page/URL switching to create or edit items, just a dialog overlaid on the current page, similar to the row actions. I suppose this might be big enough to justify a multi-stage plan. For the all-projects view, will need to add a project selector, default being Personal. I suppose the POST url will need to be built dynamically based on the project selected, since the url includes the project. Relatedly, I think we need to set the Personal project that is auto-created for a user on user creation, I think we need to set that project id as non-delete-able and put the personal-project-id on the user row. Let me know what you think however. We can split this item up into a bunch of stages since it's a lot of tenuously-related things.
+- No way exists to delete projects (when we make this, we need get double-confirmation and need to be sure to delete all children items)
+- Need to disallow sharing the personal project created on user creation. Should already be non-deleteable.
 - Highlighted tab of day-drawer in calendar pages doesn't update with tab selection, stuck on 'All'.
 - Calendar view day-drawer date element needs to be fixed-width so we don't have layout shift - the buttons on either side shift around when moving between dates. And let's shorten the string to e.g. Sat, 21 Aug so it fits on mobile more easily.
 - Need filtering for all lists.
-    - see ../tailwind-ui-html/e-commerce/category-filters.html for an example. needs to be given dark mode support and remove dependency on tailwind elements
+    - see ../tailwind-ui-html/e-commerce/category-filters.html for an example. needs to be given dark mode support 
+    - However I'd like you to TRY to use the new customizable select instead, if possible. I am hoping it will be simpler. I believe you can multi-select with these. Style this to look like other input elements in this app if possible.
     - Filter by: 
         - complete (default false), 
         - assigned to (default Me), 
@@ -19,7 +21,6 @@ Open issues and feature requests, merged from the former `docs/issues.md` and `d
     - Sort by (hierarchical allowed):
         - due date
         - other options to be added later (maybe)
-
 - Need a way to set user's time zone via web UI. There's currently no user config 
 - A previous solution to the Google calendar import problem was that all-day events will be given a date of 12:00pm in order to avoid the shift to the previous day. The other option I was given is having a user-configurable time-zone. It didn't occur to me at the time of implementation but why not instead add the "all-day" concept to our event schema? Let's require events to either be marked all-day or have a scheduled start time.
 - Allow copying a task or event to another project (distinct from the same-project "duplicate" action above).

@@ -106,7 +106,7 @@ impl TeamRepo for SqliteTeamRepo {
     async fn list_members(&self, team_id: &str) -> Result<Vec<TeamMemberInfo>, RepoError> {
         sqlx::query(
             "SELECT users.id, users.first_name, users.last_name, users.email, users.google_id,
-                    users.timezone, team_members.status, team_members.role,
+                    users.timezone, users.personal_project_id, team_members.status, team_members.role,
                     COALESCE(project_members.points, 0) AS points
              FROM team_members
              JOIN users ON team_members.user_id = users.id
@@ -311,7 +311,8 @@ mod tests {
                 last_name TEXT NOT NULL,
                 email TEXT,
                 google_id TEXT,
-                timezone TEXT
+                timezone TEXT,
+                personal_project_id TEXT
             )",
         )
         .execute(&pool)

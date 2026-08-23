@@ -71,6 +71,13 @@ pub trait UserRepo: Send + Sync {
         email: &'a str,
         name: Option<&'a str>,
     ) -> Result<User, RepoError>;
+    /// Sets `users.personal_project_id` — see `service::projects::ensure_default_project`,
+    /// the sole caller, and `docs/dialog-item-forms-plan.md`'s Stage 0.
+    async fn set_personal_project_id(
+        &self,
+        user_id: &str,
+        project_id: &str,
+    ) -> Result<(), RepoError>;
 }
 
 #[cfg_attr(test, mockall::automock)]
@@ -459,6 +466,7 @@ fn row_to_user(row: &sqlx::sqlite::SqliteRow) -> User {
         email: row.get("email"),
         google_id: row.get("google_id"),
         timezone: row.get("timezone"),
+        personal_project_id: row.get("personal_project_id"),
     }
 }
 
@@ -591,7 +599,8 @@ pub async fn create_pool(url: &str) -> Result<SqlitePool, sqlx::Error> {
             last_name TEXT NOT NULL,
             email TEXT,
             google_id TEXT UNIQUE,
-            timezone TEXT
+            timezone TEXT,
+            personal_project_id TEXT
         )",
     )
     .execute(&pool)

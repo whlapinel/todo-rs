@@ -8,7 +8,7 @@ pub struct SqliteUserRepo(pub SqlitePool);
 impl UserRepo for SqliteUserRepo {
     async fn get(&self, user_id: &str) -> Result<User, RepoError> {
         sqlx::query(
-            "SELECT id, first_name, last_name, email, google_id, timezone FROM users WHERE id = ?",
+            "SELECT id, first_name, last_name, email, google_id, timezone, personal_project_id FROM users WHERE id = ?",
         )
         .bind(user_id)
         .fetch_optional(&self.0)
@@ -19,8 +19,10 @@ impl UserRepo for SqliteUserRepo {
     }
 
     async fn list(&self) -> Result<Vec<User>, RepoError> {
-        sqlx::query("SELECT id, first_name, last_name, email, google_id, timezone FROM users")
-            .fetch_all(&self.0)
+        sqlx::query(
+            "SELECT id, first_name, last_name, email, google_id, timezone, personal_project_id FROM users",
+        )
+        .fetch_all(&self.0)
             .await
             .map_err(db_err)
             .map(|rows| rows.into_iter().map(|row| row_to_user(&row)).collect())
@@ -101,6 +103,7 @@ impl UserRepo for SqliteUserRepo {
             email: Some(email.to_string()),
             google_id: Some(google_id.to_string()),
             timezone: None,
+            personal_project_id: None,
         })
     }
 
@@ -145,6 +148,22 @@ impl UserRepo for SqliteUserRepo {
             email: Some(email.to_string()),
             google_id: None,
             timezone: None,
+            personal_project_id: None,
         })
+    }
+
+    async fn set_personal_project_id(
+        &self,
+        user_id: &str,
+        project_id: &str,
+    ) -> Result<(), RepoError> {
+        let rows = sqlx::query("UPDATE users SET personal_project_id = ? WHERE id = ?")
+            .bind(project_id)
+            .bind(user_id)
+            .execute(&self.0)
+            .await
+            .map_err(db_err)?
+            .rows_affected();
+        if rows == 0 { Err(not_found()) } else { Ok(()) }
     }
 }

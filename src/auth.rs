@@ -204,7 +204,7 @@ pub async fn auth_callback(
         }
     };
 
-    if let Err(e) = ensure_default_project(&state.project_repo, &user.id).await {
+    if let Err(e) = ensure_default_project(&state.project_repo, &state.user_repo, &user).await {
         tracing::error!("failed to ensure default project for {}: {e:?}", user.id);
         return (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response();
     }
@@ -383,7 +383,7 @@ pub async fn caddy_auth_me(
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     };
-    if let Err(e) = ensure_default_project(&projects, &user.id).await {
+    if let Err(e) = ensure_default_project(&projects, &repo, &user).await {
         tracing::error!("caddy /auth/me: failed to ensure default project for {email}: {e:?}");
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
@@ -439,7 +439,7 @@ pub async fn caddy_auth_token(
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     };
-    if let Err(e) = ensure_default_project(&projects, &user.id).await {
+    if let Err(e) = ensure_default_project(&projects, &repo, &user).await {
         tracing::error!("caddy /auth/token: failed to ensure default project for {email}: {e:?}");
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
@@ -527,7 +527,7 @@ pub async fn caddy_header_middleware(
                 return StatusCode::INTERNAL_SERVER_ERROR.into_response();
             }
         };
-        if let Err(e) = ensure_default_project(&projects, &user.id).await {
+        if let Err(e) = ensure_default_project(&projects, &repo, &user).await {
             tracing::error!("failed to ensure default project for {email}: {e:?}");
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
