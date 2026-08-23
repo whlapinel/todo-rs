@@ -155,11 +155,36 @@
     // library needed): non-modal, and closes itself on outside click/Escape for free, which is
     // exactly the "pop up beside the button" behavior the old centered #action-dialog treatment
     // didn't have. `btn` is the ⋮ button that was clicked, used to anchor the popover next to it.
+    //
+    // Clicking the same ⋮ button again while its own popover is open used to just reopen it:
+    // the button isn't a declarative `popovertarget` invoker (it opens the popover imperatively,
+    // so the popover can be re-populated per-row first), so the browser's light-dismiss treats a
+    // click on it as an "outside" click — pointerdown closes the popover, then the click event
+    // right after runs this handler again and reopens it, netting no visible change and forcing
+    // the user to click elsewhere instead. The 'toggle' listener below (capturing on `document`
+    // since #action-menu-popover doesn't exist yet when this script runs, and ToggleEvent
+    // doesn't bubble) records which row's popover light-dismiss just closed and when; if this
+    // same row's button fires again within the same click gesture (a few ms later), treat it as
+    // the second half of a toggle-off instead of reopening.
+    let lastPopoverCloseInfo = null;
+    document.addEventListener('toggle', function (evt) {
+      if (evt.target && evt.target.id === 'action-menu-popover' && evt.newState === 'closed') {
+        lastPopoverCloseInfo = { rowId: evt.target.dataset.rowId, time: evt.timeStamp };
+      }
+    }, true);
+
     function openRowActionsMenu(rowId, btn) {
-      const tpl = document.getElementById('row-actions-menu-' + rowId);
       const popover = document.getElementById('action-menu-popover');
-      if (!tpl || !popover) return;
+      if (!popover) return;
+      if (lastPopoverCloseInfo && lastPopoverCloseInfo.rowId === rowId &&
+        performance.now() - lastPopoverCloseInfo.time < 150) {
+        lastPopoverCloseInfo = null;
+        return;
+      }
+      const tpl = document.getElementById('row-actions-menu-' + rowId);
+      if (!tpl) return;
       popover.innerHTML = tpl.innerHTML;
+      popover.dataset.rowId = rowId;
       htmx.process(popover);
       popover.showPopover();
       positionActionMenuPopover(popover, btn);

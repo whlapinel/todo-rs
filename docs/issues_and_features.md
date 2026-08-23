@@ -1,9 +1,8 @@
 # Issues & features
 
-Open issues and feature requests, merged from the former `docs/issues.md` and `docs/features.md` (2026-08-20) into a single unsorted list. Completed or superseded items — including ones from the old files that were already resolved but hadn't been moved out yet — live in `docs/archived/archived_issues_and_features.md`.
+Open issues and feature requests, merged from the former `docs/issues.md` and `docs/features.md` (2026-08-20) into a single sorted list. Completed or superseded items — including ones from the old files that were already resolved but hadn't been moved out yet — live in `docs/archived/archived_issues_and_features.md`.
 
 
-- Row action menu should be toggled off upon clicking the ellipses a second time. currently have to click somewhere else as it just pops up again.
 - Row actions should be available on the calendar's day-drawer as well.
 - Change main landing page to an all-projects page. This should have a sidebar with the same options as each project except each one includes all projects. So there's an all-projects calendar, an all-projects tasks list, an all-projects events list, etc... for background, we recently changed the main page from dashboard to calendar (not sure why I did that) but I think all-projects fits the purpose better. And default should be the list rather than the calendar. But it shouldn't be a calendar list - in fact, not sure why I have a list view of the calendar? Makes no sense. Let's remove it entirely.
 - We should also have a new [item] action for each of these pages. Will need to add a project selector. The url will need to be built dynamically based on the project selected, since the url includes the project. or perhaps the url list can be provided and chosen based on the project selection? instead of a separate page let's put the form in a dialog. we'll be applying this change to the per-project new-items as well.
