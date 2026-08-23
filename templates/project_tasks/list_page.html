@@ -28,16 +28,10 @@
        control's current value) on any control's `change`. -->
   <form id="filter-bar" hx-get="/web/projects/{{ project_id }}/tasks" hx-trigger="change" hx-target="#page"
     hx-select="#page" hx-swap="innerHTML" hx-push-url="true" class="flex flex-wrap items-center gap-3">
-    {# old select checkbox replaced with the select box to match styles. delete this #}
-    {# <label class="text-sm text-gray-600 flex items-center gap-x-1 dark:text-gray-400">
-      <input type="checkbox" name="showComplete" value="1" {% if show_complete %}checked{% endif %}
-        class="size-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-600 dark:border-white/20 dark:bg-white/5" />
-      Show completed
-    </label> #}
     <select name="showComplete"
       class="rounded-md bg-white py-1.5 pr-8 pl-3 text-sm text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:*:bg-gray-800 dark:focus:outline-indigo-500">
-      <option value="1" {% if show_complete %}selected{% endif %}>Complete</option>
-      <option value="0" {% if !show_complete %}selected{% endif %}>Incomplete</option>
+      <option value="1" {% if show_complete %}selected{% endif %}>Complete and Incomplete</option>
+      <option value="0" {% if !show_complete %}selected{% endif %}>Only Incomplete</option>
     </select>
     {% if is_team_project %}
     <select name="assignedTo"

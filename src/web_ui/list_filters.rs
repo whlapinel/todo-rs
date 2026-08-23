@@ -12,8 +12,9 @@ use chrono::{DateTime, Utc};
 #[derive(serde::Deserialize, Default, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct ListFilterQuery {
-    /// Existing convention (carried over from the pre-existing `showComplete` param):
-    /// presence of the key at all means `true`, regardless of value.
+    /// Rendered as a `<select>` (`"1"` = Complete and Incomplete, `"0"`/absent = Only
+    /// Incomplete) — unlike the other single-select fields below, absence must also mean
+    /// `false`, so `from_query` checks the value itself (`== "1"`) rather than presence.
     pub show_complete: Option<String>,
     /// `"me"` | `"unassigned"` | `"all"` | a specific user id | absent (defaults to `"me"`).
     pub assigned_to: Option<String>,
@@ -111,7 +112,7 @@ impl Default for ListFilters {
 impl ListFilters {
     pub fn from_query(q: ListFilterQuery) -> Self {
         Self {
-            show_complete: q.show_complete.is_some(),
+            show_complete: q.show_complete.as_deref() == Some("1"),
             assigned_to: match q.assigned_to.as_deref() {
                 None | Some("me") => AssignedToFilter::Me,
                 Some("unassigned") => AssignedToFilter::Unassigned,
