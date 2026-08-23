@@ -164,11 +164,13 @@ pub async fn attach_team_to_project(
     input: input::AttachTeamToProjectInput,
     server::Extension(projects): server::Extension<Arc<dyn ProjectRepo>>,
     server::Extension(teams): server::Extension<Arc<dyn TeamRepo>>,
+    server::Extension(users): server::Extension<Arc<dyn UserRepo>>,
     server::Extension(auth): server::Extension<AuthUser>,
 ) -> Result<output::AttachTeamToProjectOutput, error::AttachTeamToProjectError> {
     project_service::attach_team_to_project(
         &projects,
         &teams,
+        &users,
         &input.project_id,
         &auth.user_id,
         &input.team_id,

@@ -278,15 +278,27 @@ pub async fn set_project_member_role(
 /// current ACTIVE members (`ProjectRepo::attach_team` does the actual seed insert —
 /// see docs/project-abstraction-plan.md stage A4). Requires the requester to
 /// already be a project admin; a personal project's only admin is its owner (seeded
-/// at `create`), so in practice this means "the owner attaches a team."
+/// at `create`), so in practice this means "the owner attaches a team." Refuses to
+/// attach a team to the requester's own `personal_project_id` — that project is meant
+/// to stay single-owner (see `delete_project`'s identical guard and the "disallow
+/// sharing the personal project" backlog entry that requested this), since attaching
+/// a team is the only way a personal project's membership could otherwise grow beyond
+/// its owner.
 pub async fn attach_team_to_project(
     projects: &Arc<dyn ProjectRepo>,
     teams: &Arc<dyn TeamRepo>,
+    users: &Arc<dyn UserRepo>,
     project_id: &str,
     requester_user_id: &str,
     team_id: &str,
 ) -> Result<(), ItemError> {
     require_project_admin(projects, teams, project_id, requester_user_id).await?;
+    let requester = users.get(requester_user_id).await?;
+    if requester.personal_project_id.as_deref() == Some(project_id) {
+        return Err(ItemError::Invalid(
+            "cannot share your personal project".to_string(),
+        ));
+    }
     Ok(projects.attach_team(project_id, team_id).await?)
 }
 
@@ -627,7 +639,8 @@ mod tests {
 
         let projects: Arc<dyn ProjectRepo> = Arc::new(mock);
         let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
-        let err = attach_team_to_project(&projects, &teams, "p1", "owner1", "team1")
+        let users: Arc<dyn UserRepo> = Arc::new(MockUserRepo::new());
+        let err = attach_team_to_project(&projects, &teams, &users, "p1", "owner1", "team1")
             .await
             .unwrap_err();
         assert!(matches!(err, ItemError::Invalid(_)));
@@ -645,9 +658,34 @@ mod tests {
 
         let projects: Arc<dyn ProjectRepo> = Arc::new(mock);
         let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
-        attach_team_to_project(&projects, &teams, "p1", "owner1", "team1")
+        let mut user_mock = MockUserRepo::new();
+        user_mock
+            .expect_get()
+            .returning(|_| Ok(test_user(Some("other-project"))));
+        let users: Arc<dyn UserRepo> = Arc::new(user_mock);
+        attach_team_to_project(&projects, &teams, &users, "p1", "owner1", "team1")
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn attach_team_to_project_rejects_own_personal_project() {
+        let mut mock = MockProjectRepo::new();
+        mock.expect_get().returning(|_| Ok(personal_project()));
+        mock.expect_member_role()
+            .returning(|_, _| Ok(Some(TeamRole::Admin)));
+
+        let projects: Arc<dyn ProjectRepo> = Arc::new(mock);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+        let mut user_mock = MockUserRepo::new();
+        user_mock
+            .expect_get()
+            .returning(|_| Ok(test_user(Some("p1"))));
+        let users: Arc<dyn UserRepo> = Arc::new(user_mock);
+        let err = attach_team_to_project(&projects, &teams, &users, "p1", "owner1", "team1")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ItemError::Invalid(_)));
     }
 
     #[tokio::test]
