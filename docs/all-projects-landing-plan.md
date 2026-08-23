@@ -313,3 +313,68 @@ with:
   `ProjectEventRow`, drop the `complete_url`/toggle-route machinery entirely, drop
   `task_included`'s Task-only restriction since Events are always included per
   `main_calendar::is_included`'s `Event => true` arm).
+
+**Stage 3 — done (2026-08-23).**
+- `src/web_ui/all_projects_events.rs` (replaced the Stage 1 stub in place) now has a real
+  `all_projects_events_page` handler (`GET /web/events`, already routed since Stage 1 — no route
+  change needed here). No toggle route — Events are never completable
+  (`ProjectEventRow::from_item` already hardcodes `complete_url: None`), matching the plan.
+- Row assembly is a new `list_all_projects_event_rows` function, structurally mirroring Stage 2's
+  `list_all_projects_task_rows`: loops `project_service::list_projects`, per project lists
+  top-level items narrowed to `ItemKind::Event` via `project_item_service::
+  list_project_items_unchecked`, plus every still-virtual/skipped Event-series occurrence in
+  `project_events::virtual_occurrence_window(Utc::now())`'s forward window (90 days) via
+  `item_series_service::list_occurrence_states_for_project`, filtered to `item_type ==
+  ItemKind::Event` and `!Materialized`. **Deviation from Stage 2's precedent**: reused
+  `project_events::virtual_occurrence_window` directly (it's `pub(crate)`) rather than
+  duplicating it — unlike the per-screen row/predicate helpers, it's a pure constant-window
+  function with nothing screen-specific to diverge on, so duplicating it would just be a stale-
+  copy risk with no benefit. Unlike Stage 2's Task rows (only the series' *current* occurrence),
+  every occurrence in the window is included here — matching `project_events`'s own
+  `render_rows_with_virtual` precedent, since an Event-typed series has no cursor/"current"
+  concept at all (see `ItemSeries::cursor_date`'s doc comment, and `ProjectEventVirtualRow`'s own
+  doc comment making the same point).
+- No `task_included`-style predicate at all: `main_calendar::is_included`'s `Event => true` arm
+  means Events are never assignment-restricted, so (unlike Stage 2's Task screen) this loop has
+  no inclusion filter beyond the `ItemKind::Event` retain.
+- New row builder `all_projects_event_row(...)`: `ProjectEventRow::from_item(...)` +
+  `row.project_name = Some(project_name)` + `reschedule_url` suffixed `?view=all-events`. No
+  `complete_url` rewrite (already `None` for every Event) and no `assign_url` rewrite (`Row::
+  assign_url` is already `None` for every `ProjectEventRow`, per that struct's own doc comment —
+  Events never carry assignment). Sort key mirrors `project_events::sort_key`:
+  `scheduled_date().or(due_date())`, undated last.
+- New template `templates/all_projects_events/virtual_row.html` + backing struct
+  `AllProjectsEventVirtualRow` (in `all_projects_events.rs`, same one-non-page-template-per-
+  module shape Stage 2 used) — mirrors `project_events::templates::ProjectEventVirtualRow` plus
+  a `project_name` tag, rendered as a small pill span (same markup pattern
+  `all_projects_tasks/virtual_row.html` already uses for its own `project_name` pill). No
+  `is_current`/assignee fields, matching `ProjectEventVirtualRow`'s own shape.
+- `templates/all_projects_events/list_page.html`: mirrors `project_events/list_page.html` minus
+  "Up to projects", "Manage Google Calendars", and "+ New Event" (all out of scope/inapplicable
+  at the all-projects level) — just the title and `#events-list`. No "Show completed" checkbox
+  either (Events have no `complete` concept at all, unlike Stage 2's Tasks screen).
+- Verified every Tailwind class used in both new templates is already present in an existing
+  compiled template (`project_events/list_page.html`, `project_events/virtual_row.html`,
+  `all_projects_tasks/virtual_row.html`) via a `comm`/`diff` check before building — `task
+  web-styles` was **not** run since nothing new needed compiling in.
+- Verified: `cargo build` clean (same pre-existing unrelated dead-code warnings as Stages 1-2, no
+  new ones). `cargo test`: 464 passed, 0 failed (unchanged count, same rationale as Stage 2 — no
+  new pure functions novel enough to warrant a dedicated unit test).
+- Not verified (no browser): actual sidebar highlighting on `/web/events`, row rendering/layout,
+  and virtual-row Skip/Unskip/materialize behavior on this screen specifically — needs the user's
+  own check per CLAUDE.md's UI-verification rule.
+- **Next: Stage 4** — wire the shared save/skip/unskip handlers for the `"all-tasks"`/
+  `"all-events"` row views: `project_tasks/mod.rs::normalize_row_view` needs to accept
+  `"all-tasks"` (and, per Stage 4's own listed scope, `project_events/handlers.rs` reuses that
+  same `normalize_row_view` — confirm whether `"all-events"` needs a matching arm there or a
+  separate one); `project_tasks/handlers.rs::update_project_task_form` needs a `Some("all-tasks")`
+  row-render arm plus the `complete_project_item_series_occurrence_form` rebuild branch;
+  `project_events/handlers.rs::update_project_event_form` needs an `"all-events"` arm (see its
+  existing `if view == "main-calendar" { ... } else { ... }` branch around line 606 — this needs
+  a third case, or the two-screen dispatch there needs restructuring to cover all four
+  `view` values: `project-calendar`/`main-calendar`/`all-tasks`/`all-events`); and
+  `project_item_series/handlers.rs`'s skip/unskip handlers need the dead `"project-calendar"`/
+  `"main-calendar"` branches removed and `"all-tasks"`/`"all-events"` branches added. Until this
+  lands, a Reschedule/Assign save from either new cross-project screen re-renders via the plain
+  `ProjectTaskRow`/`ProjectEventRow` shape (losing the `project_name` tag transiently) — this is
+  the exact, expected gap both Stage 2's and this stage's progress notes above already flagged.

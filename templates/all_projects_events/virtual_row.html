@@ -1,0 +1,24 @@
+<li id="all-events-virtual-{{ series_id }}-{{ occurrence_ts }}" class="py-2">
+  <div class="flex items-center gap-x-3">
+    {% if is_skipped %}
+    <span class="min-w-0 flex-1 truncate line-through text-gray-400 dark:text-gray-500">{{ name }}</span>
+    <span class="shrink-0 text-[10px] uppercase tracking-wide font-semibold text-gray-400 dark:text-gray-500">Skipped</span>
+    {% else %}
+    <a href="{{ materialize_url }}"
+      class="min-w-0 flex-1 truncate text-gray-900 dark:text-white">{{ name }}</a>
+    {% endif %}
+  </div>
+  <div class="mt-1 flex items-center gap-x-3 pl-0 text-xs text-gray-500 dark:text-gray-400">
+    <div class="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1">
+      <span class="rounded bg-gray-100 px-1.5 py-0.5 text-gray-600 dark:bg-white/10 dark:text-gray-300">{{ project_name }}</span>
+      <span>Scheduled: {{ date_label }}</span>
+    </div>
+    {% if is_skipped %}
+    <button hx-post="{{ unskip_url }}"
+      class="shrink-0 cursor-pointer text-gray-400 hover:text-indigo-500 dark:text-gray-500 dark:hover:text-indigo-400">Unskip</button>
+    {% else %}
+    <button hx-post="{{ skip_url }}" hx-confirm="Skip this occurrence?"
+      class="shrink-0 cursor-pointer text-gray-400 hover:text-red-500 dark:text-gray-500 dark:hover:text-red-400">Skip</button>
+    {% endif %}
+  </div>
+</li>
