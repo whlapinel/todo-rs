@@ -73,7 +73,7 @@ impl UserRepo for SqliteUserRepo {
         last_name: &str,
     ) -> Result<User, RepoError> {
         if let Some(row) = sqlx::query(
-            "SELECT id, first_name, last_name, email, google_id, timezone FROM users WHERE google_id = ?",
+            "SELECT id, first_name, last_name, email, google_id, timezone, personal_project_id FROM users WHERE google_id = ?",
         )
         .bind(google_id)
         .fetch_optional(&self.0)
@@ -113,7 +113,7 @@ impl UserRepo for SqliteUserRepo {
         name: Option<&'a str>,
     ) -> Result<User, RepoError> {
         if let Some(row) = sqlx::query(
-            "SELECT id, first_name, last_name, email, google_id, timezone FROM users WHERE email = ?",
+            "SELECT id, first_name, last_name, email, google_id, timezone, personal_project_id FROM users WHERE email = ?",
         )
         .bind(email)
         .fetch_optional(&self.0)
