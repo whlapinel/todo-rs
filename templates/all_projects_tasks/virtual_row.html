@@ -1,0 +1,41 @@
+<li id="all-tasks-virtual-{{ series_id }}-{{ occurrence_ts }}" class="py-2">
+  <div class="flex items-center gap-x-3">
+    {% if is_skipped %}
+    <span class="shrink-0 size-4"></span>
+    <span class="min-w-0 flex-1 truncate line-through text-gray-400 dark:text-gray-500">{{ name }}</span>
+    <span class="shrink-0 text-[10px] uppercase tracking-wide font-semibold text-gray-400 dark:text-gray-500">Skipped</span>
+    {% else %}
+    {% if let Some(url) = complete_url %}
+    <input type="checkbox" hx-post="{{ url }}"
+      class="shrink-0 size-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-600 dark:border-white/20 dark:bg-white/5" />
+    {% else %}
+    <span class="shrink-0 size-4"></span>
+    {% endif %}
+    <a href="{{ materialize_url }}"
+      class="min-w-0 flex-1 truncate text-gray-900 dark:text-white">{{ name }}</a>
+    {% if is_current %}
+    <span class="shrink-0 text-[10px] uppercase tracking-wide font-semibold text-indigo-600 dark:text-indigo-400">Current</span>
+    {% endif %}
+    {% endif %}
+  </div>
+  <div class="mt-1 flex items-center gap-x-3 pl-7 text-xs text-gray-500 dark:text-gray-400">
+    <div class="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1">
+      <span class="rounded bg-gray-100 px-1.5 py-0.5 text-gray-600 dark:bg-white/10 dark:text-gray-300">{{ project_name }}</span>
+      {% if let Some(assignee) = assignee_name %}
+      <span class="text-indigo-600 dark:text-indigo-400">[{{ assignee }}]</span>
+      {% endif %}
+      {% if is_due_date_basis %}
+      <span class="{% if overdue %}text-red-600 dark:text-red-400{% endif %}">💀 {{ date_label }}</span>
+      {% else %}
+      <span>📅 {{ date_label }}</span>
+      {% endif %}
+    </div>
+    {% if is_skipped %}
+    <button hx-post="{{ unskip_url }}"
+      class="shrink-0 cursor-pointer text-gray-400 hover:text-indigo-500 dark:text-gray-500 dark:hover:text-indigo-400">Unskip</button>
+    {% else %}
+    <button hx-post="{{ skip_url }}" hx-confirm="Skip this occurrence?"
+      class="shrink-0 cursor-pointer text-gray-400 hover:text-red-500 dark:text-gray-500 dark:hover:text-red-400">Skip</button>
+    {% endif %}
+  </div>
+</li>

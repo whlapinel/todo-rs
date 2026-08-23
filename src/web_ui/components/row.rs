@@ -92,8 +92,9 @@ pub struct Row {
     /// hierarchy by date rather than nesting children under their parent the way Tasks/Events/
     /// Simple Lists do, so parent context would otherwise be lost.
     pub parent_name: Option<String>,
-    /// This item's project's name, shown as a badge in the detail line — `None` everywhere
-    /// except `main_calendar` (the cross-project Home calendar), the only screen that mixes
-    /// rows from more than one project at once.
+    /// This item's project's name, shown as a badge in the detail line — `None` on every
+    /// single-project screen; set by `main_calendar` (the cross-project Home calendar) and
+    /// `all_projects_tasks`/`all_projects_events`, the screens that mix rows from more than one
+    /// project at once.
     pub project_name: Option<String>,
 }

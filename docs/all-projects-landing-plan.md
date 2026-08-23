@@ -238,3 +238,78 @@ with:
   its `templates/all_projects_tasks/list_page.html`, and the
   `PUT /web/tasks/projects/:project_id/items/:item_id` toggle route/handler deferred from
   here.
+
+**Stage 2 — done (2026-08-23).**
+- `src/web_ui/all_projects_tasks.rs` (replaced the Stage 1 stub in place, as instructed) now has
+  a real `all_projects_tasks_page` handler (`GET /web/tasks`) plus a new
+  `toggle_all_projects_task_complete` handler wired as
+  `PUT /web/tasks/projects/:project_id/items/:item_id` (`src/main.rs`, `build_web_router()`,
+  right after the `/tasks` route).
+- Row assembly is a new `list_all_projects_task_rows` function — duplicated (not shared) from
+  `project_tasks::list_task_rows_for_project`'s gather shape per the plan's own precedent
+  citation, looping `project_service::list_projects`, per project listing top-level
+  (`parent_item_id: None`) items narrowed to `ItemKind::Task` via
+  `project_item_service::list_project_items_unchecked`, plus each project's current
+  non-materialized Task-series occurrences via
+  `item_series_service::list_occurrence_states_for_project` (`is_current` + `!Materialized`
+  filter, mirroring `project_tasks_page`'s own query). Real items and virtual occurrences are
+  merged into one `Vec<(i64 timestamp, String html)>`, sorted by timestamp, same pattern
+  `render_rows_with_virtual`/`list_main_calendar_rows` already use — this *is* sorted by due
+  date across every project (a single flat list), which does not conflict with the plan's "no
+  flattening-by-date" line — that line contrasts with `main_calendar`'s merged-Task+Event/
+  type-badge shape, not with per-project's own due-date ordering; see the new row builder's own
+  doc comment for the reasoning spelled out where a future stage's implementer will actually see
+  it.
+- `task_included(is_team_project, assigned_to, user_id)`: a narrowed, Task-only duplicate of
+  `main_calendar::is_included` (that function's `Event`/`Simple`/`Template` arms have no analog
+  here — this screen's own gather loop already filters to `ItemKind::Task` before this predicate
+  ever runs). **Deviation from the plan**: no `assigned_to_any` toggle was added — the plan
+  explicitly left it optional ("or `assigned_to_any` if a toggle is added"); omitted to keep this
+  stage's scope minimal, matching the flat calendar list's own pre-Stage-4 behavior. If a future
+  stage adds this toggle, it's a straightforward extra `bool` parameter mirroring
+  `main_calendar::is_included`'s own.
+- New row builder `all_projects_task_row(...)`: `ProjectTaskRow::from_item(...)` (empty
+  `siblings: &[]`, matching `main_calendar::calendar_row`'s own choice) +
+  `row.project_name = Some(project_name)` + `complete_url` rewritten to
+  `/web/tasks/projects/{project_id}/items/{item_id}` (this stage's new toggle route, not the
+  per-project one — so the toggle's own response can re-render through this same function and
+  keep its `project_name` tag/cross-project URLs) + `reschedule_url`/`assign_url` each suffixed
+  `?view=all-tasks`. That suffix is inert today — `project_tasks::normalize_row_view` only
+  recognizes `"project-calendar"`/`"main-calendar"` until Stage 4 adds `"all-tasks"` — so a
+  Reschedule/Assign save from this screen currently re-renders via the plain `ProjectTaskRow`
+  arm (losing the `project_name` tag until Stage 4 lands), exactly the transient gap the plan
+  anticipated by putting that wiring in its own stage. No `parent_name`/`type_badge` set (this
+  screen lists only top-level items — see above — and is Task-only already), matching the plan's
+  explicit "simpler than `main_calendar::calendar_row`" framing.
+- New template `templates/all_projects_tasks/virtual_row.html` + backing struct
+  `AllProjectsTaskVirtualRow` (in `all_projects_tasks.rs`, not a separate `templates.rs` — this
+  module has exactly one non-page template, unlike `project_tasks`'s multi-template split) —
+  needed because `project_tasks::templates::ProjectTaskVirtualRow` has no `project_name` field
+  to tag a cross-project row with; mirrors `main_calendar::MainCalendarVirtualRow` minus the
+  type symbol/label (single-kind screen) and minus `in_list_view` (no in-place list rebuild
+  target exists yet for this screen — deferred to Stage 4, which is where `project_tasks`'s own
+  `"tasks-list"`-style rebuild branch would need an `"all-tasks"` counterpart; until then this
+  virtual row's checkbox/Skip/Unskip fall back to default whole-page htmx behavior, same as the
+  calendar day panel's `in_list_view: false` rows).
+- `templates/all_projects_tasks/list_page.html`: mirrors `project_tasks/list_page.html` minus
+  the "Up to projects" link (doesn't apply at the all-projects top level) and the "+ New Task"
+  button (explicitly out of scope per the plan's Context section) — just the title, a "Show
+  completed" checkbox (`hx-get="/web/tasks"`), and `#items-list`.
+- `components/row.rs`'s `Row::project_name` doc comment updated to name both new cross-project
+  screens alongside `main_calendar`, since it's no longer the only screen setting this field.
+- Verified: `cargo build` clean (same pre-existing unrelated dead-code warnings as Stage 1, no
+  new ones). `cargo test`: 464 passed, 0 failed (unchanged count — no new tests added; this
+  stage's new code is handler/template wiring with no pure functions novel enough to warrant a
+  unit test beyond what `project_tasks`/`main_calendar`'s own equivalents already cover by
+  precedent).
+- Not verified (no browser): actual sidebar highlighting on `/web/tasks`, row rendering/layout,
+  the toggle checkbox's live round-trip, and virtual-row Skip/Unskip/materialize behavior on this
+  screen specifically — needs the user's own check per CLAUDE.md's UI-verification rule.
+- **Next: Stage 3** — build `all_projects_events.rs` (replace its Stage 1 stub) +
+  `templates/all_projects_events/list_page.html`, same shape as this stage minus completion/
+  assignment/points (Events aren't completable). No toggle route needed for Events. Stage 2's
+  `all_projects_task_row`/`list_all_projects_task_rows`/`AllProjectsTaskVirtualRow` in
+  `all_projects_tasks.rs` are a solid template to mirror structurally (swap `ProjectTaskRow` for
+  `ProjectEventRow`, drop the `complete_url`/toggle-route machinery entirely, drop
+  `task_included`'s Task-only restriction since Events are always included per
+  `main_calendar::is_included`'s `Event => true` arm).

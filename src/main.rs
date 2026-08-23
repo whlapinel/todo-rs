@@ -52,7 +52,7 @@ use tower::ServiceBuilder;
 use tower_cookies::CookieManagerLayer;
 use tower_http::services::ServeDir;
 use web_ui::all_projects_events::all_projects_events_page;
-use web_ui::all_projects_tasks::all_projects_tasks_page;
+use web_ui::all_projects_tasks::{all_projects_tasks_page, toggle_all_projects_task_complete};
 use web_ui::assigned_items::assigned_items_page;
 use web_ui::login::login_page;
 use web_ui::main_calendar::*;
@@ -69,9 +69,13 @@ use web_ui::teams::*;
 
 fn build_web_router() -> Router {
     Router::new()
-        // Stage 1 of docs/all-projects-landing-plan.md: placeholder handlers, replaced by
-        // Stages 2/3 with the real cross-project Tasks/Events screens.
+        // Stage 2 of docs/all-projects-landing-plan.md: the real cross-project Tasks screen.
+        // `/events` is still Stage 1's placeholder, replaced by Stage 3.
         .route("/tasks", get(all_projects_tasks_page))
+        .route(
+            "/tasks/projects/:project_id/items/:item_id",
+            put(toggle_all_projects_task_complete),
+        )
         .route("/events", get(all_projects_events_page))
         .route("/calendar", get(main_calendar_page))
         .route("/calendar/list", get(main_calendar_list_page))
