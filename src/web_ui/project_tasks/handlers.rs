@@ -906,6 +906,7 @@ pub async fn update_project_task_form(
     Extension(activity_log): Extension<Arc<dyn ActivityLogRepo>>,
     Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
     TzOffset(tz): TzOffset,
+    Query(view_q): Query<super::RowViewQuery>,
     Form(form): Form<ProjectTaskForm>,
 ) -> Result<Response, ItemError> {
     let project =
@@ -914,6 +915,7 @@ pub async fn update_project_task_form(
         project_item_service::get_project_item_unchecked(&repo, &project_id, &item_id).await?;
     let current = require_task(current)?;
     let close = form.redirect.is_some();
+    let row_view = super::normalize_row_view(view_q);
     let params = update_params_from_form(&project_id, &item_id, &current, &form, tz);
     project_item_service::update_project_item(
         &repo,
@@ -983,19 +985,53 @@ pub async fn update_project_task_form(
             let just_completed = !current.complete && updated.complete;
             let confirmation = just_completed.then(|| "Completed".to_string());
             let dismiss_after_ms = (just_completed && !show_complete).then_some(1800u32);
-            let row = ProjectTaskRow::from_item(
-                &updated,
-                &project_id,
-                &names,
-                &siblings_ref,
-                tz,
-                skip_url,
-                project.team_id.is_some(),
-                show_complete,
-                confirmation,
-                dismiss_after_ms,
-            )
-            .render()?;
+            let parent_link = resolve_parent_link(&repo, &project_id, &updated).await?;
+            // Reschedule/Assign saved from a calendar row (`view` set) re-render via that
+            // screen's own `calendar_row` overlay (type badge/parent name/project name, plus
+            // its calendar-scoped `complete_url`) instead of the plain `ProjectTaskRow` shape —
+            // see `RowViewQuery`'s doc comment. A plain edit/reschedule/assign never shifts a
+            // series cursor, so a single-row swap (not a whole-list rebuild, unlike
+            // `complete_project_item_series_occurrence_form`) is always correct here.
+            let parent_name = parent_link.as_ref().map(|(name, _)| name.clone());
+            let row = match row_view.as_deref() {
+                Some("project-calendar") => crate::web_ui::project_calendar::calendar_row(
+                    &updated,
+                    parent_name,
+                    &project_id,
+                    &names,
+                    project.team_id.is_some(),
+                    tz,
+                    skip_url,
+                    show_complete,
+                    confirmation,
+                    dismiss_after_ms,
+                )?,
+                Some("main-calendar") => crate::web_ui::main_calendar::calendar_row(
+                    &updated,
+                    parent_name,
+                    &project_id,
+                    &project.name,
+                    &names,
+                    project.team_id.is_some(),
+                    tz,
+                    skip_url,
+                    confirmation,
+                    dismiss_after_ms,
+                )?,
+                _ => ProjectTaskRow::from_item(
+                    &updated,
+                    &project_id,
+                    &names,
+                    &siblings_ref,
+                    tz,
+                    skip_url,
+                    project.team_id.is_some(),
+                    show_complete,
+                    confirmation,
+                    dismiss_after_ms,
+                )
+                .render()?,
+            };
             let (assignee_options, is_team_admin) = match &project.team_id {
                 Some(team_id) => (
                     active_member_options(&teams, team_id, &auth_user.user_id).await?,
@@ -1019,7 +1055,6 @@ pub async fn update_project_task_form(
                 true,
             )
             .render()?;
-            let parent_link = resolve_parent_link(&repo, &project_id, &updated).await?;
             let linked_event = resolve_linked_event(&repo, &project_id, &updated).await?;
             let series_link = resolve_series_link(&series, &project_id, &updated).await?;
             let view = ProjectTaskDetailView::from_item(
@@ -1329,6 +1364,7 @@ pub async fn get_reschedule_task(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     TzOffset(tz): TzOffset,
+    Query(q): Query<super::RowViewQuery>,
 ) -> Result<Html<String>, ItemError> {
     let task = project_item_service::get_project_item(
         &repo,
@@ -1340,7 +1376,13 @@ pub async fn get_reschedule_task(
     )
     .await?;
     let task = require_task(task)?;
-    render(RescheduleDialog::from_task(&task, &project_id, tz))
+    let view = super::normalize_row_view(q);
+    render(RescheduleDialog::from_task(
+        &task,
+        &project_id,
+        tz,
+        view.as_deref(),
+    ))
 }
 
 pub async fn get_quick_assign_task(
@@ -1349,6 +1391,7 @@ pub async fn get_quick_assign_task(
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Query(q): Query<super::RowViewQuery>,
 ) -> Result<Html<String>, ItemError> {
     let project =
         project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
@@ -1366,9 +1409,11 @@ pub async fn get_quick_assign_task(
         Some(team_id) => active_member_options(&teams, team_id, &auth_user.user_id).await?,
         None => Vec::new(),
     };
+    let view = super::normalize_row_view(q);
     render(QuickAssignDialog::from_task(
         &task,
         &project_id,
         assignee_options,
+        view.as_deref(),
     ))
 }

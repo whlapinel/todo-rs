@@ -155,7 +155,7 @@ async fn names_for(
 /// screens' shared `Row`, which allows Delete on a team-backed project too (gated only on
 /// `is_imported`) — there was never a deliberate reason for the calendar to be stricter.
 #[allow(clippy::too_many_arguments)]
-fn calendar_row(
+pub(crate) fn calendar_row(
     item: &Item,
     parent_name: Option<String>,
     project_id: &str,
@@ -205,6 +205,17 @@ fn calendar_row(
         .complete_url
         .as_ref()
         .map(|_| format!("/web/projects/{project_id}/calendar/items/{}", item.id));
+    // Reschedule/Assign still save through the item's own generic resource route (no
+    // calendar-scoped route for those exists) — this query-string suffix is what lets
+    // `update_project_task_form`/`update_project_event_form` know to re-render the saved row
+    // via this same `calendar_row` overlay instead of the plain `ProjectTaskRow`/`ProjectEventRow`
+    // shape. See `project_tasks::RowViewQuery`'s doc comment.
+    row.reschedule_url = row
+        .reschedule_url
+        .map(|url| format!("{url}?view=project-calendar"));
+    row.assign_url = row
+        .assign_url
+        .map(|url| format!("{url}?view=project-calendar"));
     Ok(row.render()?)
 }
 

@@ -275,13 +275,20 @@ pub struct RescheduleDialog {
 }
 
 impl RescheduleDialog {
-    pub fn from_event(event: &Item, project_id: &str, tz: i32) -> Self {
+    /// `view`: see `project_tasks::templates::RescheduleDialog::from_task`'s identical
+    /// rationale.
+    pub fn from_event(event: &Item, project_id: &str, tz: i32, view: Option<&str>) -> Self {
         let local_due_date = event.due_date().map(|d| to_local(d, tz));
         let local_scheduled_date = event.scheduled_date().map(|d| to_local(d, tz));
         let local_scheduled_end_date = event.scheduled_end_date().map(|d| to_local(d, tz));
+        let post_reschedule_url = format!("/web/projects/{project_id}/events/{}", event.id);
+        let post_reschedule_url = match view {
+            Some(v) => format!("{post_reschedule_url}?view={v}"),
+            None => post_reschedule_url,
+        };
         RescheduleDialog {
             item_id: event.id.clone(),
-            post_reschedule_url: format!("/web/projects/{project_id}/events/{}", event.id),
+            post_reschedule_url,
             due_date: local_due_date
                 .map(|d| d.format("%Y-%m-%d").to_string())
                 .unwrap_or_default(),

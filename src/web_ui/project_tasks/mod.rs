@@ -59,6 +59,37 @@ pub struct ProjectTaskForm {
     redirect: Option<String>,
 }
 
+/// Set only when a Reschedule/Assign dialog (or its own save PUT) was reached from a
+/// calendar screen's row — see `project_calendar::calendar_row`/`main_calendar::calendar_row`'s
+/// override of `Row::reschedule_url`/`assign_url`, which append this as a query-string suffix.
+/// Lets `update_project_task_form`/`update_project_event_form` re-render the saved row via that
+/// screen's own `calendar_row` (badge/parent/project overlay) instead of the plain
+/// `ProjectTaskRow`/`ProjectEventRow` shape — closing the gap noted in
+/// docs/issues_and_features.md ("a row saved via Reschedule/Assign from a calendar day-drawer
+/// briefly loses that styling"). Deliberately narrower than `OccurrenceRowActionQuery` (no
+/// `preset`/`showComplete`/`assignedToAny`): unlike completing a series occurrence, a plain
+/// reschedule/assign never shifts a series cursor, so it only ever needs a single-row swap, not
+/// a whole-list rebuild.
+#[derive(serde::Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct RowViewQuery {
+    view: Option<String>,
+}
+
+/// Only `"project-calendar"`/`"main-calendar"` are ever forwarded — anything else (including a
+/// hand-crafted query value) normalizes to `None`, mirroring `OccurrenceRowActionQuery`'s
+/// literal-match-or-fall-through convention rather than reflecting arbitrary input back out.
+pub(crate) fn normalize_row_view(q: RowViewQuery) -> Option<String> {
+    if matches!(
+        q.view.as_deref(),
+        Some("project-calendar") | Some("main-calendar")
+    ) {
+        q.view
+    } else {
+        None
+    }
+}
+
 pub(crate) fn non_empty(v: &Option<String>) -> Option<String> {
     v.as_ref()
         .map(|s| s.trim())

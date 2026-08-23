@@ -165,7 +165,7 @@ fn virtual_occurrence_window(
 /// The one addition here is `project_name`, since this screen (unlike the per-project calendar)
 /// mixes rows from every project the requester belongs to.
 #[allow(clippy::too_many_arguments)]
-fn calendar_row(
+pub(crate) fn calendar_row(
     item: &Item,
     parent_name: Option<String>,
     project_id: &str,
@@ -208,6 +208,13 @@ fn calendar_row(
         .complete_url
         .as_ref()
         .map(|_| format!("/web/calendar/projects/{project_id}/items/{}", item.id));
+    // See `project_calendar::calendar_row`'s identical rationale for this suffix.
+    row.reschedule_url = row
+        .reschedule_url
+        .map(|url| format!("{url}?view=main-calendar"));
+    row.assign_url = row
+        .assign_url
+        .map(|url| format!("{url}?view=main-calendar"));
     Ok(row.render()?)
 }
 

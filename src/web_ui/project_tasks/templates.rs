@@ -150,13 +150,21 @@ pub struct RescheduleDialog {
 }
 
 impl RescheduleDialog {
-    pub fn from_task(task: &Item, project_id: &str, tz: i32) -> Self {
+    /// `view`: `Some("project-calendar"/"main-calendar")` when this dialog was opened from a
+    /// calendar row (see `RowViewQuery`) — carried onto `post_reschedule_url` so the save PUT
+    /// tells `update_project_task_form` to re-render via that screen's `calendar_row` overlay.
+    pub fn from_task(task: &Item, project_id: &str, tz: i32, view: Option<&str>) -> Self {
         let local_due_date = task.due_date().map(|d| to_local(d, tz));
         let local_scheduled_date = task.scheduled_date().map(|d| to_local(d, tz));
         let local_scheduled_end_date = task.scheduled_end_date().map(|d| to_local(d, tz));
+        let post_reschedule_url = format!("/web/projects/{project_id}/tasks/{}", task.id);
+        let post_reschedule_url = match view {
+            Some(v) => format!("{post_reschedule_url}?view={v}"),
+            None => post_reschedule_url,
+        };
         RescheduleDialog {
             item_id: task.id.clone(),
-            post_reschedule_url: format!("/web/projects/{project_id}/tasks/{}", task.id),
+            post_reschedule_url,
             due_date: local_due_date
                 .map(|d| d.format("%Y-%m-%d").to_string())
                 .unwrap_or_default(),
@@ -208,14 +216,21 @@ pub struct QuickAssignDialog {
 }
 
 impl QuickAssignDialog {
+    /// `view`: see `RescheduleDialog::from_task`'s identical rationale.
     pub fn from_task(
         task: &Item,
         project_id: &str,
         assignee_options: Vec<(String, String)>,
+        view: Option<&str>,
     ) -> Self {
+        let post_assign_url = format!("/web/projects/{project_id}/tasks/{}", task.id);
+        let post_assign_url = match view {
+            Some(v) => format!("{post_assign_url}?view={v}"),
+            None => post_assign_url,
+        };
         QuickAssignDialog {
             item_id: task.id.clone(),
-            post_assign_url: format!("/web/projects/{project_id}/tasks/{}", task.id),
+            post_assign_url,
             assignee_options,
             assigned_to_user_id: task.assigned_to_user_id(),
         }

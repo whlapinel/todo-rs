@@ -528,6 +528,7 @@ pub async fn update_project_event_form(
     Extension(activity_log): Extension<Arc<dyn crate::storage::sqlite::ActivityLogRepo>>,
     Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
     TzOffset(tz): TzOffset,
+    Query(view_q): Query<crate::web_ui::project_tasks::RowViewQuery>,
     Form(form): Form<ProjectEventForm>,
 ) -> Result<Response, ItemError> {
     let current = project_item_service::get_project_item(
@@ -541,6 +542,7 @@ pub async fn update_project_event_form(
     .await?;
     let current = require_event(current)?;
     let close = form.redirect.is_some();
+    let row_view = crate::web_ui::project_tasks::normalize_row_view(view_q);
     let params = update_params_from_form(&project_id, &item_id, &current, &form, tz);
     project_item_service::update_project_item(
         &repo,
@@ -581,7 +583,56 @@ pub async fn update_project_event_form(
         .into_response());
     }
     let skip_url = series_service::skip_url_for_item(&series, &updated, &project_id).await?;
-    let row = ProjectEventRow::from_item(&updated, &project_id, tz, skip_url).render()?;
+    // See `project_tasks::handlers::update_project_task_form`'s identical rationale — a
+    // Reschedule saved from a calendar row (`row_view` set) re-renders via that screen's own
+    // `calendar_row` overlay instead of the plain `ProjectEventRow` shape.
+    let row = if let Some(view) = row_view.as_deref() {
+        let project =
+            project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id)
+                .await?;
+        let names = match &project.team_id {
+            Some(team_id) => {
+                crate::web_ui::project_tasks::names_for(&teams, team_id, &auth_user.user_id).await?
+            }
+            None => HashMap::new(),
+        };
+        let parent_name = crate::web_ui::project_tasks::templates::resolve_parent_link(
+            &repo,
+            &project_id,
+            &updated,
+        )
+        .await?
+        .map(|(name, _)| name);
+        if view == "main-calendar" {
+            crate::web_ui::main_calendar::calendar_row(
+                &updated,
+                parent_name,
+                &project_id,
+                &project.name,
+                &names,
+                project.team_id.is_some(),
+                tz,
+                skip_url,
+                None,
+                None,
+            )?
+        } else {
+            crate::web_ui::project_calendar::calendar_row(
+                &updated,
+                parent_name,
+                &project_id,
+                &names,
+                project.team_id.is_some(),
+                tz,
+                skip_url,
+                false,
+                None,
+                None,
+            )?
+        }
+    } else {
+        ProjectEventRow::from_item(&updated, &project_id, tz, skip_url).render()?
+    };
     let fields = ProjectEventDetailFields::from_item(&updated, &project_id, tz, true).render()?;
     let view = ProjectEventDetailView::from_item(&updated, tz, series_link).render()?;
     Ok(Html(format!("{row}{fields}{view}")).into_response())
@@ -708,6 +759,7 @@ pub async fn get_reschedule_event(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     TzOffset(tz): TzOffset,
+    Query(q): Query<crate::web_ui::project_tasks::RowViewQuery>,
 ) -> Result<Html<String>, ItemError> {
     let event = project_item_service::get_project_item(
         &repo,
@@ -719,5 +771,11 @@ pub async fn get_reschedule_event(
     )
     .await?;
     let event = require_event(event)?;
-    render(RescheduleDialog::from_event(&event, &project_id, tz))
+    let view = crate::web_ui::project_tasks::normalize_row_view(q);
+    render(RescheduleDialog::from_event(
+        &event,
+        &project_id,
+        tz,
+        view.as_deref(),
+    ))
 }
