@@ -437,6 +437,17 @@ your own, alongside the auto-created "Personal" one.
 prl projects create "Side hustle"
 ```
 
+### Delete a project
+
+Permanently deletes a project and everything in it — every task, event,
+series, calendar subscription, and its points activity history. You must be
+a project admin. Your own personal project (the one auto-created for you at
+signup) can't be deleted this way. This cannot be undone.
+
+```sh
+prl projects delete <project-id>
+```
+
 ### List a project's members
 
 Shows each member's role, points balance (team-backed projects only — see

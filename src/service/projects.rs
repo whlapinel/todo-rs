@@ -211,16 +211,30 @@ pub async fn update_project(
     Ok(projects.update_name(project_id, name).await?)
 }
 
-/// Deletes a project and its whole `project_members` table (cascade lives in
-/// `SqliteProjectRepo::delete`, stage A2). Requires the requester to already be a
-/// project admin.
+/// Deletes a project and every row scoped to it — items, item series and their
+/// occurrences, calendar subscriptions, and activity log entries, plus the whole
+/// `project_members` table (cascade lives in `SqliteProjectRepo::delete`). Requires
+/// the requester to already be a project admin, and refuses to delete the
+/// requester's own `personal_project_id` — that project is meant to be permanent
+/// (see `ensure_default_project`/`docs/dialog-item-forms-plan.md`'s Stage 0); nothing
+/// re-creates it if it's deleted out from under its owner, and the "No way exists to
+/// delete projects" backlog entry that requested this feature only ever asked to make
+/// deletion possible, not to make the guaranteed-Personal-project invariant deletable
+/// too.
 pub async fn delete_project(
     projects: &Arc<dyn ProjectRepo>,
     teams: &Arc<dyn TeamRepo>,
+    users: &Arc<dyn UserRepo>,
     project_id: &str,
     requester_user_id: &str,
 ) -> Result<(), ItemError> {
     require_project_admin(projects, teams, project_id, requester_user_id).await?;
+    let requester = users.get(requester_user_id).await?;
+    if requester.personal_project_id.as_deref() == Some(project_id) {
+        return Err(ItemError::Invalid(
+            "cannot delete your personal project".to_string(),
+        ));
+    }
     Ok(projects.delete(project_id).await?)
 }
 
@@ -746,7 +760,10 @@ mod tests {
 
         let projects: Arc<dyn ProjectRepo> = Arc::new(mock);
         let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
-        let err = delete_project(&projects, &teams, "p1", "owner1")
+        // A non-admin is rejected before the personal-project check ever runs, so
+        // `users` needs no expectations.
+        let users: Arc<dyn UserRepo> = Arc::new(MockUserRepo::new());
+        let err = delete_project(&projects, &teams, &users, "p1", "owner1")
             .await
             .unwrap_err();
         assert!(matches!(err, ItemError::Invalid(_)));
@@ -764,8 +781,34 @@ mod tests {
 
         let projects: Arc<dyn ProjectRepo> = Arc::new(mock);
         let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
-        delete_project(&projects, &teams, "p1", "owner1")
+        let mut user_mock = MockUserRepo::new();
+        user_mock
+            .expect_get()
+            .returning(|_| Ok(test_user(Some("other-project"))));
+        let users: Arc<dyn UserRepo> = Arc::new(user_mock);
+        delete_project(&projects, &teams, &users, "p1", "owner1")
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn delete_project_rejects_own_personal_project() {
+        let mut mock = MockProjectRepo::new();
+        mock.expect_get().returning(|_| Ok(personal_project()));
+        mock.expect_member_role()
+            .returning(|_, _| Ok(Some(TeamRole::Admin)));
+        // No expect_delete() — proves the repo delete is never reached.
+
+        let projects: Arc<dyn ProjectRepo> = Arc::new(mock);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+        let mut user_mock = MockUserRepo::new();
+        user_mock
+            .expect_get()
+            .returning(|_| Ok(test_user(Some("p1"))));
+        let users: Arc<dyn UserRepo> = Arc::new(user_mock);
+        let err = delete_project(&projects, &teams, &users, "p1", "owner1")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ItemError::Invalid(_)));
     }
 }

@@ -8,6 +8,10 @@ pub enum ProjectsCommand {
     List,
     /// Create a new personal project (no attached team)
     Create { name: String },
+    /// Delete a project and everything in it — every task, event, series, and its
+    /// activity history (you must be a project admin; your own personal project can't
+    /// be deleted)
+    Delete { project_id: String },
     /// List a project's members, their role, and their points balance
     Members { project_id: String },
     /// Attach a team to a project, granting its active members access (you must be a project admin)
@@ -61,6 +65,19 @@ pub async fn cmd_projects(client: &Client, cmd: ProjectsCommand, user_id: Option
                 "create project",
             );
             println!("created project {}", out.project_id());
+        }
+        ProjectsCommand::Delete { project_id } => {
+            let uid = require_user(user_id);
+            unwrap_or_exit(
+                client
+                    .delete_project()
+                    .user_id(uid)
+                    .project_id(&project_id)
+                    .send()
+                    .await,
+                "delete project",
+            );
+            println!("deleted project {project_id}");
         }
         ProjectsCommand::Members { project_id } => {
             let out = unwrap_or_exit(

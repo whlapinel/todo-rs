@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Working style
+
+Do not use sub-agents (the `Agent` tool, including `Explore`/`general-purpose`/etc.) for work in this repo — do research and implementation directly. This applies even for "just research, no edits" tasks like surveying existing patterns before implementing a feature.
+
 ## Git
 
 Do not add `Co-Authored-By` trailers to commits.

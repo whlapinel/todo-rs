@@ -2,8 +2,7 @@
 
 Open issues and feature requests, merged from the former `docs/issues.md` and `docs/features.md` (2026-08-20) into a single sorted list. Completed or superseded items — including ones from the old files that were already resolved but hadn't been moved out yet — live in `docs/archived/archived_issues_and_features.md`.
 
-- No way exists to delete projects (when we make this, we need get double-confirmation and need to be sure to delete all children items)
-- Need to disallow sharing the personal project created on user creation. Should already be non-deleteable.
+- Need to disallow sharing the personal project created on user creation. (Non-deletability is now enforced — see the archived "No way exists to delete projects" entry — this item is now just about disallowing *sharing* it, e.g. via `attach-team`/inviting members.)
 - Highlighted tab of day-drawer in calendar pages doesn't update with tab selection, stuck on 'All'.
 - Calendar view day-drawer date element needs to be fixed-width so we don't have layout shift - the buttons on either side shift around when moving between dates. And let's shorten the string to e.g. Sat, 21 Aug so it fits on mobile more easily.
 - Need filtering for all lists.

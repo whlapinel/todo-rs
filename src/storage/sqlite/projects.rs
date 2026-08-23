@@ -163,20 +163,65 @@ impl ProjectRepo for SqliteProjectRepo {
     }
 
     async fn delete(&self, project_id: &str) -> Result<(), RepoError> {
+        // No FK/ON DELETE CASCADE anywhere in this schema (see create_pool()), so every
+        // table that scopes rows to a project — directly via project_id, or transitively
+        // via item_series.project_id for item_occurrences/item_series_rotation_members —
+        // is cleared in one transaction, mirroring item_series::delete_series's own
+        // reasoning for item_occurrences. Order doesn't matter for correctness (nothing
+        // here is read back mid-transaction), only for never leaving a partial cascade
+        // behind on failure.
+        let mut tx = self.0.begin().await.map_err(db_err)?;
+        sqlx::query(
+            "DELETE FROM item_occurrences WHERE series_id IN \
+             (SELECT id FROM item_series WHERE project_id = ?)",
+        )
+        .bind(project_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(db_err)?;
+        sqlx::query(
+            "DELETE FROM item_series_rotation_members WHERE series_id IN \
+             (SELECT id FROM item_series WHERE project_id = ?)",
+        )
+        .bind(project_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(db_err)?;
+        sqlx::query("DELETE FROM item_series WHERE project_id = ?")
+            .bind(project_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(db_err)?;
+        sqlx::query("DELETE FROM items WHERE project_id = ?")
+            .bind(project_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(db_err)?;
+        sqlx::query("DELETE FROM calendar_subscriptions WHERE project_id = ?")
+            .bind(project_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(db_err)?;
+        sqlx::query("DELETE FROM activity_log WHERE project_id = ?")
+            .bind(project_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(db_err)?;
+        sqlx::query("DELETE FROM project_members WHERE project_id = ?")
+            .bind(project_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(db_err)?;
         let rows = sqlx::query("DELETE FROM projects WHERE id = ?")
             .bind(project_id)
-            .execute(&self.0)
+            .execute(&mut *tx)
             .await
             .map_err(db_err)?
             .rows_affected();
         if rows == 0 {
             return Err(not_found());
         }
-        sqlx::query("DELETE FROM project_members WHERE project_id = ?")
-            .bind(project_id)
-            .execute(&self.0)
-            .await
-            .map_err(db_err)?;
+        tx.commit().await.map_err(db_err)?;
         Ok(())
     }
 
@@ -358,6 +403,75 @@ mod tests {
                 role TEXT NOT NULL DEFAULT 'member',
                 points INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (team_id, user_id)
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        // Needed for delete()'s cascade — see delete_cascades_... below.
+        sqlx::query(
+            "CREATE TABLE items (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                project_id TEXT
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE item_series (
+                id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                recurrence TEXT NOT NULL,
+                anchor_date INTEGER NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE item_occurrences (
+                series_id TEXT NOT NULL,
+                occurrence_date INTEGER NOT NULL,
+                PRIMARY KEY (series_id, occurrence_date)
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE item_series_rotation_members (
+                series_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                PRIMARY KEY (series_id, user_id)
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE calendar_subscriptions (
+                id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL,
+                ical_url TEXT NOT NULL,
+                created_by_user_id TEXT NOT NULL,
+                created_at INTEGER NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE activity_log (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                item_id TEXT NOT NULL,
+                item_name TEXT NOT NULL,
+                points_delta INTEGER NOT NULL,
+                created_at INTEGER NOT NULL,
+                project_id TEXT
             )",
         )
         .execute(&pool)
@@ -602,6 +716,84 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(members.0, 0);
+    }
+
+    #[tokio::test]
+    async fn delete_cascades_items_series_occurrences_subscriptions_and_activity_log() {
+        let pool = test_pool().await;
+        let repo = SqliteProjectRepo(pool.clone());
+        insert_user(&pool, "u1", "Ann").await;
+        let id = repo.create("Home", "u1", None).await.unwrap();
+
+        sqlx::query("INSERT INTO items (id, name, project_id) VALUES ('i1', 'Task', ?)")
+            .bind(&id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO item_series (id, project_id, name, recurrence, anchor_date) \
+             VALUES ('s1', ?, 'Weekly', 'every week', 0)",
+        )
+        .bind(&id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO item_occurrences (series_id, occurrence_date) VALUES ('s1', 0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO item_series_rotation_members (series_id, user_id) VALUES ('s1', 'u1')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO calendar_subscriptions (id, project_id, ical_url, created_by_user_id, created_at) \
+             VALUES ('cs1', ?, 'https://example.com/cal.ics', 'u1', 0)",
+        )
+        .bind(&id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO activity_log (id, user_id, item_id, item_name, points_delta, created_at, project_id) \
+             VALUES ('a1', 'u1', 'i1', 'Task', 0, 0, ?)",
+        )
+        .bind(&id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        repo.delete(&id).await.unwrap();
+
+        for (table, column) in [
+            ("items", "project_id"),
+            ("item_series", "project_id"),
+            ("calendar_subscriptions", "project_id"),
+            ("activity_log", "project_id"),
+        ] {
+            let count: (i64,) =
+                sqlx::query_as(&format!("SELECT COUNT(*) FROM {table} WHERE {column} = ?"))
+                    .bind(&id)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(count.0, 0, "{table} row survived project delete");
+        }
+        let occurrences: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM item_occurrences WHERE series_id = 's1'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(occurrences.0, 0);
+        let rotation_members: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM item_series_rotation_members WHERE series_id = 's1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(rotation_members.0, 0);
     }
 
     #[tokio::test]

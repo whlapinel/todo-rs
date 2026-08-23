@@ -23,12 +23,17 @@
     <li class="py-3 text-sm text-gray-500 dark:text-gray-400">No projects yet.</li>
     {% else %}
     {% for row in rows %}
-    <li class="py-2">
+    <li class="py-2 flex items-center gap-x-3">
       <a href="/web/projects/{{ row.id }}/tasks" hx-boost="false"
-         class="flex items-center gap-x-3 text-gray-900 dark:text-white">
+         class="flex min-w-0 flex-1 items-center gap-x-3 text-gray-900 dark:text-white">
         <span class="min-w-0 flex-1 truncate">{{ row.name }}</span>
         {% if row.is_team_project %}<span class="shrink-0 inline-flex items-center rounded-md bg-indigo-50 px-2 py-1 text-xs font-medium text-indigo-700 inset-ring inset-ring-indigo-700/10 dark:bg-indigo-400/10 dark:text-indigo-400 dark:inset-ring-indigo-400/30">Team</span>{% endif %}
       </a>
+      {% if row.can_delete %}
+      <button type="button" hx-get="/web/projects/{{ row.id }}/delete" hx-target="#action-dialog"
+          hx-select="unset" hx-swap="innerHTML"
+          class="shrink-0 cursor-pointer text-sm text-red-600 hover:text-red-500 dark:text-red-400 dark:hover:text-red-300">Delete</button>
+      {% endif %}
     </li>
     {% endfor %}
     {% endif %}

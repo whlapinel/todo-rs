@@ -3,7 +3,7 @@ use crate::auth::AuthUser;
 use crate::domain::team::TeamRole;
 use crate::service::items::ItemError;
 use crate::service::projects as project_service;
-use crate::storage::sqlite::{ProjectRepo, TeamRepo};
+use crate::storage::sqlite::{ProjectRepo, TeamRepo, UserRepo};
 use std::str::FromStr;
 use std::sync::Arc;
 use todo_server_sdk::{error, input, model, output, server};
@@ -82,11 +82,12 @@ pub async fn delete_project(
     input: input::DeleteProjectInput,
     server::Extension(projects): server::Extension<Arc<dyn ProjectRepo>>,
     server::Extension(teams): server::Extension<Arc<dyn TeamRepo>>,
+    server::Extension(users): server::Extension<Arc<dyn UserRepo>>,
     server::Extension(auth): server::Extension<AuthUser>,
 ) -> Result<output::DeleteProjectOutput, error::DeleteProjectError> {
     require_matching_user(&auth, &input.user_id)
         .map_err(|e| error::DeleteProjectError::from(to_msg(e)))?;
-    project_service::delete_project(&projects, &teams, &input.project_id, &auth.user_id)
+    project_service::delete_project(&projects, &teams, &users, &input.project_id, &auth.user_id)
         .await
         .map_err(|e| error::DeleteProjectError::from(to_msg(e)))?;
     Ok(output::DeleteProjectOutput {})
