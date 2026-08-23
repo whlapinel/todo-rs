@@ -3,20 +3,7 @@
 Open issues and feature requests, merged from the former `docs/issues.md` and `docs/features.md` (2026-08-20) into a single sorted list. Completed or superseded items — including ones from the old files that were already resolved but hadn't been moved out yet — live in `docs/archived/archived_issues_and_features.md`.
 
 - Clicking the ellipses a second time still doesn't hide the popover menu, have to click somewhere else
-- Need filtering for all lists. Scoped in `docs/list-filtering-plan.md` (2026-08-23) — that plan covers the Project Tasks screen only for now (shared filter vocabulary built for reuse, but the other four list screens and the `project` filter dimension are explicit follow-up, not yet scoped). Per a 2026-08-23 revision, `skipped` and multi-select/customizable-select are dropped from scope entirely (not deferred) — `assigned to` is a single-select with Me/Unassigned/All/one member. Implement from that doc once picked up.
-    - see ../tailwind-ui-html/e-commerce/category-filters.html for an example. needs to be given dark mode support 
-    - However I'd like you to TRY to use the new customizable select instead, if possible. I am hoping it will be simpler. I believe you can multi-select with these. Style this to look like other input elements in this app if possible.
-    - Filter by: 
-        - complete (default false), 
-        - assigned to (default Me), 
-        - project (if in all projects list) (default all),
-        - due date (default = all, overdue, none)
-        - schedule (default=all, scheduled in past, none)
-        - recurring (default=true, no)
-        - skipped (default false),
-    - Sort by (hierarchical allowed):
-        - due date
-        - other options to be added later (maybe)
+- Need filtering for the remaining lists: `project_events`, `project_simple_lists`, `all_projects_tasks`, `all_projects_events`, plus the `project` filter dimension (only meaningful on the two all-projects screens). The Project Tasks screen is done, along with the shared, reusable `ListFilters` vocabulary (`src/web_ui/list_filters.rs`) it's built on — see the archived `docs/archived/list-filtering-plan.md` for the completed design and the decisions to carry forward (single-select `assignedTo` with Me/Unassigned/All/one member, no `skipped` filter, no multi-select/customizable-select). `project_simple_lists` has no due/scheduled/recurring concept at all (only `complete` applies).
 - Allow moving a task or event to another project (distinct from the same-project "duplicate" action above).
 - A previous solution to the Google calendar import problem was that all-day events will be given a date of 12:00pm in order to avoid the shift to the previous day. The other option I was given is having a user-configurable time-zone. It didn't occur to me at the time of implementation but why not instead add the "all-day" concept to our event schema? Let's require events to either be marked all-day or have a scheduled start time.
 - Need a way to set user's time zone via web UI. There's currently no user config 
