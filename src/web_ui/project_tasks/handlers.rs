@@ -300,6 +300,15 @@ pub(crate) async fn render_series_occurrence_detail_page(
     )
     .render()?;
     let occurrence_ts = occurrence_date.timestamp();
+    let dialog = ProjectTaskSeriesOccurrenceDetailDialog::new(
+        project_id,
+        &series.id,
+        occurrence_ts,
+        &series.name,
+        is_skipped,
+        view.clone(),
+    )
+    .render()?;
     let nav_html = nav::build_nav_html(
         projects,
         &auth_user.user_id,
@@ -312,6 +321,7 @@ pub(crate) async fn render_series_occurrence_detail_page(
         name: series.name.clone(),
         is_skipped,
         view,
+        dialog,
         child_create_url: format!(
             "/web/projects/{project_id}/series/{}/occurrences/{occurrence_ts}/task-children",
             series.id
@@ -367,7 +377,6 @@ pub(crate) async fn render_series_occurrence_edit_page(
         tz,
     )
     .render()?;
-    let occurrence_ts = occurrence_date.timestamp();
     let nav_html = nav::build_nav_html(
         projects,
         &auth_user.user_id,
@@ -378,10 +387,6 @@ pub(crate) async fn render_series_occurrence_edit_page(
     render(ProjectTaskSeriesOccurrenceEditPageTemplate {
         name: series.name.clone(),
         fields,
-        back_url: format!(
-            "/web/projects/{project_id}/series/{}/occurrences/{occurrence_ts}",
-            series.id
-        ),
         nav_html,
     })
 }

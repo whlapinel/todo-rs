@@ -1,6 +1,6 @@
 # New/edit item forms as dialogs, all-projects creation, and the canonical Personal project
 
-Status: **in progress** — Stage 0 and Stage 1 done, Stages 2–3 planned/not yet implemented. Written 2026-08-23 from the first entry in `docs/issues_and_features.md`, which bundles several tenuously-related asks and explicitly invites splitting into stages — this doc does that split and records the design decisions made along the way.
+Status: **in progress** — Stages 0–2 done, Stage 3 planned/not yet implemented. Written 2026-08-23 from the first entry in `docs/issues_and_features.md`, which bundles several tenuously-related asks and explicitly invites splitting into stages — this doc does that split and records the design decisions made along the way.
 
 ## Workflow across stages
 
@@ -143,6 +143,59 @@ Do this screen first, get it reviewed/working end to end, then replicate mechani
 - **Cancel**: same `onclick="document.getElementById('action-dialog').close()"` button `reschedule_dialog.html` already uses.
 
 ## Stage 2 — Roll out to the remaining screens
+
+**Status: done** (2026-08-23). `cargo build`/`cargo fmt`/`cargo test` clean (465 passed, same
+count as Stage 0/1 — no new tests, template/wiring restructuring over already-tested logic);
+`task web-styles` run, no `static/style.css` diff (every class used, including the new
+`overflow-y-auto max-h-[85vh]` on the two `project_item_series` dialogs, was already present).
+Not yet verified live in a browser — the user's own pass per CLAUDE.md's standing policy.
+
+Mechanically repeated Stage 1's pattern per screen, exactly as planned below — no deviations
+from the file list. Notes for anyone resuming:
+
+- **`project_events`**: regular new/edit/detail all converted (new `ProjectEventDetailDialog` +
+  `detail_dialog.html`, `dialog: String` added to `ProjectEventDetailPageTemplate`), plus its
+  own separate Event-series-occurrence pair (new `ProjectEventSeriesOccurrenceDetailDialog` +
+  `series_occurrence_detail_dialog.html`). `ProjectEventEditPageTemplate` lost its now-unused
+  `id`/`project_id` fields and `ProjectEventSeriesOccurrenceEditPageTemplate` lost `back_url` —
+  same cleanup Stage 1 already did for `ProjectTaskEditPageTemplate`, once the page-level
+  header/back-link they fed was replaced by the dialog's own Cancel button.
+- **`project_simple_lists`**: Simple items have no `complete` concept and, unlike
+  Tasks/Events, `detail_page.html` never had a separate `view: String`/`detail_view.html`
+  partial to reuse — the new `ProjectSimpleItemDetailDialog`/`detail_dialog.html` inlines the
+  description directly instead of wrapping a pre-rendered sub-template. `edit_page.html` lost
+  its unused `id`/`project_id` fields the same way as `project_events` above.
+- **`project_templates` children**: narrowest scope — only `child_detail_page`/
+  `child_detail_view`/`child_edit_page`/`child_detail_fields`/`child_row.html`; the *top-level*
+  Template's own detail/edit stayed untouched (out of scope, per the table below — templates are
+  created via "Save as template", not a dialog flow). New `ProjectTemplateChildDetailDialog` +
+  `child_detail_dialog.html`; Edit is never gated on `complete` (children have no such concept).
+  `child_row.html`'s name-link became an unconditional dialog-opening button (no shared `Row`
+  struct here, so no `detail_via_dialog` opt-in needed).
+- **`project_item_series`**: the one screen with **no detail page/dialog at all** (per the
+  original table) and, unusually, both create *and* update always end in a full-page
+  `HX-Redirect` back to `/web/projects/{project_id}/series` — never an in-place row/fragment
+  re-render. That meant no `close`-branch logic, no `hx-target="#item-…"` fragment-plucking, and
+  no close-on-success script were needed on either form — the redirect already discards the
+  dialog by navigating the whole page away. The existing TASK/EVENT + assignment-mode toggle
+  `<script>` inside the form kept working unmodified once wrapped in `#dialog-fragment`, since
+  htmx evaluates inline `<script>` tags in swapped-in content the same way `hx-boost` already
+  did for the pre-Stage-2 full-page nav. `edit_page.html`'s header Delete button moved down next
+  to the form's own Save/Cancel buttons (the page-header row it lived in no longer exists inside
+  a dialog).
+- **`project_tasks` series occurrences**: `series_occurrence_detail_page.html`/
+  `series_occurrence_edit_page.html` — the Task-flavored deferred-materialization pair, distinct
+  from the regular Task detail/edit Stage 1 already converted. Per a grep at the time
+  (`grep -rn 'occurrences/{{ occurrence_ts }}"' templates/`), nothing in the UI actually links to
+  this route interactively (no row/virtual-row click reaches it) — this conversion is purely for
+  direct-URL/bookmark parity (Decision 3), no trigger buttons to update. New
+  `ProjectTaskSeriesOccurrenceDetailDialog` + `series_occurrence_detail_dialog.html`;
+  `ProjectTaskSeriesOccurrenceEditPageTemplate` lost its unused `back_url` field, same cleanup as
+  `project_events`.
+- Every screen's `Row`-construction call site (`ProjectEventRow::from_item`,
+  `ProjectSimpleItemRow::from_item`) had `detail_via_dialog` flipped from `false` to `true`
+  (`project_item_series`/`project_templates` children don't use the shared `Row` struct, so
+  there's no such flag for them — their row templates were edited directly instead).
 
 Mechanical repeat of Stage 1's pattern, one screen at a time, confirming each still passes `cargo build`/`cargo test`:
 

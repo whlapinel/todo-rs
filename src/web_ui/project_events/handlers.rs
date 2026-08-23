@@ -152,6 +152,10 @@ pub async fn project_event_detail_page(
         crate::web_ui::project_events::templates::resolve_series_link(&series, &project_id, &item)
             .await?;
     let view = ProjectEventDetailView::from_item(&item, tz, series_link).render()?;
+    let is_imported = item.google_event_id.is_some();
+    let dialog =
+        ProjectEventDetailDialog::new(&item.id, &project_id, &item.name, is_imported, view.clone())
+            .render()?;
     let nav_html = nav::build_nav_html(
         &projects,
         &auth_user.user_id,
@@ -159,12 +163,12 @@ pub async fn project_event_detail_page(
         SidebarSection::Events,
     )
     .await?;
-    let is_imported = item.google_event_id.is_some();
     render(ProjectEventDetailPageTemplate {
         id: item.id,
         project_id,
         name: item.name,
         view,
+        dialog,
         nav_html,
         is_imported,
     })
@@ -197,8 +201,6 @@ pub async fn project_event_edit_page(
     )
     .await?;
     render(ProjectEventEditPageTemplate {
-        id: item.id,
-        project_id,
         name: item.name,
         fields,
         nav_html,
@@ -227,6 +229,15 @@ pub(crate) async fn render_series_occurrence_detail_page(
     )
     .render()?;
     let occurrence_ts = occurrence_date.timestamp();
+    let dialog = ProjectEventSeriesOccurrenceDetailDialog::new(
+        project_id,
+        &series.id,
+        occurrence_ts,
+        &series.name,
+        is_skipped,
+        view.clone(),
+    )
+    .render()?;
     let nav_html = nav::build_nav_html(
         projects,
         &auth_user.user_id,
@@ -239,6 +250,7 @@ pub(crate) async fn render_series_occurrence_detail_page(
         name: series.name.clone(),
         is_skipped,
         view,
+        dialog,
         child_create_url: format!(
             "/web/projects/{project_id}/series/{}/occurrences/{occurrence_ts}/event-children",
             series.id
@@ -263,7 +275,6 @@ pub(crate) async fn render_series_occurrence_edit_page(
     let fields =
         ProjectEventSeriesOccurrenceFields::from_series(series, occurrence_date, project_id, tz)
             .render()?;
-    let occurrence_ts = occurrence_date.timestamp();
     let nav_html = nav::build_nav_html(
         projects,
         &auth_user.user_id,
@@ -274,10 +285,6 @@ pub(crate) async fn render_series_occurrence_edit_page(
     render(ProjectEventSeriesOccurrenceEditPageTemplate {
         name: series.name.clone(),
         fields,
-        back_url: format!(
-            "/web/projects/{project_id}/series/{}/occurrences/{occurrence_ts}",
-            series.id
-        ),
         nav_html,
     })
 }
@@ -565,6 +572,15 @@ pub async fn update_project_event_form(
     .await?;
     if close {
         let view = ProjectEventDetailView::from_item(&updated, tz, series_link.clone()).render()?;
+        let is_imported = updated.google_event_id.is_some();
+        let dialog = ProjectEventDetailDialog::new(
+            &updated.id,
+            &project_id,
+            &updated.name,
+            is_imported,
+            view.clone(),
+        )
+        .render()?;
         let nav_html = nav::build_nav_html(
             &projects,
             &auth_user.user_id,
@@ -577,8 +593,9 @@ pub async fn update_project_event_form(
             project_id,
             name: updated.name.clone(),
             view,
+            dialog,
             nav_html,
-            is_imported: updated.google_event_id.is_some(),
+            is_imported,
         })?
         .into_response());
     }

@@ -87,9 +87,9 @@ impl ProjectEventRow {
             type_badge: None,
             parent_name: None,
             project_name: None,
-            // Not yet converted to dialog fragments — see Stage 2 of
-            // docs/dialog-item-forms-plan.md.
-            detail_via_dialog: false,
+            // Stage 2 of docs/dialog-item-forms-plan.md — project_events' detail/edit/new
+            // pages are now dialog fragments.
+            detail_via_dialog: true,
         }
     }
 }
@@ -457,6 +457,37 @@ impl ProjectEventSeriesOccurrenceFields {
     }
 }
 
+/// Stage 2 of docs/dialog-item-forms-plan.md — the read-only dialog for a still-virtual/
+/// skipped Event series occurrence, mirroring `ProjectEventDetailDialog` below.
+#[derive(Template)]
+#[template(path = "project_events/series_occurrence_detail_dialog.html")]
+pub struct ProjectEventSeriesOccurrenceDetailDialog {
+    pub name: String,
+    pub is_skipped: bool,
+    pub view: String,
+    pub edit_url: String,
+}
+
+impl ProjectEventSeriesOccurrenceDetailDialog {
+    pub fn new(
+        project_id: &str,
+        series_id: &str,
+        occurrence_ts: i64,
+        name: &str,
+        is_skipped: bool,
+        view: String,
+    ) -> Self {
+        Self {
+            name: name.to_string(),
+            is_skipped,
+            view,
+            edit_url: format!(
+                "/web/projects/{project_id}/series/{series_id}/occurrences/{occurrence_ts}/edit"
+            ),
+        }
+    }
+}
+
 #[derive(Template)]
 #[template(path = "project_events/series_occurrence_detail_page.html")]
 pub struct ProjectEventSeriesOccurrenceDetailPageTemplate {
@@ -464,6 +495,10 @@ pub struct ProjectEventSeriesOccurrenceDetailPageTemplate {
     pub name: String,
     pub is_skipped: bool,
     pub view: String,
+    /// See `ProjectEventDetailDialog` — rendered separately from `view` and embedded
+    /// alongside it (Decision 3: a direct-URL/bookmark load auto-opens the same dialog an
+    /// interactive trigger would have opened).
+    pub dialog: String,
     pub child_create_url: String,
     pub edit_url: String,
     pub nav_html: String,
@@ -474,7 +509,6 @@ pub struct ProjectEventSeriesOccurrenceDetailPageTemplate {
 pub struct ProjectEventSeriesOccurrenceEditPageTemplate {
     pub name: String,
     pub fields: String,
-    pub back_url: String,
     pub nav_html: String,
 }
 
@@ -531,6 +565,31 @@ pub struct NewProjectEventPageTemplate {
     pub nav_html: String,
 }
 
+/// Stage 2 of docs/dialog-item-forms-plan.md — the read-only detail dialog wrapping
+/// `ProjectEventDetailView`'s already-rendered `view` HTML, mirroring
+/// `project_tasks::templates::ProjectTaskDetailDialog`.
+#[derive(Template)]
+#[template(path = "project_events/detail_dialog.html")]
+pub struct ProjectEventDetailDialog {
+    pub name: String,
+    pub is_imported: bool,
+    pub view: String,
+    pub edit_url: String,
+    pub full_page_url: String,
+}
+
+impl ProjectEventDetailDialog {
+    pub fn new(id: &str, project_id: &str, name: &str, is_imported: bool, view: String) -> Self {
+        Self {
+            name: name.to_string(),
+            is_imported,
+            view,
+            edit_url: format!("/web/projects/{project_id}/events/{id}/edit"),
+            full_page_url: format!("/web/projects/{project_id}/events/{id}"),
+        }
+    }
+}
+
 #[derive(Template)]
 #[template(path = "project_events/detail_page.html")]
 pub struct ProjectEventDetailPageTemplate {
@@ -538,6 +597,10 @@ pub struct ProjectEventDetailPageTemplate {
     pub project_id: String,
     pub name: String,
     pub view: String,
+    /// See `ProjectEventDetailDialog` — rendered separately from `view` and embedded
+    /// alongside it (Decision 3: a direct-URL/bookmark load auto-opens the same dialog an
+    /// interactive row-click would have opened).
+    pub dialog: String,
     pub nav_html: String,
     /// Hides the "Edit" link — see `templates/project_events/detail_page.html` and
     /// CLAUDE.md's read-only-enforcement note. `service::project_items::update_project_item`
@@ -549,8 +612,6 @@ pub struct ProjectEventDetailPageTemplate {
 #[derive(Template)]
 #[template(path = "project_events/edit_page.html")]
 pub struct ProjectEventEditPageTemplate {
-    pub id: String,
-    pub project_id: String,
     pub name: String,
     pub fields: String,
     pub nav_html: String,

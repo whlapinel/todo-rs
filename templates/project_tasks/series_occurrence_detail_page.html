@@ -1,6 +1,19 @@
 {% extends "base.html" %}
 {% block title %}{{ name }} · Todo{% endblock %}
 {% block content %}
+{{ dialog|safe }}
+<script>
+  (function () {
+    var dialog = document.getElementById('action-dialog');
+    var frag = document.getElementById('dialog-fragment');
+    if (dialog && frag && !dialog.open) {
+      while (frag.firstChild) dialog.appendChild(frag.firstChild);
+      frag.remove();
+      htmx.process(dialog);
+      dialog.showModal();
+    }
+  })();
+</script>
 <div class="space-y-6">
   <div class="md:flex md:items-center md:justify-between">
     <div class="min-w-0 flex-1">

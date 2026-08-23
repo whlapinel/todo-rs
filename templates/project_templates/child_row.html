@@ -1,6 +1,7 @@
 <li id="template-item-{{ id }}" class="py-2">
-  <a href="/web/projects/{{ project_id }}/templates/{{ template_id }}/items/{{ id }}" hx-target="#page" hx-select="#page" hx-swap="innerHTML"
-     class="block truncate text-gray-900 hover:text-indigo-600 dark:text-white dark:hover:text-indigo-400">{{ name }}</a>
+  <button type="button" hx-get="/web/projects/{{ project_id }}/templates/{{ template_id }}/items/{{ id }}"
+    hx-target="#action-dialog" hx-select="#dialog-fragment" hx-swap="innerHTML"
+    class="block w-full truncate text-left cursor-pointer text-gray-900 hover:text-indigo-600 dark:text-white dark:hover:text-indigo-400">{{ name }}</button>
   <div class="mt-1 flex items-center justify-between gap-x-3 text-xs text-gray-500 dark:text-gray-400">
     <span>{{ offset_label }}</span>
     <button hx-delete="/web/projects/{{ project_id }}/templates/{{ template_id }}/items/{{ id }}"

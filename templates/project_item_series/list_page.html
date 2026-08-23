@@ -9,10 +9,11 @@
       </h2>
     </div>
     <div class="mt-4 flex items-center gap-x-3 md:mt-0 md:ml-4">
-      <a href="/web/projects/{{ project_id }}/series/new" hx-target="#page" hx-select="#page" hx-swap="innerHTML"
+      <button type="button" hx-get="/web/projects/{{ project_id }}/series/new"
+        hx-target="#action-dialog" hx-select="#dialog-fragment" hx-swap="innerHTML"
         class="inline-flex items-center justify-center rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-xs hover:bg-indigo-500 dark:bg-indigo-500 dark:shadow-none dark:hover:bg-indigo-400">
         {% include "icons/add.html" %}
-      </a>
+      </button>
     </div>
   </div>
 

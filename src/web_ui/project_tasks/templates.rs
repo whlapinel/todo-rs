@@ -693,6 +693,37 @@ impl ProjectTaskSeriesOccurrenceFields {
     }
 }
 
+/// Stage 2 of docs/dialog-item-forms-plan.md — the read-only dialog for a still-virtual/
+/// skipped Task series occurrence, mirroring `ProjectTaskDetailDialog`.
+#[derive(Template)]
+#[template(path = "project_tasks/series_occurrence_detail_dialog.html")]
+pub struct ProjectTaskSeriesOccurrenceDetailDialog {
+    pub name: String,
+    pub is_skipped: bool,
+    pub view: String,
+    pub edit_url: String,
+}
+
+impl ProjectTaskSeriesOccurrenceDetailDialog {
+    pub fn new(
+        project_id: &str,
+        series_id: &str,
+        occurrence_ts: i64,
+        name: &str,
+        is_skipped: bool,
+        view: String,
+    ) -> Self {
+        Self {
+            name: name.to_string(),
+            is_skipped,
+            view,
+            edit_url: format!(
+                "/web/projects/{project_id}/series/{series_id}/occurrences/{occurrence_ts}/edit"
+            ),
+        }
+    }
+}
+
 #[derive(Template)]
 #[template(path = "project_tasks/series_occurrence_detail_page.html")]
 pub struct ProjectTaskSeriesOccurrenceDetailPageTemplate {
@@ -700,6 +731,10 @@ pub struct ProjectTaskSeriesOccurrenceDetailPageTemplate {
     pub name: String,
     pub is_skipped: bool,
     pub view: String,
+    /// See `ProjectTaskSeriesOccurrenceDetailDialog` — rendered separately from `view` and
+    /// embedded alongside it (Decision 3: a direct-URL/bookmark load auto-opens the same
+    /// dialog an interactive trigger would have opened).
+    pub dialog: String,
     pub child_create_url: String,
     pub edit_url: String,
     pub nav_html: String,
@@ -710,7 +745,6 @@ pub struct ProjectTaskSeriesOccurrenceDetailPageTemplate {
 pub struct ProjectTaskSeriesOccurrenceEditPageTemplate {
     pub name: String,
     pub fields: String,
-    pub back_url: String,
     pub nav_html: String,
 }
 

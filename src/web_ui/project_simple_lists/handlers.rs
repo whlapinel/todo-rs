@@ -97,6 +97,13 @@ pub async fn project_simple_item_detail_page(
     )
     .await?;
     let item = require_simple(item)?;
+    let dialog = ProjectSimpleItemDetailDialog::new(
+        &item.id,
+        &project_id,
+        &item.name,
+        item.description.clone(),
+    )
+    .render()?;
     let nav_html = nav::build_nav_html(
         &projects,
         &auth_user.user_id,
@@ -110,6 +117,7 @@ pub async fn project_simple_item_detail_page(
         project_id,
         name: item.name,
         description: item.description.clone(),
+        dialog,
         nav_html,
     })
 }
@@ -140,8 +148,6 @@ pub async fn project_simple_item_edit_page(
     )
     .await?;
     render(ProjectSimpleItemEditPageTemplate {
-        id: item.id,
-        project_id,
         name: item.name,
         fields,
         nav_html,
@@ -297,6 +303,13 @@ pub async fn update_project_simple_item_form(
     let updated =
         project_item_service::get_project_item_unchecked(&repo, &project_id, &item_id).await?;
     if close {
+        let dialog = ProjectSimpleItemDetailDialog::new(
+            &updated.id,
+            &project_id,
+            &updated.name,
+            updated.description.clone(),
+        )
+        .render()?;
         let nav_html = nav::build_nav_html(
             &projects,
             &auth_user.user_id,
@@ -310,6 +323,7 @@ pub async fn update_project_simple_item_form(
             project_id,
             name: updated.name.clone(),
             description: updated.description.clone(),
+            dialog,
             nav_html,
         })?
         .into_response());

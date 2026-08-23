@@ -394,6 +394,14 @@ pub async fn project_template_child_detail_page(
     )
     .await?;
     let view = ProjectTemplateChildDetailView::from_item(&item).render()?;
+    let dialog = ProjectTemplateChildDetailDialog::new(
+        &project_id,
+        &template_id,
+        &item.id,
+        &item.name,
+        view.clone(),
+    )
+    .render()?;
     let nav_html = nav::build_nav_html(
         &projects,
         &auth_user.user_id,
@@ -407,6 +415,7 @@ pub async fn project_template_child_detail_page(
         id: item.id,
         name: item.name,
         view,
+        dialog,
         nav_html,
     })
 }
@@ -438,9 +447,6 @@ pub async fn project_template_child_edit_page(
     )
     .await?;
     render(ProjectTemplateChildEditPageTemplate {
-        project_id,
-        template_id,
-        id: item.id,
         name: item.name,
         fields,
         nav_html,
@@ -498,6 +504,14 @@ pub async fn update_project_template_child_form(
         project_item_service::get_project_item_unchecked(&repo, &project_id, &item_id).await?;
     if close {
         let view = ProjectTemplateChildDetailView::from_item(&updated).render()?;
+        let dialog = ProjectTemplateChildDetailDialog::new(
+            &project_id,
+            &template_id,
+            &updated.id,
+            &updated.name,
+            view.clone(),
+        )
+        .render()?;
         let nav_html = nav::build_nav_html(
             &projects,
             &auth_user.user_id,
@@ -511,6 +525,7 @@ pub async fn update_project_template_child_form(
             id: updated.id.clone(),
             name: updated.name.clone(),
             view,
+            dialog,
             nav_html,
         })?
         .into_response());

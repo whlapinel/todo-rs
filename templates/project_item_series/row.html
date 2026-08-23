@@ -13,9 +13,9 @@
     {% endif %}
     <span class="shrink-0 flex items-center gap-x-3">
       <span class="text-xs text-gray-400 dark:text-gray-500" title="repeats">&#8635; {{ recurrence }}</span>
-      <a href="/web/projects/{{ project_id }}/series/{{ id }}/edit" hx-target="#page" hx-select="#page"
-        hx-swap="innerHTML"
-        class="text-xs font-medium text-indigo-600 hover:text-indigo-500 dark:text-indigo-400 dark:hover:text-indigo-300">Edit</a>
+      <button type="button" hx-get="/web/projects/{{ project_id }}/series/{{ id }}/edit"
+        hx-target="#action-dialog" hx-select="#dialog-fragment" hx-swap="innerHTML"
+        class="cursor-pointer text-xs font-medium text-indigo-600 hover:text-indigo-500 dark:text-indigo-400 dark:hover:text-indigo-300">Edit</button>
       <button hx-delete="/web/projects/{{ project_id }}/series/{{ id }}"
         hx-confirm="Delete series {{ name }}? Occurrences already created from it will be kept as standalone items."
         hx-target="#series-{{ id }}-row" hx-select="unset" hx-swap="outerHTML swap:200ms"

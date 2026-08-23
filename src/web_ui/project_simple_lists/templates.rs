@@ -54,9 +54,9 @@ impl ProjectSimpleItemRow {
             type_badge: None,
             parent_name: None,
             project_name: None,
-            // Not yet converted to dialog fragments — see Stage 2 of
-            // docs/dialog-item-forms-plan.md.
-            detail_via_dialog: false,
+            // Stage 2 of docs/dialog-item-forms-plan.md — project_simple_lists' detail/edit/
+            // new pages are now dialog fragments.
+            detail_via_dialog: true,
         }
     }
 }
@@ -113,6 +113,30 @@ pub struct NewProjectSimpleItemPageTemplate {
     pub nav_html: String,
 }
 
+/// Stage 2 of docs/dialog-item-forms-plan.md — the read-only detail dialog. Simple items have
+/// no pre-rendered `view` partial to wrap (unlike `ProjectTaskDetailDialog`/
+/// `ProjectEventDetailDialog`), so this holds `description` directly and
+/// `detail_dialog.html` inlines it — see that template's own doc comment.
+#[derive(Template)]
+#[template(path = "project_simple_lists/detail_dialog.html")]
+pub struct ProjectSimpleItemDetailDialog {
+    pub name: String,
+    pub description: Option<String>,
+    pub edit_url: String,
+    pub full_page_url: String,
+}
+
+impl ProjectSimpleItemDetailDialog {
+    pub fn new(id: &str, project_id: &str, name: &str, description: Option<String>) -> Self {
+        Self {
+            name: name.to_string(),
+            description,
+            edit_url: format!("/web/projects/{project_id}/simple-lists/{id}/edit"),
+            full_page_url: format!("/web/projects/{project_id}/simple-lists/{id}"),
+        }
+    }
+}
+
 #[derive(Template)]
 #[template(path = "project_simple_lists/detail_page.html")]
 pub struct ProjectSimpleItemDetailPageTemplate {
@@ -121,14 +145,16 @@ pub struct ProjectSimpleItemDetailPageTemplate {
     pub name: String,
     pub description: Option<String>,
     pub is_top_level: bool,
+    /// See `ProjectSimpleItemDetailDialog` — rendered separately and embedded alongside the
+    /// rest of the page (Decision 3: a direct-URL/bookmark load auto-opens the same dialog an
+    /// interactive row-click would have opened).
+    pub dialog: String,
     pub nav_html: String,
 }
 
 #[derive(Template)]
 #[template(path = "project_simple_lists/edit_page.html")]
 pub struct ProjectSimpleItemEditPageTemplate {
-    pub id: String,
-    pub project_id: String,
     pub name: String,
     pub fields: String,
     pub nav_html: String,
