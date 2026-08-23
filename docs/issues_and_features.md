@@ -2,6 +2,7 @@
 
 Open issues and feature requests, merged from the former `docs/issues.md` and `docs/features.md` (2026-08-20) into a single sorted list. Completed or superseded items — including ones from the old files that were already resolved but hadn't been moved out yet — live in `docs/archived/archived_issues_and_features.md`.
 
+- Clicking the ellipses a second time still doesn't hide the popover menu, have to click somewhere else
 - Need filtering for all lists.
     - see ../tailwind-ui-html/e-commerce/category-filters.html for an example. needs to be given dark mode support 
     - However I'd like you to TRY to use the new customizable select instead, if possible. I am hoping it will be simpler. I believe you can multi-select with these. Style this to look like other input elements in this app if possible.
@@ -16,9 +17,9 @@ Open issues and feature requests, merged from the former `docs/issues.md` and `d
     - Sort by (hierarchical allowed):
         - due date
         - other options to be added later (maybe)
-- Need a way to set user's time zone via web UI. There's currently no user config 
+- Allow moving a task or event to another project (distinct from the same-project "duplicate" action above).
 - A previous solution to the Google calendar import problem was that all-day events will be given a date of 12:00pm in order to avoid the shift to the previous day. The other option I was given is having a user-configurable time-zone. It didn't occur to me at the time of implementation but why not instead add the "all-day" concept to our event schema? Let's require events to either be marked all-day or have a scheduled start time.
-- Allow copying a task or event to another project (distinct from the same-project "duplicate" action above).
+- Need a way to set user's time zone via web UI. There's currently no user config 
 - Add a `priority` field to task items and task series; sort first by priority, then by due date.
 - Allow adding tags to items
 - Consider visibly disabling inputs that will result in error. Specifically, recurring tasks that aren't current should have complete and skip grayed out, and skipped recurring tasks and events that aren't cursor should have unskip grayed out.
