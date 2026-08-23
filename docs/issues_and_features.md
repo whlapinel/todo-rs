@@ -2,6 +2,8 @@
 
 Open issues and feature requests, merged from the former `docs/issues.md` and `docs/features.md` (2026-08-20) into a single sorted list. Completed or superseded items — including ones from the old files that were already resolved but hadn't been moved out yet — live in `docs/archived/archived_issues_and_features.md`.
 
+- I don't want a "full page" version of the item details. I only want the dialog. if we need to expand the dialog to fit everything then let's do that.
+- Related to the above, there's a bug surfaced by navigating to the full details page and back to the list... the details dialog stays stuck on the same item
 - Clicking the ellipses a second time still doesn't hide the popover menu, have to click somewhere else
 - Need filtering for the remaining lists: `project_events`, `project_simple_lists`, `all_projects_tasks`, `all_projects_events`, plus the `project` filter dimension (only meaningful on the two all-projects screens). The Project Tasks screen is done, along with the shared, reusable `ListFilters` vocabulary (`src/web_ui/list_filters.rs`) it's built on — see the archived `docs/archived/list-filtering-plan.md` for the completed design and the decisions to carry forward (single-select `assignedTo` with Me/Unassigned/All/one member, no `skipped` filter, no multi-select/customizable-select). `project_simple_lists` has no due/scheduled/recurring concept at all (only `complete` applies).
 - Allow moving a task or event to another project (distinct from the same-project "duplicate" action above).
