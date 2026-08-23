@@ -13,20 +13,56 @@
       <a href="/web/projects" hx-boost="false"
         class="inline-flex items-center justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-xs inset-ring inset-ring-gray-300 hover:bg-gray-50 dark:bg-white/10 dark:text-white dark:shadow-none dark:inset-ring-white/5 dark:hover:bg-white/20">
         Up to projects</a>
-      <label class="text-sm text-gray-600 flex items-center gap-x-1 dark:text-gray-400">
-        <input type="checkbox" name="showComplete" value="1" {% if show_complete %}checked{% endif %}
-          hx-get="/web/projects/{{ project_id }}/tasks" hx-trigger="change" hx-target="#page" hx-select="#page"
-          hx-swap="innerHTML" hx-push-url="true"
-          class="size-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-600 dark:border-white/20 dark:bg-white/5" />
-        Show completed
-      </label>
-      <button type="button" hx-get="/web/projects/{{ project_id }}/tasks/new{% if show_complete %}?showComplete=1{% endif %}"
+      <button type="button"
+        hx-get="/web/projects/{{ project_id }}/tasks/new{% if !filters_query.is_empty() %}?{{ filters_query }}{% endif %}"
         hx-target="#action-dialog" hx-select="#dialog-fragment" hx-swap="innerHTML"
         class="inline-flex items-center justify-center rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-xs hover:bg-indigo-500 dark:bg-indigo-500 dark:shadow-none dark:hover:bg-indigo-400">
         {% include "icons/add.html" %}
       </button>
     </div>
   </div>
+
+  <!-- Stage 2 of docs/list-filtering-plan.md: one shared hx-get for every filter control,
+       rather than each control repeating hx-get/hx-target/hx-select/hx-swap/hx-push-url the way
+       the old lone "Show completed" checkbox did — htmx serializes the whole form (every
+       control's current value) on any control's `change`. -->
+  <form id="filter-bar" hx-get="/web/projects/{{ project_id }}/tasks" hx-trigger="change"
+    hx-target="#page" hx-select="#page" hx-swap="innerHTML" hx-push-url="true"
+    class="flex flex-wrap items-center gap-3">
+    <label class="text-sm text-gray-600 flex items-center gap-x-1 dark:text-gray-400">
+      <input type="checkbox" name="showComplete" value="1" {% if show_complete %}checked{% endif %}
+        class="size-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-600 dark:border-white/20 dark:bg-white/5" />
+      Show completed
+    </label>
+    {% if is_team_project %}
+    <select name="assignedTo"
+      class="rounded-md bg-white py-1.5 pr-8 pl-3 text-sm text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:*:bg-gray-800 dark:focus:outline-indigo-500">
+      <option value="me" {% if assigned_to=="me" %}selected{% endif %}>Assigned to me</option>
+      <option value="unassigned" {% if assigned_to=="unassigned" %}selected{% endif %}>Unassigned</option>
+      <option value="all" {% if assigned_to=="all" %}selected{% endif %}>Everyone</option>
+      {% for opt in assignee_options %}
+      <option value="{{ opt.0 }}" {% if assigned_to==opt.0 %}selected{% endif %}>{{ opt.1 }}</option>
+      {% endfor %}
+    </select>
+    {% endif %}
+    <select name="dueDate"
+      class="rounded-md bg-white py-1.5 pr-8 pl-3 text-sm text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:*:bg-gray-800 dark:focus:outline-indigo-500">
+      <option value="" {% if due_date=="all" %}selected{% endif %}>Any due date</option>
+      <option value="overdue" {% if due_date=="overdue" %}selected{% endif %}>Overdue</option>
+      <option value="none" {% if due_date=="none" %}selected{% endif %}>No due date</option>
+    </select>
+    <select name="schedule"
+      class="rounded-md bg-white py-1.5 pr-8 pl-3 text-sm text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:*:bg-gray-800 dark:focus:outline-indigo-500">
+      <option value="" {% if schedule=="all" %}selected{% endif %}>Any schedule</option>
+      <option value="past" {% if schedule=="past" %}selected{% endif %}>Scheduled in the past</option>
+      <option value="none" {% if schedule=="none" %}selected{% endif %}>Not scheduled</option>
+    </select>
+    <select name="recurring"
+      class="rounded-md bg-white py-1.5 pr-8 pl-3 text-sm text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:*:bg-gray-800 dark:focus:outline-indigo-500">
+      <option value="" {% if recurring %}selected{% endif %}>Show recurring</option>
+      <option value="no" {% if !recurring %}selected{% endif %}>Hide recurring</option>
+    </select>
+  </form>
 
   <ul id="items-list"
     class="divide-y divide-gray-100 rounded-lg border border-gray-200 bg-white px-4 dark:divide-white/5 dark:border-white/10 dark:bg-gray-800/50">

@@ -33,6 +33,20 @@ pub enum AssignedToFilter {
     User(String),
 }
 
+impl AssignedToFilter {
+    /// Canonical string form — the same values `ListFilterQuery::assigned_to` accepts, and
+    /// what a `<select>` control's `value`/`selected` comparison round-trips against. Stage 2
+    /// of `docs/list-filtering-plan.md`.
+    pub fn as_value(&self) -> String {
+        match self {
+            AssignedToFilter::Me => "me".to_string(),
+            AssignedToFilter::Unassigned => "unassigned".to_string(),
+            AssignedToFilter::All => "all".to_string(),
+            AssignedToFilter::User(id) => id.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DueDateFilter {
     All,
@@ -40,11 +54,33 @@ pub enum DueDateFilter {
     None,
 }
 
+impl DueDateFilter {
+    /// See `AssignedToFilter::as_value`'s identical rationale.
+    pub fn as_value(&self) -> &'static str {
+        match self {
+            DueDateFilter::All => "all",
+            DueDateFilter::Overdue => "overdue",
+            DueDateFilter::None => "none",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScheduleFilter {
     All,
     Past,
     None,
+}
+
+impl ScheduleFilter {
+    /// See `AssignedToFilter::as_value`'s identical rationale.
+    pub fn as_value(&self) -> &'static str {
+        match self {
+            ScheduleFilter::All => "all",
+            ScheduleFilter::Past => "past",
+            ScheduleFilter::None => "none",
+        }
+    }
 }
 
 /// Parsed/normalized form of `ListFilterQuery` — what every predicate and URL builder
@@ -367,6 +403,20 @@ mod tests {
     #[test]
     fn query_string_empty_at_defaults() {
         assert_eq!(ListFilters::default().query_string(), "");
+    }
+
+    #[test]
+    fn as_value_round_trips_through_from_query() {
+        let filters = ListFilters::from_query(ListFilterQuery {
+            assigned_to: Some("bob".to_string()),
+            due_date: Some("overdue".to_string()),
+            schedule: Some("past".to_string()),
+            ..Default::default()
+        });
+        assert_eq!(filters.assigned_to.as_value(), "bob");
+        assert_eq!(filters.due_date.as_value(), "overdue");
+        assert_eq!(filters.schedule.as_value(), "past");
+        assert_eq!(ListFilters::default().assigned_to.as_value(), "me");
     }
 
     #[test]

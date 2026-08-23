@@ -288,18 +288,26 @@ impl ProjectTaskVirtualRow {
         occ: &ProjectOccurrence,
         project_id: &str,
         tz: i32,
-        show_complete: bool,
+        filters: &crate::web_ui::list_filters::ListFilters,
         in_list_view: bool,
     ) -> Self {
         let local = to_local(occ.occurrence_date, tz);
         // Baked into the URL itself (rather than relying on `hx-vals`, which `Row`'s checkbox
         // uses) so a single query-string suffix covers the checkbox and both Skip/Unskip
-        // buttons identically — see `list_task_rows_for_project`'s callers, which read these
-        // same two params back off the request.
-        let list_query = match (in_list_view, show_complete) {
-            (true, true) => "?view=tasks-list&showComplete=1",
-            (true, false) => "?view=tasks-list",
-            (false, _) => "",
+        // buttons identically — see `list_task_rows_for_project`'s callers (and
+        // `OccurrenceRowActionQuery` in both `handlers.rs` and
+        // `project_item_series::handlers`), which read these same params back off the request.
+        // Stage 2 of docs/list-filtering-plan.md: carries the full active filter set, not just
+        // `showComplete`.
+        let list_query = if in_list_view {
+            let suffix = filters.query_string();
+            if suffix.is_empty() {
+                "?view=tasks-list".to_string()
+            } else {
+                format!("?view=tasks-list&{suffix}")
+            }
+        } else {
+            String::new()
         };
         Self {
             series_id: occ.series_id.clone(),
@@ -845,6 +853,26 @@ pub struct ProjectTasksListPageTemplate {
     pub project_id: String,
     pub rows: Vec<String>,
     pub show_complete: bool,
+    /// Stage 2 of docs/list-filtering-plan.md — the filter bar's remaining four controls.
+    /// `is_team_project` gates whether the "Assigned to" control renders at all (assignment has
+    /// no meaning on a personal project — same precedent as everywhere else this is checked).
+    pub is_team_project: bool,
+    /// Canonical value (`AssignedToFilter::as_value`) for the "Assigned to" `<select>`'s
+    /// `selected` comparison: `"me"` | `"unassigned"` | `"all"` | a specific user id.
+    pub assigned_to: String,
+    pub assignee_options: Vec<(String, String)>,
+    /// `DueDateFilter::as_value`: `"all"` | `"overdue"` | `"none"`.
+    pub due_date: String,
+    /// `ScheduleFilter::as_value`: `"all"` | `"past"` | `"none"`.
+    pub schedule: String,
+    /// `true` = show recurring items (the default).
+    pub recurring: bool,
+    /// Pre-encoded `ListFilters::query_string()` (empty at all-default filters) — used to build
+    /// the "New task" button's URL so the filters carry into `new_project_task_page` (which
+    /// re-embeds them as `NewProjectTaskPageTemplate::filters_query` for the batch form's own
+    /// round trip). Replaces the old ad hoc `?showComplete=1` literal this button used to build
+    /// by hand — see Stage 1's doc comment on `ListFilters::query_string`.
+    pub filters_query: String,
     /// `Some("{n} pts")` on a team-backed project (the viewer's own balance — see
     /// `service::teams::member_points`), `None` on a personal project.
     pub points_label: Option<String>,
@@ -866,6 +894,12 @@ pub struct NewProjectTaskPageTemplate {
     pub blank_due_time_input: String,
     pub is_team_admin: bool,
     pub blank_points_input: String,
+    /// Stage 2 of docs/list-filtering-plan.md — the list screen's non-default filters at the
+    /// moment this page/dialog was opened, pre-encoded via `ListFilters::query_string()` (empty
+    /// at all-default filters). Round-tripped through the "Add multiple at once" batch form's
+    /// hidden `filtersQuery` field so a redirect back to the list after a batch create lands on
+    /// the same filtered view — see `ProjectTaskForm::filters_query`/`BatchForm::filters_query`.
+    pub filters_query: String,
     pub nav_html: String,
 }
 

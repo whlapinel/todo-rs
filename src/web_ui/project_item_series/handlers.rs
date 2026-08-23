@@ -6,12 +6,13 @@ use crate::service::item_series::{
 };
 use crate::service::projects::{self as project_service};
 use crate::storage::sqlite::{ItemRepo, ItemSeriesRepo, ProjectRepo, TeamRepo, UserRepo};
+use crate::web_ui::list_filters::ListFilters;
 use crate::web_ui::nav::{self, ActiveContext, SidebarSection};
 use crate::web_ui::project_item_series::templates::*;
 use crate::web_ui::project_item_series::{
     combine_local_to_utc, end_of_day, non_empty, render, start_of_day,
 };
-use crate::web_ui::project_tasks::{active_member_options, names_for};
+use crate::web_ui::project_tasks::{active_member_options, list_filters_from_parts, names_for};
 use crate::web_ui::{TzOffset, hx_redirect, to_local};
 use askama::Template;
 use axum::extract::{Extension, Form, Path, Query};
@@ -516,6 +517,14 @@ pub async fn materialize_project_item_series_occurrence_form(
 pub struct OccurrenceRowActionQuery {
     view: Option<String>,
     show_complete: Option<String>,
+    /// Stage 2 of `docs/list-filtering-plan.md` — see `project_tasks::handlers::
+    /// OccurrenceRowActionQuery`'s identical fields/rationale; only consumed by the
+    /// `view=tasks-list` branch below, ignored by `view=all-tasks`/`view=all-events` (neither
+    /// screen is migrated onto `ListFilters` yet).
+    assigned_to: Option<String>,
+    due_date: Option<String>,
+    schedule: Option<String>,
+    recurring: Option<String>,
 }
 
 /// Stage 6 of docs/recurring-events-virtual-occurrences-rough-plan.md — the "Skip" button
@@ -577,6 +586,13 @@ pub async fn skip_project_item_series_occurrence_form(
     .await?;
 
     if q.view.as_deref() == Some("tasks-list") {
+        let filters = list_filters_from_parts(
+            &q.show_complete,
+            &q.assigned_to,
+            &q.due_date,
+            &q.schedule,
+            &q.recurring,
+        );
         return Ok(rebuild_tasks_list_response(
             &repo,
             &projects,
@@ -585,7 +601,7 @@ pub async fn skip_project_item_series_occurrence_form(
             &item_series,
             &project_id,
             &auth_user.user_id,
-            q.show_complete.is_some(),
+            &filters,
             tz,
         )
         .await?);
@@ -655,6 +671,13 @@ pub async fn unskip_project_item_series_occurrence_form(
     item_series_service::unskip_occurrence(&item_series, &series_id, occurrence_date, tz).await?;
 
     if q.view.as_deref() == Some("tasks-list") {
+        let filters = list_filters_from_parts(
+            &q.show_complete,
+            &q.assigned_to,
+            &q.due_date,
+            &q.schedule,
+            &q.recurring,
+        );
         return Ok(rebuild_tasks_list_response(
             &repo,
             &projects,
@@ -663,7 +686,7 @@ pub async fn unskip_project_item_series_occurrence_form(
             &item_series,
             &project_id,
             &auth_user.user_id,
-            q.show_complete.is_some(),
+            &filters,
             tz,
         )
         .await?);
@@ -710,7 +733,7 @@ async fn rebuild_tasks_list_response(
     item_series: &Arc<dyn ItemSeriesRepo>,
     project_id: &str,
     requester_user_id: &str,
-    show_complete: bool,
+    filters: &ListFilters,
     tz: i32,
 ) -> Result<Response, ItemError> {
     let project =
@@ -723,7 +746,7 @@ async fn rebuild_tasks_list_response(
         project_id,
         project.team_id.as_deref(),
         requester_user_id,
-        show_complete,
+        filters,
         tz,
         None,
     )

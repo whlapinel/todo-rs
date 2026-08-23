@@ -7,6 +7,7 @@ use crate::service::item_series::{self as item_series_service, ProjectOccurrence
 use crate::service::project_items::list_project_items_unchecked;
 use crate::service::teams as team_service;
 use crate::storage::sqlite::{ItemRepo, ItemSeriesRepo, TeamRepo, UserRepo};
+use crate::web_ui::list_filters::{ListFilterQuery, ListFilters};
 use crate::web_ui::project_tasks::templates::{
     ProjectTaskRow, ProjectTaskRowsFragmentTemplate, ProjectTaskVirtualRow,
 };
@@ -49,6 +50,17 @@ pub struct ProjectTaskForm {
     due_offset_days: Option<String>,
     parent_item_id: Option<String>,
     show_complete: Option<String>,
+    /// Stage 2 of `docs/list-filtering-plan.md`: the list screen's non-default filters at the
+    /// moment this form was rendered, pre-encoded via `ListFilters::query_string()` — a single
+    /// opaque `key=value&key2=value2` fragment, not individual `ListFilterQuery`-shaped
+    /// fields. Individual fields aren't an option here: `ListFilterQuery::due_date`'s wire name
+    /// (`dueDate`) collides with this same form's own item-due-date input, since both this
+    /// filter round-trip and the real item fields live in the same `<form>` — see
+    /// `templates/project_tasks/new_page.html`'s "New task" dialog. Only actually consumed by
+    /// the `redirect` branch of `create_project_task_form` (via `redirect_to_project_tasks`,
+    /// which appends it to the redirect URL as-is); harmless and unread everywhere else
+    /// `ProjectTaskForm` is posted (update forms have no redirect-to-list branch at all).
+    filters_query: Option<String>,
     /// Only present/honored server-side on a team-backed project — see
     /// `service::team_items::create_team_item`/`update_team_item`'s own admin gate.
     assigned_to_user_id: Option<String>,
@@ -92,6 +104,28 @@ pub(crate) fn normalize_row_view(q: RowViewQuery) -> Option<String> {
     } else {
         None
     }
+}
+
+/// Builds a `ListFilters` from five loose `Option<String>` parts rather than requiring the
+/// caller to already have a `ListFilterQuery` value — used by handlers whose own
+/// `#[derive(Deserialize)] struct` carries the same five fields alongside a `view`/other param
+/// that isn't part of the shared vocabulary (`OccurrenceRowActionQuery` in this module and in
+/// `project_item_series::handlers`), so those structs can't just wrap/deref a `ListFilterQuery`
+/// directly. Stage 2 of `docs/list-filtering-plan.md`.
+pub(crate) fn list_filters_from_parts(
+    show_complete: &Option<String>,
+    assigned_to: &Option<String>,
+    due_date: &Option<String>,
+    schedule: &Option<String>,
+    recurring: &Option<String>,
+) -> ListFilters {
+    ListFilters::from_query(ListFilterQuery {
+        show_complete: show_complete.clone(),
+        assigned_to: assigned_to.clone(),
+        due_date: due_date.clone(),
+        schedule: schedule.clone(),
+        recurring: recurring.clone(),
+    })
 }
 
 pub(crate) fn non_empty(v: &Option<String>) -> Option<String> {
@@ -401,36 +435,50 @@ pub(crate) fn render_rows(
 ///
 /// `just_completed_item_id` (added for the virtual-occurrence confirm-then-fade-away follow-up,
 /// see `handlers::complete_project_item_series_occurrence_form`) forces that one materialized
-/// item's row to stay visible even when `!show_complete` would otherwise filter a completed item
-/// out entirely — without the force-include, the row would simply vanish on this fresh render
-/// instead of getting a moment to show its "Completed" badge before `Row`'s own
-/// `data-dismiss-after` JS removes it client-side. `in_list_view` is threaded onto
-/// `ProjectTaskVirtualRow` so its checkbox/Skip/Unskip only target `#items-list` (see
-/// `handlers::list_task_rows_for_project`) when this is really the flat list's own render, not
-/// a subordinate/children list render, which has no `#items-list` in its DOM.
+/// item's row to stay visible even when `filters` would otherwise exclude it (typically because
+/// it just became complete and `filters.show_complete` is off) — without the force-include, the
+/// row would simply vanish on this fresh render instead of getting a moment to show its
+/// "Completed" badge before `Row`'s own `data-dismiss-after` JS removes it client-side.
+/// `in_list_view` is threaded onto `ProjectTaskVirtualRow` so its checkbox/Skip/Unskip only
+/// target `#items-list` (see `handlers::list_task_rows_for_project`) when this is really the
+/// flat list's own render, not a subordinate/children list render, which has no `#items-list`
+/// in its DOM.
+///
+/// Stage 2 of `docs/list-filtering-plan.md`: `filters`/`requester_user_id` replace the old
+/// `show_complete: bool` — every dimension in `ListFilters::matches` now gates visibility, not
+/// just completion. `filters.recurring == false` additionally drops every virtual occurrence
+/// outright (a virtual row is always a series occurrence, so "hide recurring" means "show none
+/// of them") — materialized items whose `series_id` is set are excluded the same way by
+/// `matches` itself, so no separate handling is needed for those.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn render_rows_with_virtual(
     items: &[Item],
     virtual_occurrences: &[ProjectOccurrence],
     project_id: &str,
     names: &HashMap<String, String>,
-    show_complete: bool,
+    filters: &ListFilters,
+    requester_user_id: &str,
     tz: i32,
     skip_urls: &HashMap<String, String>,
     team_id: Option<&str>,
     just_completed_item_id: Option<&str>,
     in_list_view: bool,
 ) -> Result<Vec<String>, ItemError> {
+    let now = Utc::now();
+    let is_team_project = team_id.is_some();
     let visible: Vec<&Item> = items
         .iter()
-        .filter(|i| show_complete || !i.complete || Some(i.id.as_str()) == just_completed_item_id)
+        .filter(|i| {
+            filters.matches(i, requester_user_id, is_team_project, now)
+                || Some(i.id.as_str()) == just_completed_item_id
+        })
         .collect();
     let mut entries: Vec<(i64, String)> = visible
         .iter()
         .map(|i| {
             let just_completed = Some(i.id.as_str()) == just_completed_item_id;
             let confirmation = just_completed.then(|| "Completed".to_string());
-            let dismiss_after_ms = (just_completed && !show_complete).then_some(1800u32);
+            let dismiss_after_ms = (just_completed && !filters.show_complete).then_some(1800u32);
             ProjectTaskRow::from_item(
                 i,
                 project_id,
@@ -438,8 +486,8 @@ pub(crate) fn render_rows_with_virtual(
                 &visible,
                 tz,
                 skip_urls.get(&i.id).cloned(),
-                team_id.is_some(),
-                show_complete,
+                is_team_project,
+                filters.show_complete,
                 confirmation,
                 dismiss_after_ms,
             )
@@ -447,18 +495,14 @@ pub(crate) fn render_rows_with_virtual(
             .map(|html| (sort_key(i), html))
         })
         .collect::<Result<Vec<_>, _>>()?;
-    for occ in virtual_occurrences {
-        entries.push((
-            occ.occurrence_date.timestamp(),
-            ProjectTaskVirtualRow::from_occurrence(
-                occ,
-                project_id,
-                tz,
-                show_complete,
-                in_list_view,
-            )
-            .render()?,
-        ));
+    if filters.recurring {
+        for occ in virtual_occurrences {
+            entries.push((
+                occ.occurrence_date.timestamp(),
+                ProjectTaskVirtualRow::from_occurrence(occ, project_id, tz, filters, in_list_view)
+                    .render()?,
+            ));
+        }
     }
     entries.sort_by_key(|(ts, _)| *ts);
     Ok(entries.into_iter().map(|(_, html)| html).collect())
@@ -485,7 +529,7 @@ pub(crate) async fn list_task_rows_for_project(
     project_id: &str,
     team_id: Option<&str>,
     requester_user_id: &str,
-    show_complete: bool,
+    filters: &ListFilters,
     tz: i32,
     just_completed_item_id: Option<&str>,
 ) -> Result<Vec<String>, ItemError> {
@@ -495,24 +539,31 @@ pub(crate) async fn list_task_rows_for_project(
         None => HashMap::new(),
     };
     // See `handlers::project_tasks_page`'s identical query/filter — kept in sync deliberately.
-    let virtual_occurrences: Vec<_> = item_series_service::list_occurrence_states_for_project(
-        series,
-        users,
-        project_id,
-        Utc::now(),
-        Utc::now(),
-        tz,
-    )
-    .await?
-    .into_iter()
-    .filter(|occ| occ.item_type == ItemKind::Task && occ.is_current)
-    .filter(|occ| {
-        !matches!(
-            occ.state,
-            item_series_service::OccurrenceState::Materialized { .. }
+    // Skipped entirely when `filters.recurring` is off: `render_rows_with_virtual` would drop
+    // every entry from this anyway (a virtual row is always a series occurrence), so there's no
+    // reason to pay for the query.
+    let virtual_occurrences: Vec<_> = if filters.recurring {
+        item_series_service::list_occurrence_states_for_project(
+            series,
+            users,
+            project_id,
+            Utc::now(),
+            Utc::now(),
+            tz,
         )
-    })
-    .collect();
+        .await?
+        .into_iter()
+        .filter(|occ| occ.item_type == ItemKind::Task && occ.is_current)
+        .filter(|occ| {
+            !matches!(
+                occ.state,
+                item_series_service::OccurrenceState::Materialized { .. }
+            )
+        })
+        .collect()
+    } else {
+        Vec::new()
+    };
     let mut skip_urls: HashMap<String, String> = HashMap::new();
     for item in &items {
         if let Some(url) = item_series_service::skip_url_for_item(series, item, project_id).await? {
@@ -524,7 +575,8 @@ pub(crate) async fn list_task_rows_for_project(
         &virtual_occurrences,
         project_id,
         &names,
-        show_complete,
+        filters,
+        requester_user_id,
         tz,
         &skip_urls,
         team_id,

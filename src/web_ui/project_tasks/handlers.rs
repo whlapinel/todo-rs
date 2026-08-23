@@ -10,11 +10,13 @@ use crate::storage::sqlite::{
     ActivityLogRepo, ItemRepo, ItemSeriesRepo, ProjectRepo, TeamRepo, UserRepo,
 };
 use crate::web_ui::TzOffset;
+use crate::web_ui::list_filters::{ListFilterQuery, ListFilters};
 use crate::web_ui::nav::{self, ActiveContext, SidebarSection};
 use crate::web_ui::project_tasks::templates::*;
 use crate::web_ui::project_tasks::{
-    ProjectTaskForm, active_member_options, create_params_from_form, names_for, non_empty, render,
-    render_scope_fragment, require_task, sibling_group, update_params_from_form,
+    ProjectTaskForm, active_member_options, create_params_from_form, list_filters_from_parts,
+    names_for, non_empty, render, render_scope_fragment, require_task, sibling_group,
+    update_params_from_form,
 };
 use askama::Template;
 use axum::extract::{Extension, Form, Path, Query};
@@ -36,12 +38,6 @@ fn active_context(project_id: &str) -> ActiveContext {
     ActiveContext::Project(project_id.to_string())
 }
 
-#[derive(serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ShowCompleteQuery {
-    show_complete: Option<String>,
-}
-
 pub async fn project_tasks_page(
     Path(project_id): Path<String>,
     Extension(auth_user): Extension<AuthUser>,
@@ -51,11 +47,11 @@ pub async fn project_tasks_page(
     Extension(users): Extension<Arc<dyn UserRepo>>,
     Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
     TzOffset(tz): TzOffset,
-    Query(q): Query<ShowCompleteQuery>,
+    Query(q): Query<ListFilterQuery>,
 ) -> Result<Html<String>, ItemError> {
     let project =
         project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
-    let show_complete = q.show_complete.is_some();
+    let filters = ListFilters::from_query(q);
     // Stage 10 gap 2: a Task series' current occurrence is range-independent (a pure
     // function of the cursor), so any degenerate range surfaces it — see
     // `list_virtual_occurrences_for_project_unchecked`'s backlog-exemption logic (which
@@ -83,17 +79,19 @@ pub async fn project_tasks_page(
         &project_id,
         project.team_id.as_deref(),
         &auth_user.user_id,
-        show_complete,
+        &filters,
         tz,
         None,
     )
     .await?;
-    let points_label = match &project.team_id {
+    let (points_label, assignee_options) = match &project.team_id {
         Some(team_id) => {
             let points = team_service::member_points(&teams, team_id, &auth_user.user_id).await?;
-            Some(format!("{points} pts"))
+            let assignee_options =
+                active_member_options(&teams, team_id, &auth_user.user_id).await?;
+            (Some(format!("{points} pts")), assignee_options)
         }
-        None => None,
+        None => (None, Vec::new()),
     };
     let nav_html = nav::build_nav_html(
         &projects,
@@ -105,7 +103,14 @@ pub async fn project_tasks_page(
     render(ProjectTasksListPageTemplate {
         project_id,
         rows,
-        show_complete,
+        show_complete: filters.show_complete,
+        is_team_project: project.team_id.is_some(),
+        assigned_to: filters.assigned_to.as_value(),
+        assignee_options,
+        due_date: filters.due_date.as_value().to_string(),
+        schedule: filters.schedule.as_value().to_string(),
+        recurring: filters.recurring,
+        filters_query: filters.query_string(),
         points_label,
         nav_html,
     })
@@ -116,7 +121,7 @@ pub async fn new_project_task_page(
     Extension(auth_user): Extension<AuthUser>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
-    Query(q): Query<ShowCompleteQuery>,
+    Query(q): Query<ListFilterQuery>,
 ) -> Result<Html<String>, ItemError> {
     let project =
         project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
@@ -129,6 +134,7 @@ pub async fn new_project_task_page(
         ),
         None => (Vec::new(), false),
     };
+    let filters = ListFilters::from_query(q);
     let nav_html = nav::build_nav_html(
         &projects,
         &auth_user.user_id,
@@ -138,7 +144,7 @@ pub async fn new_project_task_page(
     .await?;
     render(NewProjectTaskPageTemplate {
         project_id,
-        show_complete: q.show_complete.is_some(),
+        show_complete: filters.show_complete,
         is_team_project,
         assignee_options,
         blank_scheduled_date_input: String::new(),
@@ -149,6 +155,7 @@ pub async fn new_project_task_page(
         blank_due_time_input: String::new(),
         is_team_admin,
         blank_points_input: String::new(),
+        filters_query: filters.query_string(),
         nav_html,
     })
 }
@@ -485,6 +492,16 @@ pub struct OccurrenceRowActionQuery {
     /// the pre-existing `redirect_to_current_page` behavior below.
     view: Option<String>,
     show_complete: Option<String>,
+    /// Stage 2 of `docs/list-filtering-plan.md`: only meaningful alongside `view=tasks-list` —
+    /// `ProjectTaskVirtualRow::from_occurrence` bakes the full active filter set (not just
+    /// `showComplete`) into this route's URL so `view=tasks-list`'s rebuild of `#items-list`
+    /// applies the same filters the surrounding page load did. The `view=all-tasks` branch
+    /// below ignores these — `all_projects_tasks` hasn't been migrated onto `ListFilters` yet
+    /// (see the plan's Out of scope section).
+    assigned_to: Option<String>,
+    due_date: Option<String>,
+    schedule: Option<String>,
+    recurring: Option<String>,
 }
 
 /// The row-checkbox counterpart to Skip/Unskip (`project_item_series::handlers`) — completes a
@@ -562,6 +579,13 @@ pub async fn complete_project_item_series_occurrence_form(
         let project =
             project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id)
                 .await?;
+        let filters = list_filters_from_parts(
+            &q.show_complete,
+            &q.assigned_to,
+            &q.due_date,
+            &q.schedule,
+            &q.recurring,
+        );
         let rows = super::list_task_rows_for_project(
             &repo,
             &teams,
@@ -570,7 +594,7 @@ pub async fn complete_project_item_series_occurrence_form(
             &project_id,
             project.team_id.as_deref(),
             &auth_user.user_id,
-            q.show_complete.is_some(),
+            &filters,
             tz,
             Some(item.id.as_str()),
         )
@@ -759,21 +783,17 @@ pub async fn project_task_children_fragment(
 
 /// Redirect back to the project's tasks list (via the `hx-redirect` header) after a create
 /// from the standalone `/projects/:project_id/tasks/new` page. Mirrors
-/// `tasks::redirect_to_tasks`/`team_tasks::redirect_to_team_tasks`.
-fn redirect_to_project_tasks(project_id: &str, show_complete: bool) -> Response {
-    let location = if show_complete {
-        format!("/web/projects/{project_id}/tasks?showComplete=1")
-    } else {
+/// `tasks::redirect_to_tasks`/`team_tasks::redirect_to_team_tasks`. `filters_query` is the
+/// opaque `ListFilters::query_string()` fragment the calling form round-tripped (see
+/// `ProjectTaskForm::filters_query`) — appended as-is, empty means every filter was already at
+/// its default.
+fn redirect_to_project_tasks(project_id: &str, filters_query: &str) -> Response {
+    let location = if filters_query.is_empty() {
         project_tasks_list_url(project_id)
+    } else {
+        format!("/web/projects/{project_id}/tasks?{filters_query}")
     };
-    (
-        [(
-            axum::http::header::HeaderName::from_static("hx-redirect"),
-            location,
-        )],
-        Html(String::new()),
-    )
-        .into_response()
+    hx_redirect(location)
 }
 
 pub async fn create_project_task_form(
@@ -789,12 +809,13 @@ pub async fn create_project_task_form(
         project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
     let show_complete = form.show_complete.is_some();
     let redirect = form.redirect.is_some();
+    let filters_query = form.filters_query.clone().unwrap_or_default();
     let params = create_params_from_form(&project_id, &form, tz);
     let parent_item_id = params.parent_item_id.clone();
     project_item_service::create_project_item(&repo, &projects, &teams, &auth_user.user_id, params)
         .await?;
     if redirect {
-        return Ok(redirect_to_project_tasks(&project_id, show_complete));
+        return Ok(redirect_to_project_tasks(&project_id, &filters_query));
     }
     Ok(render_scope_fragment(
         &repo,
@@ -816,6 +837,9 @@ pub struct BatchForm {
     names: String,
     parent_item_id: Option<String>,
     show_complete: Option<String>,
+    /// See `ProjectTaskForm::filters_query`'s identical rationale — an opaque, pre-encoded
+    /// `ListFilters::query_string()` fragment, not individual `ListFilterQuery` fields.
+    filters_query: Option<String>,
     redirect: Option<String>,
 }
 
@@ -856,7 +880,7 @@ pub async fn create_project_tasks_batch(
     if form.redirect.is_some() {
         return Ok(redirect_to_project_tasks(
             &project_id,
-            form.show_complete.is_some(),
+            form.filters_query.as_deref().unwrap_or(""),
         ));
     }
     Ok(render_scope_fragment(
