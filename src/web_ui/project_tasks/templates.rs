@@ -119,6 +119,11 @@ impl ProjectTaskRow {
             // Only an Event can ever be Google-Calendar-imported (see CLAUDE.md's Points/
             // Recurrence sections — imported items are always `ItemType::Event`).
             is_imported: false,
+            // Calendar-only fields — see `Row`'s doc comments. The calendar screens build a
+            // `Row` via this same `from_item` and then override these themselves.
+            type_badge: None,
+            parent_name: None,
+            project_name: None,
         }
     }
 }

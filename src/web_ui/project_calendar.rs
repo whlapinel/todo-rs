@@ -1,4 +1,6 @@
 use super::nav::{self, ActiveContext, SidebarSection};
+use super::project_events::templates::ProjectEventRow;
+use super::project_tasks::templates::ProjectTaskRow;
 use super::{TzOffset, to_local};
 use crate::auth::AuthUser;
 use crate::domain::item::{Item, ItemKind};
@@ -76,14 +78,6 @@ fn calendar_date(item: &Item) -> Option<DateTime<Utc>> {
     }
 }
 
-fn calendar_has_time(item: &Item) -> bool {
-    match item.kind() {
-        ItemKind::Event if item.scheduled_date().is_some() => item.has_scheduled_time(),
-        ItemKind::Event => item.has_due_time(),
-        _ => item.has_due_time(),
-    }
-}
-
 fn type_symbol(kind: ItemKind) -> &'static str {
     match kind {
         ItemKind::Task => "T",
@@ -144,90 +138,74 @@ async fn names_for(
         .collect())
 }
 
-#[derive(Template)]
-#[template(path = "project_calendar/row.html")]
-struct ProjectCalendarRow {
-    item_id: String,
-    name: String,
-    complete: bool,
-    date_label: Option<String>,
-    date_kind_label: &'static str,
-    overdue: bool,
-    type_symbol: &'static str,
+/// Builds a materialized calendar row's `components::row::Row` — reuses `ProjectTaskRow`/
+/// `ProjectEventRow::from_item` exactly (rather than a calendar-specific template of its own)
+/// so the day-drawer/flat calendar list get the same row-actions menu (Edit/Reschedule/Assign/
+/// Duplicate/Delete), Skip, and confirm-then-fade behavior the Tasks/Events screens already
+/// have, with no separate template to drift out of sync — see docs/issues_and_features.md's
+/// "Row actions should be available on the calendar's day-drawer as well." `type_badge`/
+/// `parent_name` are then overridden since a calendar row (unlike a single-kind Tasks/Events
+/// list) interleaves both kinds by date and flattens across the whole parent/child hierarchy —
+/// see `Row`'s own doc comments for why those two fields exist at all. `expanded_row` is forced
+/// `true`: the date/parent/assignee context this second line carries matters far more in a
+/// chronological, cross-item view than it does on a single-kind list.
+///
+/// This also fixes a pre-existing inconsistency: the old calendar-specific row only ever showed
+/// Delete on a personal project (`can_delete: !is_team_project`), unlike the Tasks/Events
+/// screens' shared `Row`, which allows Delete on a team-backed project too (gated only on
+/// `is_imported`) — there was never a deliberate reason for the calendar to be stricter.
+#[allow(clippy::too_many_arguments)]
+fn calendar_row(
+    item: &Item,
     parent_name: Option<String>,
-    assignee_name: Option<String>,
-    /// Mirrors `dashboard::DashboardRow`'s own `can_delete` — true only on a personal
-    /// project (matching the legacy personal dashboard, whose items were always the
-    /// caller's own); `team_dashboard/row.html` never had a delete affordance at all, so a
-    /// team-backed project's rows don't get one here either.
-    can_delete: bool,
-    /// `None` for an Event row — `Item::validate` rejects `complete: true` for
-    /// `ItemType::Event` outright, so there's no toggle to render (mirrors
-    /// `components::row::Row`'s `complete_url` escape hatch used everywhere else).
-    toggle_target: Option<String>,
-    detail_link: String,
-    toggle_complete_json: String,
-    /// `components::row::Row`-style confirm-then-fade badge — see that struct's identical
-    /// fields. Only ever set by `render_rows`'s `just_completed_item_id` force-include, when
-    /// this row is the materialized result of completing a virtual series occurrence from
-    /// this same screen (see `ProjectCalendarVirtualRow::complete_url`) — `None` everywhere
-    /// else, including `toggle_project_calendar_item_complete`'s own direct-item checkbox,
-    /// which is unrelated to this pass. See the archived "dashboard checkbox parity" follow-up
-    /// (2026-08-21).
+    project_id: &str,
+    names: &HashMap<String, String>,
+    is_team_project: bool,
+    tz: i32,
+    skip_url: Option<String>,
+    show_complete: bool,
     confirmation: Option<String>,
     dismiss_after_ms: Option<u32>,
-}
-
-impl ProjectCalendarRow {
-    #[allow(clippy::too_many_arguments)]
-    fn from_due_item(
-        di: &DueItem,
-        project_id: &str,
-        names: &HashMap<String, String>,
-        is_team_project: bool,
-        tz: i32,
-        confirmation: Option<String>,
-        dismiss_after_ms: Option<u32>,
-    ) -> Self {
-        let item = &di.item;
-        let date_label = calendar_date(item).map(|d| {
-            let local = to_local(d, tz);
-            if calendar_has_time(item) {
-                local.format("%Y-%m-%d %H:%M").to_string()
-            } else {
-                local.format("%Y-%m-%d").to_string()
-            }
-        });
-        let date_kind_label = if item.kind() == ItemKind::Event && item.scheduled_date().is_some() {
-            "Scheduled"
-        } else {
-            "Due"
-        };
-        Self {
-            item_id: item.id.clone(),
-            name: item.name.clone(),
-            complete: item.complete,
-            date_label,
-            date_kind_label,
-            overdue: item.is_overdue(Utc::now()),
-            type_symbol: type_symbol(item.kind()),
-            parent_name: if di.parent_name.is_empty() {
-                None
-            } else {
-                Some(di.parent_name.clone())
-            },
-            assignee_name: item
+) -> Result<String, ItemError> {
+    let mut row = match item.kind() {
+        ItemKind::Event => {
+            let mut row = ProjectEventRow::from_item(item, project_id, tz, skip_url);
+            // `ProjectEventRow::from_item` always leaves `assignee_name: None` — an Event has
+            // no "Assign" action on its own screen — but the calendar has always displayed an
+            // Event's assignee (if any) alongside its date, so this is preserved here rather
+            // than silently dropped by the switch to the shared builder.
+            row.assignee_name = item
                 .assigned_to_user_id()
-                .and_then(|id| names.get(&id).cloned()),
-            can_delete: !is_team_project,
-            toggle_target: (item.kind() != ItemKind::Event)
-                .then(|| format!("/web/projects/{project_id}/calendar/items/{}", item.id)),
-            detail_link: detail_url(item, project_id),
-            toggle_complete_json: (!item.complete).to_string(),
+                .and_then(|id| names.get(&id).cloned());
+            row.confirmation = confirmation;
+            row.dismiss_after_ms = dismiss_after_ms;
+            row
+        }
+        _ => ProjectTaskRow::from_item(
+            item,
+            project_id,
+            names,
+            &[],
+            tz,
+            skip_url,
+            is_team_project,
+            show_complete,
             confirmation,
             dismiss_after_ms,
-        }
-    }
+        ),
+    };
+    row.type_badge = Some(type_symbol(item.kind()));
+    row.parent_name = parent_name;
+    row.expanded_row = true;
+    // Re-point the checkbox at this screen's own toggle route (rather than the item's own
+    // resource PUT route `ProjectTaskRow::from_item` sets by default) so a subsequent toggle
+    // keeps re-rendering with this function's calendar-flavored row instead of reverting to the
+    // plain Tasks-list shape. `None` (Events) is left untouched.
+    row.complete_url = row
+        .complete_url
+        .as_ref()
+        .map(|_| format!("/web/projects/{project_id}/calendar/items/{}", item.id));
+    Ok(row.render()?)
 }
 
 #[derive(Template)]
@@ -251,10 +229,11 @@ struct ProjectCalendarVirtualRow {
     is_skipped: bool,
     unskip_url: String,
     /// `Some` only for a Task-typed occurrence (`Item::validate` rejects `complete: true` for
-    /// Events, mirroring `ProjectCalendarRow::toggle_target`'s identical `None`-for-Event
-    /// convention above) that's also `is_current`, giving the calendar's virtual row the same
-    /// completability the Tasks list's `ProjectTaskVirtualRow` already has for the one
-    /// occurrence per series that's actually completable. Unlike the flat Tasks list (which
+    /// Events, mirroring `components::row::Row`'s identical `None`-`complete_url`-for-Event
+    /// convention `calendar_row` relies on above) that's also `is_current`, giving the
+    /// calendar's virtual row the same completability the Tasks list's `ProjectTaskVirtualRow`
+    /// already has for the one occurrence per series that's actually completable. Unlike the
+    /// flat Tasks list (which
     /// only ever lists the current occurrence to begin with — see
     /// `project_tasks::handlers::project_tasks_page`), this page also shows future "Planned"
     /// occurrences; without the `is_current` gate a Planned row's checkbox would reliably 400
@@ -367,7 +346,7 @@ fn calendar_list_query(preset: &str, show_complete: bool, assigned_to_any: bool)
 /// (both `after`/`before` `None`) followed by filtering against `calendar_date` here, so an
 /// Event showing up by `scheduled_date` isn't excluded for lacking a `due_date`.
 #[allow(clippy::too_many_arguments)]
-fn render_rows(
+async fn render_rows(
     user_id: &str,
     items: &[DueItem],
     virtual_occurrences: &[ProjectOccurrence],
@@ -380,6 +359,7 @@ fn render_rows(
     after: Option<DateTime<Utc>>,
     before: Option<DateTime<Utc>>,
     tz: i32,
+    series: &Arc<dyn ItemSeriesRepo>,
     // See `project_tasks::render_rows_with_virtual`'s identical rationale — force-includes a
     // just-completed item (the materialized result of completing a virtual occurrence from
     // this same screen) so it gets a moment to display its confirm-then-fade badge even when
@@ -411,28 +391,30 @@ fn render_rows(
             .unwrap_or(i64::MAX)
     });
 
-    let mut entries: Vec<(i64, String)> = items
-        .iter()
-        .map(|di| {
-            let ts = calendar_date(&di.item)
-                .map(|d| d.timestamp())
-                .unwrap_or(i64::MAX);
-            let just_completed = Some(di.item.id.as_str()) == just_completed_item_id;
-            let confirmation = just_completed.then(|| "Completed".to_string());
-            let dismiss_after_ms = (just_completed && !show_complete).then_some(1800u32);
-            ProjectCalendarRow::from_due_item(
-                di,
-                project_id,
-                names,
-                is_team_project,
-                tz,
-                confirmation,
-                dismiss_after_ms,
-            )
-            .render()
-            .map(|html| (ts, html))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    let mut entries: Vec<(i64, String)> = Vec::with_capacity(items.len());
+    for di in &items {
+        let ts = calendar_date(&di.item)
+            .map(|d| d.timestamp())
+            .unwrap_or(i64::MAX);
+        let just_completed = Some(di.item.id.as_str()) == just_completed_item_id;
+        let confirmation = just_completed.then(|| "Completed".to_string());
+        let dismiss_after_ms = (just_completed && !show_complete).then_some(1800u32);
+        let skip_url = series_service::skip_url_for_item(series, &di.item, project_id).await?;
+        let parent_name = (!di.parent_name.is_empty()).then(|| di.parent_name.clone());
+        let html = calendar_row(
+            &di.item,
+            parent_name,
+            project_id,
+            names,
+            is_team_project,
+            tz,
+            skip_url,
+            show_complete,
+            confirmation,
+            dismiss_after_ms,
+        )?;
+        entries.push((ts, html));
+    }
 
     // Virtual occurrences have no `complete`/due-date-presence concept, so
     // `show_complete`/"All with due date" are no-ops for them by construction — every entry
@@ -474,9 +456,10 @@ fn render_rows(
 /// The calendar's per-day panel — see `project_tasks::day_list_rows`'s identical rationale.
 /// Unlike `render_rows` above (the flat calendar page's preset-filtered view), this shows
 /// every item/occurrence on `date`, optionally narrowed by the drawer's own All/Tasks/Events
-/// tab (`type_filter`) and assigned-to-me toggle (`assigned_to_any`) — reusing
-/// `ProjectCalendarRow`/`ProjectCalendarVirtualRow` as-is (no feature upgrade to virtual-row
-/// completability; that's tracked separately in docs/issues_and_features.md).
+/// tab (`type_filter`) and assigned-to-me toggle (`assigned_to_any`) — reusing `calendar_row`/
+/// `ProjectCalendarVirtualRow` (no feature upgrade to virtual-row completability; that's
+/// tracked separately in docs/issues_and_features.md — this only brings materialized rows'
+/// action menu here, not a new capability for still-virtual occurrences).
 ///
 /// The assigned-to-me filter is gated on `is_team_project` — deliberately *not* a literal
 /// copy of `render_rows`' own `assigned_to_any || ...assigned_to_user_id() == Some(user_id)`
@@ -486,7 +469,7 @@ fn render_rows(
 /// project's calendar under the new "mine" default. Team-backed projects behave identically to
 /// `render_rows` either way, since `is_team_project` is true there.
 #[allow(clippy::too_many_arguments)]
-fn day_list_rows(
+async fn day_list_rows(
     due_items: &[DueItem],
     virtual_occurrences: &[ProjectOccurrence],
     project_id: &str,
@@ -497,33 +480,39 @@ fn day_list_rows(
     user_id: &str,
     assigned_to_any: bool,
     type_filter: Option<ItemKind>,
+    series: &Arc<dyn ItemSeriesRepo>,
 ) -> Result<Vec<String>, ItemError> {
     let mine = |assigned: Option<String>| {
         !is_team_project || assigned_to_any || assigned == Some(user_id.to_string())
     };
-    let mut entries: Vec<(i64, String)> = due_items
+    let day_items: Vec<&DueItem> = due_items
         .iter()
         .filter(|di| di.item.kind() != ItemKind::Simple)
         .filter(|di| type_filter.is_none_or(|k| di.item.kind() == k))
         .filter(|di| mine(di.item.assigned_to_user_id()))
         .filter(|di| calendar_date(&di.item).map(|d| to_local(d, tz).date_naive()) == Some(date))
-        .map(|di| {
-            let ts = calendar_date(&di.item)
-                .map(|d| d.timestamp())
-                .unwrap_or(i64::MAX);
-            ProjectCalendarRow::from_due_item(
-                di,
-                project_id,
-                names,
-                is_team_project,
-                tz,
-                None,
-                None,
-            )
-            .render()
-            .map(|html| (ts, html))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect();
+    let mut entries: Vec<(i64, String)> = Vec::with_capacity(day_items.len());
+    for di in day_items {
+        let ts = calendar_date(&di.item)
+            .map(|d| d.timestamp())
+            .unwrap_or(i64::MAX);
+        let skip_url = series_service::skip_url_for_item(series, &di.item, project_id).await?;
+        let parent_name = (!di.parent_name.is_empty()).then(|| di.parent_name.clone());
+        let html = calendar_row(
+            &di.item,
+            parent_name,
+            project_id,
+            names,
+            is_team_project,
+            tz,
+            skip_url,
+            true,
+            None,
+            None,
+        )?;
+        entries.push((ts, html));
+    }
     for occ in virtual_occurrences
         .iter()
         .filter(|occ| !matches!(occ.state, OccurrenceState::Materialized { .. }))
@@ -621,8 +610,10 @@ pub(crate) async fn list_calendar_rows_for_project(
         after,
         before,
         tz,
+        series,
         just_completed_item_id,
     )
+    .await
 }
 
 /// The `#project-calendar-list` innerHTML swap body — see `project_tasks::
@@ -1046,18 +1037,22 @@ pub async fn project_calendar_page(
         None => HashMap::new(),
     };
     let day_rows = match selected_date {
-        Some(date) => day_list_rows(
-            &due_items,
-            &virtual_occurrences,
-            &project_id,
-            &names,
-            project.team_id.is_some(),
-            date,
-            tz,
-            &auth_user.user_id,
-            assigned_to_any,
-            type_filter,
-        )?,
+        Some(date) => {
+            day_list_rows(
+                &due_items,
+                &virtual_occurrences,
+                &project_id,
+                &names,
+                project.team_id.is_some(),
+                date,
+                tz,
+                &auth_user.user_id,
+                assigned_to_any,
+                type_filter,
+                &series,
+            )
+            .await?
+        }
         None => Vec::new(),
     };
     let day_drawer_html = render_day_drawer(
@@ -1150,7 +1145,9 @@ pub async fn project_calendar_day_fragment(
         &auth_user.user_id,
         assigned_to_any,
         type_filter,
-    )?;
+        &series,
+    )
+    .await?;
     Ok(Html(render_day_drawer(
         &project_id,
         Some(date),
@@ -1224,18 +1221,22 @@ pub async fn toggle_project_calendar_item_complete(
         None => HashMap::new(),
     };
     match project_item_service::get_project_item_unchecked(&repo, &project_id, &item_id).await {
-        Ok(updated) => render(ProjectCalendarRow::from_due_item(
-            &DueItem {
-                parent_name: String::new(),
-                item: updated,
-            },
-            &project_id,
-            &names,
-            project.team_id.is_some(),
-            tz,
-            None,
-            None,
-        )),
+        Ok(updated) => {
+            let skip_url =
+                series_service::skip_url_for_item(&series, &updated, &project_id).await?;
+            Ok(Html(calendar_row(
+                &updated,
+                None,
+                &project_id,
+                &names,
+                project.team_id.is_some(),
+                tz,
+                skip_url,
+                false,
+                None,
+                None,
+            )?))
+        }
         // Recurring item just completed and got replaced under a new id (see
         // service::items::update_item/team_items::update_team_item) — nothing to render
         // back for the old id. See CLAUDE.md/B5b's implementation notes: current

@@ -49,6 +49,11 @@ impl ProjectSimpleItemRow {
             dismiss_after_ms: None,
             // Simple items are never Google-Calendar-imported (only Events are).
             is_imported: false,
+            // Calendar-only fields — see `Row`'s doc comments; Simple items never appear on a
+            // calendar screen at all (see `ItemKind::Simple`'s exclusion there).
+            type_badge: None,
+            parent_name: None,
+            project_name: None,
         }
     }
 }

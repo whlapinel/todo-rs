@@ -7,6 +7,11 @@
             hx-swap="outerHTML"
             class="shrink-0 size-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-600 dark:border-white/20 dark:bg-white/5" />
         {% endif %}
+        {% if let Some(badge) = type_badge %}
+        <span
+            class="shrink-0 inline-flex size-4 items-center justify-center rounded-full bg-gray-200 text-[10px] font-semibold text-gray-600 dark:bg-white/10 dark:text-gray-300">{{
+            badge }}</span>
+        {% endif %}
         <a href="{{ item_url }}" hx-target="#page" hx-select="#page" hx-swap="innerHTML"
             class="min-w-0 flex-1 truncate {% if complete %}line-through text-gray-400 dark:text-gray-500{% else %}text-gray-900 dark:text-white{% endif %}">
             {% if has_children %}<span class="text-gray-400 dark:text-gray-500">&#9656;</span>{% endif %} {{ name }}
@@ -43,6 +48,11 @@
     {% if expanded_row %}
     <div class="mt-1 flex items-center gap-x-3 pl-7 text-xs text-gray-500 dark:text-gray-400">
         <div class="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1">
+            {% if let Some(p) = project_name %}<span
+                class="rounded bg-gray-100 px-1.5 py-0.5 text-gray-600 dark:bg-white/10 dark:text-gray-300">{{ p
+                }}</span>{% endif %}
+            {% if let Some(p) = parent_name %}<span class="text-indigo-600 dark:text-indigo-400">[{{ p
+                }}]</span>{% endif %}
             {% if let Some(e) = event_type %}<span>({{ e }})</span>{% endif %}
             {% if let Some(label) = offset_label %}<span>{{ label }}</span>{% endif %}
             {% if let Some(assignee) = assignee_name %}<span class="text-indigo-600 dark:text-indigo-400">[{{ assignee

@@ -1,5 +1,6 @@
 use super::nav::{self, ActiveContext, SidebarSection};
-use super::project_calendar::detail_url;
+use super::project_events::templates::ProjectEventRow;
+use super::project_tasks::templates::ProjectTaskRow;
 use super::{TzOffset, to_local};
 use crate::auth::AuthUser;
 use crate::domain::item::{Item, ItemKind};
@@ -64,14 +65,6 @@ fn calendar_date(item: &Item) -> Option<DateTime<Utc>> {
     match item.kind() {
         ItemKind::Event => item.scheduled_date().or(item.due_date()),
         _ => item.due_date(),
-    }
-}
-
-fn calendar_has_time(item: &Item) -> bool {
-    match item.kind() {
-        ItemKind::Event if item.scheduled_date().is_some() => item.has_scheduled_time(),
-        ItemKind::Event => item.has_due_time(),
-        _ => item.has_due_time(),
     }
 }
 
@@ -166,77 +159,56 @@ fn virtual_occurrence_window(
     )
 }
 
-#[derive(Template)]
-#[template(path = "main_calendar/row.html")]
-struct MainCalendarRow {
-    item_id: String,
-    project_name: String,
-    name: String,
-    complete: bool,
-    date_label: Option<String>,
-    date_kind_label: &'static str,
-    overdue: bool,
-    type_symbol: &'static str,
+/// Cross-project counterpart to `project_calendar::calendar_row` — see that function's doc
+/// comment for the full rationale (reuses `ProjectTaskRow`/`ProjectEventRow::from_item` rather
+/// than a calendar-specific template, to bring the row-actions menu here with no drift risk).
+/// The one addition here is `project_name`, since this screen (unlike the per-project calendar)
+/// mixes rows from every project the requester belongs to.
+#[allow(clippy::too_many_arguments)]
+fn calendar_row(
+    item: &Item,
     parent_name: Option<String>,
-    assignee_name: Option<String>,
-    toggle_target: Option<String>,
-    detail_link: String,
-    toggle_complete_json: String,
-    /// See `project_calendar::ProjectCalendarRow`'s identical fields/rationale.
+    project_id: &str,
+    project_name: &str,
+    names: &HashMap<String, String>,
+    is_team_project: bool,
+    tz: i32,
+    skip_url: Option<String>,
     confirmation: Option<String>,
     dismiss_after_ms: Option<u32>,
-}
-
-impl MainCalendarRow {
-    #[allow(clippy::too_many_arguments)]
-    fn from_due_item(
-        di: &DueItem,
-        project_id: &str,
-        project_name: &str,
-        names: &HashMap<String, String>,
-        tz: i32,
-        confirmation: Option<String>,
-        dismiss_after_ms: Option<u32>,
-    ) -> Self {
-        let item = &di.item;
-        let date_label = calendar_date(item).map(|d| {
-            let local = to_local(d, tz);
-            if calendar_has_time(item) {
-                local.format("%Y-%m-%d %H:%M").to_string()
-            } else {
-                local.format("%Y-%m-%d").to_string()
-            }
-        });
-        let date_kind_label = if item.kind() == ItemKind::Event && item.scheduled_date().is_some() {
-            "Scheduled"
-        } else {
-            "Due"
-        };
-        Self {
-            item_id: item.id.clone(),
-            project_name: project_name.to_string(),
-            name: item.name.clone(),
-            complete: item.complete,
-            date_label,
-            date_kind_label,
-            overdue: item.is_overdue(Utc::now()),
-            type_symbol: type_symbol(item.kind()),
-            parent_name: if di.parent_name.is_empty() {
-                None
-            } else {
-                Some(di.parent_name.clone())
-            },
-            assignee_name: item
+) -> Result<String, ItemError> {
+    let mut row = match item.kind() {
+        ItemKind::Event => {
+            let mut row = ProjectEventRow::from_item(item, project_id, tz, skip_url);
+            row.assignee_name = item
                 .assigned_to_user_id()
-                .and_then(|id| names.get(&id).cloned()),
-            toggle_target: (item.kind() != ItemKind::Event)
-                .then(|| format!("/web/calendar/projects/{project_id}/items/{}", item.id)),
-            detail_link: detail_url(item, project_id),
-            toggle_complete_json: (!item.complete).to_string(),
+                .and_then(|id| names.get(&id).cloned());
+            row.confirmation = confirmation;
+            row.dismiss_after_ms = dismiss_after_ms;
+            row
+        }
+        _ => ProjectTaskRow::from_item(
+            item,
+            project_id,
+            names,
+            &[],
+            tz,
+            skip_url,
+            is_team_project,
+            false,
             confirmation,
             dismiss_after_ms,
-        }
-    }
+        ),
+    };
+    row.type_badge = Some(type_symbol(item.kind()));
+    row.parent_name = parent_name;
+    row.project_name = Some(project_name.to_string());
+    row.expanded_row = true;
+    row.complete_url = row
+        .complete_url
+        .as_ref()
+        .map(|_| format!("/web/calendar/projects/{project_id}/items/{}", item.id));
+    Ok(row.render()?)
 }
 
 #[derive(Template)]
@@ -420,16 +392,20 @@ pub(crate) async fn list_main_calendar_rows(
             let ts = d.map(|d| d.timestamp()).unwrap_or(i64::MAX);
             let confirmation = just_completed.then(|| "Completed".to_string());
             let dismiss_after_ms = (just_completed && !show_complete).then_some(1800u32);
-            let html = MainCalendarRow::from_due_item(
-                di,
+            let skip_url = series_service::skip_url_for_item(series, item, &project.id).await?;
+            let parent_name = (!di.parent_name.is_empty()).then(|| di.parent_name.clone());
+            let html = calendar_row(
+                item,
+                parent_name,
                 &project.id,
                 &project.name,
                 &names,
+                is_team_project,
                 tz_offset,
+                skip_url,
                 confirmation,
                 dismiss_after_ms,
-            )
-            .render()?;
+            )?;
             entries.push((ts, html));
         }
 
@@ -726,13 +702,14 @@ fn build_calendar_days(
 /// closure here: `is_included`'s `assigned_to_any`-aware filtering already happened once in
 /// `gather_calendar_data` (the caller), so `due_items`/`virtual_occurrences` arrive pre-filtered
 /// for both the caller and this function.
-fn day_list_rows(
+async fn day_list_rows(
     due_items: &[(DueItem, String, String)],
     virtual_occurrences: &[(ProjectOccurrence, String, String)],
     names_by_project: &HashMap<String, HashMap<String, String>>,
     date: NaiveDate,
     tz: i32,
     type_filter: Option<ItemKind>,
+    series: &Arc<dyn ItemSeriesRepo>,
 ) -> Result<Vec<String>, ItemError> {
     let mut entries: Vec<(i64, String)> = Vec::new();
     for (di, project_id, project_name) in due_items {
@@ -747,11 +724,27 @@ fn day_list_rows(
             continue;
         }
         let empty = HashMap::new();
+        // `names_by_project` only ever gets an entry for a team-backed project (see
+        // `gather_calendar_data`), so its presence doubles as the `is_team_project` flag this
+        // needs — cheaper than threading a third field through the whole bucket just for this.
+        let is_team_project = names_by_project.contains_key(project_id);
         let names = names_by_project.get(project_id).unwrap_or(&empty);
+        let skip_url = series_service::skip_url_for_item(series, item, project_id).await?;
+        let parent_name = (!di.parent_name.is_empty()).then(|| di.parent_name.clone());
         entries.push((
             dt.timestamp(),
-            MainCalendarRow::from_due_item(di, project_id, project_name, names, tz, None, None)
-                .render()?,
+            calendar_row(
+                item,
+                parent_name,
+                project_id,
+                project_name,
+                names,
+                is_team_project,
+                tz,
+                skip_url,
+                None,
+                None,
+            )?,
         ));
     }
     for (occ, project_id, project_name) in virtual_occurrences {
@@ -929,14 +922,18 @@ pub async fn main_calendar_page(
     )
     .await?;
     let day_rows = match selected_date {
-        Some(date) => day_list_rows(
-            &due_bucket,
-            &occ_bucket,
-            &names_by_project,
-            date,
-            tz,
-            type_filter,
-        )?,
+        Some(date) => {
+            day_list_rows(
+                &due_bucket,
+                &occ_bucket,
+                &names_by_project,
+                date,
+                tz,
+                type_filter,
+                &series,
+            )
+            .await?
+        }
         None => Vec::new(),
     };
     let day_drawer_html = render_day_drawer(selected_date, day_rows, type_filter, assigned_to_any)?;
@@ -1002,7 +999,9 @@ pub async fn main_calendar_day_fragment(
         date,
         tz,
         type_filter,
-    )?;
+        &series,
+    )
+    .await?;
     Ok(Html(render_day_drawer(
         Some(date),
         day_rows,
@@ -1075,18 +1074,22 @@ pub async fn toggle_main_calendar_item_complete(
         None => HashMap::new(),
     };
     match project_item_service::get_project_item_unchecked(&repo, &project_id, &item_id).await {
-        Ok(updated) => render(MainCalendarRow::from_due_item(
-            &DueItem {
-                parent_name: String::new(),
-                item: updated,
-            },
-            &project_id,
-            &project.name,
-            &names,
-            tz,
-            None,
-            None,
-        )),
+        Ok(updated) => {
+            let skip_url =
+                series_service::skip_url_for_item(&series, &updated, &project_id).await?;
+            Ok(Html(calendar_row(
+                &updated,
+                None,
+                &project_id,
+                &project.name,
+                &names,
+                project.team_id.is_some(),
+                tz,
+                skip_url,
+                None,
+                None,
+            )?))
+        }
         // See `project_calendar::toggle_project_calendar_item_complete`'s identical
         // rationale for this branch.
         Err(ItemError::NotFound) => Ok(Html(String::new())),

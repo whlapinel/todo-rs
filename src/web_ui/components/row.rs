@@ -82,4 +82,18 @@ pub struct Row {
     /// `(calendar_subscription_id, google_event_id)` unique-index guard) and shows a small
     /// "Google Calendar" badge instead.
     pub is_imported: bool,
+    /// A short kind indicator ("T"/"E") shown before the name — `None` everywhere except the
+    /// calendar screens (`project_calendar`/`main_calendar`), which interleave Tasks and Events
+    /// by date and so need a visual way to tell them apart; every single-kind screen (Tasks,
+    /// Events, Simple Lists) leaves this `None` since the screen itself already disambiguates.
+    pub type_badge: Option<&'static str>,
+    /// This item's parent's name, shown as `[Parent Name]` in the detail line — `None`
+    /// everywhere except the calendar screens, which flatten every item across the whole
+    /// hierarchy by date rather than nesting children under their parent the way Tasks/Events/
+    /// Simple Lists do, so parent context would otherwise be lost.
+    pub parent_name: Option<String>,
+    /// This item's project's name, shown as a badge in the detail line — `None` everywhere
+    /// except `main_calendar` (the cross-project Home calendar), the only screen that mixes
+    /// rows from more than one project at once.
+    pub project_name: Option<String>,
 }
