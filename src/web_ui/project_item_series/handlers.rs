@@ -504,11 +504,13 @@ pub async fn materialize_project_item_series_occurrence_form(
         .into_response())
 }
 
-/// Query param shared by Skip/Unskip below — set only by `ProjectTaskVirtualRow::
-/// from_occurrence` (`in_list_view: true`, i.e. only the flat Tasks list, never the calendar
-/// day panel or any other screen's own row template) via a URL-baked `?view=tasks-list`
-/// suffix, per its doc comment. See the archived "extend confirm-then-fade to virtual
-/// occurrences" entry (2026-08-21).
+/// Query param shared by Skip/Unskip below — set by `ProjectTaskVirtualRow::from_occurrence`
+/// (`in_list_view: true`, i.e. only the flat Tasks list, never the calendar day panel or any
+/// other screen's own row template) via a URL-baked `?view=tasks-list` suffix, per its doc
+/// comment. See the archived "extend confirm-then-fade to virtual occurrences" entry
+/// (2026-08-21). `AllProjectsTaskVirtualRow`/`AllProjectsEventVirtualRow::from_occurrence` bake
+/// the analogous `?view=all-tasks`/`?view=all-events` suffixes for the two cross-project
+/// screens (`docs/all-projects-landing-plan.md` Stage 4).
 #[derive(serde::Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct OccurrenceRowActionQuery {
@@ -590,6 +592,30 @@ pub async fn skip_project_item_series_occurrence_form(
             &project_id,
             &auth_user.user_id,
             q.show_complete.is_some(),
+            tz,
+        )
+        .await?);
+    }
+    if q.view.as_deref() == Some("all-tasks") {
+        return Ok(rebuild_all_tasks_list_response(
+            &repo,
+            &projects,
+            &users,
+            &teams,
+            &item_series,
+            &auth_user.user_id,
+            q.show_complete.is_some(),
+            tz,
+        )
+        .await?);
+    }
+    if q.view.as_deref() == Some("all-events") {
+        return Ok(rebuild_all_events_list_response(
+            &repo,
+            &projects,
+            &users,
+            &item_series,
+            &auth_user.user_id,
             tz,
         )
         .await?);
@@ -678,6 +704,30 @@ pub async fn unskip_project_item_series_occurrence_form(
         )
         .await?);
     }
+    if q.view.as_deref() == Some("all-tasks") {
+        return Ok(rebuild_all_tasks_list_response(
+            &repo,
+            &projects,
+            &users,
+            &teams,
+            &item_series,
+            &auth_user.user_id,
+            q.show_complete.is_some(),
+            tz,
+        )
+        .await?);
+    }
+    if q.view.as_deref() == Some("all-events") {
+        return Ok(rebuild_all_events_list_response(
+            &repo,
+            &projects,
+            &users,
+            &item_series,
+            &auth_user.user_id,
+            tz,
+        )
+        .await?);
+    }
     if q.view.as_deref() == Some("project-calendar") {
         return Ok(rebuild_project_calendar_list_response(
             &repo,
@@ -745,6 +795,65 @@ async fn rebuild_tasks_list_response(
     )
     .await?;
     Ok(Html(crate::web_ui::project_tasks::items_list_inner_html(&rows)).into_response())
+}
+
+/// Shared by the `view=all-tasks` branch of both Skip and Unskip — the cross-project
+/// counterpart to `rebuild_tasks_list_response` above, rebuilding `#items-list` via
+/// `all_projects_tasks::list_all_projects_task_rows` (every project, not just `project_id`).
+/// `docs/all-projects-landing-plan.md` Stage 4.
+async fn rebuild_all_tasks_list_response(
+    repo: &Arc<dyn ItemRepo>,
+    projects: &Arc<dyn ProjectRepo>,
+    users: &Arc<dyn UserRepo>,
+    teams: &Arc<dyn TeamRepo>,
+    item_series: &Arc<dyn ItemSeriesRepo>,
+    requester_user_id: &str,
+    show_complete: bool,
+    tz: i32,
+) -> Result<Response, ItemError> {
+    let rows = crate::web_ui::all_projects_tasks::list_all_projects_task_rows(
+        repo,
+        projects,
+        users,
+        teams,
+        item_series,
+        requester_user_id,
+        show_complete,
+        tz,
+        None,
+    )
+    .await?;
+    Ok(Html(crate::web_ui::project_tasks::items_list_inner_html(&rows)).into_response())
+}
+
+/// Shared by the `view=all-events` branch of both Skip and Unskip — the cross-project,
+/// Events-screen counterpart to `rebuild_all_tasks_list_response` above, rebuilding
+/// `#events-list` via `all_projects_events::list_all_projects_event_rows`. No `show_complete`
+/// param (Events have no `complete` concept, unlike Tasks). `docs/all-projects-landing-plan.md`
+/// Stage 4.
+async fn rebuild_all_events_list_response(
+    repo: &Arc<dyn ItemRepo>,
+    projects: &Arc<dyn ProjectRepo>,
+    users: &Arc<dyn UserRepo>,
+    item_series: &Arc<dyn ItemSeriesRepo>,
+    requester_user_id: &str,
+    tz: i32,
+) -> Result<Response, ItemError> {
+    let rows = crate::web_ui::all_projects_events::list_all_projects_event_rows(
+        repo,
+        projects,
+        users,
+        item_series,
+        requester_user_id,
+        tz,
+    )
+    .await?;
+    Ok(
+        Html(crate::web_ui::all_projects_events::events_list_inner_html(
+            &rows,
+        ))
+        .into_response(),
+    )
 }
 
 /// Shared by the `view=project-calendar` branch of both Skip and Unskip — rebuilds

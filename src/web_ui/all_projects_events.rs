@@ -1,7 +1,9 @@
 use crate::auth::AuthUser;
 use crate::domain::item::ItemKind;
 use crate::service::error::ItemError;
-use crate::service::item_series::{self as item_series_service, OccurrenceState, ProjectOccurrence};
+use crate::service::item_series::{
+    self as item_series_service, OccurrenceState, ProjectOccurrence,
+};
 use crate::service::project_items::{self as project_item_service};
 use crate::service::projects as project_service;
 use crate::storage::sqlite::{ItemRepo, ItemSeriesRepo, ProjectRepo, UserRepo};
@@ -40,6 +42,12 @@ struct AllProjectsEventVirtualRow {
 }
 
 impl AllProjectsEventVirtualRow {
+    /// Bakes a `?view=all-events` suffix onto Skip/Unskip, mirroring
+    /// `AllProjectsTaskVirtualRow::from_occurrence`'s `list_query` — lets
+    /// `project_item_series::handlers`' skip/unskip `"all-events"` branch
+    /// (`docs/all-projects-landing-plan.md` Stage 4) rebuild `#events-list` in place. No
+    /// `showComplete` toggle to fold in (unlike Tasks — this screen has no "Show completed"
+    /// control, Events have no `complete` concept).
     fn from_occurrence(
         occ: &ProjectOccurrence,
         project_id: &str,
@@ -54,9 +62,9 @@ impl AllProjectsEventVirtualRow {
             name: occ.series_name.clone(),
             date_label: local.format("%Y-%m-%d %H:%M").to_string(),
             materialize_url: occ.materialize_url(project_id),
-            skip_url: occ.skip_url(project_id),
+            skip_url: format!("{}?view=all-events", occ.skip_url(project_id)),
             is_skipped: occ.is_skipped(),
-            unskip_url: occ.unskip_url(project_id),
+            unskip_url: format!("{}?view=all-events", occ.unskip_url(project_id)),
         }
     }
 }
@@ -65,10 +73,11 @@ impl AllProjectsEventVirtualRow {
 /// `project_name` tag, mirroring `all_projects_tasks::all_projects_task_row`. No
 /// `complete_url` rewrite (Events are never completable — `ProjectEventRow::from_item` already
 /// hardcodes it `None`) and no toggle route of this screen's own, unlike Tasks'.
-/// `reschedule_url` carries a `?view=all-events` suffix for `project_tasks::normalize_row_view`
-/// to recognize once `docs/all-projects-landing-plan.md` Stage 4 wires it — until then it's
-/// simply ignored, same transient gap `all_projects_task_row`'s identical suffix documents.
-fn all_projects_event_row(
+/// `reschedule_url` carries a `?view=all-events` suffix, recognized by
+/// `project_tasks::normalize_row_view` (`docs/all-projects-landing-plan.md` Stage 4) —
+/// `project_events::handlers::update_project_event_form`'s `"all-events"` arm calls this same
+/// function to re-render a Reschedule save from this screen.
+pub(crate) fn all_projects_event_row(
     item: &crate::domain::item::Item,
     project_id: &str,
     project_name: &str,
@@ -77,7 +86,9 @@ fn all_projects_event_row(
 ) -> Result<String, ItemError> {
     let mut row = ProjectEventRow::from_item(item, project_id, tz, skip_url);
     row.project_name = Some(project_name.to_string());
-    row.reschedule_url = row.reschedule_url.map(|url| format!("{url}?view=all-events"));
+    row.reschedule_url = row
+        .reschedule_url
+        .map(|url| format!("{url}?view=all-events"));
     Ok(row.render()?)
 }
 
@@ -88,6 +99,19 @@ struct AllProjectsEventsListPageTemplate {
     nav_html: String,
 }
 
+/// The `#events-list` placeholder markup (`templates/all_projects_events/list_page.html`'s own
+/// `rows.is_empty()` branch) — mirrors `project_tasks::items_list_inner_html`'s identical
+/// rationale, used by `project_item_series::handlers`' skip/unskip `"all-events"` rebuild branch
+/// to swap in raw `innerHTML` rather than rendering through a `Template` struct.
+pub(crate) fn events_list_inner_html(rows: &[String]) -> String {
+    if rows.is_empty() {
+        "<li class=\"py-3 text-sm text-gray-500 dark:text-gray-400\">No events yet.</li>"
+            .to_string()
+    } else {
+        rows.concat()
+    }
+}
+
 /// Cross-project row assembly — one project at a time, mirroring
 /// `all_projects_tasks::list_all_projects_task_rows`'s own gather shape (top-level Event items
 /// + every still-virtual/skipped Event-series occurrence within
@@ -96,7 +120,10 @@ struct AllProjectsEventsListPageTemplate {
 /// diverge on) across every project the requester belongs to, each row tagged with its
 /// project's name. No inclusion filter beyond kind==Event: `main_calendar::is_included`'s own
 /// `Event => true` arm means Events are never assignment-restricted, unlike Tasks.
-async fn list_all_projects_event_rows(
+///
+/// `pub(crate)` since `project_item_series::handlers`' skip/unskip `"all-events"` rebuild branch
+/// (`docs/all-projects-landing-plan.md` Stage 4) also calls this directly.
+pub(crate) async fn list_all_projects_event_rows(
     repo: &Arc<dyn ItemRepo>,
     projects: &Arc<dyn ProjectRepo>,
     users: &Arc<dyn UserRepo>,
@@ -119,7 +146,8 @@ async fn list_all_projects_event_rows(
                 .or(item.due_date())
                 .map(|d| d.timestamp())
                 .unwrap_or(i64::MAX);
-            let skip_url = item_series_service::skip_url_for_item(series, item, &project.id).await?;
+            let skip_url =
+                item_series_service::skip_url_for_item(series, item, &project.id).await?;
             let html = all_projects_event_row(item, &project.id, &project.name, tz, skip_url)?;
             entries.push((ts, html));
         }
@@ -157,15 +185,9 @@ pub async fn all_projects_events_page(
     Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
     TzOffset(tz): TzOffset,
 ) -> Result<Html<String>, ItemError> {
-    let rows = list_all_projects_event_rows(
-        &repo,
-        &projects,
-        &users,
-        &series,
-        &auth_user.user_id,
-        tz,
-    )
-    .await?;
+    let rows =
+        list_all_projects_event_rows(&repo, &projects, &users, &series, &auth_user.user_id, tz)
+            .await?;
     let nav_html = nav::build_nav_html(
         &projects,
         &auth_user.user_id,

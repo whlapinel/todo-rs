@@ -590,45 +590,70 @@ pub async fn update_project_event_form(
         let project =
             project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id)
                 .await?;
-        let names = match &project.team_id {
-            Some(team_id) => {
-                crate::web_ui::project_tasks::names_for(&teams, team_id, &auth_user.user_id).await?
+        match view {
+            "main-calendar" => {
+                let names = match &project.team_id {
+                    Some(team_id) => {
+                        crate::web_ui::project_tasks::names_for(&teams, team_id, &auth_user.user_id)
+                            .await?
+                    }
+                    None => HashMap::new(),
+                };
+                let parent_name = crate::web_ui::project_tasks::templates::resolve_parent_link(
+                    &repo,
+                    &project_id,
+                    &updated,
+                )
+                .await?
+                .map(|(name, _)| name);
+                crate::web_ui::main_calendar::calendar_row(
+                    &updated,
+                    parent_name,
+                    &project_id,
+                    &project.name,
+                    &names,
+                    project.team_id.is_some(),
+                    tz,
+                    skip_url,
+                    None,
+                    None,
+                )?
             }
-            None => HashMap::new(),
-        };
-        let parent_name = crate::web_ui::project_tasks::templates::resolve_parent_link(
-            &repo,
-            &project_id,
-            &updated,
-        )
-        .await?
-        .map(|(name, _)| name);
-        if view == "main-calendar" {
-            crate::web_ui::main_calendar::calendar_row(
+            "all-events" => crate::web_ui::all_projects_events::all_projects_event_row(
                 &updated,
-                parent_name,
                 &project_id,
                 &project.name,
-                &names,
-                project.team_id.is_some(),
                 tz,
                 skip_url,
-                None,
-                None,
-            )?
-        } else {
-            crate::web_ui::project_calendar::calendar_row(
-                &updated,
-                parent_name,
-                &project_id,
-                &names,
-                project.team_id.is_some(),
-                tz,
-                skip_url,
-                false,
-                None,
-                None,
-            )?
+            )?,
+            _ => {
+                let names = match &project.team_id {
+                    Some(team_id) => {
+                        crate::web_ui::project_tasks::names_for(&teams, team_id, &auth_user.user_id)
+                            .await?
+                    }
+                    None => HashMap::new(),
+                };
+                let parent_name = crate::web_ui::project_tasks::templates::resolve_parent_link(
+                    &repo,
+                    &project_id,
+                    &updated,
+                )
+                .await?
+                .map(|(name, _)| name);
+                crate::web_ui::project_calendar::calendar_row(
+                    &updated,
+                    parent_name,
+                    &project_id,
+                    &names,
+                    project.team_id.is_some(),
+                    tz,
+                    skip_url,
+                    false,
+                    None,
+                    None,
+                )?
+            }
         }
     } else {
         ProjectEventRow::from_item(&updated, &project_id, tz, skip_url).render()?

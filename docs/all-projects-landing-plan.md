@@ -378,3 +378,87 @@ with:
   lands, a Reschedule/Assign save from either new cross-project screen re-renders via the plain
   `ProjectTaskRow`/`ProjectEventRow` shape (losing the `project_name` tag transiently) — this is
   the exact, expected gap both Stage 2's and this stage's progress notes above already flagged.
+
+**Stage 4 — done (2026-08-23).**
+- `project_tasks/mod.rs::normalize_row_view`: now also forwards `"all-tasks"`/`"all-events"`
+  (previously only `"project-calendar"`/`"main-calendar"`). `project_events/handlers.rs` reuses
+  this same function for its own `RowViewQuery`, so both cross-project screens' suffixes are
+  recognized in one place.
+- `project_tasks/handlers.rs::update_project_task_form`: added a `Some("all-tasks")` match arm
+  calling the now-`pub(crate)` `all_projects_tasks::all_projects_task_row(...)` (previously
+  private — see below). `complete_project_item_series_occurrence_form`: added an `"all-tasks"`
+  rebuild branch mirroring `"tasks-list"` exactly, calling the now-`pub(crate)`
+  `all_projects_tasks::list_all_projects_task_rows(...)` and rendering via the existing
+  `super::items_list_inner_html` (its "No tasks yet." empty-state markup is byte-identical to
+  `all_projects_tasks/list_page.html`'s own, so it's reused rather than duplicated).
+- `project_events/handlers.rs::update_project_event_form`: the old two-way
+  `if view == "main-calendar" { ... } else { project_calendar::calendar_row }` was restructured
+  into a `match view { "main-calendar" => ..., "all-events" => all_projects_events::
+  all_projects_event_row(...), _ => project_calendar::calendar_row(...) }` — a third case needed
+  its own arm rather than fitting the old binary dispatch, per the plan's own note. `_` (not
+  `"project-calendar"` specifically) is the fallback, matching the original's permissiveness.
+- `project_item_series/handlers.rs` skip/unskip handlers: added `"all-tasks"`/`"all-events"`
+  branches (new `rebuild_all_tasks_list_response`/`rebuild_all_events_list_response` helpers,
+  mirroring `rebuild_tasks_list_response`'s shape) to both `skip_project_item_series_occurrence_form`
+  and `unskip_project_item_series_occurrence_form`.
+  **Deviation from the plan**: did **not** remove the dead `"project-calendar"`/`"main-calendar"`
+  branches (and their `rebuild_project_calendar_list_response`/`rebuild_main_calendar_list_response`
+  helpers) despite the plan's Stage 4 bullet saying to. Reason found while implementing: those
+  branches are only dead *after* Stage 5 deletes the flat calendar-list pages that still bake
+  `?view=project-calendar`/`?view=main-calendar` onto their own virtual-row URLs
+  (`MainCalendarVirtualRow`/`ProjectCalendarVirtualRow`'s `list_query`, per the plan's own "Key
+  existing structure" section) — those pages are still live and linked-to until Stage 5 runs, so
+  removing the branches now would silently degrade their Skip/Unskip from an in-place list
+  rebuild to a whole-page redirect for one stage's duration. The plan's own "Key existing
+  structure" section already flagged this as "a second, independent dead-code chain to remove
+  **alongside the above**" (i.e. alongside Stage 5's removal of `list_main_calendar_rows` etc.),
+  which reads as the more careful analysis versus Stage 4's own bullet list. **Stage 5's
+  implementer must remove these two branches and their two helper functions** as part of that
+  stage's cleanup — they're still exactly as described in this file's original "Key existing
+  structure" section, untouched by Stage 4.
+- **Extension beyond the plan's literal text, needed to make `"all-tasks"`/`"all-events"` actually
+  reachable rather than dead code on arrival**: the plan didn't call this out explicitly, but
+  neither virtual-row struct baked a `?view=...` suffix onto its own Skip/Complete/Unskip URLs
+  yet (Stage 2/3 deferred this, same as the `reschedule_url`/`assign_url` suffixes they *did*
+  already bake in) — added it now, symmetric with `ProjectTaskVirtualRow::from_occurrence`'s own
+  `list_query` precedent:
+  - `all_projects_tasks.rs`: `AllProjectsTaskVirtualRow::from_occurrence` gained a `show_complete:
+    bool` param and now bakes `?view=all-tasks[&showComplete=1]` onto `skip_url`/`complete_url`/
+    `unskip_url`. `templates/all_projects_tasks/virtual_row.html`'s checkbox/Skip/Unskip elements
+    gained `hx-target="#items-list" hx-select="unset" hx-swap="innerHTML"` (hardcoded, not
+    conditional — this screen is always the flat list, no calendar-day-panel equivalent, so no
+    `in_list_view` bool was needed, unlike `ProjectTaskVirtualRow`). To fully mirror `"tasks-list"`'s
+    confirm-then-fade behavior for a materialized completion, `list_all_projects_task_rows` and
+    `all_projects_task_row` both gained the same `just_completed_item_id: Option<&str>` /
+    `confirmation: Option<String>` / `dismiss_after_ms: Option<u32>` threading
+    `render_rows_with_virtual`/`calendar_row` already have; `all_projects_tasks_page`'s own call
+    passes `None` (only the completion-rebuild branch passes `Some`).
+  - `all_projects_events.rs`: `AllProjectsEventVirtualRow::from_occurrence` now bakes
+    `?view=all-events` onto `skip_url`/`unskip_url` (no `complete_url`/`showComplete` — Events
+    aren't completable). `templates/all_projects_events/virtual_row.html`'s Skip/Unskip buttons
+    gained `hx-target="#events-list" hx-select="unset" hx-swap="innerHTML"`. Added a new
+    `events_list_inner_html(rows: &[String]) -> String` helper (mirroring
+    `project_tasks::items_list_inner_html`'s "No events yet." markup, byte-identical to
+    `all_projects_events/list_page.html`'s own empty state) since nothing like it existed yet for
+    this screen; `list_all_projects_event_rows` and `all_projects_event_row` were both changed
+    from private to `pub(crate)` so `project_item_series::handlers` can call them directly.
+- Verified: `cargo build` clean (same 12 pre-existing unrelated dead-code warnings as prior
+  stages, no new ones). `cargo test`: 464 passed, 0 failed (unchanged count).
+- **Process note for future stages**: ran `cargo fmt -- <the 6 files actually touched>` (never
+  `src/main.rs`, per CLAUDE.md) to fix a handful of `cargo fmt --check` line-wrap diffs in this
+  stage's own edits — but it also silently reformatted three files never named on that command
+  line (`src/service/item_series.rs`, `src/storage/migrations/add_calendar_subscriptions.rs`,
+  `src/storage/sqlite/calendar_subscriptions.rs`, all pre-existing unrelated formatting drift, not
+  from this stage's edits). Reverted those three via `git checkout --` per CLAUDE.md's own
+  guidance for this exact scenario. Confirms CLAUDE.md's rustfmt warning isn't strictly limited to
+  passing `src/main.rs` — even a fully-scoped `cargo fmt -- <files>` call can sweep in unrelated
+  files. **Always re-check `git status`/`git diff --stat` immediately after any `cargo fmt`
+  invocation**, scoped or not, before committing.
+- Not verified (no browser): the actual in-place checkbox/Skip/Unskip round-trip on both new
+  screens, Reschedule/Assign save styling now carrying the `project_name` tag, and sidebar
+  highlighting — needs the user's own check per CLAUDE.md's UI-verification rule.
+- **Next: Stage 5** — remove the calendar-list views per the plan below, **plus** the two
+  `"project-calendar"`/`"main-calendar"` branches (and their helper functions) in
+  `project_item_series/handlers.rs`'s skip/unskip handlers that this stage deliberately left in
+  place (see the deviation note above) — they become genuinely dead only once Stage 5's page
+  removal lands, and should come out in the same commit as that removal.

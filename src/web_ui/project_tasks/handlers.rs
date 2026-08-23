@@ -574,6 +574,21 @@ pub async fn complete_project_item_series_occurrence_form(
         .await?;
         return Ok(Html(super::items_list_inner_html(&rows)).into_response());
     }
+    if q.view.as_deref() == Some("all-tasks") {
+        let rows = crate::web_ui::all_projects_tasks::list_all_projects_task_rows(
+            &repo,
+            &projects,
+            &users,
+            &teams,
+            &item_series,
+            &auth_user.user_id,
+            q.show_complete.is_some(),
+            tz,
+            Some(item.id.as_str()),
+        )
+        .await?;
+        return Ok(Html(super::items_list_inner_html(&rows)).into_response());
+    }
     if q.view.as_deref() == Some("project-calendar") {
         let rows = crate::web_ui::project_calendar::list_calendar_rows_for_project(
             &repo,
@@ -1015,6 +1030,18 @@ pub async fn update_project_task_form(
                     project.team_id.is_some(),
                     tz,
                     skip_url,
+                    confirmation,
+                    dismiss_after_ms,
+                )?,
+                Some("all-tasks") => crate::web_ui::all_projects_tasks::all_projects_task_row(
+                    &updated,
+                    &project_id,
+                    &project.name,
+                    &names,
+                    project.team_id.is_some(),
+                    tz,
+                    skip_url,
+                    show_complete,
                     confirmation,
                     dismiss_after_ms,
                 )?,

@@ -62,8 +62,26 @@ struct AllProjectsTaskVirtualRow {
 }
 
 impl AllProjectsTaskVirtualRow {
-    fn from_occurrence(occ: &ProjectOccurrence, project_id: &str, project_name: &str, tz: i32) -> Self {
+    /// `show_complete` bakes a `?view=all-tasks[&showComplete=1]` suffix onto the
+    /// checkbox/Skip/Unskip URLs, mirroring `ProjectTaskVirtualRow::from_occurrence`'s own
+    /// `list_query` — this screen is always the flat list (no calendar-day-panel equivalent, so
+    /// no `in_list_view` gate is needed), letting `project_tasks::handlers::
+    /// complete_project_item_series_occurrence_form`'s `"all-tasks"` branch (and
+    /// `project_item_series::handlers`' skip/unskip `"all-tasks"` branch,
+    /// `docs/all-projects-landing-plan.md` Stage 4) rebuild `#items-list` in place.
+    fn from_occurrence(
+        occ: &ProjectOccurrence,
+        project_id: &str,
+        project_name: &str,
+        tz: i32,
+        show_complete: bool,
+    ) -> Self {
         let local = to_local(occ.occurrence_date, tz);
+        let list_query = if show_complete {
+            "?view=all-tasks&showComplete=1"
+        } else {
+            "?view=all-tasks"
+        };
         Self {
             series_id: occ.series_id.clone(),
             occurrence_ts: occ.occurrence_date.timestamp(),
@@ -73,12 +91,14 @@ impl AllProjectsTaskVirtualRow {
             is_due_date_basis: occ.is_due_date_basis,
             overdue: occ.is_due_date_basis && occ.occurrence_date < Utc::now(),
             materialize_url: occ.materialize_url(project_id),
-            skip_url: occ.skip_url(project_id),
-            complete_url: occ.is_current.then(|| occ.complete_url(project_id)),
+            skip_url: format!("{}{list_query}", occ.skip_url(project_id)),
+            complete_url: occ
+                .is_current
+                .then(|| format!("{}{list_query}", occ.complete_url(project_id))),
             is_current: occ.is_current,
             assignee_name: occ.assigned_to_user_name.clone(),
             is_skipped: occ.is_skipped(),
-            unskip_url: occ.unskip_url(project_id),
+            unskip_url: format!("{}{list_query}", occ.unskip_url(project_id)),
         }
     }
 }
@@ -90,12 +110,15 @@ impl AllProjectsTaskVirtualRow {
 /// affordance, unaffected by any of this). `complete_url` points at this module's own
 /// `toggle_all_projects_task_complete` route rather than the per-project one, so its response
 /// can re-render via this same function; `reschedule_url`/`assign_url` carry a `?view=all-tasks`
-/// suffix for `project_tasks::normalize_row_view` to recognize once
-/// `docs/all-projects-landing-plan.md` Stage 4 wires it — until then it's simply ignored
-/// (falls back to the plain `ProjectTaskRow` render), same as `main_calendar::calendar_row`'s
-/// suffix was before its own view was recognized.
+/// suffix, now recognized by `project_tasks::normalize_row_view`
+/// (`docs/all-projects-landing-plan.md` Stage 4) — `update_project_task_form`'s `"all-tasks"` arm
+/// calls this same function to re-render a Reschedule/Assign save from this screen. `confirmation`/
+/// `dismiss_after_ms` mirror `project_calendar::calendar_row`/`main_calendar::calendar_row`'s own
+/// trailing params, threaded through by `list_all_projects_task_rows`'s `just_completed_item_id`
+/// and by `project_tasks::handlers::complete_project_item_series_occurrence_form`'s `"all-tasks"`
+/// rebuild branch.
 #[allow(clippy::too_many_arguments)]
-fn all_projects_task_row(
+pub(crate) fn all_projects_task_row(
     item: &Item,
     project_id: &str,
     project_name: &str,
@@ -104,6 +127,8 @@ fn all_projects_task_row(
     tz: i32,
     skip_url: Option<String>,
     show_complete: bool,
+    confirmation: Option<String>,
+    dismiss_after_ms: Option<u32>,
 ) -> Result<String, ItemError> {
     let mut row = ProjectTaskRow::from_item(
         item,
@@ -114,15 +139,17 @@ fn all_projects_task_row(
         skip_url,
         is_team_project,
         show_complete,
-        None,
-        None,
+        confirmation,
+        dismiss_after_ms,
     );
     row.project_name = Some(project_name.to_string());
     row.complete_url = row
         .complete_url
         .as_ref()
         .map(|_| format!("/web/tasks/projects/{project_id}/items/{}", item.id));
-    row.reschedule_url = row.reschedule_url.map(|url| format!("{url}?view=all-tasks"));
+    row.reschedule_url = row
+        .reschedule_url
+        .map(|url| format!("{url}?view=all-tasks"));
     row.assign_url = row.assign_url.map(|url| format!("{url}?view=all-tasks"));
     Ok(row.render()?)
 }
@@ -149,7 +176,14 @@ pub struct AllProjectsTasksQuery {
 /// `main_calendar::list_main_calendar_rows`'s identical rationale) — this loop's per-project
 /// bucketing/filtering/tagging has no real overlap with the single-project function it
 /// otherwise resembles.
-async fn list_all_projects_task_rows(
+///
+/// `just_completed_item_id` mirrors `project_tasks::render_rows_with_virtual`'s own parameter —
+/// forces that one item's row to stay visible (with its "Completed" confirm-then-fade badge)
+/// even when `!show_complete` would otherwise filter it out, used by `project_tasks::handlers::
+/// complete_project_item_series_occurrence_form`'s `"all-tasks"` rebuild branch. `None` for the
+/// plain page load (`all_projects_tasks_page`).
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn list_all_projects_task_rows(
     repo: &Arc<dyn ItemRepo>,
     projects: &Arc<dyn ProjectRepo>,
     users: &Arc<dyn UserRepo>,
@@ -158,6 +192,7 @@ async fn list_all_projects_task_rows(
     requester_user_id: &str,
     show_complete: bool,
     tz: i32,
+    just_completed_item_id: Option<&str>,
 ) -> Result<Vec<String>, ItemError> {
     let user_projects = project_service::list_projects(projects, requester_user_id).await?;
 
@@ -181,11 +216,15 @@ async fn list_all_projects_task_rows(
             ) {
                 continue;
             }
-            if !show_complete && item.complete {
+            if !show_complete && item.complete && Some(item.id.as_str()) != just_completed_item_id {
                 continue;
             }
             let ts = item.due_date().map(|d| d.timestamp()).unwrap_or(i64::MAX);
-            let skip_url = item_series_service::skip_url_for_item(series, item, &project.id).await?;
+            let skip_url =
+                item_series_service::skip_url_for_item(series, item, &project.id).await?;
+            let just_completed = Some(item.id.as_str()) == just_completed_item_id;
+            let confirmation = just_completed.then(|| "Completed".to_string());
+            let dismiss_after_ms = (just_completed && !show_complete).then_some(1800u32);
             let html = all_projects_task_row(
                 item,
                 &project.id,
@@ -195,6 +234,8 @@ async fn list_all_projects_task_rows(
                 tz,
                 skip_url,
                 show_complete,
+                confirmation,
+                dismiss_after_ms,
             )?;
             entries.push((ts, html));
         }
@@ -221,8 +262,14 @@ async fn list_all_projects_task_rows(
         for occ in occurrences {
             entries.push((
                 occ.occurrence_date.timestamp(),
-                AllProjectsTaskVirtualRow::from_occurrence(&occ, &project.id, &project.name, tz)
-                    .render()?,
+                AllProjectsTaskVirtualRow::from_occurrence(
+                    &occ,
+                    &project.id,
+                    &project.name,
+                    tz,
+                    show_complete,
+                )
+                .render()?,
             ));
         }
     }
@@ -251,6 +298,7 @@ pub async fn all_projects_tasks_page(
         &auth_user.user_id,
         show_complete,
         tz,
+        None,
     )
     .await?;
     let nav_html = nav::build_nav_html(
@@ -347,6 +395,8 @@ pub async fn toggle_all_projects_task_complete(
                 tz,
                 skip_url,
                 false,
+                None,
+                None,
             )?))
         }
         // Same rationale as `main_calendar::toggle_main_calendar_item_complete`'s identical

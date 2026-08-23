@@ -76,13 +76,17 @@ pub struct RowViewQuery {
     view: Option<String>,
 }
 
-/// Only `"project-calendar"`/`"main-calendar"` are ever forwarded — anything else (including a
-/// hand-crafted query value) normalizes to `None`, mirroring `OccurrenceRowActionQuery`'s
-/// literal-match-or-fall-through convention rather than reflecting arbitrary input back out.
+/// Only `"project-calendar"`/`"main-calendar"`/`"all-tasks"`/`"all-events"` are ever forwarded —
+/// anything else (including a hand-crafted query value) normalizes to `None`, mirroring
+/// `OccurrenceRowActionQuery`'s literal-match-or-fall-through convention rather than reflecting
+/// arbitrary input back out. `"all-tasks"`/`"all-events"` were added in
+/// `docs/all-projects-landing-plan.md` Stage 4 — `project_events/handlers.rs` reuses this same
+/// function for its own `RowViewQuery`, so both cross-project screens' suffixes are recognized
+/// here rather than via a second, parallel normalizer.
 pub(crate) fn normalize_row_view(q: RowViewQuery) -> Option<String> {
     if matches!(
         q.view.as_deref(),
-        Some("project-calendar") | Some("main-calendar")
+        Some("project-calendar") | Some("main-calendar") | Some("all-tasks") | Some("all-events")
     ) {
         q.view
     } else {
