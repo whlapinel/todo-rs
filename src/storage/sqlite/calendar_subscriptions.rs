@@ -54,7 +54,8 @@ impl CalendarSubscriptionRepo for SqliteCalendarSubscriptionRepo {
         &self,
         project_id: &str,
     ) -> Result<Vec<CalendarSubscription>, RepoError> {
-        let q = format!("{CALENDAR_SUBSCRIPTION_SELECT} WHERE project_id = ? ORDER BY created_at ASC");
+        let q =
+            format!("{CALENDAR_SUBSCRIPTION_SELECT} WHERE project_id = ? ORDER BY created_at ASC");
         sqlx::query(&q)
             .bind(project_id)
             .fetch_all(&self.0)

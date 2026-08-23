@@ -1102,7 +1102,6 @@ impl ProjectOccurrence {
         matches!(self.state, OccurrenceState::Skipped)
     }
 
-
     /// `GET`s the no-side-effect read-only view for a still-virtual/skipped occurrence (see
     /// `project_item_series::handlers::project_item_series_occurrence_detail_page`), and is
     /// the base path every mutation route below nests under. The name predates Stage C, which
