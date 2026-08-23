@@ -2,8 +2,30 @@
 
 Open issues and feature requests, merged from the former `docs/issues.md` and `docs/features.md` (2026-08-20) into a single unsorted list. Completed or superseded items — including ones from the old files that were already resolved but hadn't been moved out yet — live in `docs/archived/archived_issues_and_features.md`.
 
+
+- Row action menu should be toggled off upon clicking the ellipses a second time. currently have to click somewhere else as it just pops up again.
+- Row actions should be available on the calendar's day-drawer as well.
+- Change main landing page to an all-projects page. This should have a sidebar with the same options as each project except each one includes all projects. So there's an all-projects calendar, an all-projects tasks list, an all-projects events list, etc... for background, we recently changed the main page from dashboard to calendar (not sure why I did that) but I think all-projects fits the purpose better. And default should be the list rather than the calendar. But it shouldn't be a calendar list - in fact, not sure why I have a list view of the calendar? Makes no sense. Let's remove it entirely.
+- We should also have a new [item] action for each of these pages. Will need to add a project selector. The url will need to be built dynamically based on the project selected, since the url includes the project. or perhaps the url list can be provided and chosen based on the project selection? instead of a separate page let's put the form in a dialog. we'll be applying this change to the per-project new-items as well.
+- Calendar view day-drawer date element needs to be fixed-width so we don't have layout shift - the buttons on either side shift around when moving between dates. And let's shorten the string to e.g. Sat, 21 Aug so it fits on mobile more easily.
+- Need filtering for all lists.
+    - see ../tailwind-ui-html/e-commerce/category-filters.html for an example. needs to be given dark mode support and remove dependency on tailwind elements
+    - Filter by: 
+        - complete (default false), 
+        - assigned to (default Me), 
+        - project (if in all projects list) (default all),
+        - due date (default = all, overdue, none)
+        - schedule (default=all, scheduled in past, none)
+        - recurring (default=true, no)
+        - skipped (default false),
+    - Sort by (hierarchical allowed):
+        - due date
+        - other options to be added later (maybe)
+
+- A previous solution to the Google calendar import problem was that all-day events will be given a date of 12:00pm in order to avoid the shift to the previous day. The other option I was given is having a user-configurable time-zone. It didn't occur to me at the time of implementation but why not instead add the "all-day" concept to our event schema? Let's require events to either be marked all-day or have a scheduled start time.
 - Allow copying a task or event to another project (distinct from the same-project "duplicate" action above).
 - Add a `priority` field to task items and task series; sort first by priority, then by due date.
+- Allow adding tags to items
 - Consider visibly disabling inputs that will result in error. Specifically, recurring tasks that aren't current should have complete and skip grayed out, and skipped recurring tasks and events that aren't cursor should have unskip grayed out.
 - Add metadata fields to `Item`: `created_at`, `created_by`, `deleted_at`, `deleted_by` (tag for deletion instead of deleting outright, allowing recovery), with a TTL after which the item is actually deleted. Depends on the soft-delete design question mentioned elsewhere. Add completed_by field to activity log.
     - Open design question: should delete mark a `deleted` column true instead of actually deleting, to allow undo within a timeframe and easy viewing of recently-deleted items? Unsure this is the right pattern — wants a tradeoffs discussion before deciding. If adopted, pairs with the metadata-fields item.
