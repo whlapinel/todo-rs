@@ -7,7 +7,7 @@ use crate::service::item_series::{
 use crate::service::project_items::{self as project_item_service, UpdateProjectItemParams};
 use crate::service::projects as project_service;
 use crate::storage::sqlite::{
-    ActivityLogRepo, ItemRepo, ItemSeriesRepo, ProjectRepo, TeamRepo, UserRepo,
+    ActivityLogRepo, ItemRepo, ItemSeriesRepo, ProjectRepo, ReminderRepo, TeamRepo, UserRepo,
 };
 use crate::web_ui::TzOffset;
 use crate::web_ui::list_filters::{ListFilterQuery, ListFilters};
@@ -520,6 +520,7 @@ pub async fn toggle_all_projects_task_complete(
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(activity_log): Extension<Arc<dyn ActivityLogRepo>>,
     Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
+    Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
     TzOffset(tz): TzOffset,
     Form(form): Form<ToggleAllProjectsTaskForm>,
 ) -> Result<Html<String>, ItemError> {
@@ -559,6 +560,7 @@ pub async fn toggle_all_projects_task_complete(
         &teams,
         &activity_log,
         &series,
+        &reminders,
         &auth_user.user_id,
         params,
     )

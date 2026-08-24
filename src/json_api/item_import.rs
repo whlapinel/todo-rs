@@ -2,7 +2,7 @@ use super::{internal, not_found};
 use crate::auth::AuthUser;
 use crate::service::import;
 use crate::service::items::ItemError;
-use crate::storage::sqlite::{ItemRepo, ProjectRepo, TeamRepo};
+use crate::storage::sqlite::{ItemRepo, ProjectRepo, ReminderRepo, TeamRepo};
 use std::sync::Arc;
 use todo_server_sdk::{error, input, output, server};
 
@@ -18,12 +18,14 @@ pub async fn import_project_items(
     server::Extension(repo): server::Extension<Arc<dyn ItemRepo>>,
     server::Extension(projects): server::Extension<Arc<dyn ProjectRepo>>,
     server::Extension(teams): server::Extension<Arc<dyn TeamRepo>>,
+    server::Extension(reminders): server::Extension<Arc<dyn ReminderRepo>>,
     server::Extension(auth): server::Extension<AuthUser>,
 ) -> Result<output::ImportProjectItemsOutput, error::ImportProjectItemsError> {
     let results = import::import_project_items(
         &repo,
         &projects,
         &teams,
+        &reminders,
         &auth.user_id,
         &input.project_id,
         &input.csv,

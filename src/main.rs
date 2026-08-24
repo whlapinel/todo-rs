@@ -8,11 +8,11 @@ mod storage;
 mod web_ui;
 
 use crate::storage::sqlite::{
-    ActivityLogRepo, CalendarSubscriptionRepo, ItemRepo, ItemSeriesRepo, ProjectRepo, TeamRepo,
-    UserRepo, activity_log::SqliteActivityLogRepo,
+    ActivityLogRepo, CalendarSubscriptionRepo, ItemRepo, ItemSeriesRepo, ProjectRepo, ReminderRepo,
+    TeamRepo, UserRepo, activity_log::SqliteActivityLogRepo,
     calendar_subscriptions::SqliteCalendarSubscriptionRepo, create_pool,
     item_series::SqliteItemSeriesRepo, items::SqliteItemRepo, projects::SqliteProjectRepo,
-    teams::SqliteTeamRepo, users::SqliteUserRepo,
+    reminders::SqliteReminderRepo, teams::SqliteTeamRepo, users::SqliteUserRepo,
 };
 use axum::{
     Extension, Router,
@@ -397,6 +397,7 @@ async fn main() {
     let series_repo = Arc::new(SqliteItemSeriesRepo(pool.clone())) as Arc<dyn ItemSeriesRepo>;
     let activity_log_repo =
         Arc::new(SqliteActivityLogRepo(pool.clone())) as Arc<dyn ActivityLogRepo>;
+    let reminder_repo = Arc::new(SqliteReminderRepo(pool.clone())) as Arc<dyn ReminderRepo>;
     let calendar_repo =
         Arc::new(SqliteCalendarSubscriptionRepo(pool)) as Arc<dyn CalendarSubscriptionRepo>;
 
@@ -480,6 +481,7 @@ async fn main() {
         .layer(Extension(project_repo.clone()))
         .layer(Extension(series_repo.clone()))
         .layer(Extension(activity_log_repo.clone()))
+        .layer(Extension(reminder_repo.clone()))
         .layer(Extension(calendar_repo.clone()))
         .map_response(|res: http::Response<_>| res.map(boxed))
         .service(smithy);
@@ -514,6 +516,7 @@ async fn main() {
                 .layer(Extension(project_repo.clone()))
                 .layer(Extension(series_repo.clone()))
                 .layer(Extension(activity_log_repo.clone()))
+                .layer(Extension(reminder_repo.clone()))
                 .layer(Extension(calendar_repo.clone()))
                 .layer(middleware::from_fn(auth::caddy_header_middleware));
             let public_web_router = build_public_web_router();
@@ -582,6 +585,7 @@ async fn main() {
                 .layer(Extension(project_repo))
                 .layer(Extension(series_repo))
                 .layer(Extension(activity_log_repo))
+                .layer(Extension(reminder_repo))
                 .layer(Extension(calendar_repo))
                 .layer(middleware::from_fn(auth::web_auth_middleware));
             let public_web_router = build_public_web_router();

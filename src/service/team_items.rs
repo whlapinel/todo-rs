@@ -8,7 +8,9 @@ use crate::service::items::{
 use crate::service::projects::{
     require_project_admin, require_project_member, resolve_project_assignee,
 };
-use crate::storage::sqlite::{ActivityLogRepo, ItemRepo, ItemSeriesRepo, ProjectRepo, TeamRepo};
+use crate::storage::sqlite::{
+    ActivityLogRepo, ItemRepo, ItemSeriesRepo, ProjectRepo, ReminderRepo, TeamRepo,
+};
 use chrono::{DateTime, Utc};
 use std::sync::Arc;
 
@@ -278,6 +280,7 @@ pub async fn create_team_item(
 pub async fn delete_team_item(
     repo: &Arc<dyn ItemRepo>,
     series: &Arc<dyn ItemSeriesRepo>,
+    reminders: &Arc<dyn ReminderRepo>,
     teams: &Arc<dyn TeamRepo>,
     projects: &Arc<dyn ProjectRepo>,
     requester_user_id: &str,
@@ -300,6 +303,7 @@ pub async fn delete_team_item(
             queue.push(child.id.clone());
             repo.delete(&child.id).await?;
             item_series::unlink_deleted_item_occurrence(series, &child.id).await?;
+            reminders.delete_for_item(&child.id).await?;
         }
     }
     unlink_source_event_tasks(repo, item_id).await?;
@@ -591,7 +595,8 @@ mod tests {
     use crate::domain::activity_log::ActivityLogEntry;
     use crate::domain::team::TeamRole;
     use crate::storage::sqlite::{
-        MockActivityLogRepo, MockItemRepo, MockItemSeriesRepo, MockProjectRepo, MockTeamRepo,
+        MockActivityLogRepo, MockItemRepo, MockItemSeriesRepo, MockProjectRepo, MockReminderRepo,
+        MockTeamRepo,
     };
 
     /// A `ProjectRepo` resolving `project_id` as a team-backed project (`team_id`)
@@ -810,9 +815,13 @@ mod tests {
             Arc::new(project_with_role("p1", "t1", TeamRole::Member));
         let series: Arc<dyn ItemSeriesRepo> = Arc::new(MockItemSeriesRepo::new());
 
-        let err = delete_team_item(&items, &series, &teams, &projects, "member1", "p1", "item1")
-            .await
-            .expect_err("should reject deleting an imported item");
+        let reminders: Arc<dyn ReminderRepo> = Arc::new(MockReminderRepo::new());
+
+        let err = delete_team_item(
+            &items, &series, &reminders, &teams, &projects, "member1", "p1", "item1",
+        )
+        .await
+        .expect_err("should reject deleting an imported item");
 
         assert!(matches!(err, ItemError::Invalid(_)));
     }

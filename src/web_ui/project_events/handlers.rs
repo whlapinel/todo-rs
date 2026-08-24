@@ -5,7 +5,9 @@ use crate::service::item_series::{self as series_service};
 use crate::service::project_items::{self as project_item_service};
 use crate::service::projects::{self as project_service};
 use crate::service::templates::{self as template_service, CreateProjectTemplateParams};
-use crate::storage::sqlite::{ItemRepo, ItemSeriesRepo, ProjectRepo, TeamRepo, UserRepo};
+use crate::storage::sqlite::{
+    ItemRepo, ItemSeriesRepo, ProjectRepo, ReminderRepo, TeamRepo, UserRepo,
+};
 use crate::web_ui::TzOffset;
 use crate::web_ui::nav::{self, ActiveContext, SidebarSection};
 use crate::web_ui::project_events::templates::*;
@@ -289,6 +291,7 @@ pub async fn update_project_event_series_occurrence_form(
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(item_series): Extension<Arc<dyn ItemSeriesRepo>>,
     Extension(activity_log): Extension<Arc<dyn crate::storage::sqlite::ActivityLogRepo>>,
+    Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
     TzOffset(tz): TzOffset,
     Form(form): Form<ProjectEventForm>,
 ) -> Result<Response, ItemError> {
@@ -310,6 +313,7 @@ pub async fn update_project_event_series_occurrence_form(
         &projects,
         &teams,
         &item_series,
+        &reminders,
         &auth_user.user_id,
         &series_id,
         occurrence_date,
@@ -323,6 +327,7 @@ pub async fn update_project_event_series_occurrence_form(
         &teams,
         &activity_log,
         &item_series,
+        &reminders,
         &auth_user.user_id,
         params,
     )
@@ -348,6 +353,7 @@ pub async fn create_project_event_series_occurrence_child_form(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(item_series): Extension<Arc<dyn ItemSeriesRepo>>,
+    Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
     TzOffset(tz): TzOffset,
     Form(form): Form<ProjectEventSeriesOccurrenceChildForm>,
 ) -> Result<Response, ItemError> {
@@ -369,6 +375,7 @@ pub async fn create_project_event_series_occurrence_child_form(
         &projects,
         &teams,
         &item_series,
+        &reminders,
         &auth_user.user_id,
         &series_id,
         occurrence_date,
@@ -389,8 +396,15 @@ pub async fn create_project_event_series_occurrence_child_form(
         timezone_offset_minutes: Some(tz),
         ..Default::default()
     };
-    project_item_service::create_project_item(&repo, &projects, &teams, &auth_user.user_id, params)
-        .await?;
+    project_item_service::create_project_item(
+        &repo,
+        &projects,
+        &teams,
+        &reminders,
+        &auth_user.user_id,
+        params,
+    )
+    .await?;
     Ok(hx_redirect(project_event_url(&project_id, &item.id)))
 }
 
@@ -469,6 +483,7 @@ pub async fn create_project_event_child_form(
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
     TzOffset(tz): TzOffset,
     Form(form): Form<ProjectEventChildForm>,
 ) -> Result<Response, ItemError> {
@@ -489,8 +504,15 @@ pub async fn create_project_event_child_form(
         timezone_offset_minutes: Some(tz),
         ..Default::default()
     };
-    project_item_service::create_project_item(&repo, &projects, &teams, &auth_user.user_id, params)
-        .await?;
+    project_item_service::create_project_item(
+        &repo,
+        &projects,
+        &teams,
+        &reminders,
+        &auth_user.user_id,
+        params,
+    )
+    .await?;
     if redirect {
         return Ok(redirect_to_project_events(&project_id));
     }
@@ -527,13 +549,21 @@ pub async fn create_project_event_form(
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
     TzOffset(tz): TzOffset,
     Form(form): Form<ProjectEventForm>,
 ) -> Result<Response, ItemError> {
     project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
     let params = create_params_from_form(&project_id, &form, tz);
-    project_item_service::create_project_item(&repo, &projects, &teams, &auth_user.user_id, params)
-        .await?;
+    project_item_service::create_project_item(
+        &repo,
+        &projects,
+        &teams,
+        &reminders,
+        &auth_user.user_id,
+        params,
+    )
+    .await?;
     if form.redirect.is_some() {
         return Ok(redirect_to_project_events(&project_id));
     }
@@ -554,6 +584,7 @@ pub async fn update_project_event_form(
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(activity_log): Extension<Arc<dyn crate::storage::sqlite::ActivityLogRepo>>,
     Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
+    Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
     TzOffset(tz): TzOffset,
     Query(view_q): Query<crate::web_ui::project_tasks::RowViewQuery>,
     Form(form): Form<ProjectEventForm>,
@@ -577,6 +608,7 @@ pub async fn update_project_event_form(
         &teams,
         &activity_log,
         &series,
+        &reminders,
         &auth_user.user_id,
         params,
     )
@@ -713,6 +745,7 @@ pub async fn delete_project_event_form(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
+    Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
     Query(q): Query<DeleteItemQuery>,
 ) -> Result<Response, ItemError> {
     let current = project_item_service::get_project_item(
@@ -730,6 +763,7 @@ pub async fn delete_project_event_form(
         &projects,
         &teams,
         &series,
+        &reminders,
         &auth_user.user_id,
         &project_id,
         &item_id,

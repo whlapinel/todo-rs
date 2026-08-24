@@ -5,7 +5,9 @@ use crate::service::item_series::{
     self as item_series_service, CreateItemSeriesParams, UpdateItemSeriesParams,
 };
 use crate::service::projects::{self as project_service};
-use crate::storage::sqlite::{ItemRepo, ItemSeriesRepo, ProjectRepo, TeamRepo, UserRepo};
+use crate::storage::sqlite::{
+    ItemRepo, ItemSeriesRepo, ProjectRepo, ReminderRepo, TeamRepo, UserRepo,
+};
 use crate::web_ui::list_filters::ListFilters;
 use crate::web_ui::nav::{self, ActiveContext, SidebarSection};
 use crate::web_ui::project_item_series::templates::*;
@@ -466,6 +468,7 @@ pub async fn materialize_project_item_series_occurrence_form(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(item_series): Extension<Arc<dyn ItemSeriesRepo>>,
+    Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
     TzOffset(tz): TzOffset,
 ) -> Result<Response, ItemError> {
     let series = item_series_service::get_series(
@@ -488,6 +491,7 @@ pub async fn materialize_project_item_series_occurrence_form(
         &projects,
         &teams,
         &item_series,
+        &reminders,
         &auth_user.user_id,
         &series_id,
         occurrence_date,
@@ -557,6 +561,7 @@ pub async fn skip_project_item_series_occurrence_form(
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(users): Extension<Arc<dyn UserRepo>>,
     Extension(item_series): Extension<Arc<dyn ItemSeriesRepo>>,
+    Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
     TzOffset(tz): TzOffset,
     Query(q): Query<OccurrenceRowActionQuery>,
     headers: HeaderMap,
@@ -581,6 +586,7 @@ pub async fn skip_project_item_series_occurrence_form(
         &projects,
         &teams,
         &item_series,
+        &reminders,
         &auth_user.user_id,
         &series_id,
         occurrence_date,

@@ -2,7 +2,7 @@ use crate::domain::item::ItemKind;
 use crate::service::error::ItemError;
 use crate::service::project_items::{self, CreateProjectItemParams};
 use crate::service::projects::require_project_member;
-use crate::storage::sqlite::{ItemRepo, ProjectRepo, TeamRepo};
+use crate::storage::sqlite::{ItemRepo, ProjectRepo, ReminderRepo, TeamRepo};
 use chrono::{DateTime, Duration, NaiveDate, NaiveTime, Utc};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -182,6 +182,7 @@ pub async fn import_project_items(
     repo: &Arc<dyn ItemRepo>,
     projects: &Arc<dyn ProjectRepo>,
     teams: &Arc<dyn TeamRepo>,
+    reminders: &Arc<dyn ReminderRepo>,
     requester_user_id: &str,
     project_id: &str,
     csv: &str,
@@ -235,8 +236,15 @@ pub async fn import_project_items(
         };
         params.timezone_offset_minutes = timezone_offset_minutes;
 
-        match project_items::create_project_item(repo, projects, teams, requester_user_id, params)
-            .await
+        match project_items::create_project_item(
+            repo,
+            projects,
+            teams,
+            reminders,
+            requester_user_id,
+            params,
+        )
+        .await
         {
             Ok(item_id) => results.push(ok_result(row_number, item_id)),
             Err(e) => results.push(err_result(row_number, e.to_string())),
@@ -262,7 +270,7 @@ mod tests {
     use super::*;
     use crate::domain::item::Item;
     use crate::domain::project::Project;
-    use crate::storage::sqlite::{MockItemRepo, MockProjectRepo, MockTeamRepo};
+    use crate::storage::sqlite::{MockItemRepo, MockProjectRepo, MockReminderRepo, MockTeamRepo};
 
     fn test_project(id: &str, owner: &str) -> Project {
         Project {
@@ -271,6 +279,16 @@ mod tests {
             owner_user_id: owner.to_string(),
             team_id: None,
         }
+    }
+
+    /// `import_project_items` resyncs reminders after every successful row create — a
+    /// harmless no-op stub for tests that don't care about reminder rows.
+    fn no_op_reminders() -> Arc<dyn ReminderRepo> {
+        let mut mock = MockReminderRepo::new();
+        mock.expect_sync_auto_reminders()
+            .returning(|_, _, _, _| Ok(()));
+        mock.expect_delete_for_item().returning(|_| Ok(()));
+        Arc::new(mock)
     }
 
     #[tokio::test]
@@ -287,6 +305,8 @@ mod tests {
         repo.expect_create()
             .times(2)
             .returning(|item: &Item| Ok(item.id.clone()));
+        repo.expect_get_by_project()
+            .returning(|_, _| Ok(Item::new_project_item("p1", "Good row")));
 
         let teams = MockTeamRepo::new();
 
@@ -295,6 +315,7 @@ mod tests {
             &(Arc::new(repo) as Arc<dyn ItemRepo>),
             &(Arc::new(projects) as Arc<dyn ProjectRepo>),
             &(Arc::new(teams) as Arc<dyn TeamRepo>),
+            &no_op_reminders(),
             "u1",
             "p1",
             csv_text,
@@ -333,6 +354,8 @@ mod tests {
             .withf(|item: &Item| item.name == "Reordered" && item.due_date().is_some())
             .times(1)
             .returning(|item: &Item| Ok(item.id.clone()));
+        repo.expect_get_by_project()
+            .returning(|_, _| Ok(Item::new_project_item("p1", "Reordered")));
 
         let teams = MockTeamRepo::new();
 
@@ -341,6 +364,7 @@ mod tests {
             &(Arc::new(repo) as Arc<dyn ItemRepo>),
             &(Arc::new(projects) as Arc<dyn ProjectRepo>),
             &(Arc::new(teams) as Arc<dyn TeamRepo>),
+            &no_op_reminders(),
             "u1",
             "p1",
             csv_text,
@@ -369,6 +393,8 @@ mod tests {
             .withf(|item: &Item| item.name == "Bare" && item.description.is_none())
             .times(1)
             .returning(|item: &Item| Ok(item.id.clone()));
+        repo.expect_get_by_project()
+            .returning(|_, _| Ok(Item::new_project_item("p1", "Bare")));
 
         let teams = MockTeamRepo::new();
 
@@ -377,6 +403,7 @@ mod tests {
             &(Arc::new(repo) as Arc<dyn ItemRepo>),
             &(Arc::new(projects) as Arc<dyn ProjectRepo>),
             &(Arc::new(teams) as Arc<dyn TeamRepo>),
+            &no_op_reminders(),
             "u1",
             "p1",
             csv_text,
@@ -404,6 +431,8 @@ mod tests {
         repo.expect_create()
             .times(2)
             .returning(|item: &Item| Ok(item.id.clone()));
+        repo.expect_get_by_project()
+            .returning(|_, _| Ok(Item::new_project_item("p1", "Dated")));
 
         let teams = MockTeamRepo::new();
 
@@ -412,6 +441,7 @@ mod tests {
             &(Arc::new(repo) as Arc<dyn ItemRepo>),
             &(Arc::new(projects) as Arc<dyn ProjectRepo>),
             &(Arc::new(teams) as Arc<dyn TeamRepo>),
+            &no_op_reminders(),
             "u1",
             "p1",
             csv_text,
@@ -455,6 +485,8 @@ mod tests {
             })
             .times(1)
             .returning(|item: &Item| Ok(item.id.clone()));
+        repo.expect_get_by_project()
+            .returning(|_, _| Ok(Item::new_project_item("p1", "Eat donuts")));
 
         let teams = MockTeamRepo::new();
 
@@ -463,6 +495,7 @@ mod tests {
             &(Arc::new(repo) as Arc<dyn ItemRepo>),
             &(Arc::new(projects) as Arc<dyn ProjectRepo>),
             &(Arc::new(teams) as Arc<dyn TeamRepo>),
+            &no_op_reminders(),
             "u1",
             "p1",
             csv_text,
@@ -495,6 +528,7 @@ mod tests {
             &(Arc::new(repo) as Arc<dyn ItemRepo>),
             &(Arc::new(projects) as Arc<dyn ProjectRepo>),
             &(Arc::new(teams) as Arc<dyn TeamRepo>),
+            &no_op_reminders(),
             "u1",
             "p1",
             csv_text,
@@ -532,6 +566,7 @@ mod tests {
             &(Arc::new(repo) as Arc<dyn ItemRepo>),
             &(Arc::new(projects) as Arc<dyn ProjectRepo>),
             &(Arc::new(teams) as Arc<dyn TeamRepo>),
+            &no_op_reminders(),
             "u1",
             "p1",
             csv_text,
@@ -569,6 +604,7 @@ mod tests {
             &(Arc::new(repo) as Arc<dyn ItemRepo>),
             &(Arc::new(projects) as Arc<dyn ProjectRepo>),
             &(Arc::new(teams) as Arc<dyn TeamRepo>),
+            &no_op_reminders(),
             "u1",
             "p1",
             "name\nAnything\n",
@@ -594,6 +630,7 @@ mod tests {
             &(Arc::new(repo) as Arc<dyn ItemRepo>),
             &(Arc::new(projects) as Arc<dyn ProjectRepo>),
             &(Arc::new(teams) as Arc<dyn TeamRepo>),
+            &no_op_reminders(),
             "u1",
             "p1",
             "name\nAnything\n",

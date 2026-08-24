@@ -7,7 +7,7 @@ use crate::service::projects::{self as project_service};
 use crate::service::teams as team_service;
 use crate::service::templates::{self as template_service, CreateProjectTemplateParams};
 use crate::storage::sqlite::{
-    ActivityLogRepo, ItemRepo, ItemSeriesRepo, ProjectRepo, TeamRepo, UserRepo,
+    ActivityLogRepo, ItemRepo, ItemSeriesRepo, ProjectRepo, ReminderRepo, TeamRepo, UserRepo,
 };
 use crate::web_ui::TzOffset;
 use crate::web_ui::list_filters::{ListFilterQuery, ListFilters};
@@ -421,6 +421,7 @@ pub async fn update_project_task_series_occurrence_form(
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(item_series): Extension<Arc<dyn ItemSeriesRepo>>,
     Extension(activity_log): Extension<Arc<dyn ActivityLogRepo>>,
+    Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
     TzOffset(tz): TzOffset,
     Form(form): Form<ProjectTaskForm>,
 ) -> Result<Response, ItemError> {
@@ -442,6 +443,7 @@ pub async fn update_project_task_series_occurrence_form(
         &projects,
         &teams,
         &item_series,
+        &reminders,
         &auth_user.user_id,
         &series_id,
         occurrence_date,
@@ -455,6 +457,7 @@ pub async fn update_project_task_series_occurrence_form(
         &teams,
         &activity_log,
         &item_series,
+        &reminders,
         &auth_user.user_id,
         params,
     )
@@ -523,6 +526,7 @@ pub async fn complete_project_item_series_occurrence_form(
     Extension(users): Extension<Arc<dyn UserRepo>>,
     Extension(item_series): Extension<Arc<dyn ItemSeriesRepo>>,
     Extension(activity_log): Extension<Arc<dyn ActivityLogRepo>>,
+    Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
     TzOffset(tz): TzOffset,
     Query(q): Query<OccurrenceRowActionQuery>,
     headers: HeaderMap,
@@ -545,6 +549,7 @@ pub async fn complete_project_item_series_occurrence_form(
         &projects,
         &teams,
         &item_series,
+        &reminders,
         &auth_user.user_id,
         &series_id,
         occurrence_date,
@@ -562,6 +567,7 @@ pub async fn complete_project_item_series_occurrence_form(
         &teams,
         &activity_log,
         &item_series,
+        &reminders,
         &auth_user.user_id,
         params,
     )
@@ -637,6 +643,7 @@ pub async fn create_project_task_series_occurrence_child_form(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(item_series): Extension<Arc<dyn ItemSeriesRepo>>,
+    Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
     TzOffset(tz): TzOffset,
     Form(form): Form<ProjectTaskSeriesOccurrenceChildForm>,
 ) -> Result<Response, ItemError> {
@@ -658,6 +665,7 @@ pub async fn create_project_task_series_occurrence_child_form(
         &projects,
         &teams,
         &item_series,
+        &reminders,
         &auth_user.user_id,
         &series_id,
         occurrence_date,
@@ -678,8 +686,15 @@ pub async fn create_project_task_series_occurrence_child_form(
         timezone_offset_minutes: Some(tz),
         ..Default::default()
     };
-    project_item_service::create_project_item(&repo, &projects, &teams, &auth_user.user_id, params)
-        .await?;
+    project_item_service::create_project_item(
+        &repo,
+        &projects,
+        &teams,
+        &reminders,
+        &auth_user.user_id,
+        params,
+    )
+    .await?;
     Ok(hx_redirect(project_task_url(&project_id, &item.id)))
 }
 
@@ -802,6 +817,7 @@ pub async fn create_project_task_form(
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
     TzOffset(tz): TzOffset,
     Form(form): Form<ProjectTaskForm>,
 ) -> Result<Response, ItemError> {
@@ -812,8 +828,15 @@ pub async fn create_project_task_form(
     let filters_query = form.filters_query.clone().unwrap_or_default();
     let params = create_params_from_form(&project_id, &form, tz);
     let parent_item_id = params.parent_item_id.clone();
-    project_item_service::create_project_item(&repo, &projects, &teams, &auth_user.user_id, params)
-        .await?;
+    project_item_service::create_project_item(
+        &repo,
+        &projects,
+        &teams,
+        &reminders,
+        &auth_user.user_id,
+        params,
+    )
+    .await?;
     if redirect {
         return Ok(redirect_to_project_tasks(&project_id, &filters_query));
     }
@@ -849,6 +872,7 @@ pub async fn create_project_tasks_batch(
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
     TzOffset(tz): TzOffset,
     Form(form): Form<BatchForm>,
 ) -> Result<Response, ItemError> {
@@ -872,6 +896,7 @@ pub async fn create_project_tasks_batch(
             &repo,
             &projects,
             &teams,
+            &reminders,
             &auth_user.user_id,
             params,
         )
@@ -905,6 +930,7 @@ pub async fn update_project_task_form(
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(activity_log): Extension<Arc<dyn ActivityLogRepo>>,
     Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
+    Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
     TzOffset(tz): TzOffset,
     Query(view_q): Query<super::RowViewQuery>,
     Form(form): Form<ProjectTaskForm>,
@@ -923,6 +949,7 @@ pub async fn update_project_task_form(
         &teams,
         &activity_log,
         &series,
+        &reminders,
         &auth_user.user_id,
         params,
     )
@@ -1119,6 +1146,7 @@ pub async fn delete_project_task_form(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
+    Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
     Query(q): Query<DeleteItemQuery>,
 ) -> Result<Response, ItemError> {
     let current = project_item_service::get_project_item(
@@ -1136,6 +1164,7 @@ pub async fn delete_project_task_form(
         &projects,
         &teams,
         &series,
+        &reminders,
         &auth_user.user_id,
         &project_id,
         &item_id,
@@ -1291,6 +1320,7 @@ pub async fn move_project_task_form(
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(activity_log): Extension<Arc<dyn ActivityLogRepo>>,
     Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
+    Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
     TzOffset(tz): TzOffset,
     Form(form): Form<MoveForm>,
 ) -> Result<Response, ItemError> {
@@ -1340,6 +1370,7 @@ pub async fn move_project_task_form(
         &teams,
         &activity_log,
         &series,
+        &reminders,
         &auth_user.user_id,
         params,
     )

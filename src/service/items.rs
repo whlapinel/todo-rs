@@ -3,7 +3,9 @@ use crate::domain::item::{Item, ItemKind, ItemType, Recurrence, Schedule};
 use crate::domain::recurrence;
 use crate::service::activity_log::reverse_entry;
 use crate::service::item_series;
-use crate::storage::sqlite::{ActivityLogRepo, ItemRepo, ItemSeriesRepo, ProjectRepo, RepoError};
+use crate::storage::sqlite::{
+    ActivityLogRepo, ItemRepo, ItemSeriesRepo, ProjectRepo, ReminderRepo, RepoError,
+};
 use chrono::{DateTime, Utc};
 use std::future::Future;
 use std::pin::Pin;
@@ -370,6 +372,7 @@ pub async fn update_item(
 pub async fn delete_item(
     repo: &Arc<dyn ItemRepo>,
     series: &Arc<dyn ItemSeriesRepo>,
+    reminders: &Arc<dyn ReminderRepo>,
     user_id: &str,
     item_id: &str,
 ) -> Result<(), ItemError> {
@@ -388,6 +391,7 @@ pub async fn delete_item(
             queue.push(child.id.clone());
             repo.delete(&child.id).await?;
             item_series::unlink_deleted_item_occurrence(series, &child.id).await?;
+            reminders.delete_for_item(&child.id).await?;
         }
     }
     unlink_source_event_tasks(repo, item_id).await?;
@@ -704,8 +708,16 @@ pub(crate) fn copy_children_as_template<'a>(
 mod tests {
     use super::*;
     use crate::storage::sqlite::{
-        MockActivityLogRepo, MockItemRepo, MockItemSeriesRepo, MockProjectRepo,
+        MockActivityLogRepo, MockItemRepo, MockItemSeriesRepo, MockProjectRepo, MockReminderRepo,
     };
+
+    /// Harmless stub for `delete_item` tests whose deleted item has no children — `delete_item`
+    /// only calls `ReminderRepo::delete_for_item` per recursively-deleted child, not for the
+    /// top-level id (that's `delete_project_item`'s job), so a childless delete never touches
+    /// this mock at all.
+    fn no_op_reminders() -> Arc<dyn ReminderRepo> {
+        Arc::new(MockReminderRepo::new())
+    }
 
     /// `create_item`'s `find_personal_project` lookup, stubbed to "none found" — none
     /// of these tests care about the resolved `project_id`, so this keeps them from
@@ -1022,7 +1034,7 @@ mod tests {
         let repo: Arc<dyn ItemRepo> = Arc::new(mock);
         let series: Arc<dyn ItemSeriesRepo> = Arc::new(MockItemSeriesRepo::new());
 
-        delete_item(&repo, &series, "u1", "event1")
+        delete_item(&repo, &series, &no_op_reminders(), "u1", "event1")
             .await
             .expect("should delete the event and unlink referencing tasks");
     }
@@ -1148,7 +1160,7 @@ mod tests {
         let repo: Arc<dyn ItemRepo> = Arc::new(mock);
         let series: Arc<dyn ItemSeriesRepo> = Arc::new(MockItemSeriesRepo::new());
 
-        let err = delete_item(&repo, &series, "u1", "item1")
+        let err = delete_item(&repo, &series, &no_op_reminders(), "u1", "item1")
             .await
             .expect_err("should reject deleting an imported item");
 

@@ -6,7 +6,9 @@ use crate::service::activity_log as activity_log_service;
 use crate::service::error::ItemError;
 use crate::service::projects::get_project;
 use crate::service::teams as team_service;
-use crate::storage::sqlite::{ActivityLogRepo, ItemRepo, ItemSeriesRepo, ProjectRepo, TeamRepo};
+use crate::storage::sqlite::{
+    ActivityLogRepo, ItemRepo, ItemSeriesRepo, ProjectRepo, ReminderRepo, TeamRepo,
+};
 use askama::Template;
 use axum::extract::{Extension, Path};
 use axum::response::Html;
@@ -154,6 +156,7 @@ pub async fn undo_project_activity_log_entry_form(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(activity_log): Extension<Arc<dyn ActivityLogRepo>>,
     Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
+    Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
     TzOffset(tz): TzOffset,
 ) -> Result<Html<String>, ItemError> {
     // Project-scoped (see docs/archived/archived_issues_and_features.md's "unify completion-undo" note) — works for
@@ -165,6 +168,7 @@ pub async fn undo_project_activity_log_entry_form(
         &teams,
         &activity_log,
         &series,
+        &reminders,
         &project_id,
         &entry_id,
         &auth_user.user_id,

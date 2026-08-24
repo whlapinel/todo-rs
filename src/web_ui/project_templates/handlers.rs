@@ -10,7 +10,7 @@ use crate::service::projects::{self as project_service};
 use crate::service::templates::{
     self as template_service, CreateProjectTemplateParams, UpdateProjectTemplateParams,
 };
-use crate::storage::sqlite::{ItemRepo, ItemSeriesRepo, ProjectRepo, TeamRepo};
+use crate::storage::sqlite::{ItemRepo, ItemSeriesRepo, ProjectRepo, ReminderRepo, TeamRepo};
 use crate::web_ui::TzOffset;
 use crate::web_ui::nav::{self, ActiveContext, SidebarSection};
 use crate::web_ui::project_tasks::active_member_options;
@@ -193,12 +193,14 @@ pub async fn delete_project_template_form(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
+    Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
 ) -> Result<Html<String>, ItemError> {
     project_item_service::delete_project_item(
         &repo,
         &projects,
         &teams,
         &series,
+        &reminders,
         &auth_user.user_id,
         &project_id,
         &template_id,
@@ -363,6 +365,7 @@ pub async fn create_project_template_child_form(
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
     Form(form): Form<ProjectTemplateChildForm>,
 ) -> Result<Html<String>, ItemError> {
     let params = CreateProjectItemParams {
@@ -372,8 +375,15 @@ pub async fn create_project_template_child_form(
         due_offset_days: parse_offset(&form.due_offset_days),
         ..Default::default()
     };
-    project_item_service::create_project_item(&repo, &projects, &teams, &auth_user.user_id, params)
-        .await?;
+    project_item_service::create_project_item(
+        &repo,
+        &projects,
+        &teams,
+        &reminders,
+        &auth_user.user_id,
+        params,
+    )
+    .await?;
     render_children_fragment(&repo, &project_id, &template_id).await
 }
 
@@ -457,6 +467,7 @@ pub async fn update_project_template_child_form(
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(activity_log): Extension<Arc<dyn crate::storage::sqlite::ActivityLogRepo>>,
     Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
+    Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
     Form(form): Form<ProjectTemplateChildForm>,
 ) -> Result<Response, ItemError> {
     let close = form.redirect.is_some();
@@ -492,6 +503,7 @@ pub async fn update_project_template_child_form(
         &teams,
         &activity_log,
         &series,
+        &reminders,
         &auth_user.user_id,
         params,
     )
@@ -536,12 +548,14 @@ pub async fn delete_project_template_child_form(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
+    Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
 ) -> Result<Html<String>, ItemError> {
     project_item_service::delete_project_item(
         &repo,
         &projects,
         &teams,
         &series,
+        &reminders,
         &auth_user.user_id,
         &project_id,
         &item_id,
@@ -564,6 +578,7 @@ pub async fn use_project_template_form(
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
     TzOffset(tz): TzOffset,
     Form(form): Form<UseProjectTemplateForm>,
 ) -> Result<Response, ItemError> {
@@ -607,6 +622,7 @@ pub async fn use_project_template_form(
         &repo,
         &projects,
         &teams,
+        &reminders,
         &auth_user.user_id,
         params,
     )

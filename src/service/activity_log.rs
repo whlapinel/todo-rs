@@ -5,7 +5,7 @@ use crate::service::project_items::{self, UpdateProjectItemParams};
 use crate::service::projects::require_project_member;
 use crate::service::team_items::require_active_member;
 use crate::storage::sqlite::{
-    ActivityLogRepo, ItemRepo, ItemSeriesRepo, ProjectRepo, RepoError, TeamRepo,
+    ActivityLogRepo, ItemRepo, ItemSeriesRepo, ProjectRepo, ReminderRepo, RepoError, TeamRepo,
 };
 use std::sync::Arc;
 
@@ -90,6 +90,7 @@ async fn reopen_item_if_still_complete(
     teams: &Arc<dyn TeamRepo>,
     activity_log: &Arc<dyn ActivityLogRepo>,
     series: &Arc<dyn ItemSeriesRepo>,
+    reminders: &Arc<dyn ReminderRepo>,
     project_id: &str,
     item_id: &str,
     requester_user_id: &str,
@@ -107,6 +108,7 @@ async fn reopen_item_if_still_complete(
         teams,
         activity_log,
         series,
+        reminders,
         requester_user_id,
         UpdateProjectItemParams {
             project_id: project_id.to_string(),
@@ -145,6 +147,7 @@ async fn reverse_and_reopen(
     teams: &Arc<dyn TeamRepo>,
     activity_log: &Arc<dyn ActivityLogRepo>,
     series: &Arc<dyn ItemSeriesRepo>,
+    reminders: &Arc<dyn ReminderRepo>,
     entry: &ActivityLogEntry,
     requester_user_id: &str,
     tz_offset_minutes: i32,
@@ -184,6 +187,7 @@ async fn reverse_and_reopen(
             teams,
             activity_log,
             series,
+            reminders,
             project_id,
             &entry.item_id,
             requester_user_id,
@@ -206,6 +210,7 @@ pub async fn undo_activity_log_entry(
     projects: &Arc<dyn ProjectRepo>,
     activity_log: &Arc<dyn ActivityLogRepo>,
     series: &Arc<dyn ItemSeriesRepo>,
+    reminders: &Arc<dyn ReminderRepo>,
     team_id: &str,
     entry_id: &str,
     requester_user_id: &str,
@@ -228,6 +233,7 @@ pub async fn undo_activity_log_entry(
         teams,
         activity_log,
         series,
+        reminders,
         &entry,
         requester_user_id,
         tz_offset_minutes,
@@ -246,6 +252,7 @@ pub async fn undo_project_activity_log_entry(
     teams: &Arc<dyn TeamRepo>,
     activity_log: &Arc<dyn ActivityLogRepo>,
     series: &Arc<dyn ItemSeriesRepo>,
+    reminders: &Arc<dyn ReminderRepo>,
     project_id: &str,
     entry_id: &str,
     requester_user_id: &str,
@@ -268,6 +275,7 @@ pub async fn undo_project_activity_log_entry(
         teams,
         activity_log,
         series,
+        reminders,
         &entry,
         requester_user_id,
         tz_offset_minutes,
@@ -280,7 +288,8 @@ mod tests {
     use super::*;
     use crate::domain::item::Item;
     use crate::storage::sqlite::{
-        MockActivityLogRepo, MockItemRepo, MockItemSeriesRepo, MockProjectRepo, MockTeamRepo,
+        MockActivityLogRepo, MockItemRepo, MockItemSeriesRepo, MockProjectRepo, MockReminderRepo,
+        MockTeamRepo,
     };
     use chrono::{DateTime, Utc};
 
@@ -332,6 +341,17 @@ mod tests {
         let mut mock = MockItemSeriesRepo::new();
         mock.expect_find_occurrence_by_item_id()
             .returning(|_| Ok(None));
+        Arc::new(mock)
+    }
+
+    /// `reopen_item_if_still_complete` (reached via `update_project_item`'s reminder
+    /// resync) only ever touches this when the reopen path actually runs — a harmless
+    /// no-op stub for every test that isn't specifically exercising reminder rows.
+    fn no_op_reminders() -> Arc<dyn ReminderRepo> {
+        let mut mock = MockReminderRepo::new();
+        mock.expect_sync_auto_reminders()
+            .returning(|_, _, _, _| Ok(()));
+        mock.expect_delete_for_item().returning(|_| Ok(()));
         Arc::new(mock)
     }
 
@@ -396,11 +416,13 @@ mod tests {
             .returning(|_| Ok(entry("u1", "t1", 30, false)));
 
         let log: Arc<dyn ActivityLogRepo> = Arc::new(log);
+        let reminders = no_op_reminders();
 
-        let err =
-            undo_activity_log_entry(&repo, &teams, &projects, &log, &series, "t1", "e1", "u2", 0)
-                .await
-                .expect_err("should reject a non-owner's undo attempt");
+        let err = undo_activity_log_entry(
+            &repo, &teams, &projects, &log, &series, &reminders, "t1", "e1", "u2", 0,
+        )
+        .await
+        .expect_err("should reject a non-owner's undo attempt");
         assert!(matches!(err, ItemError::Invalid(_)));
     }
 
@@ -416,11 +438,13 @@ mod tests {
             .returning(|_| Ok(entry("u1", "t1", 30, true)));
 
         let log: Arc<dyn ActivityLogRepo> = Arc::new(log);
+        let reminders = no_op_reminders();
 
-        let err =
-            undo_activity_log_entry(&repo, &teams, &projects, &log, &series, "t1", "e1", "u1", 0)
-                .await
-                .expect_err("should reject undoing an already-reversed entry");
+        let err = undo_activity_log_entry(
+            &repo, &teams, &projects, &log, &series, &reminders, "t1", "e1", "u1", 0,
+        )
+        .await
+        .expect_err("should reject undoing an already-reversed entry");
         assert!(matches!(err, ItemError::Invalid(_)));
     }
 
@@ -525,6 +549,7 @@ mod tests {
         let projects: Arc<dyn ProjectRepo> = Arc::new(SqliteProjectRepo(pool.clone()));
         let activity_log: Arc<dyn ActivityLogRepo> = Arc::new(SqliteActivityLogRepo(pool.clone()));
         let series = no_op_series();
+        let reminders = no_op_reminders();
 
         let entry_id = activity_log
             .log_activity(Some("t1"), Some("p1"), "u1", "item1", "Mow the lawn", 30)
@@ -537,6 +562,7 @@ mod tests {
             &projects,
             &activity_log,
             &series,
+            &reminders,
             "t1",
             &entry_id,
             "u1",
@@ -562,6 +588,7 @@ mod tests {
             &projects,
             &activity_log,
             &series,
+            &reminders,
             "t1",
             &entry_id,
             "u1",
@@ -585,10 +612,13 @@ mod tests {
         log.expect_mark_reversed().times(1).returning(|_| Ok(()));
 
         let log: Arc<dyn ActivityLogRepo> = Arc::new(log);
+        let reminders = no_op_reminders();
 
-        undo_activity_log_entry(&repo, &teams, &projects, &log, &series, "t1", "e1", "u1", 0)
-            .await
-            .expect("owner should be able to undo their own unreversed entry");
+        undo_activity_log_entry(
+            &repo, &teams, &projects, &log, &series, &reminders, "t1", "e1", "u1", 0,
+        )
+        .await
+        .expect("owner should be able to undo their own unreversed entry");
     }
 
     #[tokio::test]
@@ -602,11 +632,13 @@ mod tests {
         log.expect_get_entry()
             .returning(|_| Ok(entry("u1", "other-team", 30, false)));
         let log: Arc<dyn ActivityLogRepo> = Arc::new(log);
+        let reminders = no_op_reminders();
 
-        let err =
-            undo_activity_log_entry(&repo, &teams, &projects, &log, &series, "t1", "e1", "u1", 0)
-                .await
-                .expect_err("should reject an entry that doesn't belong to this team");
+        let err = undo_activity_log_entry(
+            &repo, &teams, &projects, &log, &series, &reminders, "t1", "e1", "u1", 0,
+        )
+        .await
+        .expect_err("should reject an entry that doesn't belong to this team");
         assert!(matches!(err, ItemError::NotFound));
     }
 
@@ -681,9 +713,10 @@ mod tests {
         log.expect_most_recent_unreversed()
             .returning(|_, _| Ok(None));
         let log: Arc<dyn ActivityLogRepo> = Arc::new(log);
+        let reminders = no_op_reminders();
 
         undo_project_activity_log_entry(
-            &repo, &projects, &teams, &log, &series, "p1", "e1", "u1", 0,
+            &repo, &projects, &teams, &log, &series, &reminders, "p1", "e1", "u1", 0,
         )
         .await
         .expect("should reverse the entry and reopen the item");
@@ -788,9 +821,10 @@ mod tests {
         // Never reached — the pre-check rejects before reverse_entry runs.
         log.expect_mark_reversed().times(0);
         let log: Arc<dyn ActivityLogRepo> = Arc::new(log);
+        let reminders = no_op_reminders();
 
         let err = undo_project_activity_log_entry(
-            &repo, &projects, &teams, &log, &series, "p1", "e1", "u1", 0,
+            &repo, &projects, &teams, &log, &series, &reminders, "p1", "e1", "u1", 0,
         )
         .await
         .expect_err("should reject undoing an out-of-order series occurrence");
@@ -817,6 +851,7 @@ mod tests {
         log.expect_get_entry()
             .returning(|_| Ok(entry("u1", "t1", 0, false)));
         let log: Arc<dyn ActivityLogRepo> = Arc::new(log);
+        let reminders = no_op_reminders();
 
         let err = undo_project_activity_log_entry(
             &repo,
@@ -824,6 +859,7 @@ mod tests {
             &teams,
             &log,
             &series,
+            &reminders,
             "some-other-project",
             "e1",
             "u1",
