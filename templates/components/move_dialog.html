@@ -1,0 +1,46 @@
+<!-- Swapped into #action-dialog's innerHTML (see base.html) — same fragment shape as
+     quick_assign_dialog.html/add_child_dialog.html, no <dialog> wrapper of its own. Reparenting
+     can move an item out of the sibling group currently rendered on screen entirely (e.g. onto
+     its grandparent, or under a sibling whose own children aren't shown here), so — like
+     add_child_dialog.html's create form — this posts with `hx-swap="none"` and relies on the
+     handler's `HX-Redirect` response (a real browser navigation) to land on wherever the moved
+     item now lives, rather than trying to swap a single row in place. -->
+<div id="dialog-backdrop"
+    class="fixed inset-0 bg-gray-500/75 dark:bg-gray-900/50 transition-opacity duration-300 ease-out opacity-0 group-open/dialog:opacity-100">
+</div>
+
+<div tabindex="0"
+    class="relative z-10 flex min-h-full items-end justify-center p-4 text-center focus:outline-none sm:items-center sm:p-0">
+    <div class="relative transform overflow-hidden rounded-lg bg-white dark:bg-gray-800 px-4 pt-5 pb-4 text-left shadow-xl transition-all duration-300 ease-out translate-y-4 opacity-0 scale-95 group-open/dialog:translate-y-0 group-open/dialog:opacity-100 group-open/dialog:scale-100 sm:my-8 sm:w-full sm:max-w-lg sm:p-6 dark:outline dark:-outline-offset-1 dark:outline-white/10">
+        {% if options.is_empty() %}
+        <h3 class="text-base font-semibold text-gray-900 dark:text-white">Move {{ item_name }}</h3>
+        <p class="mt-3 text-sm text-gray-500 dark:text-gray-400">There's nowhere to move this — it has no parent and no siblings.</p>
+        <div class="mt-5 sm:mt-6 flex justify-end">
+            <button type="button" onclick="document.getElementById('action-dialog').close()"
+                class="inline-flex justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-xs inset-ring-1 inset-ring-gray-300 hover:bg-gray-50 dark:bg-white/10 dark:text-white dark:shadow-none dark:inset-ring-white/5 dark:hover:bg-white/20">Close</button>
+        </div>
+        {% else %}
+        <form hx-post="{{ post_move_url }}" hx-swap="none">
+            <h3 class="text-base font-semibold text-gray-900 dark:text-white">Move {{ item_name }}</h3>
+            <div class="mt-3 text-left">
+                <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Move to
+                    <div class="mt-2 grid grid-cols-1">
+                        <select name="target"
+                            class="col-start-1 row-start-1 block w-full appearance-none rounded-md bg-white py-1.5 pr-8 pl-3 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:*:bg-gray-800 dark:focus:outline-indigo-500">
+                            {% for opt in options %}
+                            <option value="{{ opt.0 }}">{{ opt.1 }}{% if opt.2 %} (parent){% endif %}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                </label>
+            </div>
+            <div class="mt-5 sm:mt-6 sm:grid sm:grid-flow-row-dense sm:grid-cols-2 sm:gap-3">
+                <button type="submit"
+                    class="inline-flex w-full justify-center rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-xs hover:bg-indigo-500 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600 sm:col-start-2 dark:bg-indigo-500 dark:shadow-none dark:hover:bg-indigo-400 dark:focus-visible:outline-indigo-500">Move</button>
+                <button type="button" onclick="document.getElementById('action-dialog').close()"
+                    class="mt-3 inline-flex w-full justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-xs inset-ring-1 inset-ring-gray-300 hover:bg-gray-50 sm:col-start-1 sm:mt-0 dark:bg-white/10 dark:text-white dark:shadow-none dark:inset-ring-white/5 dark:hover:bg-white/20">Cancel</button>
+            </div>
+        </form>
+        {% endif %}
+    </div>
+</div>

@@ -145,12 +145,8 @@ fn build_web_router() -> Router {
             post(save_project_task_as_template),
         )
         .route(
-            "/projects/:project_id/tasks/:item_id/promote",
-            post(promote_project_task_form),
-        )
-        .route(
-            "/projects/:project_id/tasks/:item_id/subordinate",
-            post(subordinate_project_task_form),
+            "/projects/:project_id/tasks/:item_id/move",
+            get(get_move_task_dialog).post(move_project_task_form),
         )
         .route(
             "/projects/:project_id/events",
@@ -230,12 +226,8 @@ fn build_web_router() -> Router {
             get(project_simple_item_children_fragment),
         )
         .route(
-            "/projects/:project_id/simple-lists/:item_id/promote",
-            post(promote_project_simple_item_form),
-        )
-        .route(
-            "/projects/:project_id/simple-lists/:item_id/subordinate",
-            post(subordinate_project_simple_item_form),
+            "/projects/:project_id/simple-lists/:item_id/move",
+            get(get_move_simple_item_dialog).post(move_project_simple_item_form),
         )
         .route("/assigned-items", get(assigned_items_page))
         .route(

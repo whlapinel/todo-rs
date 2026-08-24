@@ -68,6 +68,9 @@ impl ProjectEventRow {
             // An Event never has children (see this impl's own doc comment) — no create route
             // to open the "Add sub-item" dialog against.
             add_child_url: None,
+            // An Event is always top-level and never has siblings tracked here (see this impl's
+            // own doc comment) — no Move action to offer.
+            move_url: None,
             reschedule_url: if item.google_event_id.is_some() {
                 None
             } else {
@@ -79,8 +82,6 @@ impl ProjectEventRow {
             assign_url: None,
             skip_url,
             toggle_complete_json: String::new(),
-            siblings: Vec::new(),
-            is_source_event_linked: false,
             show_complete: false,
             confirmation: None,
             dismiss_after_ms: None,

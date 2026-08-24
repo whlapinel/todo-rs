@@ -46,6 +46,16 @@ pub struct Row {
     /// Events (an Event never has children — see `ProjectEventRow`'s doc comment) and on any
     /// screen with its own non-shared `Row` type (`project_templates`/`project_item_series`).
     pub add_child_url: Option<String>,
+    /// Row-actions-menu-only — opens the "Move" dialog (`hx-get` into `#action-dialog`,
+    /// mirroring `add_child_url`'s dialog pattern), which lets the user reparent this item onto
+    /// its own grandparent ("promote", the dialog's first/parent option) or onto one of its
+    /// current siblings ("subordinate", every other option) from a single picker — see
+    /// `components/move_dialog.html`. `Some(...)` only when there's actually somewhere to move
+    /// to (a parent, or at least one sibling) and reparenting wouldn't conflict with a
+    /// `sourceEventId` reference (mutually exclusive with `parentItemId` — see
+    /// `Item::validate`). `None` on Events/Templates/series rows, none of which support
+    /// reparenting via this action.
+    pub move_url: Option<String>,
     pub reschedule_url: Option<String>,
     /// `Some(...)` only on a team-backed project (assignment has no meaning on a personal
     /// one) — opens the quick-assign dialog, mirroring `reschedule_url`'s dialog pattern.
@@ -57,16 +67,6 @@ pub struct Row {
     /// skipping it. `None` for any item that never came from a series.
     pub skip_url: Option<String>,
     pub toggle_complete_json: String,
-    /// (id, name) of every other item rendered alongside this one in the same list —
-    /// i.e. this item's actual siblings, since `render_rows` is only ever called with a
-    /// single sibling group (a full top-level list or one parent's children) at a time.
-    /// Populates the row's "subordinate under…" picker (see `subordinate_task_form`);
-    /// empty for an only child / sole top-level item.
-    pub siblings: Vec<(String, String)>,
-    /// True if this task references an Event via `sourceEventId` — its row hides the
-    /// "subordinate under…" picker even when siblings exist, since giving it a
-    /// `parentItemId` too would conflict with the reference (see `Item::validate`).
-    pub is_source_event_linked: bool,
     /// Whether the screen this row belongs to is currently showing completed items — baked
     /// into the checkbox's own `hx-vals` (as `showComplete`) so a completion PUT round-trips
     /// the value back to the handler that decides `dismiss_after_ms` below, the same way

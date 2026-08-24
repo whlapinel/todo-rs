@@ -38,16 +38,12 @@ impl ProjectSimpleItemRow {
                 "/web/projects/{project_id}/simple-lists/{}/add-child",
                 item.id
             )),
+            move_url: (item.parent_item_id.is_some() || siblings.iter().any(|s| s.id != item.id))
+                .then(|| format!("/web/projects/{project_id}/simple-lists/{}/move", item.id)),
             reschedule_url: None,
             assign_url: None,
             skip_url: None,
             toggle_complete_json: String::new(),
-            siblings: siblings
-                .iter()
-                .filter(|s| s.id != item.id)
-                .map(|s| (s.id.clone(), s.name.clone()))
-                .collect(),
-            is_source_event_linked: false,
             show_complete: false,
             confirmation: None,
             dismiss_after_ms: None,
@@ -86,6 +82,40 @@ impl AddChildDialog {
             parent_item_id: parent.id.clone(),
             parent_name: parent.name.clone(),
             post_create_url: format!("/web/projects/{project_id}/simple-lists"),
+        }
+    }
+}
+
+/// Sentinel `target` value meaning "promote" — see
+/// `project_tasks::templates::MOVE_TARGET_PARENT`'s identical rationale.
+pub const MOVE_TARGET_PARENT: &str = "up";
+
+/// See `project_tasks::templates::MoveDialog` for the full rationale (identical here, just
+/// posting to this screen's own move route).
+#[derive(Template)]
+#[template(path = "components/move_dialog.html")]
+pub struct MoveDialog {
+    pub item_name: String,
+    pub post_move_url: String,
+    pub options: Vec<(String, String, bool)>,
+}
+
+impl MoveDialog {
+    pub fn new(item: &Item, parent: Option<&Item>, siblings: &[Item], project_id: &str) -> Self {
+        let mut options: Vec<(String, String, bool)> = Vec::new();
+        if let Some(parent) = parent {
+            options.push((MOVE_TARGET_PARENT.to_string(), parent.name.clone(), true));
+        }
+        options.extend(
+            siblings
+                .iter()
+                .filter(|s| s.id != item.id)
+                .map(|s| (s.id.clone(), s.name.clone(), false)),
+        );
+        MoveDialog {
+            item_name: item.name.clone(),
+            post_move_url: format!("/web/projects/{project_id}/simple-lists/{}/move", item.id),
+            options,
         }
     }
 }
@@ -173,7 +203,6 @@ pub struct ProjectSimpleItemDetailPageTemplate {
     pub project_id: String,
     pub name: String,
     pub description: Option<String>,
-    pub is_top_level: bool,
     /// See `ProjectSimpleItemDetailDialog` — rendered separately and embedded alongside the
     /// rest of the page (Decision 3: a direct-URL/bookmark load auto-opens the same dialog an
     /// interactive row-click would have opened).

@@ -1241,21 +1241,19 @@ fn hx_redirect(location: String) -> Response {
         .into_response()
 }
 
-/// Promotes a child item to a sibling of its own parent — see `tasks::promote_task_form`.
-/// Unlike the legacy screens, the redirect target is always within this same project's Tasks
-/// screen (no per-kind dispatch table needed — see the plan doc's B5a note on why
-/// `dashboard::detail_url`/`list_url_for` aren't reused here).
-pub async fn promote_project_task_form(
+/// Opens the "Move" dialog — see `templates::MoveDialog`'s doc comment for the unified promote/
+/// subordinate rationale. `parent` is fetched unchecked since membership was already verified by
+/// `get_project_item` above; a since-deleted parent (unlikely — nothing deletes a parent out from
+/// under an in-flight dialog open, but `resolve_parent_link` treats it as possible elsewhere)
+/// would surface as a `NotFound` here, which is an acceptable failure mode for opening a dialog.
+pub async fn get_move_task_dialog(
     Path((project_id, item_id)): Path<(String, String)>,
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
-    Extension(activity_log): Extension<Arc<dyn ActivityLogRepo>>,
-    Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
-    TzOffset(tz): TzOffset,
-) -> Result<Response, ItemError> {
-    let target = project_item_service::resolve_promotion_target(
+) -> Result<Html<String>, ItemError> {
+    let task = project_item_service::get_project_item(
         &repo,
         &projects,
         &teams,
@@ -1264,42 +1262,32 @@ pub async fn promote_project_task_form(
         &item_id,
     )
     .await?;
-    let current = require_task(target.current)?;
-    let grandparent = target.grandparent;
-    let params = reparent_params(
-        &project_id,
-        &item_id,
-        &current,
-        grandparent.as_ref().map(|gp| gp.id.clone()),
-        target.offset_anchor,
-        tz,
-    );
-    project_item_service::update_project_item(
-        &repo,
-        &projects,
-        &teams,
-        &activity_log,
-        &series,
-        &auth_user.user_id,
-        params,
-    )
-    .await?;
-
-    let location = match &grandparent {
-        Some(gp) => project_task_url(&project_id, &gp.id),
-        None => project_tasks_list_url(&project_id),
+    let task = require_task(task)?;
+    let parent = match &task.parent_item_id {
+        Some(pid) => Some(repo.get_by_project(&project_id, pid).await?),
+        None => None,
     };
-    Ok(hx_redirect(location))
+    let siblings = sibling_group(&repo, &project_id, task.parent_item_id.as_deref()).await?;
+    render(MoveDialog::new(
+        &task,
+        parent.as_ref(),
+        &siblings,
+        &project_id,
+    ))
 }
 
 #[derive(serde::Deserialize, Debug)]
-pub struct SubordinateForm {
-    new_parent_id: String,
+pub struct MoveForm {
+    target: String,
 }
 
-/// Subordinates a sibling to become a child of another sibling — see
-/// `tasks::subordinate_task_form`.
-pub async fn subordinate_project_task_form(
+/// Reparents this item per `form.target` — either `MOVE_TARGET_PARENT` ("promote": reparent onto
+/// this item's own grandparent) or another item's id ("subordinate": reparent under that sibling)
+/// — replacing what used to be two separate routes/handlers (`promote`/`subordinate`) now that
+/// `MoveDialog` presents both as one picker. Unlike the legacy screens, the redirect target is
+/// always within this same project's Tasks screen (no per-kind dispatch table needed — see the
+/// plan doc's B5a note on why `dashboard::detail_url`/`list_url_for` aren't reused here).
+pub async fn move_project_task_form(
     Path((project_id, item_id)): Path<(String, String)>,
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
@@ -1308,26 +1296,54 @@ pub async fn subordinate_project_task_form(
     Extension(activity_log): Extension<Arc<dyn ActivityLogRepo>>,
     Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
     TzOffset(tz): TzOffset,
-    Form(form): Form<SubordinateForm>,
+    Form(form): Form<MoveForm>,
 ) -> Result<Response, ItemError> {
-    let target = project_item_service::resolve_subordination_target(
-        &repo,
-        &projects,
-        &teams,
-        &project_id,
-        &auth_user.user_id,
-        &item_id,
-        &form.new_parent_id,
-    )
-    .await?;
-    let current = require_task(target.current)?;
-    let new_parent = target.new_parent;
+    let (current, new_parent_item_id, offset_anchor, location) =
+        if form.target == MOVE_TARGET_PARENT {
+            let target = project_item_service::resolve_promotion_target(
+                &repo,
+                &projects,
+                &teams,
+                &project_id,
+                &auth_user.user_id,
+                &item_id,
+            )
+            .await?;
+            let location = match &target.grandparent {
+                Some(gp) => project_task_url(&project_id, &gp.id),
+                None => project_tasks_list_url(&project_id),
+            };
+            (
+                require_task(target.current)?,
+                target.grandparent.map(|gp| gp.id),
+                target.offset_anchor,
+                location,
+            )
+        } else {
+            let target = project_item_service::resolve_subordination_target(
+                &repo,
+                &projects,
+                &teams,
+                &project_id,
+                &auth_user.user_id,
+                &item_id,
+                &form.target,
+            )
+            .await?;
+            let location = project_task_url(&project_id, &target.new_parent.id);
+            (
+                require_task(target.current)?,
+                Some(target.new_parent.id),
+                target.offset_anchor,
+                location,
+            )
+        };
     let params = reparent_params(
         &project_id,
         &item_id,
         &current,
-        Some(new_parent.id.clone()),
-        target.offset_anchor,
+        new_parent_item_id,
+        offset_anchor,
         tz,
     );
     project_item_service::update_project_item(
@@ -1340,7 +1356,7 @@ pub async fn subordinate_project_task_form(
         params,
     )
     .await?;
-    Ok(hx_redirect(project_task_url(&project_id, &new_parent.id)))
+    Ok(hx_redirect(location))
 }
 
 pub async fn save_project_task_as_template(

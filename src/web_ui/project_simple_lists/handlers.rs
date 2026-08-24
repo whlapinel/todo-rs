@@ -114,7 +114,6 @@ pub async fn project_simple_item_detail_page(
     )
     .await?;
     render(ProjectSimpleItemDetailPageTemplate {
-        is_top_level: item.parent_item_id.is_none(),
         id: item.id,
         project_id,
         name: item.name,
@@ -340,7 +339,6 @@ pub async fn update_project_simple_item_form(
         )
         .await?;
         return Ok(render(ProjectSimpleItemDetailPageTemplate {
-            is_top_level: updated.parent_item_id.is_none(),
             id: updated.id.clone(),
             project_id,
             name: updated.name.clone(),
@@ -440,17 +438,16 @@ fn hx_redirect(location: String) -> Response {
         .into_response()
 }
 
-/// Promotes a child item to a sibling of its own parent — see `tasks::promote_task_form`.
-pub async fn promote_project_simple_item_form(
+/// Opens the "Move" dialog — see `project_tasks::handlers::get_move_task_dialog`'s identical
+/// rationale.
+pub async fn get_move_simple_item_dialog(
     Path((project_id, item_id)): Path<(String, String)>,
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
-    Extension(activity_log): Extension<Arc<dyn crate::storage::sqlite::ActivityLogRepo>>,
-    Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
-) -> Result<Response, ItemError> {
-    let target = project_item_service::resolve_promotion_target(
+) -> Result<Html<String>, ItemError> {
+    let item = project_item_service::get_project_item(
         &repo,
         &projects,
         &teams,
@@ -459,40 +456,29 @@ pub async fn promote_project_simple_item_form(
         &item_id,
     )
     .await?;
-    let current = require_simple(target.current)?;
-    let grandparent = target.grandparent;
-    let params = reparent_params(
-        &project_id,
-        &item_id,
-        &current,
-        grandparent.as_ref().map(|gp| gp.id.clone()),
-    );
-    project_item_service::update_project_item(
-        &repo,
-        &projects,
-        &teams,
-        &activity_log,
-        &series,
-        &auth_user.user_id,
-        params,
-    )
-    .await?;
-
-    let location = match &grandparent {
-        Some(gp) => format!("/web/projects/{project_id}/simple-lists/{}", gp.id),
-        None => format!("/web/projects/{project_id}/simple-lists"),
+    let item = require_simple(item)?;
+    let parent = match &item.parent_item_id {
+        Some(pid) => Some(repo.get_by_project(&project_id, pid).await?),
+        None => None,
     };
-    Ok(hx_redirect(location))
+    let siblings = sibling_group(&repo, &project_id, item.parent_item_id.as_deref()).await?;
+    render(MoveDialog::new(
+        &item,
+        parent.as_ref(),
+        &siblings,
+        &project_id,
+    ))
 }
 
 #[derive(serde::Deserialize, Debug)]
-pub struct SubordinateForm {
-    new_parent_id: String,
+pub struct MoveForm {
+    target: String,
 }
 
-/// Subordinates a sibling to become a child of another sibling — see
-/// `tasks::subordinate_task_form`.
-pub async fn subordinate_project_simple_item_form(
+/// Reparents this item per `form.target` — see
+/// `project_tasks::handlers::move_project_task_form`'s identical rationale, minus the offset/tz
+/// recompute (no `dueOffsetDays` concept for `ItemType::Simple` — see `reparent_params`).
+pub async fn move_project_simple_item_form(
     Path((project_id, item_id)): Path<(String, String)>,
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
@@ -500,21 +486,49 @@ pub async fn subordinate_project_simple_item_form(
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(activity_log): Extension<Arc<dyn crate::storage::sqlite::ActivityLogRepo>>,
     Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
-    Form(form): Form<SubordinateForm>,
+    Form(form): Form<MoveForm>,
 ) -> Result<Response, ItemError> {
-    let target = project_item_service::resolve_subordination_target(
-        &repo,
-        &projects,
-        &teams,
-        &project_id,
-        &auth_user.user_id,
-        &item_id,
-        &form.new_parent_id,
-    )
-    .await?;
-    let current = require_simple(target.current)?;
-    let new_parent = target.new_parent;
-    let params = reparent_params(&project_id, &item_id, &current, Some(new_parent.id.clone()));
+    let (current, new_parent_item_id, location) = if form.target == MOVE_TARGET_PARENT {
+        let target = project_item_service::resolve_promotion_target(
+            &repo,
+            &projects,
+            &teams,
+            &project_id,
+            &auth_user.user_id,
+            &item_id,
+        )
+        .await?;
+        let location = match &target.grandparent {
+            Some(gp) => format!("/web/projects/{project_id}/simple-lists/{}", gp.id),
+            None => format!("/web/projects/{project_id}/simple-lists"),
+        };
+        (
+            require_simple(target.current)?,
+            target.grandparent.map(|gp| gp.id),
+            location,
+        )
+    } else {
+        let target = project_item_service::resolve_subordination_target(
+            &repo,
+            &projects,
+            &teams,
+            &project_id,
+            &auth_user.user_id,
+            &item_id,
+            &form.target,
+        )
+        .await?;
+        let location = format!(
+            "/web/projects/{project_id}/simple-lists/{}",
+            target.new_parent.id
+        );
+        (
+            require_simple(target.current)?,
+            Some(target.new_parent.id),
+            location,
+        )
+    };
+    let params = reparent_params(&project_id, &item_id, &current, new_parent_item_id);
     project_item_service::update_project_item(
         &repo,
         &projects,
@@ -525,8 +539,5 @@ pub async fn subordinate_project_simple_item_form(
         params,
     )
     .await?;
-    Ok(hx_redirect(format!(
-        "/web/projects/{project_id}/simple-lists/{}",
-        new_parent.id
-    )))
+    Ok(hx_redirect(location))
 }

@@ -41,6 +41,10 @@
     <button type="button" hx-get="{{ url }}" hx-target="#action-dialog" hx-select="unset" hx-swap="innerHTML"
         class="block w-full cursor-pointer px-4 py-3 text-left text-sm text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-white/5">Add sub-item</button>
     {% endif %}
+    {% if let Some(url) = move_url %}
+    <button type="button" hx-get="{{ url }}" hx-target="#action-dialog" hx-select="unset" hx-swap="innerHTML"
+        class="block w-full cursor-pointer px-4 py-3 text-left text-sm text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-white/5">Move</button>
+    {% endif %}
     {% if let Some(url) = duplicate_url %}
     <button type="button" hx-post="{{ url }}"
         hx-confirm="Copy {{ name }}{% if has_children %} and all its sub-items{% endif %}?"

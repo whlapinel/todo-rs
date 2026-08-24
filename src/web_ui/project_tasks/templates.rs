@@ -103,6 +103,9 @@ impl ProjectTaskRow {
                 "/web/projects/{project_id}/tasks/{}/add-child",
                 item.id
             )),
+            move_url: (item.source_event_id().is_none()
+                && (item.parent_item_id.is_some() || siblings.iter().any(|s| s.id != item.id)))
+            .then(|| format!("/web/projects/{project_id}/tasks/{}/move", item.id)),
             reschedule_url: Some(format!(
                 "/web/projects/{project_id}/tasks/{}/reschedule",
                 item.id
@@ -111,12 +114,6 @@ impl ProjectTaskRow {
                 .then(|| format!("/web/projects/{project_id}/tasks/{}/assign", item.id)),
             skip_url,
             toggle_complete_json: (!item.complete).to_string(),
-            siblings: siblings
-                .iter()
-                .filter(|s| s.id != item.id)
-                .map(|s| (s.id.clone(), s.name.clone()))
-                .collect(),
-            is_source_event_linked: item.source_event_id().is_some(),
             show_complete,
             confirmation,
             dismiss_after_ms,
@@ -276,6 +273,48 @@ impl AddChildDialog {
             parent_item_id: parent.id.clone(),
             parent_name: parent.name.clone(),
             post_create_url: format!("/web/projects/{project_id}/tasks"),
+        }
+    }
+}
+
+/// Sentinel `target` value meaning "promote" — reparent onto the item's own grandparent — as
+/// opposed to every other `<option>` value in `MoveDialog`, which is a sibling's own id meaning
+/// "subordinate under this sibling". Never collides with a real item id.
+pub const MOVE_TARGET_PARENT: &str = "up";
+
+/// Opened from a task row's "Move" row-action (or the detail view's own "Move" button) — unifies
+/// what used to be two separate actions ("promote to sibling of parent" and "subordinate to
+/// sibling") into a single picker: the item's current parent (if any, listed first and marked
+/// "(parent)") plus every current sibling. Picking the parent entry promotes; picking a sibling
+/// subordinates the item under it. See `handlers::move_project_task_form`'s dispatch on
+/// `MOVE_TARGET_PARENT` and `CLAUDE.md`'s reparent-actions note.
+#[derive(Template)]
+#[template(path = "components/move_dialog.html")]
+pub struct MoveDialog {
+    pub item_name: String,
+    pub post_move_url: String,
+    /// (target value, label, is_parent) in display order — the parent entry (if any) always
+    /// first. `target value` is `MOVE_TARGET_PARENT` for the parent entry, a sibling's own id
+    /// otherwise.
+    pub options: Vec<(String, String, bool)>,
+}
+
+impl MoveDialog {
+    pub fn new(item: &Item, parent: Option<&Item>, siblings: &[Item], project_id: &str) -> Self {
+        let mut options: Vec<(String, String, bool)> = Vec::new();
+        if let Some(parent) = parent {
+            options.push((MOVE_TARGET_PARENT.to_string(), parent.name.clone(), true));
+        }
+        options.extend(
+            siblings
+                .iter()
+                .filter(|s| s.id != item.id)
+                .map(|s| (s.id.clone(), s.name.clone(), false)),
+        );
+        MoveDialog {
+            item_name: item.name.clone(),
+            post_move_url: format!("/web/projects/{project_id}/tasks/{}/move", item.id),
+            options,
         }
     }
 }
@@ -485,7 +524,6 @@ pub struct ProjectTaskDetailView {
     pub overdue: bool,
     pub scheduled_date: Option<String>,
     pub scheduled_end_date: Option<String>,
-    pub is_top_level: bool,
     pub is_offset_driven: bool,
     pub offset_label: Option<String>,
     pub is_team_project: bool,
@@ -552,7 +590,6 @@ impl ProjectTaskDetailView {
             overdue: item.is_overdue(Utc::now()),
             scheduled_date,
             scheduled_end_date,
-            is_top_level: item.parent_item_id.is_none(),
             is_offset_driven: item.is_offset_driven(),
             offset_label: offset_label_for(item),
             is_team_project,
