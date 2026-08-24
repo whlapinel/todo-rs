@@ -125,6 +125,10 @@ fn build_web_router() -> Router {
             get(get_quick_assign_task),
         )
         .route(
+            "/projects/:project_id/tasks/:item_id/add-child",
+            get(get_add_child_task),
+        )
+        .route(
             "/projects/:project_id/tasks/:item_id/edit",
             get(project_task_edit_page),
         )
@@ -216,6 +220,10 @@ fn build_web_router() -> Router {
         .route(
             "/projects/:project_id/simple-lists/:item_id/edit",
             get(project_simple_item_edit_page),
+        )
+        .route(
+            "/projects/:project_id/simple-lists/:item_id/add-child",
+            get(get_add_child_simple_item),
         )
         .route(
             "/projects/:project_id/simple-lists/:item_id/children",

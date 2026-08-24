@@ -99,6 +99,10 @@ impl ProjectTaskRow {
                 "/web/projects/{project_id}/tasks/{}/duplicate",
                 item.id
             )),
+            add_child_url: Some(format!(
+                "/web/projects/{project_id}/tasks/{}/add-child",
+                item.id
+            )),
             reschedule_url: Some(format!(
                 "/web/projects/{project_id}/tasks/{}/reschedule",
                 item.id
@@ -245,6 +249,33 @@ impl QuickAssignDialog {
             post_assign_url,
             assignee_options,
             assigned_to_user_id: task.assigned_to_user_id(),
+        }
+    }
+}
+
+/// Opened from a task row's "Add sub-item" row-action — a bare name-only create form, posting
+/// straight to the same POST `/web/projects/:project_id/tasks` endpoint the standalone "+ New
+/// Task" page and this item's own detail-page "New sub-item" form already use
+/// (`create_project_task_form`), with `parentItemId` pre-filled to this row's own id and
+/// `redirect=1` so a successful save is a full `HX-Redirect` back to the Tasks list — the
+/// simplest thing that's correct regardless of whether this row already had any children
+/// rendered inline (see `Row::children_html`'s doc comment: a leaf row has no
+/// `#item-{id}-children` container a narrower swap could target), mirroring `duplicate_url`'s
+/// existing same-shape redirect-to-list precedent.
+#[derive(Template)]
+#[template(path = "components/add_child_dialog.html")]
+pub struct AddChildDialog {
+    pub parent_item_id: String,
+    pub parent_name: String,
+    pub post_create_url: String,
+}
+
+impl AddChildDialog {
+    pub fn new(parent: &Item, project_id: &str) -> Self {
+        AddChildDialog {
+            parent_item_id: parent.id.clone(),
+            parent_name: parent.name.clone(),
+            post_create_url: format!("/web/projects/{project_id}/tasks"),
         }
     }
 }

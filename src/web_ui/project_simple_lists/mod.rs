@@ -9,6 +9,7 @@ use crate::web_ui::project_simple_lists::templates::{
     ProjectSimpleItemRow, ProjectSimpleItemRowsFragmentTemplate,
 };
 use askama::Template;
+use async_recursion::async_recursion;
 use axum::response::Html;
 use std::sync::Arc;
 
@@ -110,6 +111,69 @@ pub(crate) fn render_rows(items: &[Item], project_id: &str) -> Result<Vec<String
         .map(|i| ProjectSimpleItemRow::from_item(i, project_id, &all).render())
         .collect::<Result<Vec<_>, _>>()
         .map_err(ItemError::from)
+}
+
+/// Fixed left-padding class for a nested row at `depth` levels below the flat list's own
+/// top-level rows — mirrors `project_tasks::indent_class`'s identical rationale (Tailwind's
+/// compiler needs literal, not computed, class names, so nesting caps at 3 indent steps).
+fn indent_class(depth: u8) -> &'static str {
+    match depth {
+        0 => "",
+        1 => "pl-8",
+        2 => "pl-12",
+        _ => "pl-16",
+    }
+}
+
+/// Recursively renders `parent_item_id`'s full descendant subtree as ready-to-insert `<li>`
+/// markup, each descendant's own row in turn carrying its own nested `children_html` — the
+/// flat Simple Lists screen's in-place "expand to view sub-items" feature, mirroring
+/// `project_tasks::render_expandable_children`. Unlike that Tasks version, there's no
+/// `show_complete` filter to apply (Simple items have no `complete` concept at all — see
+/// `ProjectSimpleItemRow::from_item`'s doc comment).
+#[async_recursion]
+async fn render_expandable_children(
+    repo: &Arc<dyn ItemRepo>,
+    parent_item_id: &str,
+    project_id: &str,
+    depth: u8,
+) -> Result<String, ItemError> {
+    let children =
+        list_project_items_unchecked(repo, project_id, Some(parent_item_id.to_string())).await?;
+    let all: Vec<&Item> = children.iter().collect();
+    let mut html = String::new();
+    for i in &all {
+        let mut row = ProjectSimpleItemRow::from_item(i, project_id, &all);
+        row.indent_class = indent_class(depth);
+        if i.has_children {
+            row.children_html =
+                Some(render_expandable_children(repo, &i.id, project_id, depth + 1).await?);
+        }
+        html.push_str(&row.render()?);
+    }
+    Ok(html)
+}
+
+/// The flat list page's own row-building — opts each top-level row with children into the
+/// in-place expand feature (see `Row::children_html`'s doc comment) by eagerly inlining its
+/// whole descendant subtree, so the browser's expand/collapse toggle never round-trips to the
+/// server. Unlike plain `render_rows` above (used by the children-fragment/create-fragment
+/// routes, which stay non-expandable), this is async and needs `repo` to walk each branch.
+pub(crate) async fn render_rows_expandable(
+    repo: &Arc<dyn ItemRepo>,
+    items: &[Item],
+    project_id: &str,
+) -> Result<Vec<String>, ItemError> {
+    let all: Vec<&Item> = items.iter().collect();
+    let mut rows = Vec::with_capacity(all.len());
+    for i in &all {
+        let mut row = ProjectSimpleItemRow::from_item(i, project_id, &all);
+        if i.has_children {
+            row.children_html = Some(render_expandable_children(repo, &i.id, project_id, 1).await?);
+        }
+        rows.push(row.render()?);
+    }
+    Ok(rows)
 }
 
 /// `list_project_items_unchecked` already scopes to top-level, non-Template items — this

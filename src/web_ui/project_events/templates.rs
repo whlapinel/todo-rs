@@ -65,6 +65,9 @@ impl ProjectEventRow {
                     item.id
                 ))
             },
+            // An Event never has children (see this impl's own doc comment) — no create route
+            // to open the "Add sub-item" dialog against.
+            add_child_url: None,
             reschedule_url: if item.google_event_id.is_some() {
                 None
             } else {

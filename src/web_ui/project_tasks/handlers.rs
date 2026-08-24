@@ -1438,3 +1438,23 @@ pub async fn get_quick_assign_task(
         view.as_deref(),
     ))
 }
+
+pub async fn get_add_child_task(
+    Path((project_id, item_id)): Path<(String, String)>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+) -> Result<Html<String>, ItemError> {
+    let task = project_item_service::get_project_item(
+        &repo,
+        &projects,
+        &teams,
+        &project_id,
+        &auth_user.user_id,
+        &item_id,
+    )
+    .await?;
+    let task = require_task(task)?;
+    render(AddChildDialog::new(&task, &project_id))
+}

@@ -36,6 +36,16 @@ pub struct Row {
     /// from `item_url`, which always points at the read-only detail page.
     pub edit_url: Option<String>,
     pub duplicate_url: Option<String>,
+    /// Row-actions-menu-only — opens the "Add sub-item" dialog (`hx-get` into `#action-dialog`,
+    /// mirroring `reschedule_url`/`assign_url`'s dialog pattern). `Some(...)` on any row built
+    /// by `ProjectTaskRow::from_item`/`ProjectSimpleItemRow::from_item` — including calendar/
+    /// cross-project overlays (`project_calendar::calendar_row`, `main_calendar::calendar_row`,
+    /// `all_projects_tasks::all_projects_task_row`) that inherit it unchanged, mirroring
+    /// `duplicate_url`'s existing precedent of always saving/redirecting back to that item's
+    /// own project-scoped list regardless of which screen the row was rendered on. `None` on
+    /// Events (an Event never has children — see `ProjectEventRow`'s doc comment) and on any
+    /// screen with its own non-shared `Row` type (`project_templates`/`project_item_series`).
+    pub add_child_url: Option<String>,
     pub reschedule_url: Option<String>,
     /// `Some(...)` only on a team-backed project (assignment has no meaning on a personal
     /// one) — opens the quick-assign dialog, mirroring `reschedule_url`'s dialog pattern.

@@ -34,6 +34,10 @@ impl ProjectSimpleItemRow {
                 item.id
             )),
             duplicate_url: None,
+            add_child_url: Some(format!(
+                "/web/projects/{project_id}/simple-lists/{}/add-child",
+                item.id
+            )),
             reschedule_url: None,
             assign_url: None,
             skip_url: None,
@@ -62,6 +66,26 @@ impl ProjectSimpleItemRow {
             // and today's click-to-detail behavior.
             children_html: None,
             indent_class: "",
+        }
+    }
+}
+
+/// Opened from a row's "Add sub-item" row-action — see `project_tasks::templates::AddChildDialog`
+/// for the full rationale (identical here, just posting to this screen's own create route).
+#[derive(Template)]
+#[template(path = "components/add_child_dialog.html")]
+pub struct AddChildDialog {
+    pub parent_item_id: String,
+    pub parent_name: String,
+    pub post_create_url: String,
+}
+
+impl AddChildDialog {
+    pub fn new(parent: &Item, project_id: &str) -> Self {
+        AddChildDialog {
+            parent_item_id: parent.id.clone(),
+            parent_name: parent.name.clone(),
+            post_create_url: format!("/web/projects/{project_id}/simple-lists"),
         }
     }
 }

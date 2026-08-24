@@ -30,7 +30,9 @@ pub async fn project_simple_lists_page(
     let project =
         project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
     let items = list_project_simple_items(&repo, &project_id).await?;
-    let rows = render_rows_scoped(&items, &project_id)?;
+    let rows =
+        crate::web_ui::project_simple_lists::render_rows_expandable(&repo, &items, &project_id)
+            .await?;
     let points_label = match &project.team_id {
         Some(team_id) => {
             let points = team_service::member_points(&teams, team_id, &auth_user.user_id).await?;
@@ -152,6 +154,26 @@ pub async fn project_simple_item_edit_page(
         fields,
         nav_html,
     })
+}
+
+pub async fn get_add_child_simple_item(
+    Path((project_id, item_id)): Path<(String, String)>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+) -> Result<Html<String>, ItemError> {
+    let item = project_item_service::get_project_item(
+        &repo,
+        &projects,
+        &teams,
+        &project_id,
+        &auth_user.user_id,
+        &item_id,
+    )
+    .await?;
+    let item = require_simple(item)?;
+    render(AddChildDialog::new(&item, &project_id))
 }
 
 pub async fn project_simple_item_children_fragment(
