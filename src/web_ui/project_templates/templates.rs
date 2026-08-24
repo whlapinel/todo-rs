@@ -180,7 +180,6 @@ pub struct ProjectTemplateChildDetailDialog {
     pub name: String,
     pub view: String,
     pub edit_url: String,
-    pub full_page_url: String,
 }
 
 impl ProjectTemplateChildDetailDialog {
@@ -189,22 +188,17 @@ impl ProjectTemplateChildDetailDialog {
             name: name.to_string(),
             view,
             edit_url: format!("/web/projects/{project_id}/templates/{template_id}/items/{id}/edit"),
-            full_page_url: format!("/web/projects/{project_id}/templates/{template_id}/items/{id}"),
         }
     }
 }
 
+/// See docs/item-detail-full-page-retirement.md — this page is now just the read-only detail
+/// dialog fragment plus the Decision-3 auto-open script, not a full page with its own duplicate
+/// header.
 #[derive(Template)]
 #[template(path = "project_templates/child_detail_page.html")]
 pub struct ProjectTemplateChildDetailPageTemplate {
-    pub project_id: String,
-    pub template_id: String,
-    pub id: String,
     pub name: String,
-    pub view: String,
-    /// See `ProjectTemplateChildDetailDialog` — rendered separately from `view` and embedded
-    /// alongside it (Decision 3: a direct-URL/bookmark load auto-opens the same dialog an
-    /// interactive row-click would have opened).
     pub dialog: String,
     pub nav_html: String,
 }

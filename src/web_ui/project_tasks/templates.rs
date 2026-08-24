@@ -103,6 +103,13 @@ impl ProjectTaskRow {
                 "/web/projects/{project_id}/tasks/{}/add-child",
                 item.id
             )),
+            save_as_template_url: Some(format!(
+                "/web/projects/{project_id}/tasks/{}/save-as-template",
+                item.id
+            )),
+            // Events-only (see `Row::add_linked_task_url`'s doc comment) — a Task uses
+            // `add_child_url` instead.
+            add_linked_task_url: None,
             move_url: (item.source_event_id().is_none()
                 && (item.parent_item_id.is_some() || siblings.iter().any(|s| s.id != item.id)))
             .then(|| format!("/web/projects/{project_id}/tasks/{}/move", item.id)),
@@ -265,6 +272,11 @@ pub struct AddChildDialog {
     pub parent_item_id: String,
     pub parent_name: String,
     pub post_create_url: String,
+    /// Migrated from the retired full detail page's own "Add multiple at once" section — see
+    /// `handlers::create_project_tasks_batch`, which already accepted `parentItemId`/`redirect`
+    /// (the detail page posted to it too, just with a narrower `#children-list` target instead
+    /// of this dialog's full-redirect close).
+    pub post_batch_url: String,
 }
 
 impl AddChildDialog {
@@ -273,6 +285,7 @@ impl AddChildDialog {
             parent_item_id: parent.id.clone(),
             parent_name: parent.name.clone(),
             post_create_url: format!("/web/projects/{project_id}/tasks"),
+            post_batch_url: format!("/web/projects/{project_id}/tasks/batch"),
         }
     }
 }
@@ -809,19 +822,15 @@ impl ProjectTaskSeriesOccurrenceDetailDialog {
     }
 }
 
+/// See docs/item-detail-full-page-retirement.md — this page is now just the read-only detail
+/// dialog fragment plus the Decision-3 auto-open script. It previously also rendered a
+/// materialize-via-"add sub-item" form directly on the page (dropped, not moved, since nothing
+/// in the UI ever linked to this route in the first place — see that doc).
 #[derive(Template)]
 #[template(path = "project_tasks/series_occurrence_detail_page.html")]
 pub struct ProjectTaskSeriesOccurrenceDetailPageTemplate {
-    pub project_id: String,
     pub name: String,
-    pub is_skipped: bool,
-    pub view: String,
-    /// See `ProjectTaskSeriesOccurrenceDetailDialog` — rendered separately from `view` and
-    /// embedded alongside it (Decision 3: a direct-URL/bookmark load auto-opens the same
-    /// dialog an interactive trigger would have opened).
     pub dialog: String,
-    pub child_create_url: String,
-    pub edit_url: String,
     pub nav_html: String,
 }
 
@@ -990,7 +999,6 @@ pub struct ProjectTaskDetailDialog {
     pub complete: bool,
     pub view: String,
     pub edit_url: String,
-    pub full_page_url: String,
 }
 
 impl ProjectTaskDetailDialog {
@@ -1000,22 +1008,18 @@ impl ProjectTaskDetailDialog {
             complete,
             view,
             edit_url: format!("/web/projects/{project_id}/tasks/{id}/edit"),
-            full_page_url: format!("/web/projects/{project_id}/tasks/{id}"),
         }
     }
 }
 
+/// See docs/item-detail-full-page-retirement.md — this page is now just the read-only detail
+/// dialog fragment plus the Decision-3 auto-open script, the same minimal shape
+/// `ProjectTaskEditPageTemplate`/new_page.html already use, not a full page with its own
+/// duplicate header/Sub-items/Save-as-template section.
 #[derive(Template)]
 #[template(path = "project_tasks/detail_page.html")]
 pub struct ProjectTaskDetailPageTemplate {
-    pub id: String,
-    pub project_id: String,
     pub name: String,
-    pub complete: bool,
-    pub view: String,
-    /// See `ProjectTaskDetailDialog` — rendered separately from `view` and embedded alongside
-    /// it (Decision 3: a direct-URL/bookmark load of this page auto-opens the same dialog an
-    /// interactive row-click would have opened).
     pub dialog: String,
     pub nav_html: String,
 }

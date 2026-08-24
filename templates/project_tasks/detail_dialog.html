@@ -1,11 +1,14 @@
 <!-- Stage 1 of docs/dialog-item-forms-plan.md — the read-only detail dialog (Decision 1):
      reuses whatever detail_view.html already rendered (`view`, computed once by the handler,
-     see ProjectTaskDetailDialog::new) plus Edit/Close buttons. Deliberately lighter than the
-     full detail_page.html (no Sub-items management, no Save-as-template, no Delete — those stay
-     reachable via "View full page" below, or via the row's own "⋮" menu for Delete) — see the
-     plan doc's Stage 1 notes on this being a deliberate scope reduction for the quick-look
-     dialog, not an oversight. #dialog-fragment is the conventional wrapper id every
-     new/edit/detail dialog fragment uses. -->
+     see ProjectTaskDetailDialog::new) plus Edit/Close buttons. No Sub-items management/
+     Save-as-template/Delete here — Sub-items management is the row's own "Add sub-item" action
+     (now including batch-add, see add_child_dialog.html), Save-as-template and Delete are on
+     the row's "⋮" menu. The full detail page this dialog used to sit on top of ("View full
+     page") is retired — see docs/item-detail-full-page-retirement.md: it duplicated this
+     dialog's content and its "View full page" link's hx-target="#page" swap racing this
+     dialog's own onclick-close was the source of a real bug (the swapped-in page's auto-open
+     script would re-open this same dialog an instant after the click closed it). #dialog-
+     fragment is the conventional wrapper id every new/edit/detail dialog fragment uses. -->
 <div id="dialog-fragment">
   <div id="dialog-backdrop"
     class="fixed inset-0 bg-gray-500/75 dark:bg-gray-900/50 transition-opacity duration-300 ease-out opacity-0 group-open/dialog:opacity-100">
@@ -21,10 +24,6 @@
           hx-swap="innerHTML"
           class="inline-flex items-center justify-center rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-xs hover:bg-indigo-500 dark:bg-indigo-500 dark:shadow-none dark:hover:bg-indigo-400">Edit</button>
         {% endif %}
-        <a href="{{ full_page_url }}" hx-target="#page" hx-select="#page" hx-swap="innerHTML"
-          onclick="document.getElementById('action-dialog').close()"
-          class="inline-flex items-center justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-xs inset-ring-1 inset-ring-gray-300 hover:bg-gray-50 dark:bg-white/10 dark:text-white dark:shadow-none dark:inset-ring-white/5 dark:hover:bg-white/20">View
-          full page</a>
         <button type="button" onclick="document.getElementById('action-dialog').close()"
           class="ml-auto inline-flex items-center justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-xs inset-ring-1 inset-ring-gray-300 hover:bg-gray-50 dark:bg-white/10 dark:text-white dark:shadow-none dark:inset-ring-white/5 dark:hover:bg-white/20">Close</button>
       </div>

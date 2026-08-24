@@ -46,6 +46,21 @@ pub struct Row {
     /// Events (an Event never has children — see `ProjectEventRow`'s doc comment) and on any
     /// screen with its own non-shared `Row` type (`project_templates`/`project_item_series`).
     pub add_child_url: Option<String>,
+    /// Row-actions-menu-only — posts to this item's "Save as template" route (`hx-swap="none"`,
+    /// no confirmation dialog needed to render since the row-actions popover closes itself
+    /// immediately on any successful action, same as `duplicate_url`). Migrated off the retired
+    /// full detail page's own button (see docs/item-detail-full-page-retirement.md) — only
+    /// `ProjectTaskRow::from_item`/`ProjectEventRow::from_item` set this (`None` on Simple
+    /// Lists, which have no such route — see CLAUDE.md's own note on this, and Templates/
+    /// series, which have no non-shared `Row` type to begin with).
+    pub save_as_template_url: Option<String>,
+    /// Row-actions-menu-only — Events' own counterpart to `add_child_url`: opens the "Add
+    /// linked task" dialog, which creates a plain Task referencing this Event via
+    /// `sourceEventId` rather than `parentItemId` (Events can never have structural children —
+    /// see `ProjectEventRow`'s doc comment). Migrated off the retired full detail page's own
+    /// "New linked task" form (see docs/item-detail-full-page-retirement.md). `None` on every
+    /// row except an Event's own (Tasks/Simple Lists use `add_child_url` instead, never both).
+    pub add_linked_task_url: Option<String>,
     /// Row-actions-menu-only — opens the "Move" dialog (`hx-get` into `#action-dialog`,
     /// mirroring `add_child_url`'s dialog pattern), which lets the user reparent this item onto
     /// its own grandparent ("promote", the dialog's first/parent option) or onto one of its

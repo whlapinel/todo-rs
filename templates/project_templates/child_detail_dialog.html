@@ -1,6 +1,8 @@
 <!-- Stage 2 of docs/dialog-item-forms-plan.md — the read-only detail dialog, mirroring
      project_tasks/detail_dialog.html. Template children have no `complete` concept at all, so
-     Edit is always shown unconditionally (no gating). -->
+     Edit is always shown unconditionally (no gating). See
+     docs/item-detail-full-page-retirement.md — the full detail page this used to sit on top of
+     ("View full page") is retired. -->
 <div id="dialog-fragment">
   <div id="dialog-backdrop"
     class="fixed inset-0 bg-gray-500/75 dark:bg-gray-900/50 transition-opacity duration-300 ease-out opacity-0 group-open/dialog:opacity-100">
@@ -14,10 +16,6 @@
         <button type="button" hx-get="{{ edit_url }}" hx-target="#action-dialog" hx-select="#dialog-fragment"
           hx-swap="innerHTML"
           class="inline-flex items-center justify-center rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-xs hover:bg-indigo-500 dark:bg-indigo-500 dark:shadow-none dark:hover:bg-indigo-400">Edit</button>
-        <a href="{{ full_page_url }}" hx-target="#page" hx-select="#page" hx-swap="innerHTML"
-          onclick="document.getElementById('action-dialog').close()"
-          class="inline-flex items-center justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-xs inset-ring-1 inset-ring-gray-300 hover:bg-gray-50 dark:bg-white/10 dark:text-white dark:shadow-none dark:inset-ring-white/5 dark:hover:bg-white/20">View
-          full page</a>
         <button type="button" onclick="document.getElementById('action-dialog').close()"
           class="ml-auto inline-flex items-center justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-xs inset-ring-1 inset-ring-gray-300 hover:bg-gray-50 dark:bg-white/10 dark:text-white dark:shadow-none dark:inset-ring-white/5 dark:hover:bg-white/20">Close</button>
       </div>

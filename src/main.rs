@@ -175,6 +175,10 @@ fn build_web_router() -> Router {
             get(project_event_children_fragment).post(create_project_event_child_form),
         )
         .route(
+            "/projects/:project_id/events/:item_id/add-linked-task",
+            get(get_add_linked_task_dialog),
+        )
+        .route(
             "/projects/:project_id/events/:item_id/duplicate",
             post(duplicate_project_event_form),
         )

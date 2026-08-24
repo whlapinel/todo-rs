@@ -2,6 +2,15 @@
 {% block title %}{{ name }} · Todo{% endblock %}
 {% block content %}
 {{ dialog|safe }}
+<!-- Direct-URL/bookmark access only (Decision 3 of docs/dialog-item-forms-plan.md) — see
+     docs/item-detail-full-page-retirement.md: this page used to also render a full duplicate
+     of the dialog's content (header with Edit/Back links) underneath the auto-opened dialog;
+     that's retired now, matching edit_page.html/new_page.html's own dialog-only shape. An
+     htmx-triggered open already selected just #dialog-fragment out of this response, so this
+     sibling <script> is never part of what gets swapped in that path; it only runs on an
+     actual full-page load. Moves (not copies) #dialog-fragment's children into base.html's
+     persistent #action-dialog so nothing inert is left behind in #page once the dialog is
+     showing. -->
 <script>
   (function () {
     var dialog = document.getElementById('action-dialog');
@@ -14,19 +23,4 @@
     }
   })();
 </script>
-<div class="space-y-6">
-  <div class="md:flex md:items-center md:justify-between">
-    <div class="min-w-0 flex-1">
-      <h2 class="text-2xl/7 font-bold text-gray-900 sm:truncate sm:text-3xl sm:tracking-tight dark:text-white">{{ name }}</h2>
-    </div>
-    <div class="mt-4 flex items-center gap-x-3 md:mt-0 md:ml-4">
-      <a href="/web/projects/{{ project_id }}/templates/{{ template_id }}/items/{{ id }}/edit"
-         class="inline-flex items-center justify-center rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-xs hover:bg-indigo-500 dark:bg-indigo-500 dark:shadow-none dark:hover:bg-indigo-400">Edit</a>
-      <a href="/web/projects/{{ project_id }}/templates/{{ template_id }}"
-         class="inline-flex items-center justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-xs inset-ring inset-ring-gray-300 hover:bg-gray-50 dark:bg-white/10 dark:text-white dark:shadow-none dark:inset-ring-white/5 dark:hover:bg-white/20">Back to template</a>
-    </div>
-  </div>
-
-  {{ view|safe }}
-</div>
 {% endblock %}

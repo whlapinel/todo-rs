@@ -38,6 +38,11 @@ impl ProjectSimpleItemRow {
                 "/web/projects/{project_id}/simple-lists/{}/add-child",
                 item.id
             )),
+            // Simple items have no "Save as template" route (see CLAUDE.md's own note on this).
+            save_as_template_url: None,
+            // Events-only (see `Row::add_linked_task_url`'s doc comment) — a Simple item uses
+            // `add_child_url` instead.
+            add_linked_task_url: None,
             move_url: (item.parent_item_id.is_some() || siblings.iter().any(|s| s.id != item.id))
                 .then(|| format!("/web/projects/{project_id}/simple-lists/{}/move", item.id)),
             reschedule_url: None,
@@ -74,6 +79,9 @@ pub struct AddChildDialog {
     pub parent_item_id: String,
     pub parent_name: String,
     pub post_create_url: String,
+    /// See `project_tasks::templates::AddChildDialog::post_batch_url` for the full rationale
+    /// (identical here, just posting to this screen's own batch route).
+    pub post_batch_url: String,
 }
 
 impl AddChildDialog {
@@ -82,6 +90,7 @@ impl AddChildDialog {
             parent_item_id: parent.id.clone(),
             parent_name: parent.name.clone(),
             post_create_url: format!("/web/projects/{project_id}/simple-lists"),
+            post_batch_url: format!("/web/projects/{project_id}/simple-lists/batch"),
         }
     }
 }
@@ -182,7 +191,6 @@ pub struct ProjectSimpleItemDetailDialog {
     pub name: String,
     pub description: Option<String>,
     pub edit_url: String,
-    pub full_page_url: String,
 }
 
 impl ProjectSimpleItemDetailDialog {
@@ -191,21 +199,17 @@ impl ProjectSimpleItemDetailDialog {
             name: name.to_string(),
             description,
             edit_url: format!("/web/projects/{project_id}/simple-lists/{id}/edit"),
-            full_page_url: format!("/web/projects/{project_id}/simple-lists/{id}"),
         }
     }
 }
 
+/// See docs/item-detail-full-page-retirement.md — this page is now just the read-only detail
+/// dialog fragment plus the Decision-3 auto-open script, not a full page with its own duplicate
+/// header/Move button/Sub-items section.
 #[derive(Template)]
 #[template(path = "project_simple_lists/detail_page.html")]
 pub struct ProjectSimpleItemDetailPageTemplate {
-    pub id: String,
-    pub project_id: String,
     pub name: String,
-    pub description: Option<String>,
-    /// See `ProjectSimpleItemDetailDialog` — rendered separately and embedded alongside the
-    /// rest of the page (Decision 3: a direct-URL/bookmark load auto-opens the same dialog an
-    /// interactive row-click would have opened).
     pub dialog: String,
     pub nav_html: String,
 }

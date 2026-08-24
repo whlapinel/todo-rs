@@ -1,8 +1,10 @@
-<!-- Swapped into #action-dialog's innerHTML (see base.html) — same fragment shape as
-     reschedule_dialog.html/quick_assign_dialog.html, no <dialog> wrapper of its own. Unlike
-     those two, the save here is a create (not an update to the row that opened it), so on
-     success the form redirects back to the list rather than swapping a single row — see
-     `post_create_url`'s doc comment on each screen's own `AddChildDialog` struct. -->
+<!-- Opened from an Event row's "Add linked task" row-action (see docs/item-detail-full-page-
+     retirement.md) — Events can never have structural children (see `ProjectEventRow`'s doc
+     comment), so unlike add_child_dialog.html this posts a plain Task that references the
+     event via `sourceEventId`, not `parentItemId`, and the parent is already baked into
+     `post_create_url`'s own path segment rather than a hidden field. Same fragment shape as
+     add_child_dialog.html/reschedule_dialog.html otherwise — swapped into #action-dialog's
+     innerHTML, no <dialog> wrapper of its own. -->
 <div id="dialog-backdrop"
     class="fixed inset-0 bg-gray-500/75 dark:bg-gray-900/50 transition-opacity duration-300 ease-out opacity-0 group-open/dialog:opacity-100">
 </div>
@@ -11,14 +13,19 @@
     class="relative z-10 flex min-h-full items-end justify-center p-4 text-center focus:outline-none sm:items-center sm:p-0">
     <div class="relative transform overflow-hidden rounded-lg bg-white dark:bg-gray-800 px-4 pt-5 pb-4 text-left shadow-xl transition-all duration-300 ease-out translate-y-4 opacity-0 scale-95 group-open/dialog:translate-y-0 group-open/dialog:opacity-100 group-open/dialog:scale-100 sm:my-8 sm:w-full sm:max-w-lg sm:p-6 dark:outline dark:-outline-offset-1 dark:outline-white/10">
         <form hx-post="{{ post_create_url }}" hx-swap="none">
-            <input type="hidden" name="parentItemId" value="{{ parent_item_id }}" />
             <input type="hidden" name="redirect" value="1" />
-            <h3 class="text-base font-semibold text-gray-900 dark:text-white">Add sub-item to {{ parent_name }}</h3>
-            <div class="mt-3 text-left">
+            <h3 class="text-base font-semibold text-gray-900 dark:text-white">Add linked task to {{ parent_name }}</h3>
+            <div class="mt-3 text-left space-y-3">
                 <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Name
                     <div class="mt-2">
                         <input type="text" name="name" placeholder="Name" required maxlength="200" autofocus
                             class="block w-full rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 placeholder:text-gray-400 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:placeholder:text-gray-500 dark:focus:outline-indigo-500" />
+                    </div>
+                </label>
+                <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Offset days
+                    <div class="mt-2">
+                        <input type="number" name="dueOffsetDays"
+                            class="block w-full rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:focus:outline-indigo-500" />
                     </div>
                 </label>
             </div>
@@ -29,22 +36,5 @@
                     class="mt-3 inline-flex w-full justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-xs inset-ring-1 inset-ring-gray-300 hover:bg-gray-50 sm:col-start-1 sm:mt-0 dark:bg-white/10 dark:text-white dark:shadow-none dark:inset-ring-white/5 dark:hover:bg-white/20">Cancel</button>
             </div>
         </form>
-
-        <!-- Migrated from the now-retired full detail page's own "Add multiple at once"
-             section (docs/dialog-item-forms-plan.md's full-page detail views) — same batch
-             endpoint (`.../batch`), same `parentItemId`/`redirect=1` hidden fields, so a
-             successful submit closes this dialog via the same full HX-Redirect the single-add
-             form above already uses. -->
-        <details class="mt-4 rounded-lg border border-gray-200 bg-white p-3 text-left dark:border-white/10 dark:bg-gray-800/50">
-            <summary class="text-sm text-gray-700 cursor-pointer dark:text-gray-300">Add multiple at once</summary>
-            <form hx-post="{{ post_batch_url }}" hx-swap="none" class="mt-3 space-y-2">
-                <input type="hidden" name="parentItemId" value="{{ parent_item_id }}" />
-                <input type="hidden" name="redirect" value="1" />
-                <textarea name="names" rows="4" placeholder="One sub-item per line"
-                    class="block w-full rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 placeholder:text-gray-400 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:placeholder:text-gray-500 dark:focus:outline-indigo-500"></textarea>
-                <button type="submit"
-                    class="inline-flex w-full justify-center rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-xs hover:bg-indigo-500 dark:bg-indigo-500 dark:shadow-none dark:hover:bg-indigo-400">Add all</button>
-            </form>
-        </details>
     </div>
 </div>

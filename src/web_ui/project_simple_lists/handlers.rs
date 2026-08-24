@@ -114,10 +114,7 @@ pub async fn project_simple_item_detail_page(
     )
     .await?;
     render(ProjectSimpleItemDetailPageTemplate {
-        id: item.id,
-        project_id,
         name: item.name,
-        description: item.description.clone(),
         dialog,
         nav_html,
     })
@@ -339,10 +336,7 @@ pub async fn update_project_simple_item_form(
         )
         .await?;
         return Ok(render(ProjectSimpleItemDetailPageTemplate {
-            id: updated.id.clone(),
-            project_id,
             name: updated.name.clone(),
-            description: updated.description.clone(),
             dialog,
             nav_html,
         })?

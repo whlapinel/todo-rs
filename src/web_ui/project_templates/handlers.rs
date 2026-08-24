@@ -399,7 +399,7 @@ pub async fn project_template_child_detail_page(
         &template_id,
         &item.id,
         &item.name,
-        view.clone(),
+        view,
     )
     .render()?;
     let nav_html = nav::build_nav_html(
@@ -410,11 +410,7 @@ pub async fn project_template_child_detail_page(
     )
     .await?;
     render(ProjectTemplateChildDetailPageTemplate {
-        project_id,
-        template_id,
-        id: item.id,
         name: item.name,
-        view,
         dialog,
         nav_html,
     })
@@ -509,7 +505,7 @@ pub async fn update_project_template_child_form(
             &template_id,
             &updated.id,
             &updated.name,
-            view.clone(),
+            view,
         )
         .render()?;
         let nav_html = nav::build_nav_html(
@@ -520,11 +516,7 @@ pub async fn update_project_template_child_form(
         )
         .await?;
         return Ok(render(ProjectTemplateChildDetailPageTemplate {
-            project_id,
-            template_id,
-            id: updated.id.clone(),
             name: updated.name.clone(),
-            view,
             dialog,
             nav_html,
         })?

@@ -154,7 +154,7 @@ pub async fn project_event_detail_page(
     let view = ProjectEventDetailView::from_item(&item, tz, series_link).render()?;
     let is_imported = item.google_event_id.is_some();
     let dialog =
-        ProjectEventDetailDialog::new(&item.id, &project_id, &item.name, is_imported, view.clone())
+        ProjectEventDetailDialog::new(&item.id, &project_id, &item.name, is_imported, view)
             .render()?;
     let nav_html = nav::build_nav_html(
         &projects,
@@ -164,13 +164,9 @@ pub async fn project_event_detail_page(
     )
     .await?;
     render(ProjectEventDetailPageTemplate {
-        id: item.id,
-        project_id,
         name: item.name,
-        view,
         dialog,
         nav_html,
-        is_imported,
     })
 }
 
@@ -235,7 +231,7 @@ pub(crate) async fn render_series_occurrence_detail_page(
         occurrence_ts,
         &series.name,
         is_skipped,
-        view.clone(),
+        view,
     )
     .render()?;
     let nav_html = nav::build_nav_html(
@@ -246,19 +242,8 @@ pub(crate) async fn render_series_occurrence_detail_page(
     )
     .await?;
     render(ProjectEventSeriesOccurrenceDetailPageTemplate {
-        project_id: project_id.to_string(),
         name: series.name.clone(),
-        is_skipped,
-        view,
         dialog,
-        child_create_url: format!(
-            "/web/projects/{project_id}/series/{}/occurrences/{occurrence_ts}/event-children",
-            series.id
-        ),
-        edit_url: format!(
-            "/web/projects/{project_id}/series/{}/occurrences/{occurrence_ts}/edit",
-            series.id
-        ),
         nav_html,
     })
 }
@@ -436,11 +421,39 @@ pub async fn project_event_children_fragment(
     .await
 }
 
+/// Opened from an Event row's "Add linked task" row-action — see `AddLinkedTaskDialog`'s own
+/// doc comment.
+pub async fn get_add_linked_task_dialog(
+    Path((project_id, item_id)): Path<(String, String)>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+) -> Result<Html<String>, ItemError> {
+    let event = project_item_service::get_project_item(
+        &repo,
+        &projects,
+        &teams,
+        &project_id,
+        &auth_user.user_id,
+        &item_id,
+    )
+    .await?;
+    let event = require_event(event)?;
+    render(AddLinkedTaskDialog::new(&event, &project_id))
+}
+
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectEventChildForm {
     name: String,
     due_offset_days: Option<String>,
+    /// See `project_tasks::ProjectTaskForm::redirect`'s identical rationale — set only when
+    /// this form was reached via the row-actions "Add linked task" dialog
+    /// (`AddLinkedTaskDialog`), which (unlike the events detail page's own now-retired "New
+    /// linked task" form) has no `#children-list` on whatever page it was opened from to
+    /// target instead.
+    redirect: Option<String>,
 }
 
 /// Creates a top-level Task that references this event via `sourceEventId` — not a
@@ -456,9 +469,10 @@ pub async fn create_project_event_child_form(
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     TzOffset(tz): TzOffset,
     Form(form): Form<ProjectEventChildForm>,
-) -> Result<Html<String>, ItemError> {
+) -> Result<Response, ItemError> {
     let project =
         project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
+    let redirect = form.redirect.is_some();
     let params = crate::service::project_items::CreateProjectItemParams {
         project_id: project_id.clone(),
         name: form.name,
@@ -475,7 +489,10 @@ pub async fn create_project_event_child_form(
     };
     project_item_service::create_project_item(&repo, &projects, &teams, &auth_user.user_id, params)
         .await?;
-    render_source_event_fragment(
+    if redirect {
+        return Ok(redirect_to_project_events(&project_id));
+    }
+    Ok(render_source_event_fragment(
         &repo,
         &teams,
         &project_id,
@@ -484,7 +501,8 @@ pub async fn create_project_event_child_form(
         &auth_user.user_id,
         tz,
     )
-    .await
+    .await?
+    .into_response())
 }
 
 /// Redirect back to the project's events list (via the `hx-redirect` header) after a create
@@ -578,7 +596,7 @@ pub async fn update_project_event_form(
             &project_id,
             &updated.name,
             is_imported,
-            view.clone(),
+            view,
         )
         .render()?;
         let nav_html = nav::build_nav_html(
@@ -589,13 +607,9 @@ pub async fn update_project_event_form(
         )
         .await?;
         return Ok(render(ProjectEventDetailPageTemplate {
-            id: updated.id.clone(),
-            project_id,
             name: updated.name.clone(),
-            view,
             dialog,
             nav_html,
-            is_imported,
         })?
         .into_response());
     }

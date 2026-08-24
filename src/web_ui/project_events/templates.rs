@@ -68,6 +68,19 @@ impl ProjectEventRow {
             // An Event never has children (see this impl's own doc comment) — no create route
             // to open the "Add sub-item" dialog against.
             add_child_url: None,
+            // Unlike edit/duplicate/reschedule above, the old detail page's "Save as template"
+            // button was never gated on `is_imported` — kept unconditional here to match (see
+            // docs/item-detail-full-page-retirement.md).
+            save_as_template_url: Some(format!(
+                "/web/projects/{project_id}/events/{}/save-as-template",
+                item.id
+            )),
+            // Same "never gated on is_imported" precedent as save_as_template_url above — the
+            // old detail page's "New linked task" form was unconditional too.
+            add_linked_task_url: Some(format!(
+                "/web/projects/{project_id}/events/{}/add-linked-task",
+                item.id
+            )),
             // An Event is always top-level and never has siblings tracked here (see this impl's
             // own doc comment) — no Move action to offer.
             move_url: None,
@@ -98,6 +111,29 @@ impl ProjectEventRow {
             // expand feature never applies here.
             children_html: None,
             indent_class: "",
+        }
+    }
+}
+
+/// Opened from an Event row's "Add linked task" row-action — see
+/// `project_tasks::templates::AddChildDialog` for the overall rationale, and
+/// `components/add_linked_task_dialog.html`'s own doc comment for why this can't just reuse
+/// that same component (a linked task references its Event via `sourceEventId`, not
+/// `parentItemId`, so the parent id lives in `post_create_url`'s own path rather than a hidden
+/// form field). Migrated off the retired full detail page's "New linked task" form — see
+/// docs/item-detail-full-page-retirement.md.
+#[derive(Template)]
+#[template(path = "components/add_linked_task_dialog.html")]
+pub struct AddLinkedTaskDialog {
+    pub parent_name: String,
+    pub post_create_url: String,
+}
+
+impl AddLinkedTaskDialog {
+    pub fn new(parent: &Item, project_id: &str) -> Self {
+        AddLinkedTaskDialog {
+            parent_name: parent.name.clone(),
+            post_create_url: format!("/web/projects/{project_id}/events/{}/children", parent.id),
         }
     }
 }
@@ -496,19 +532,15 @@ impl ProjectEventSeriesOccurrenceDetailDialog {
     }
 }
 
+/// See docs/item-detail-full-page-retirement.md — this page is now just the read-only detail
+/// dialog fragment plus the Decision-3 auto-open script. It previously also rendered a
+/// materialize-via-"add linked task" form directly on the page (dropped, not moved, since
+/// nothing in the UI ever linked to this route in the first place — see that doc).
 #[derive(Template)]
 #[template(path = "project_events/series_occurrence_detail_page.html")]
 pub struct ProjectEventSeriesOccurrenceDetailPageTemplate {
-    pub project_id: String,
     pub name: String,
-    pub is_skipped: bool,
-    pub view: String,
-    /// See `ProjectEventDetailDialog` — rendered separately from `view` and embedded
-    /// alongside it (Decision 3: a direct-URL/bookmark load auto-opens the same dialog an
-    /// interactive trigger would have opened).
     pub dialog: String,
-    pub child_create_url: String,
-    pub edit_url: String,
     pub nav_html: String,
 }
 
@@ -583,7 +615,6 @@ pub struct ProjectEventDetailDialog {
     pub is_imported: bool,
     pub view: String,
     pub edit_url: String,
-    pub full_page_url: String,
 }
 
 impl ProjectEventDetailDialog {
@@ -593,28 +624,19 @@ impl ProjectEventDetailDialog {
             is_imported,
             view,
             edit_url: format!("/web/projects/{project_id}/events/{id}/edit"),
-            full_page_url: format!("/web/projects/{project_id}/events/{id}"),
         }
     }
 }
 
+/// See docs/item-detail-full-page-retirement.md — this page is now just the read-only detail
+/// dialog fragment plus the Decision-3 auto-open script, not a full page with its own duplicate
+/// header/Linked-tasks/Save-as-template section.
 #[derive(Template)]
 #[template(path = "project_events/detail_page.html")]
 pub struct ProjectEventDetailPageTemplate {
-    pub id: String,
-    pub project_id: String,
     pub name: String,
-    pub view: String,
-    /// See `ProjectEventDetailDialog` — rendered separately from `view` and embedded
-    /// alongside it (Decision 3: a direct-URL/bookmark load auto-opens the same dialog an
-    /// interactive row-click would have opened).
     pub dialog: String,
     pub nav_html: String,
-    /// Hides the "Edit" link — see `templates/project_events/detail_page.html` and
-    /// CLAUDE.md's read-only-enforcement note. `service::project_items::update_project_item`
-    /// rejects any edit of an imported item regardless, so this is purely to avoid showing a
-    /// link that would only ever lead to an error.
-    pub is_imported: bool,
 }
 
 #[derive(Template)]

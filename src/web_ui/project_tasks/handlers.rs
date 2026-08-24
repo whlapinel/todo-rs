@@ -192,14 +192,9 @@ pub async fn project_task_detail_page(
         series_link,
     )
     .render()?;
-    let dialog = ProjectTaskDetailDialog::new(
-        &item.id,
-        &project_id,
-        &item.name,
-        item.complete,
-        view.clone(),
-    )
-    .render()?;
+    let dialog =
+        ProjectTaskDetailDialog::new(&item.id, &project_id, &item.name, item.complete, view)
+            .render()?;
     let nav_html = nav::build_nav_html(
         &projects,
         &auth_user.user_id,
@@ -208,11 +203,7 @@ pub async fn project_task_detail_page(
     )
     .await?;
     render(ProjectTaskDetailPageTemplate {
-        id: item.id,
-        project_id,
         name: item.name,
-        complete: item.complete,
-        view,
         dialog,
         nav_html,
     })
@@ -313,7 +304,7 @@ pub(crate) async fn render_series_occurrence_detail_page(
         occurrence_ts,
         &series.name,
         is_skipped,
-        view.clone(),
+        view,
     )
     .render()?;
     let nav_html = nav::build_nav_html(
@@ -324,19 +315,8 @@ pub(crate) async fn render_series_occurrence_detail_page(
     )
     .await?;
     render(ProjectTaskSeriesOccurrenceDetailPageTemplate {
-        project_id: project_id.to_string(),
         name: series.name.clone(),
-        is_skipped,
-        view,
         dialog,
-        child_create_url: format!(
-            "/web/projects/{project_id}/series/{}/occurrences/{occurrence_ts}/task-children",
-            series.id
-        ),
-        edit_url: format!(
-            "/web/projects/{project_id}/series/{}/occurrences/{occurrence_ts}/edit",
-            series.id
-        ),
         nav_html,
     })
 }
@@ -953,7 +933,7 @@ pub async fn update_project_task_form(
                 &project_id,
                 &updated.name,
                 updated.complete,
-                view.clone(),
+                view,
             )
             .render()?;
             let nav_html = nav::build_nav_html(
@@ -964,11 +944,7 @@ pub async fn update_project_task_form(
             )
             .await?;
             Ok(render(ProjectTaskDetailPageTemplate {
-                id: updated.id.clone(),
-                project_id,
                 name: updated.name.clone(),
-                complete: updated.complete,
-                view,
                 dialog,
                 nav_html,
             })?
