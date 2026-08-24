@@ -472,16 +472,18 @@ pub struct OccurrenceRowActionQuery {
     /// the pre-existing `redirect_to_current_page` behavior below.
     view: Option<String>,
     show_complete: Option<String>,
-    /// Stage 2 of `docs/list-filtering-plan.md`: only meaningful alongside `view=tasks-list` —
-    /// `ProjectTaskVirtualRow::from_occurrence` bakes the full active filter set (not just
-    /// `showComplete`) into this route's URL so `view=tasks-list`'s rebuild of `#items-list`
-    /// applies the same filters the surrounding page load did. The `view=all-tasks` branch
-    /// below ignores these — `all_projects_tasks` hasn't been migrated onto `ListFilters` yet
-    /// (see the plan's Out of scope section).
+    /// Stage 2 of `docs/list-filtering-plan.md`: `ProjectTaskVirtualRow`/`AllProjectsTaskVirtualRow`'s
+    /// own `from_occurrence` bakes the full active filter set (not just `showComplete`) into this
+    /// route's URL, whichever `view` is set — so `view=tasks-list`'s/`view=all-tasks`'s rebuild of
+    /// `#items-list` applies the same filters the surrounding page load did.
     assigned_to: Option<String>,
     due_date: Option<String>,
     schedule: Option<String>,
     recurring: Option<String>,
+    /// Only meaningful alongside `view=all-tasks` — the cross-project-only `project` filter
+    /// dimension `all_projects_tasks::AllProjectsTasksQuery` carries, absent from `ListFilters`
+    /// itself (see that type's own doc comment). Ignored by every other `view`.
+    project: Option<String>,
 }
 
 /// The row-checkbox counterpart to Skip/Unskip (`project_item_series::handlers`) — completes a
@@ -582,6 +584,13 @@ pub async fn complete_project_item_series_occurrence_form(
         return Ok(Html(super::items_list_inner_html(&rows)).into_response());
     }
     if q.view.as_deref() == Some("all-tasks") {
+        let filters = list_filters_from_parts(
+            &q.show_complete,
+            &q.assigned_to,
+            &q.due_date,
+            &q.schedule,
+            &q.recurring,
+        );
         let rows = crate::web_ui::all_projects_tasks::list_all_projects_task_rows(
             &repo,
             &projects,
@@ -589,7 +598,8 @@ pub async fn complete_project_item_series_occurrence_form(
             &teams,
             &item_series,
             &auth_user.user_id,
-            q.show_complete.is_some(),
+            &filters,
+            q.project.as_deref(),
             tz,
             Some(item.id.as_str()),
         )

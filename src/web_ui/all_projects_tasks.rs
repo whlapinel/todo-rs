@@ -10,6 +10,7 @@ use crate::storage::sqlite::{
     ActivityLogRepo, ItemRepo, ItemSeriesRepo, ProjectRepo, TeamRepo, UserRepo,
 };
 use crate::web_ui::TzOffset;
+use crate::web_ui::list_filters::{ListFilterQuery, ListFilters};
 use crate::web_ui::nav::{self, ActiveContext, SidebarSection};
 use crate::web_ui::project_tasks::names_for;
 use crate::web_ui::project_tasks::templates::ProjectTaskRow;
@@ -23,19 +24,6 @@ use std::sync::Arc;
 
 fn render<T: Template>(t: T) -> Result<Html<String>, ItemError> {
     Ok(Html(t.render()?))
-}
-
-/// Cross-project Task-only counterpart to `main_calendar::is_included` — this screen never
-/// carries Events/Simple/Template rows at all (the per-project gather loop below already
-/// filters to `ItemKind::Task`), so unlike that function this only needs the one case: a Task
-/// is unrestricted on a personal project (single member, "assigned to me" is moot) and
-/// restricted to the requester's own assignment on a team-backed one — otherwise this screen
-/// would show every team member's tasks, defeating its "what's mine, across every project"
-/// purpose. See `docs/all-projects-landing-plan.md` Stage 2: no `assignedToAny` toggle yet
-/// (deferred — this screen has no such control today, matching the flat calendar list's own
-/// pre-Stage-4 behavior).
-fn task_included(is_team_project: bool, assigned_to: Option<&str>, user_id: &str) -> bool {
-    !is_team_project || assigned_to == Some(user_id)
 }
 
 /// Cross-project counterpart to `project_tasks::templates::ProjectTaskVirtualRow` — a Task
@@ -62,26 +50,33 @@ struct AllProjectsTaskVirtualRow {
 }
 
 impl AllProjectsTaskVirtualRow {
-    /// `show_complete` bakes a `?view=all-tasks[&showComplete=1]` suffix onto the
-    /// checkbox/Skip/Unskip URLs, mirroring `ProjectTaskVirtualRow::from_occurrence`'s own
+    /// `filters`/`project_filter` bake a `?view=all-tasks&<filters>[&project=<id>]` suffix onto
+    /// the checkbox/Skip/Unskip URLs, mirroring `ProjectTaskVirtualRow::from_occurrence`'s own
     /// `list_query` — this screen is always the flat list (no calendar-day-panel equivalent, so
     /// no `in_list_view` gate is needed), letting `project_tasks::handlers::
     /// complete_project_item_series_occurrence_form`'s `"all-tasks"` branch (and
     /// `project_item_series::handlers`' skip/unskip `"all-tasks"` branch,
-    /// `docs/all-projects-landing-plan.md` Stage 4) rebuild `#items-list` in place.
+    /// `docs/all-projects-landing-plan.md` Stage 4) rebuild `#items-list` in place with the same
+    /// filters (including the cross-project-only `project` dimension) the surrounding page load
+    /// applied.
     fn from_occurrence(
         occ: &ProjectOccurrence,
         project_id: &str,
         project_name: &str,
         tz: i32,
-        show_complete: bool,
+        filters: &ListFilters,
+        project_filter: Option<&str>,
     ) -> Self {
         let local = to_local(occ.occurrence_date, tz);
-        let list_query = if show_complete {
-            "?view=all-tasks&showComplete=1"
-        } else {
-            "?view=all-tasks"
-        };
+        let mut parts = vec!["view=all-tasks".to_string()];
+        let filters_suffix = filters.query_string();
+        if !filters_suffix.is_empty() {
+            parts.push(filters_suffix);
+        }
+        if let Some(pid) = project_filter {
+            parts.push(format!("project={pid}"));
+        }
+        let list_query = format!("?{}", parts.join("&"));
         Self {
             series_id: occ.series_id.clone(),
             occurrence_ts: occ.occurrence_date.timestamp(),
@@ -163,13 +158,62 @@ pub(crate) fn all_projects_task_row(
 struct AllProjectsTasksListPageTemplate {
     rows: Vec<String>,
     show_complete: bool,
+    /// `AssignedToFilter::as_value()`/`DueDateFilter::as_value()`/`ScheduleFilter::as_value()` —
+    /// see `templates/project_tasks/list_page.html`'s identical filter-dialog fields, which this
+    /// mirrors exactly.
+    assigned_to: String,
+    /// Merged, deduped (by user id) `active_member_options` across every team-backed project the
+    /// requester belongs to — populates the "Assigned to" select's specific-member options, since
+    /// a cross-project screen has no single team to ask.
+    assignee_options: Vec<(String, String)>,
+    /// Whether the requester belongs to at least one team-backed project — gates whether the
+    /// "Assigned to" select renders at all, the cross-project counterpart of `project_tasks`'s
+    /// per-project `is_team_project` gate.
+    has_team_project: bool,
+    due_date: String,
+    schedule: String,
+    recurring: bool,
+    /// Pre-encoded `ListFilters::query_string()` — see `templates/project_tasks/list_page.html`'s
+    /// identical "Filters" button dot-indicator use.
+    filters_query: String,
+    /// `(project id, project name, is_selected)` — `project_tasks/new_page.html`'s project
+    /// `<select>` shape, reused here for the filter dialog's own project dimension.
+    project_options: Vec<(String, String, bool)>,
+    /// `"all"` or a specific project id — the filter dialog's project `<select>` value.
+    project_filter: String,
     nav_html: String,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct AllProjectsTasksQuery {
     show_complete: Option<String>,
+    assigned_to: Option<String>,
+    due_date: Option<String>,
+    schedule: Option<String>,
+    recurring: Option<String>,
+    /// Cross-project-only filter dimension (`docs/list-filtering-plan.md`'s Out of scope note) —
+    /// a specific project id, or absent/`"all"` for every project the requester belongs to.
+    project: Option<String>,
+}
+
+impl AllProjectsTasksQuery {
+    fn filters(&self) -> ListFilters {
+        ListFilters::from_query(ListFilterQuery {
+            show_complete: self.show_complete.clone(),
+            assigned_to: self.assigned_to.clone(),
+            due_date: self.due_date.clone(),
+            schedule: self.schedule.clone(),
+            recurring: self.recurring.clone(),
+        })
+    }
+
+    fn project_filter(&self) -> Option<&str> {
+        self.project
+            .as_deref()
+            .map(str::trim)
+            .filter(|p| !p.is_empty() && *p != "all")
+    }
 }
 
 /// Cross-project row assembly — one project at a time, mirroring
@@ -182,9 +226,17 @@ pub struct AllProjectsTasksQuery {
 ///
 /// `just_completed_item_id` mirrors `project_tasks::render_rows_with_virtual`'s own parameter —
 /// forces that one item's row to stay visible (with its "Completed" confirm-then-fade badge)
-/// even when `!show_complete` would otherwise filter it out, used by `project_tasks::handlers::
+/// even when the filters would otherwise exclude it, used by `project_tasks::handlers::
 /// complete_project_item_series_occurrence_form`'s `"all-tasks"` rebuild branch. `None` for the
 /// plain page load (`all_projects_tasks_page`).
+///
+/// `filters` is the same screen-agnostic `ListFilters` `project_tasks` uses
+/// (`docs/list-filtering-plan.md`) — every dimension (`showComplete`/`assignedTo`/`dueDate`/
+/// `schedule`/`recurring`) applies per item/occurrence exactly as it does there, gated by each
+/// item's own project's `team_id.is_some()`. `project_filter`, unlike every other dimension, has
+/// no `ListFilters` counterpart (that type is deliberately screen-agnostic, and "which project"
+/// is meaningless on a screen already scoped to one) — `Some(id)` restricts the whole gather loop
+/// to that one project, `None` (the default) spans every project the requester belongs to.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn list_all_projects_task_rows(
     repo: &Arc<dyn ItemRepo>,
@@ -193,14 +245,19 @@ pub(crate) async fn list_all_projects_task_rows(
     teams: &Arc<dyn TeamRepo>,
     series: &Arc<dyn ItemSeriesRepo>,
     requester_user_id: &str,
-    show_complete: bool,
+    filters: &ListFilters,
+    project_filter: Option<&str>,
     tz: i32,
     just_completed_item_id: Option<&str>,
 ) -> Result<Vec<String>, ItemError> {
     let user_projects = project_service::list_projects(projects, requester_user_id).await?;
+    let now = Utc::now();
 
     let mut entries: Vec<(i64, String)> = Vec::new();
     for project in &user_projects {
+        if project_filter.is_some_and(|pid| pid != project.id) {
+            continue;
+        }
         let is_team_project = project.team_id.is_some();
         let names = match &project.team_id {
             Some(team_id) => names_for(teams, team_id, requester_user_id).await?,
@@ -212,22 +269,15 @@ pub(crate) async fn list_all_projects_task_rows(
         items.retain(|i| i.kind() == ItemKind::Task);
 
         for item in &items {
-            if !task_included(
-                is_team_project,
-                item.assigned_to_user_id().as_deref(),
-                requester_user_id,
-            ) {
-                continue;
-            }
-            if !show_complete && item.complete && Some(item.id.as_str()) != just_completed_item_id {
+            let just_completed = Some(item.id.as_str()) == just_completed_item_id;
+            if !(filters.matches(item, requester_user_id, is_team_project, now) || just_completed) {
                 continue;
             }
             let ts = item.due_date().map(|d| d.timestamp()).unwrap_or(i64::MAX);
             let skip_url =
                 item_series_service::skip_url_for_item(series, item, &project.id).await?;
-            let just_completed = Some(item.id.as_str()) == just_completed_item_id;
             let confirmation = just_completed.then(|| "Completed".to_string());
-            let dismiss_after_ms = (just_completed && !show_complete).then_some(1800u32);
+            let dismiss_after_ms = (just_completed && !filters.show_complete).then_some(1800u32);
             let html = all_projects_task_row(
                 item,
                 &project.id,
@@ -236,44 +286,41 @@ pub(crate) async fn list_all_projects_task_rows(
                 is_team_project,
                 tz,
                 skip_url,
-                show_complete,
+                filters.show_complete,
                 confirmation,
                 dismiss_after_ms,
             )?;
             entries.push((ts, html));
         }
 
-        let occurrences = item_series_service::list_occurrence_states_for_project(
-            series,
-            users,
-            &project.id,
-            Utc::now(),
-            Utc::now(),
-            tz,
-        )
-        .await?
-        .into_iter()
-        .filter(|occ| occ.item_type == ItemKind::Task && occ.is_current)
-        .filter(|occ| !matches!(occ.state, OccurrenceState::Materialized { .. }))
-        .filter(|occ| {
-            task_included(
-                is_team_project,
-                occ.assigned_to_user_id.as_deref(),
-                requester_user_id,
+        if filters.recurring {
+            let occurrences = item_series_service::list_occurrence_states_for_project(
+                series,
+                users,
+                &project.id,
+                Utc::now(),
+                Utc::now(),
+                tz,
             )
-        });
-        for occ in occurrences {
-            entries.push((
-                occ.occurrence_date.timestamp(),
-                AllProjectsTaskVirtualRow::from_occurrence(
-                    &occ,
-                    &project.id,
-                    &project.name,
-                    tz,
-                    show_complete,
-                )
-                .render()?,
-            ));
+            .await?
+            .into_iter()
+            .filter(|occ| occ.item_type == ItemKind::Task && occ.is_current)
+            .filter(|occ| !matches!(occ.state, OccurrenceState::Materialized { .. }))
+            .filter(|occ| filters.matches_occurrence(occ, requester_user_id, is_team_project, now));
+            for occ in occurrences {
+                entries.push((
+                    occ.occurrence_date.timestamp(),
+                    AllProjectsTaskVirtualRow::from_occurrence(
+                        &occ,
+                        &project.id,
+                        &project.name,
+                        tz,
+                        filters,
+                        project_filter,
+                    )
+                    .render()?,
+                ));
+            }
         }
     }
 
@@ -291,7 +338,8 @@ pub async fn all_projects_tasks_page(
     TzOffset(tz): TzOffset,
     Query(q): Query<AllProjectsTasksQuery>,
 ) -> Result<Html<String>, ItemError> {
-    let show_complete = q.show_complete.is_some();
+    let filters = q.filters();
+    let project_filter = q.project_filter();
     let rows = list_all_projects_task_rows(
         &repo,
         &projects,
@@ -299,11 +347,42 @@ pub async fn all_projects_tasks_page(
         &teams,
         &series,
         &auth_user.user_id,
-        show_complete,
+        &filters,
+        project_filter,
         tz,
         None,
     )
     .await?;
+    let user_projects = project_service::list_projects(&projects, &auth_user.user_id).await?;
+    let mut assignee_map: HashMap<String, String> = HashMap::new();
+    let mut has_team_project = false;
+    for project in &user_projects {
+        if let Some(team_id) = &project.team_id {
+            has_team_project = true;
+            for (id, name) in crate::web_ui::project_tasks::active_member_options(
+                &teams,
+                team_id,
+                &auth_user.user_id,
+            )
+            .await?
+            {
+                assignee_map.entry(id).or_insert(name);
+            }
+        }
+    }
+    let mut assignee_options: Vec<(String, String)> = assignee_map.into_iter().collect();
+    assignee_options.sort_by(|a, b| a.1.cmp(&b.1));
+    let project_filter_value = project_filter.unwrap_or("all").to_string();
+    let project_options = user_projects
+        .iter()
+        .map(|p| {
+            (
+                p.id.clone(),
+                p.name.clone(),
+                project_filter == Some(p.id.as_str()),
+            )
+        })
+        .collect();
     let nav_html = nav::build_nav_html(
         &projects,
         &auth_user.user_id,
@@ -313,7 +392,16 @@ pub async fn all_projects_tasks_page(
     .await?;
     render(AllProjectsTasksListPageTemplate {
         rows,
-        show_complete,
+        show_complete: filters.show_complete,
+        assigned_to: filters.assigned_to.as_value(),
+        assignee_options,
+        has_team_project,
+        due_date: filters.due_date.as_value().to_string(),
+        schedule: filters.schedule.as_value().to_string(),
+        recurring: filters.recurring,
+        filters_query: filters.query_string(),
+        project_options,
+        project_filter: project_filter_value,
         nav_html,
     })
 }

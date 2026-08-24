@@ -518,13 +518,16 @@ pub struct OccurrenceRowActionQuery {
     view: Option<String>,
     show_complete: Option<String>,
     /// Stage 2 of `docs/list-filtering-plan.md` — see `project_tasks::handlers::
-    /// OccurrenceRowActionQuery`'s identical fields/rationale; only consumed by the
-    /// `view=tasks-list` branch below, ignored by `view=all-tasks`/`view=all-events` (neither
-    /// screen is migrated onto `ListFilters` yet).
+    /// OccurrenceRowActionQuery`'s identical fields/rationale; consumed by both the
+    /// `view=tasks-list` and `view=all-tasks` branches below (ignored by `view=all-events`,
+    /// which has no `ListFilters` concept — Events aren't completable).
     assigned_to: Option<String>,
     due_date: Option<String>,
     schedule: Option<String>,
     recurring: Option<String>,
+    /// Only meaningful alongside `view=all-tasks` — see `project_tasks::handlers::
+    /// OccurrenceRowActionQuery::project`'s identical rationale.
+    project: Option<String>,
 }
 
 /// Stage 6 of docs/recurring-events-virtual-occurrences-rough-plan.md — the "Skip" button
@@ -607,6 +610,13 @@ pub async fn skip_project_item_series_occurrence_form(
         .await?);
     }
     if q.view.as_deref() == Some("all-tasks") {
+        let filters = list_filters_from_parts(
+            &q.show_complete,
+            &q.assigned_to,
+            &q.due_date,
+            &q.schedule,
+            &q.recurring,
+        );
         return Ok(rebuild_all_tasks_list_response(
             &repo,
             &projects,
@@ -614,7 +624,8 @@ pub async fn skip_project_item_series_occurrence_form(
             &teams,
             &item_series,
             &auth_user.user_id,
-            q.show_complete.is_some(),
+            &filters,
+            q.project.as_deref(),
             tz,
         )
         .await?);
@@ -692,6 +703,13 @@ pub async fn unskip_project_item_series_occurrence_form(
         .await?);
     }
     if q.view.as_deref() == Some("all-tasks") {
+        let filters = list_filters_from_parts(
+            &q.show_complete,
+            &q.assigned_to,
+            &q.due_date,
+            &q.schedule,
+            &q.recurring,
+        );
         return Ok(rebuild_all_tasks_list_response(
             &repo,
             &projects,
@@ -699,7 +717,8 @@ pub async fn unskip_project_item_series_occurrence_form(
             &teams,
             &item_series,
             &auth_user.user_id,
-            q.show_complete.is_some(),
+            &filters,
+            q.project.as_deref(),
             tz,
         )
         .await?);
@@ -756,8 +775,9 @@ async fn rebuild_tasks_list_response(
 
 /// Shared by the `view=all-tasks` branch of both Skip and Unskip — the cross-project
 /// counterpart to `rebuild_tasks_list_response` above, rebuilding `#items-list` via
-/// `all_projects_tasks::list_all_projects_task_rows` (every project, not just `project_id`).
-/// `docs/all-projects-landing-plan.md` Stage 4.
+/// `all_projects_tasks::list_all_projects_task_rows` (every project, not just `project_id`,
+/// unless `project_filter` narrows it). `docs/all-projects-landing-plan.md` Stage 4.
+#[allow(clippy::too_many_arguments)]
 async fn rebuild_all_tasks_list_response(
     repo: &Arc<dyn ItemRepo>,
     projects: &Arc<dyn ProjectRepo>,
@@ -765,7 +785,8 @@ async fn rebuild_all_tasks_list_response(
     teams: &Arc<dyn TeamRepo>,
     item_series: &Arc<dyn ItemSeriesRepo>,
     requester_user_id: &str,
-    show_complete: bool,
+    filters: &ListFilters,
+    project_filter: Option<&str>,
     tz: i32,
 ) -> Result<Response, ItemError> {
     let rows = crate::web_ui::all_projects_tasks::list_all_projects_task_rows(
@@ -775,7 +796,8 @@ async fn rebuild_all_tasks_list_response(
         teams,
         item_series,
         requester_user_id,
-        show_complete,
+        filters,
+        project_filter,
         tz,
         None,
     )

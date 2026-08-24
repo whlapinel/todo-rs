@@ -9,13 +9,14 @@
       </h2>
     </div>
     <div class="mt-4 flex items-center gap-x-3 md:mt-0 md:ml-4">
-      <label class="text-sm text-gray-600 flex items-center gap-x-1 dark:text-gray-400">
-        <input type="checkbox" name="showComplete" value="1" {% if show_complete %}checked{% endif %}
-          hx-get="/web/tasks" hx-trigger="change" hx-target="#page" hx-select="#page" hx-swap="innerHTML"
-          hx-push-url="true"
-          class="size-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-600 dark:border-white/20 dark:bg-white/5" />
-        Show completed
-      </label>
+      <button type="button" onclick="document.getElementById('task-filters-dialog').showModal()"
+        class="relative inline-flex items-center justify-center gap-x-1.5 rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-xs inset-ring inset-ring-gray-300 hover:bg-gray-50 dark:bg-white/10 dark:text-white dark:shadow-none dark:inset-ring-white/5 dark:hover:bg-white/20">
+        {% include "icons/filter.html" %}
+        Filters
+        {% if !filters_query.is_empty() || project_filter != "all" %}
+        <span class="absolute -top-1 -right-1 size-2.5 rounded-full bg-indigo-600 dark:bg-indigo-500"></span>
+        {% endif %}
+      </button>
       <button type="button" hx-get="/web/tasks/new{% if show_complete %}?showComplete=1{% endif %}"
         hx-target="#action-dialog" hx-select="#dialog-fragment" hx-swap="innerHTML"
         class="inline-flex items-center justify-center rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-xs hover:bg-indigo-500 dark:bg-indigo-500 dark:shadow-none dark:hover:bg-indigo-400">
@@ -23,6 +24,77 @@
       </button>
     </div>
   </div>
+
+  <!-- Mirrors templates/project_tasks/list_page.html's filter dialog exactly (see that file's
+       doc comment for the rationale of using a self-contained <dialog> with an explicit Apply
+       button rather than instant-on-change submission) plus one addition: a "Project" select,
+       the cross-project-only filter dimension `ListFilters` itself deliberately has no
+       counterpart for (see docs/list-filtering-plan.md's Out of scope note) — this screen threads
+       it separately as its own `project` query param alongside the shared filter set. -->
+  <dialog id="task-filters-dialog"
+    class="group/dialog fixed inset-0 size-auto max-h-none max-w-none overflow-y-auto bg-transparent backdrop:bg-transparent">
+    <div id="task-filters-dialog-backdrop"
+      class="fixed inset-0 bg-gray-500/75 dark:bg-gray-900/50 transition-opacity duration-300 ease-out opacity-0 group-open/dialog:opacity-100">
+    </div>
+    <div tabindex="0"
+      class="relative z-10 flex min-h-full items-end justify-center p-4 text-center focus:outline-none sm:items-center sm:p-0">
+      <div
+        class="relative transform overflow-hidden rounded-lg bg-white dark:bg-gray-800 px-4 pt-5 pb-4 text-left shadow-xl transition-all duration-300 ease-out translate-y-4 opacity-0 scale-95 group-open/dialog:translate-y-0 group-open/dialog:opacity-100 group-open/dialog:scale-100 sm:my-8 sm:w-full sm:max-w-lg sm:p-6 dark:outline dark:-outline-offset-1 dark:outline-white/10">
+        <form id="filter-bar" hx-get="/web/tasks" hx-target="#page" hx-select="#page" hx-swap="innerHTML"
+          hx-push-url="true">
+          <h3 class="text-base font-semibold text-gray-900 dark:text-white">Filters</h3>
+          <div class="mt-3 flex flex-col gap-3">
+            <select name="project"
+              class="rounded-md bg-white py-1.5 pr-8 pl-3 text-sm text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:*:bg-gray-800 dark:focus:outline-indigo-500">
+              <option value="all" {% if project_filter=="all" %}selected{% endif %}>All projects</option>
+              {% for opt in project_options %}
+              <option value="{{ opt.0 }}" {% if opt.2 %}selected{% endif %}>{{ opt.1 }}</option>
+              {% endfor %}
+            </select>
+            <select name="showComplete"
+              class="rounded-md bg-white py-1.5 pr-8 pl-3 text-sm text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:*:bg-gray-800 dark:focus:outline-indigo-500">
+              <option value="1" {% if show_complete %}selected{% endif %}>Complete and Incomplete</option>
+              <option value="0" {% if !show_complete %}selected{% endif %}>Only Incomplete</option>
+            </select>
+            {% if has_team_project %}
+            <select name="assignedTo"
+              class="rounded-md bg-white py-1.5 pr-8 pl-3 text-sm text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:*:bg-gray-800 dark:focus:outline-indigo-500">
+              <option value="me" {% if assigned_to=="me" %}selected{% endif %}>Assigned to me</option>
+              <option value="unassigned" {% if assigned_to=="unassigned" %}selected{% endif %}>Unassigned</option>
+              <option value="all" {% if assigned_to=="all" %}selected{% endif %}>Everyone</option>
+              {% for opt in assignee_options %}
+              <option value="{{ opt.0 }}" {% if assigned_to==opt.0 %}selected{% endif %}>{{ opt.1 }}</option>
+              {% endfor %}
+            </select>
+            {% endif %}
+            <select name="dueDate"
+              class="rounded-md bg-white py-1.5 pr-8 pl-3 text-sm text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:*:bg-gray-800 dark:focus:outline-indigo-500">
+              <option value="" {% if due_date=="all" %}selected{% endif %}>Any due date</option>
+              <option value="overdue" {% if due_date=="overdue" %}selected{% endif %}>Overdue</option>
+              <option value="none" {% if due_date=="none" %}selected{% endif %}>No due date</option>
+            </select>
+            <select name="schedule"
+              class="rounded-md bg-white py-1.5 pr-8 pl-3 text-sm text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:*:bg-gray-800 dark:focus:outline-indigo-500">
+              <option value="" {% if schedule=="all" %}selected{% endif %}>Any schedule</option>
+              <option value="past" {% if schedule=="past" %}selected{% endif %}>Scheduled in the past</option>
+              <option value="none" {% if schedule=="none" %}selected{% endif %}>Not scheduled</option>
+            </select>
+            <select name="recurring"
+              class="rounded-md bg-white py-1.5 pr-8 pl-3 text-sm text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:*:bg-gray-800 dark:focus:outline-indigo-500">
+              <option value="" {% if recurring %}selected{% endif %}>Show recurring</option>
+              <option value="no" {% if !recurring %}selected{% endif %}>Hide recurring</option>
+            </select>
+          </div>
+          <div class="mt-5 sm:mt-6 sm:grid sm:grid-flow-row-dense sm:grid-cols-2 sm:gap-3">
+            <button type="submit"
+              class="inline-flex w-full justify-center rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-xs hover:bg-indigo-500 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600 sm:col-start-2 dark:bg-indigo-500 dark:shadow-none dark:hover:bg-indigo-400 dark:focus-visible:outline-indigo-500">Apply</button>
+            <button type="reset" onclick="document.getElementById('task-filters-dialog').close()"
+              class="mt-3 inline-flex w-full justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-xs inset-ring-1 inset-ring-gray-300 hover:bg-gray-50 sm:col-start-1 sm:mt-0 dark:bg-white/10 dark:text-white dark:shadow-none dark:inset-ring-white/5 dark:hover:bg-white/20">Cancel</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </dialog>
 
   <ul id="items-list"
     class="divide-y divide-gray-100 rounded-lg border border-gray-200 bg-white px-4 dark:divide-white/5 dark:border-white/10 dark:bg-gray-800/50">
