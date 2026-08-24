@@ -263,7 +263,12 @@ impl ProjectCalendarVirtualRow {
 /// The assigned-to-me filter is gated on `is_team_project`: a personal-project item never
 /// carries a `TeamAssignment` at all (see CLAUDE.md's Points section — `assigned_to_user_id`/
 /// `points` are "only meaningful on a team-backed project"), so applying that filter ungated
-/// would silently empty every personal project's calendar under the new "mine" default.
+/// would silently empty every personal project's calendar under the new "mine" default. It's
+/// also exempted for `ItemKind::Event` entirely (mirrors `main_calendar::is_included`'s
+/// `Event => true` arm — see CLAUDE.md's Cross-project scoping rule doc comment): an Event or
+/// Event-series occurrence has no meaningful "not mine" state, and most carry no assignee at
+/// all, so gating them the same as Tasks silently hid every Event series occurrence on a
+/// team-backed project (2026-08-24 bug fix).
 #[allow(clippy::too_many_arguments)]
 async fn day_list_rows(
     due_items: &[DueItem],
@@ -285,7 +290,8 @@ async fn day_list_rows(
         .iter()
         .filter(|di| di.item.kind() != ItemKind::Simple)
         .filter(|di| type_filter.is_none_or(|k| di.item.kind() == k))
-        .filter(|di| mine(di.item.assigned_to_user_id()))
+        // Events are never assignment-gated — see build_calendar_days' identical carve-out.
+        .filter(|di| di.item.kind() == ItemKind::Event || mine(di.item.assigned_to_user_id()))
         .filter(|di| calendar_date(&di.item).map(|d| to_local(d, tz).date_naive()) == Some(date))
         .collect();
     let mut entries: Vec<(i64, String)> = Vec::with_capacity(day_items.len());
@@ -313,7 +319,8 @@ async fn day_list_rows(
         .iter()
         .filter(|occ| !matches!(occ.state, OccurrenceState::Materialized { .. }))
         .filter(|occ| type_filter.is_none_or(|k| occ.item_type == k))
-        .filter(|occ| mine(occ.assigned_to_user_id.clone()))
+        // Events are never assignment-gated — see build_calendar_days' identical carve-out.
+        .filter(|occ| occ.item_type == ItemKind::Event || mine(occ.assigned_to_user_id.clone()))
         .filter(|occ| to_local(occ.occurrence_date, tz).date_naive() == date)
     {
         entries.push((
@@ -555,7 +562,15 @@ fn build_calendar_days(
     let mut counts: std::collections::HashMap<NaiveDate, usize> = std::collections::HashMap::new();
     for di in due_items {
         let item = &di.item;
-        if item.kind() == ItemKind::Simple || !mine(item.assigned_to_user_id()) {
+        if item.kind() == ItemKind::Simple {
+            continue;
+        }
+        // Events are never assignment-gated (see CLAUDE.md's Cross-project scoping rule /
+        // main_calendar::is_included's identical carve-out) — an Event or Event-series
+        // occurrence has no meaningful "not mine" state, and most don't carry an assignee
+        // at all, so gating them here silently hid every Event series occurrence on a
+        // team-backed project.
+        if item.kind() != ItemKind::Event && !mine(item.assigned_to_user_id()) {
             continue;
         }
         if let Some(dt) = calendar_date(item) {
@@ -563,7 +578,7 @@ fn build_calendar_days(
         }
     }
     for occ in virtual_occurrences {
-        if !mine(occ.assigned_to_user_id.clone()) {
+        if occ.item_type != ItemKind::Event && !mine(occ.assigned_to_user_id.clone()) {
             continue;
         }
         let local = to_local(occ.occurrence_date, tz);

@@ -2,18 +2,6 @@
 
 Open issues and feature requests, merged from the former `docs/issues.md` and `docs/features.md` (2026-08-20) into a single sorted list. Completed or superseded items — including ones from the old files that were already resolved but hadn't been moved out yet — live in `docs/archived/archived_issues_and_features.md`.
 
-- I don't want a "full page" version of the item details. I only want the dialog. if we need to expand the dialog to fit everything then let's do that.
-- Related to the above, there's a bug surfaced by navigating to the full details page and back to the list... the details dialog stays stuck on the same item
-- Clicking the ellipses a second time still doesn't hide the popover menu, have to click somewhere else
-- Need filtering for the remaining lists: `project_events`, `project_simple_lists`, `all_projects_tasks`, `all_projects_events`, plus the `project` filter dimension (only meaningful on the two all-projects screens). The Project Tasks screen is done, along with the shared, reusable `ListFilters` vocabulary (`src/web_ui/list_filters.rs`) it's built on — see the archived `docs/archived/list-filtering-plan.md` for the completed design and the decisions to carry forward (single-select `assignedTo` with Me/Unassigned/All/one member, no `skipped` filter, no multi-select/customizable-select). `project_simple_lists` has no due/scheduled/recurring concept at all (only `complete` applies).
-- Allow moving a task or event to another project (distinct from the same-project "duplicate" action above).
-- A previous solution to the Google calendar import problem was that all-day events will be given a date of 12:00pm in order to avoid the shift to the previous day. The other option I was given is having a user-configurable time-zone. It didn't occur to me at the time of implementation but why not instead add the "all-day" concept to our event schema? Let's require events to either be marked all-day or have a scheduled start time.
-- Need a way to set user's time zone via web UI. There's currently no user config 
-- Add a `priority` field to task items and task series; sort first by priority, then by due date.
-- Allow adding tags to items
-- Consider visibly disabling inputs that will result in error. Specifically, recurring tasks that aren't current should have complete and skip grayed out, and skipped recurring tasks and events that aren't cursor should have unskip grayed out.
-- Add metadata fields to `Item`: `created_at`, `created_by`, `deleted_at`, `deleted_by` (tag for deletion instead of deleting outright, allowing recovery), with a TTL after which the item is actually deleted. Depends on the soft-delete design question mentioned elsewhere. Add completed_by field to activity log.
-    - Open design question: should delete mark a `deleted` column true instead of actually deleting, to allow undo within a timeframe and easy viewing of recently-deleted items? Unsure this is the right pattern — wants a tradeoffs discussion before deciding. If adopted, pairs with the metadata-fields item.
 - Add reminder schema and UI to tasks, series, and events. 
 - Default value is reminders pushed on the instant they're scheduled for (for tasks and events), and on the instant they're due (for tasks)
 - Add in-app notifications for reminders.
@@ -22,6 +10,17 @@ Open issues and feature requests, merged from the former `docs/issues.md` and `d
     - Comment notifications configurability
         - radio with (default = all comments ) or only tasks I'm assigned, 
         - events (checkbox)
+- Add metadata fields to `Item`: `created_at`, `created_by`, `deleted_at`, `deleted_by` (tag for deletion instead of deleting outright, allowing recovery), with a TTL after which the item is actually deleted. Depends on the soft-delete design question mentioned elsewhere. Add completed_by field to activity log.
+    - Open design question: should delete mark a `deleted` column true instead of actually deleting, to allow undo within a timeframe and easy viewing of recently-deleted items? Unsure this is the right pattern — wants a tradeoffs discussion before deciding. If adopted, pairs with the metadata-fields item.
+- All completions should get an undo button in the activity log
+- All skips should get an undo button in the activity log
+- Need filtering for the remaining lists: `project_events`, `project_simple_lists`, `all_projects_tasks`, `all_projects_events`, plus the `project` filter dimension (only meaningful on the two all-projects screens). The Project Tasks screen is done, along with the shared, reusable `ListFilters` vocabulary (`src/web_ui/list_filters.rs`) it's built on — see the archived `docs/archived/list-filtering-plan.md` for the completed design and the decisions to carry forward (single-select `assignedTo` with Me/Unassigned/All/one member, no `skipped` filter, no multi-select/customizable-select). `project_simple_lists` has no due/scheduled/recurring concept at all (only `complete` applies).
+- Allow moving a task or event to another project (distinct from the same-project "duplicate" action above).
+- A previous solution to the Google calendar import problem was that all-day events will be given a date of 12:00pm in order to avoid the shift to the previous day. The other option I was given is having a user-configurable time-zone. It didn't occur to me at the time of implementation but why not instead add the "all-day" concept to our event schema? Let's require events to either be marked all-day or have a scheduled start time.
+- Need a way to set user's time zone via web UI. There's currently no user config 
+- Add a `priority` field to task items and task series; sort first by priority, then by due date.
+- Allow adding tags to items
+- Consider visibly disabling inputs that will result in error. Specifically, recurring tasks that aren't current should have complete and skip grayed out, and skipped recurring tasks and events that aren't cursor should have unskip grayed out.
 - Add comments for all items. Any team-member can comment on any item. No edit or delete for now.
 - Add notifications for comments -- all team members notified of any comment by default
 - Turn app into a PWA
