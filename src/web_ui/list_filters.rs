@@ -4,6 +4,7 @@
 //! Nothing in `src/web_ui/project_tasks/` calls into this yet — that's Stage 2.
 
 use crate::domain::item::Item;
+use crate::service::item_series::ProjectOccurrence;
 use chrono::{DateTime, Utc};
 
 /// Raw query-string shape for a filterable list screen. Every field is single-valued — no
@@ -186,6 +187,63 @@ impl ListFilters {
         true
     }
 
+    /// `matches`' counterpart for a still-virtual/skipped series occurrence — every caller
+    /// that merges `ProjectOccurrence`s alongside real items into one `ListFilters`-filtered
+    /// screen (currently just `project_tasks::list_task_rows_for_project`) must run occurrences
+    /// through this too, or a filter that should exclude an item silently leaves its series'
+    /// current occurrence showing anyway. `show_complete` has no occurrence counterpart — a
+    /// virtual/skipped occurrence is never complete (there's no `complete` flag on
+    /// `ProjectOccurrence` at all), and the caller already excludes `Materialized` occurrences
+    /// before this runs (those are real items by then, filtered via `matches` instead) — so
+    /// this only checks `assigned_to`/`due_date`/`schedule`. `recurring` has no counterpart
+    /// either: `filters.recurring == false` means the caller skips querying occurrences
+    /// entirely (a virtual row is always a series occurrence), so nothing here would ever see
+    /// one to reject. An occurrence carries exactly one date (`occurrence_date`), tagged by
+    /// `is_due_date_basis` as either that series' due-date-equivalent or its
+    /// scheduled-date-equivalent (mirrors how `ProjectTaskVirtualRow` already picks which
+    /// icon/label to render) — so `due_date`/`schedule` are mutually exclusive on an
+    /// occurrence, unlike on a real item which can carry both independently.
+    pub fn matches_occurrence(
+        &self,
+        occ: &ProjectOccurrence,
+        requester_user_id: &str,
+        is_team_project: bool,
+        now: DateTime<Utc>,
+    ) -> bool {
+        if is_team_project {
+            let matches_assignment = match &self.assigned_to {
+                AssignedToFilter::All => true,
+                AssignedToFilter::Me => {
+                    occ.assigned_to_user_id.as_deref() == Some(requester_user_id)
+                }
+                AssignedToFilter::Unassigned => occ.assigned_to_user_id.is_none(),
+                AssignedToFilter::User(id) => {
+                    occ.assigned_to_user_id.as_deref() == Some(id.as_str())
+                }
+            };
+            if !matches_assignment {
+                return false;
+            }
+        }
+        let matches_due = match self.due_date {
+            DueDateFilter::All => true,
+            DueDateFilter::Overdue => occ.is_due_date_basis && occ.occurrence_date < now,
+            DueDateFilter::None => !occ.is_due_date_basis,
+        };
+        if !matches_due {
+            return false;
+        }
+        let matches_schedule = match self.schedule {
+            ScheduleFilter::All => true,
+            ScheduleFilter::Past => !occ.is_due_date_basis && occ.occurrence_date < now,
+            ScheduleFilter::None => occ.is_due_date_basis,
+        };
+        if !matches_schedule {
+            return false;
+        }
+        true
+    }
+
     /// Non-default filter params as a `key=value&key2=value2` fragment — no leading `?`/`&`,
     /// empty when every filter is at its default. A caller combining this with an existing
     /// prefix (e.g. `view=tasks-list`) joins with `&` when non-empty; a caller with nothing
@@ -225,7 +283,8 @@ impl ListFilters {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::item::{ItemType, TeamAssignment};
+    use crate::domain::item::{ItemKind, ItemType, TeamAssignment};
+    use crate::service::item_series::OccurrenceState;
 
     fn utc(s: &str) -> DateTime<Utc> {
         DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc)
@@ -261,6 +320,21 @@ mod tests {
 
     fn task() -> Item {
         Item::new_user_item("u1", "Test task")
+    }
+
+    fn occurrence(occurrence_date: DateTime<Utc>, is_due_date_basis: bool) -> ProjectOccurrence {
+        ProjectOccurrence {
+            series_id: "s1".to_string(),
+            series_name: "Series".to_string(),
+            item_type: ItemKind::Task,
+            event_type: None,
+            occurrence_date,
+            is_current: true,
+            assigned_to_user_id: None,
+            assigned_to_user_name: None,
+            state: OccurrenceState::Virtual,
+            is_due_date_basis,
+        }
     }
 
     const NOW: &str = "2026-08-23T12:00:00Z";
@@ -399,6 +473,88 @@ mod tests {
         assert!(filters.matches(&item, "u1", false, utc(NOW)));
         item.series_id = Some("series-1".to_string());
         assert!(!filters.matches(&item, "u1", false, utc(NOW)));
+    }
+
+    #[test]
+    fn matches_occurrence_assigned_to_me_excludes_other_members_occurrences() {
+        let filters = ListFilters::default(); // AssignedToFilter::Me
+        let mut occ = occurrence(utc(NOW), true);
+        occ.assigned_to_user_id = Some("someone-else".to_string());
+        assert!(!filters.matches_occurrence(&occ, "u1", true, utc(NOW)));
+        occ.assigned_to_user_id = Some("u1".to_string());
+        assert!(filters.matches_occurrence(&occ, "u1", true, utc(NOW)));
+    }
+
+    #[test]
+    fn matches_occurrence_assigned_to_is_a_noop_on_a_personal_project() {
+        let filters = ListFilters::default(); // AssignedToFilter::Me
+        let mut occ = occurrence(utc(NOW), true);
+        occ.assigned_to_user_id = Some("someone-else".to_string());
+        assert!(filters.matches_occurrence(&occ, "u1", false, utc(NOW)));
+    }
+
+    #[test]
+    fn matches_occurrence_due_date_overdue_only_matches_due_basis_in_the_past() {
+        let filters = ListFilters::from_query(ListFilterQuery {
+            due_date: Some("overdue".to_string()),
+            ..Default::default()
+        });
+        assert!(!filters.matches_occurrence(&occurrence(utc(NOW), true), "u1", false, utc(NOW)));
+        assert!(filters.matches_occurrence(
+            &occurrence(utc("2020-01-01T00:00:00Z"), true),
+            "u1",
+            false,
+            utc(NOW)
+        ));
+        // A scheduled-basis occurrence has no due date at all, so it can never be "overdue".
+        assert!(!filters.matches_occurrence(
+            &occurrence(utc("2020-01-01T00:00:00Z"), false),
+            "u1",
+            false,
+            utc(NOW)
+        ));
+    }
+
+    #[test]
+    fn matches_occurrence_due_date_none_only_matches_scheduled_basis() {
+        let filters = ListFilters::from_query(ListFilterQuery {
+            due_date: Some("none".to_string()),
+            ..Default::default()
+        });
+        assert!(!filters.matches_occurrence(&occurrence(utc(NOW), true), "u1", false, utc(NOW)));
+        assert!(filters.matches_occurrence(&occurrence(utc(NOW), false), "u1", false, utc(NOW)));
+    }
+
+    #[test]
+    fn matches_occurrence_schedule_past_only_matches_scheduled_basis_in_the_past() {
+        let filters = ListFilters::from_query(ListFilterQuery {
+            schedule: Some("past".to_string()),
+            ..Default::default()
+        });
+        assert!(!filters.matches_occurrence(&occurrence(utc(NOW), false), "u1", false, utc(NOW)));
+        assert!(filters.matches_occurrence(
+            &occurrence(utc("2020-01-01T00:00:00Z"), false),
+            "u1",
+            false,
+            utc(NOW)
+        ));
+        // A due-basis occurrence has no scheduled date at all.
+        assert!(!filters.matches_occurrence(
+            &occurrence(utc("2020-01-01T00:00:00Z"), true),
+            "u1",
+            false,
+            utc(NOW)
+        ));
+    }
+
+    #[test]
+    fn matches_occurrence_schedule_none_only_matches_due_basis() {
+        let filters = ListFilters::from_query(ListFilterQuery {
+            schedule: Some("none".to_string()),
+            ..Default::default()
+        });
+        assert!(filters.matches_occurrence(&occurrence(utc(NOW), true), "u1", false, utc(NOW)));
+        assert!(!filters.matches_occurrence(&occurrence(utc(NOW), false), "u1", false, utc(NOW)));
     }
 
     #[test]

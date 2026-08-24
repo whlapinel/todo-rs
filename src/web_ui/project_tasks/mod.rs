@@ -523,7 +523,10 @@ pub(crate) fn render_rows(
 /// just completion. `filters.recurring == false` additionally drops every virtual occurrence
 /// outright (a virtual row is always a series occurrence, so "hide recurring" means "show none
 /// of them") — materialized items whose `series_id` is set are excluded the same way by
-/// `matches` itself, so no separate handling is needed for those.
+/// `matches` itself, so no separate handling is needed for those. `virtual_occurrences` itself
+/// is expected to already be filtered through `ListFilters::matches_occurrence` by the caller
+/// (`list_task_rows_for_project`) — this function doesn't re-filter it, same as it doesn't
+/// re-filter `items` against anything beyond what's already true of `visible` below.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn render_rows_with_virtual(
     repo: &Arc<dyn ItemRepo>,
@@ -635,14 +638,11 @@ pub(crate) async fn list_task_rows_for_project(
     // Skipped entirely when `filters.recurring` is off: `render_rows_with_virtual` would drop
     // every entry from this anyway (a virtual row is always a series occurrence), so there's no
     // reason to pay for the query.
+    let now = Utc::now();
+    let is_team_project = team_id.is_some();
     let virtual_occurrences: Vec<_> = if filters.recurring {
         item_series_service::list_occurrence_states_for_project(
-            series,
-            users,
-            project_id,
-            Utc::now(),
-            Utc::now(),
-            tz,
+            series, users, project_id, now, now, tz,
         )
         .await?
         .into_iter()
@@ -653,6 +653,10 @@ pub(crate) async fn list_task_rows_for_project(
                 item_series_service::OccurrenceState::Materialized { .. }
             )
         })
+        // See `render_rows_with_virtual`'s doc comment: this is `filters.matches`' own
+        // occurrence-shaped counterpart — without it, a filter that would exclude a real item
+        // (e.g. "assigned to Bob") left its series' current occurrence showing regardless.
+        .filter(|occ| filters.matches_occurrence(occ, requester_user_id, is_team_project, now))
         .collect()
     } else {
         Vec::new()
