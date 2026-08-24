@@ -4,5 +4,6 @@ pub mod item;
 pub mod item_series;
 pub mod project;
 pub mod recurrence;
+pub mod reminder;
 pub mod team;
 pub mod user;

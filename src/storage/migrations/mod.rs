@@ -14,6 +14,7 @@ mod add_item_series_rotation_members;
 mod add_item_series_template_item_id;
 mod add_item_source_event_id;
 mod add_projects;
+mod add_reminders;
 mod add_team_member_role;
 mod add_user_personal_project_id;
 mod add_user_timezone;
@@ -42,6 +43,7 @@ use add_item_series_rotation_members::AddItemSeriesRotationMembers;
 use add_item_series_template_item_id::AddItemSeriesTemplateItemId;
 use add_item_source_event_id::AddItemSourceEventId;
 use add_projects::AddProjects;
+use add_reminders::AddReminders;
 use add_team_member_role::AddTeamMemberRole;
 use add_user_personal_project_id::AddUserPersonalProjectId;
 use add_user_timezone::AddUserTimezone;
@@ -116,6 +118,7 @@ fn all_migrations() -> Vec<Box<dyn Migration>> {
         Box::new(AddCalendarSubscriptions),
         Box::new(AddUserTimezone),
         Box::new(AddUserPersonalProjectId),
+        Box::new(AddReminders),
     ]
 }
 
@@ -542,7 +545,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 27);
+        assert_eq!(applied_count, 28);
     }
 
     #[tokio::test]
@@ -555,7 +558,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 27);
+        assert_eq!(applied_count, 28);
     }
 
     #[tokio::test]
@@ -569,6 +572,6 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 27);
+        assert_eq!(applied_count, 28);
     }
 }

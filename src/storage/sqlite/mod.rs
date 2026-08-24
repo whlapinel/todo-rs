@@ -3,6 +3,7 @@ pub mod calendar_subscriptions;
 pub mod item_series;
 pub mod items;
 pub mod projects;
+pub mod reminders;
 pub mod teams;
 pub mod users;
 use crate::domain::{
@@ -11,6 +12,7 @@ use crate::domain::{
     item::{Item, ItemKind, ItemType, Recurrence, Schedule, TeamAssignment},
     item_series::{ItemOccurrence, ItemSeries},
     project::Project,
+    reminder::{Reminder, ReminderKind},
     team::{Team, TeamRole},
     user::User,
 };
@@ -260,6 +262,31 @@ pub trait CalendarSubscriptionRepo: Send + Sync {
         synced_at: DateTime<Utc>,
         error: Option<String>,
     ) -> Result<(), RepoError>;
+}
+
+/// Auto-generated "notify at the instant a date occurs" reminders for Task/Event items —
+/// see `service::reminders::sync_item_reminders`, the sole writer. Stage 1 of the
+/// reminders feature (`docs/issues_and_features.md`): schema + auto-population only, no
+/// mutation UI/API and no delivery mechanism yet, so nothing else reads this table.
+#[cfg_attr(test, mockall::automock)]
+#[async_trait]
+pub trait ReminderRepo: Send + Sync {
+    /// Replaces every `source = 'AUTO'` reminder for `item_id` with `reminders` in one
+    /// transaction (delete-then-insert, not a diff — nothing sets `sent_at` yet, so
+    /// there's no in-flight state to preserve across an edit). Any `source = 'CUSTOM'`
+    /// row (a future mutation-UI feature) is left untouched. An empty `reminders` slice
+    /// still clears existing auto rows — e.g. a due date getting removed, or an item
+    /// becoming unassigned on a team project.
+    async fn sync_auto_reminders(
+        &self,
+        item_id: &str,
+        project_id: &str,
+        user_id: &str,
+        reminders: &[(ReminderKind, DateTime<Utc>)],
+    ) -> Result<(), RepoError>;
+    /// Deletes every reminder (auto or custom) for `item_id` — called on item delete.
+    async fn delete_for_item(&self, item_id: &str) -> Result<(), RepoError>;
+    async fn list_for_item(&self, item_id: &str) -> Result<Vec<Reminder>, RepoError>;
 }
 
 /// Append-mostly completion/points log, kept separate from `ItemRepo`/`TeamRepo`
@@ -852,6 +879,40 @@ pub async fn create_pool(url: &str) -> Result<SqlitePool, sqlx::Error> {
     )
     .execute(&pool)
     .await?;
+
+    // Stage 1 of the reminders feature (docs/issues_and_features.md) — schema +
+    // auto-population only, see service::reminders::sync_item_reminders, the sole
+    // writer. Brand-new table, same "safe directly in the baseline" precedent as
+    // calendar_subscriptions above; AddReminders creates the identical pair for a DB
+    // that predates this migration. idx_reminders_item_id is exercised immediately by
+    // sync_auto_reminders/delete_for_item; idx_reminders_user_remind_at isn't read by
+    // anything yet but is exactly what a future delivery sweep ("every unsent reminder
+    // due now, per user") will need.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS reminders (
+            id TEXT PRIMARY KEY,
+            item_id TEXT NOT NULL,
+            project_id TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            source TEXT NOT NULL DEFAULT 'AUTO',
+            remind_at INTEGER NOT NULL,
+            sent_at INTEGER,
+            created_at INTEGER NOT NULL
+        )",
+    )
+    .execute(&pool)
+    .await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_reminders_item_id ON reminders (item_id)")
+        .execute(&pool)
+        .await?;
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_reminders_user_remind_at \
+         ON reminders (user_id, remind_at)",
+    )
+    .execute(&pool)
+    .await?;
+
     // idx_items_calendar_subscription_id / idx_items_calsub_google_event_id are
     // deliberately NOT created here — same index-ordering reason as idx_items_project_id
     // below: `items.calendar_subscription_id`/`items.google_event_id` are added to an
