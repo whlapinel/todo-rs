@@ -25,10 +25,19 @@
         </a>
       </div>
       <div class="flex items-center rounded-md bg-white shadow-xs outline -outline-offset-1 outline-gray-300 dark:bg-white/10 dark:shadow-none dark:outline-white/5">
-        <a href="/web/projects/{{ project_id }}/tasks/new" hx-target="#page" hx-select="#page" hx-swap="innerHTML"
+        <!-- hx-target/hx-select match every other "+ New" trigger's dialog-opening convention
+             (list_page.html) — the calendar page has no #items-list/#events-list of its own,
+             so the create form itself must render in `redirect_after_create` mode (see
+             project_tasks/new_page.html's doc comment); `?redirect=1` here is what makes the
+             GET below opt into that. -->
+        <a href="/web/projects/{{ project_id }}/tasks/new?redirect=1"
+           hx-get="/web/projects/{{ project_id }}/tasks/new?redirect=1"
+           hx-target="#action-dialog" hx-select="#dialog-fragment" hx-swap="innerHTML"
            class="rounded-l-md px-3 py-2 text-sm font-semibold text-gray-900 hover:bg-gray-50 dark:text-white dark:hover:bg-white/20">+ Task</a>
         <span class="h-5 w-px bg-gray-300 dark:bg-white/10"></span>
-        <a href="/web/projects/{{ project_id }}/events/new" hx-target="#page" hx-select="#page" hx-swap="innerHTML"
+        <a href="/web/projects/{{ project_id }}/events/new?redirect=1"
+           hx-get="/web/projects/{{ project_id }}/events/new?redirect=1"
+           hx-target="#action-dialog" hx-select="#dialog-fragment" hx-swap="innerHTML"
            class="rounded-r-md px-3 py-2 text-sm font-semibold text-gray-900 hover:bg-gray-50 dark:text-white dark:hover:bg-white/20">+ Event</a>
       </div>
       <label class="text-sm text-gray-600 flex items-center gap-x-1 dark:text-gray-400">

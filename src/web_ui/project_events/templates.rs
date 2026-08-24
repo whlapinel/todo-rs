@@ -602,6 +602,9 @@ pub struct NewProjectEventPageTemplate {
     pub blank_scheduled_time_input: String,
     pub blank_scheduled_end_date_input: String,
     pub blank_scheduled_end_time_input: String,
+    /// See `project_tasks::templates::NewProjectTaskPageTemplate::redirect_after_create`'s
+    /// identical rationale.
+    pub redirect_after_create: bool,
     pub nav_html: String,
 }
 

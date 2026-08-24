@@ -10,10 +10,15 @@
   <div tabindex="0"
     class="relative z-10 flex min-h-full items-end justify-center p-4 text-center focus:outline-none sm:items-center sm:p-0">
     <div class="relative transform overflow-hidden rounded-lg bg-white dark:bg-gray-800 px-4 pt-5 pb-4 text-left shadow-xl transition-all duration-300 ease-out translate-y-4 opacity-0 scale-95 group-open/dialog:translate-y-0 group-open/dialog:opacity-100 group-open/dialog:scale-100 sm:my-8 sm:w-full sm:max-w-lg sm:p-6 dark:outline dark:-outline-offset-1 dark:outline-white/10">
-      <form hx-post="/web/projects/{{ project_id }}/events" hx-target="#events-list" hx-select="unset"
-        hx-swap="innerHTML"
+      <!-- See project_tasks/new_page.html's identical `redirect_after_create` doc comment —
+           `#events-list` doesn't exist when this dialog is opened from a context with no
+           Events list underneath (e.g. the calendar's "+ Event" button). -->
+      <form hx-post="/web/projects/{{ project_id }}/events"
+        hx-target="{% if redirect_after_create %}this{% else %}#events-list{% endif %}" hx-select="unset"
+        hx-swap="{% if redirect_after_create %}none{% else %}innerHTML{% endif %}"
         hx-on::after-request="if(event.detail.successful) document.getElementById('action-dialog').close()"
         class="space-y-3">
+        {% if redirect_after_create %}<input type="hidden" name="redirect" value="1" />{% endif %}
         <h3 class="text-base font-semibold text-gray-900 dark:text-white">New event</h3>
         <div class="mt-3 text-left space-y-3">
           <input type="text" name="name" placeholder="New event *" required maxlength="200"

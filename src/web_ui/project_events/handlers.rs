@@ -13,7 +13,7 @@ use crate::web_ui::project_events::{
     ProjectEventForm, create_params_from_form, list_project_events, render, require_event,
     update_params_from_form,
 };
-use crate::web_ui::project_tasks::handlers::render_source_event_fragment;
+use crate::web_ui::project_tasks::handlers::{NewItemQuery, render_source_event_fragment};
 use askama::Template;
 use axum::extract::{Extension, Form, Path, Query};
 use axum::response::{Html, IntoResponse, Response};
@@ -108,6 +108,7 @@ pub async fn new_project_event_page(
     Extension(auth_user): Extension<AuthUser>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Query(nq): Query<NewItemQuery>,
 ) -> Result<Html<String>, ItemError> {
     let _project =
         project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
@@ -125,6 +126,7 @@ pub async fn new_project_event_page(
         blank_scheduled_time_input: String::new(),
         blank_scheduled_end_date_input: String::new(),
         blank_scheduled_end_time_input: String::new(),
+        redirect_after_create: nq.redirect.is_some(),
         nav_html,
     })
 }

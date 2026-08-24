@@ -38,6 +38,14 @@ fn active_context(project_id: &str) -> ActiveContext {
     ActiveContext::Project(project_id.to_string())
 }
 
+/// See `NewProjectTaskPageTemplate::redirect_after_create`'s doc comment — `?redirect=1` on
+/// the `GET .../tasks/new` (or `.../events/new`, shared with `project_events::handlers`) request
+/// opens the dialog in "no list underneath" mode.
+#[derive(serde::Deserialize)]
+pub struct NewItemQuery {
+    pub redirect: Option<String>,
+}
+
 pub async fn project_tasks_page(
     Path(project_id): Path<String>,
     Extension(auth_user): Extension<AuthUser>,
@@ -122,6 +130,7 @@ pub async fn new_project_task_page(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Query(q): Query<ListFilterQuery>,
+    Query(nq): Query<NewItemQuery>,
 ) -> Result<Html<String>, ItemError> {
     let project =
         project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
@@ -156,6 +165,7 @@ pub async fn new_project_task_page(
         is_team_admin,
         blank_points_input: String::new(),
         filters_query: filters.query_string(),
+        redirect_after_create: nq.redirect.is_some(),
         nav_html,
     })
 }

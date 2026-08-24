@@ -16,14 +16,21 @@
   <div tabindex="0"
     class="relative z-10 flex min-h-full items-end justify-center p-4 text-center focus:outline-none sm:items-center sm:p-0">
     <div class="relative transform overflow-hidden rounded-lg bg-white dark:bg-gray-800 px-4 pt-5 pb-4 text-left shadow-xl transition-all duration-300 ease-out translate-y-4 opacity-0 scale-95 group-open/dialog:translate-y-0 group-open/dialog:opacity-100 group-open/dialog:scale-100 sm:my-8 sm:w-full sm:max-w-lg sm:p-6 dark:outline dark:-outline-offset-1 dark:outline-white/10">
-      <!-- Targets #items-list on whatever Tasks list page is underneath this dialog — same
-           known, accepted gap as detail_fields.html's edit form: creating from a direct-URL-
-           loaded /tasks/new (no list page underneath, so no #items-list to find) is not
-           handled specially. -->
-      <form hx-post="/web/projects/{{ project_id }}/tasks" hx-target="#items-list" hx-select="unset"
-        hx-swap="innerHTML"
+      <!-- Targets #items-list on whatever Tasks list page is underneath this dialog. When
+           there's no such list underneath (`redirect_after_create` — e.g. opened from the
+           calendar's "+ Task" button, which swaps this dialog in over the calendar grid, not
+           a Tasks list), targets the form itself instead (always resolves) and relies on the
+           hidden `redirect` field to make the handler respond with `HX-Redirect` back to the
+           Tasks list rather than trying to render an #items-list swap that isn't there —
+           without this, htmx's own pre-flight target resolution finds no #items-list and
+           silently refuses to even send the request. Direct-URL/bookmark access (no dialog
+           open yet at all) is handled separately, below. -->
+      <form hx-post="/web/projects/{{ project_id }}/tasks"
+        hx-target="{% if redirect_after_create %}this{% else %}#items-list{% endif %}" hx-select="unset"
+        hx-swap="{% if redirect_after_create %}none{% else %}innerHTML{% endif %}"
         hx-on::after-request="if(event.detail.successful) document.getElementById('action-dialog').close()"
         class="space-y-3">
+        {% if redirect_after_create %}<input type="hidden" name="redirect" value="1" />{% endif %}
         {% if show_complete %}<input type="hidden" name="showComplete" value="1" />{% endif %}
         {% if !filters_query.is_empty() %}<input type="hidden" name="filtersQuery" value="{{ filters_query }}" />{% endif %}
         <h3 class="text-base font-semibold text-gray-900 dark:text-white">New task</h3>

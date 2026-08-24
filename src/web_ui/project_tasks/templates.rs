@@ -986,6 +986,15 @@ pub struct NewProjectTaskPageTemplate {
     /// hidden `filtersQuery` field so a redirect back to the list after a batch create lands on
     /// the same filtered view — see `ProjectTaskForm::filters_query`/`BatchForm::filters_query`.
     pub filters_query: String,
+    /// Set when this dialog is opened from a context with no Tasks list underneath to swap
+    /// into (e.g. `project_calendar`'s "+ Task" button, which replaces the whole page rather
+    /// than opening over a list) — see `new_page.html`'s own doc comment. Renders the hidden
+    /// `redirect` field and points the form at itself (`hx-target="this"`, `hx-swap="none"`)
+    /// instead of `#items-list`, so the client-side pre-flight target resolution htmx does
+    /// before even sending the request never fails for lack of an `#items-list` to find — the
+    /// create still succeeds via the same `HX-Redirect`-back-to-the-list path
+    /// `redirect_to_project_tasks` already serves the "Add multiple at once" batch form.
+    pub redirect_after_create: bool,
     pub nav_html: String,
 }
 
