@@ -3,8 +3,9 @@
      can move an item out of the sibling group currently rendered on screen entirely (e.g. onto
      its grandparent, or under a sibling whose own children aren't shown here), so — like
      add_child_dialog.html's create form — this posts with `hx-swap="none"` and relies on the
-     handler's `HX-Redirect` response (a real browser navigation) to land on wherever the moved
-     item now lives, rather than trying to swap a single row in place. -->
+     handler's `HX-Redirect` response (a real browser navigation) to land back on this screen's
+     own list view — never a moved-to parent's own detail page, which is being retired as a
+     navigation target — rather than trying to swap a single row in place. -->
 <div id="dialog-backdrop"
     class="fixed inset-0 bg-gray-500/75 dark:bg-gray-900/50 transition-opacity duration-300 ease-out opacity-0 group-open/dialog:opacity-100">
 </div>

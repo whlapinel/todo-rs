@@ -1284,9 +1284,9 @@ pub struct MoveForm {
 /// Reparents this item per `form.target` — either `MOVE_TARGET_PARENT` ("promote": reparent onto
 /// this item's own grandparent) or another item's id ("subordinate": reparent under that sibling)
 /// — replacing what used to be two separate routes/handlers (`promote`/`subordinate`) now that
-/// `MoveDialog` presents both as one picker. Unlike the legacy screens, the redirect target is
-/// always within this same project's Tasks screen (no per-kind dispatch table needed — see the
-/// plan doc's B5a note on why `dashboard::detail_url`/`list_url_for` aren't reused here).
+/// `MoveDialog` presents both as one picker. The redirect always lands back on this project's
+/// Tasks list (never a moved-to parent's own detail page — the list already shows children
+/// in place, and per-item detail pages are being retired as a navigation target).
 pub async fn move_project_task_form(
     Path((project_id, item_id)): Path<(String, String)>,
     Extension(auth_user): Extension<AuthUser>,
@@ -1298,46 +1298,38 @@ pub async fn move_project_task_form(
     TzOffset(tz): TzOffset,
     Form(form): Form<MoveForm>,
 ) -> Result<Response, ItemError> {
-    let (current, new_parent_item_id, offset_anchor, location) =
-        if form.target == MOVE_TARGET_PARENT {
-            let target = project_item_service::resolve_promotion_target(
-                &repo,
-                &projects,
-                &teams,
-                &project_id,
-                &auth_user.user_id,
-                &item_id,
-            )
-            .await?;
-            let location = match &target.grandparent {
-                Some(gp) => project_task_url(&project_id, &gp.id),
-                None => project_tasks_list_url(&project_id),
-            };
-            (
-                require_task(target.current)?,
-                target.grandparent.map(|gp| gp.id),
-                target.offset_anchor,
-                location,
-            )
-        } else {
-            let target = project_item_service::resolve_subordination_target(
-                &repo,
-                &projects,
-                &teams,
-                &project_id,
-                &auth_user.user_id,
-                &item_id,
-                &form.target,
-            )
-            .await?;
-            let location = project_task_url(&project_id, &target.new_parent.id);
-            (
-                require_task(target.current)?,
-                Some(target.new_parent.id),
-                target.offset_anchor,
-                location,
-            )
-        };
+    let (current, new_parent_item_id, offset_anchor) = if form.target == MOVE_TARGET_PARENT {
+        let target = project_item_service::resolve_promotion_target(
+            &repo,
+            &projects,
+            &teams,
+            &project_id,
+            &auth_user.user_id,
+            &item_id,
+        )
+        .await?;
+        (
+            require_task(target.current)?,
+            target.grandparent.map(|gp| gp.id),
+            target.offset_anchor,
+        )
+    } else {
+        let target = project_item_service::resolve_subordination_target(
+            &repo,
+            &projects,
+            &teams,
+            &project_id,
+            &auth_user.user_id,
+            &item_id,
+            &form.target,
+        )
+        .await?;
+        (
+            require_task(target.current)?,
+            Some(target.new_parent.id),
+            target.offset_anchor,
+        )
+    };
     let params = reparent_params(
         &project_id,
         &item_id,
@@ -1356,7 +1348,7 @@ pub async fn move_project_task_form(
         params,
     )
     .await?;
-    Ok(hx_redirect(location))
+    Ok(hx_redirect(project_tasks_list_url(&project_id)))
 }
 
 pub async fn save_project_task_as_template(

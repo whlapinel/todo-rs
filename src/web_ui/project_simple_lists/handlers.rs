@@ -477,7 +477,9 @@ pub struct MoveForm {
 
 /// Reparents this item per `form.target` — see
 /// `project_tasks::handlers::move_project_task_form`'s identical rationale, minus the offset/tz
-/// recompute (no `dueOffsetDays` concept for `ItemType::Simple` — see `reparent_params`).
+/// recompute (no `dueOffsetDays` concept for `ItemType::Simple` — see `reparent_params`). The
+/// redirect always lands back on this project's Simple Lists screen (never a moved-to parent's
+/// own detail page — see `move_project_task_form`'s doc comment).
 pub async fn move_project_simple_item_form(
     Path((project_id, item_id)): Path<(String, String)>,
     Extension(auth_user): Extension<AuthUser>,
@@ -488,7 +490,7 @@ pub async fn move_project_simple_item_form(
     Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
     Form(form): Form<MoveForm>,
 ) -> Result<Response, ItemError> {
-    let (current, new_parent_item_id, location) = if form.target == MOVE_TARGET_PARENT {
+    let (current, new_parent_item_id) = if form.target == MOVE_TARGET_PARENT {
         let target = project_item_service::resolve_promotion_target(
             &repo,
             &projects,
@@ -498,14 +500,9 @@ pub async fn move_project_simple_item_form(
             &item_id,
         )
         .await?;
-        let location = match &target.grandparent {
-            Some(gp) => format!("/web/projects/{project_id}/simple-lists/{}", gp.id),
-            None => format!("/web/projects/{project_id}/simple-lists"),
-        };
         (
             require_simple(target.current)?,
             target.grandparent.map(|gp| gp.id),
-            location,
         )
     } else {
         let target = project_item_service::resolve_subordination_target(
@@ -518,15 +515,7 @@ pub async fn move_project_simple_item_form(
             &form.target,
         )
         .await?;
-        let location = format!(
-            "/web/projects/{project_id}/simple-lists/{}",
-            target.new_parent.id
-        );
-        (
-            require_simple(target.current)?,
-            Some(target.new_parent.id),
-            location,
-        )
+        (require_simple(target.current)?, Some(target.new_parent.id))
     };
     let params = reparent_params(&project_id, &item_id, &current, new_parent_item_id);
     project_item_service::update_project_item(
@@ -539,5 +528,7 @@ pub async fn move_project_simple_item_form(
         params,
     )
     .await?;
-    Ok(hx_redirect(location))
+    Ok(hx_redirect(format!(
+        "/web/projects/{project_id}/simple-lists"
+    )))
 }
