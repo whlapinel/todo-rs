@@ -13,6 +13,14 @@
      inline buttons did. base.html's generic htmx:afterRequest listener closes this popover after
      any of these (or Edit's own boosted navigation) succeeds — no per-button onclick needed. -->
 <div class="divide-y divide-gray-100 dark:divide-white/10">
+    {% if children_html.is_some() %}
+    <!-- Only shown when the name-click was repurposed to toggle in-place expansion (see
+         Row::children_html's doc comment) — everywhere else the name itself already opens
+         this. -->
+    <a href="{{ item_url }}"
+        {% if detail_via_dialog %}hx-get="{{ item_url }}" hx-target="#action-dialog" hx-select="#dialog-fragment" hx-swap="innerHTML"{% else %}hx-target="#page" hx-select="#page" hx-swap="innerHTML"{% endif %}
+        class="block px-4 py-3 text-sm text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-white/5">Details</a>
+    {% endif %}
     {% if let Some(url) = edit_url %}
     <!-- Goes straight to the edit dialog fragment, not through the detail dialog first — see
          Decision 1 of docs/dialog-item-forms-plan.md's Stage 1. #dialog-fragment is the

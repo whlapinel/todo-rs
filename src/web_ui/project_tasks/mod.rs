@@ -12,6 +12,7 @@ use crate::web_ui::project_tasks::templates::{
     ProjectTaskRow, ProjectTaskRowsFragmentTemplate, ProjectTaskVirtualRow,
 };
 use askama::Template;
+use async_recursion::async_recursion;
 use axum::response::Html;
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
@@ -391,6 +392,79 @@ pub(crate) async fn names_for(
 
 // ---- shared rendering helpers ------------------------------------------------
 
+/// Fixed left-padding class for a nested row at `depth` levels below the flat list's own
+/// top-level rows (`Row::indent_class`) — Tailwind's compiler only picks up class names that
+/// appear literally in the source (no arbitrary computed `pl-{depth}`), so nesting visually
+/// caps at 3 indent steps; anything deeper reuses the deepest one rather than growing further.
+fn indent_class(depth: u8) -> &'static str {
+    match depth {
+        0 => "",
+        1 => "pl-8",
+        2 => "pl-12",
+        _ => "pl-16",
+    }
+}
+
+/// Recursively renders `parent_item_id`'s full descendant subtree as ready-to-insert `<li>`
+/// markup, each descendant's own row in turn carrying its own nested `children_html` — the
+/// flat Tasks list's in-place "expand to view sub-items" feature (see `Row::children_html`'s
+/// doc comment). Everything is fetched and rendered eagerly, up front — one query per
+/// `has_children` node — so the browser's expand/collapse toggle never round-trips to the
+/// server; the cost is paid on every list load regardless of whether a branch is ever expanded.
+#[async_recursion]
+async fn render_expandable_children(
+    repo: &Arc<dyn ItemRepo>,
+    parent_item_id: &str,
+    project_id: &str,
+    names: &HashMap<String, String>,
+    show_complete: bool,
+    tz: i32,
+    skip_urls: &HashMap<String, String>,
+    team_id: Option<&str>,
+    depth: u8,
+) -> Result<String, ItemError> {
+    let children =
+        list_project_items_unchecked(repo, project_id, Some(parent_item_id.to_string())).await?;
+    let visible: Vec<&Item> = children
+        .iter()
+        .filter(|i| show_complete || !i.complete)
+        .collect();
+    let mut html = String::new();
+    for i in &visible {
+        let mut row = ProjectTaskRow::from_item(
+            i,
+            project_id,
+            names,
+            &visible,
+            tz,
+            skip_urls.get(&i.id).cloned(),
+            team_id.is_some(),
+            show_complete,
+            None,
+            None,
+        );
+        row.indent_class = indent_class(depth);
+        if i.has_children {
+            row.children_html = Some(
+                render_expandable_children(
+                    repo,
+                    &i.id,
+                    project_id,
+                    names,
+                    show_complete,
+                    tz,
+                    skip_urls,
+                    team_id,
+                    depth + 1,
+                )
+                .await?,
+            );
+        }
+        html.push_str(&row.render()?);
+    }
+    Ok(html)
+}
+
 pub(crate) fn render_rows(
     items: &[Item],
     project_id: &str,
@@ -451,7 +525,8 @@ pub(crate) fn render_rows(
 /// of them") — materialized items whose `series_id` is set are excluded the same way by
 /// `matches` itself, so no separate handling is needed for those.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn render_rows_with_virtual(
+pub(crate) async fn render_rows_with_virtual(
+    repo: &Arc<dyn ItemRepo>,
     items: &[Item],
     virtual_occurrences: &[ProjectOccurrence],
     project_id: &str,
@@ -473,28 +548,46 @@ pub(crate) fn render_rows_with_virtual(
                 || Some(i.id.as_str()) == just_completed_item_id
         })
         .collect();
-    let mut entries: Vec<(i64, String)> = visible
-        .iter()
-        .map(|i| {
-            let just_completed = Some(i.id.as_str()) == just_completed_item_id;
-            let confirmation = just_completed.then(|| "Completed".to_string());
-            let dismiss_after_ms = (just_completed && !filters.show_complete).then_some(1800u32);
-            ProjectTaskRow::from_item(
-                i,
-                project_id,
-                names,
-                &visible,
-                tz,
-                skip_urls.get(&i.id).cloned(),
-                is_team_project,
-                filters.show_complete,
-                confirmation,
-                dismiss_after_ms,
-            )
-            .render()
-            .map(|html| (sort_key(i), html))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    let mut entries: Vec<(i64, String)> = Vec::with_capacity(visible.len());
+    for i in &visible {
+        let just_completed = Some(i.id.as_str()) == just_completed_item_id;
+        let confirmation = just_completed.then(|| "Completed".to_string());
+        let dismiss_after_ms = (just_completed && !filters.show_complete).then_some(1800u32);
+        let mut row = ProjectTaskRow::from_item(
+            i,
+            project_id,
+            names,
+            &visible,
+            tz,
+            skip_urls.get(&i.id).cloned(),
+            is_team_project,
+            filters.show_complete,
+            confirmation,
+            dismiss_after_ms,
+        );
+        // In-place expansion (see `Row::children_html`'s doc comment) — the flat list is the
+        // one screen that opts a `ProjectTaskRow` into this, eagerly inlining the whole
+        // subtree so the browser's toggle never has to fetch. Leaf items (no children) are
+        // left at `ProjectTaskRow::from_item`'s own default (`None`), keeping their original
+        // name-click-opens-detail behavior.
+        if i.has_children {
+            row.children_html = Some(
+                render_expandable_children(
+                    repo,
+                    &i.id,
+                    project_id,
+                    names,
+                    filters.show_complete,
+                    tz,
+                    skip_urls,
+                    team_id,
+                    1,
+                )
+                .await?,
+            );
+        }
+        entries.push((sort_key(i), row.render()?));
+    }
     if filters.recurring {
         for occ in virtual_occurrences {
             entries.push((
@@ -571,6 +664,7 @@ pub(crate) async fn list_task_rows_for_project(
         }
     }
     render_rows_with_virtual(
+        repo,
         &items,
         &virtual_occurrences,
         project_id,
@@ -583,6 +677,7 @@ pub(crate) async fn list_task_rows_for_project(
         just_completed_item_id,
         true,
     )
+    .await
 }
 
 /// The `#items-list` placeholder markup (`templates/project_tasks/list_page.html`'s own

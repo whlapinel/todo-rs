@@ -173,6 +173,18 @@
       }
     }, true);
 
+    // In-place children expansion (components/row.html's `children_html` branch) — the whole
+    // subtree was already fetched and rendered server-side, so this is a pure class toggle, no
+    // request. classList.toggle('hidden') returns true when 'hidden' is now present (i.e. we
+    // just collapsed it), which is exactly when the chevron should point right again.
+    function toggleChildren(id) {
+      var ul = document.getElementById('item-' + id + '-children');
+      if (!ul) return;
+      var isHidden = ul.classList.toggle('hidden');
+      var chevron = document.getElementById('chevron-' + id);
+      if (chevron) chevron.innerHTML = isHidden ? '&#9656;' : '&#9662;';
+    }
+
     function openRowActionsMenu(rowId, btn) {
       const popover = document.getElementById('action-menu-popover');
       if (!popover) return;

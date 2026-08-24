@@ -127,6 +127,15 @@ impl ProjectTaskRow {
             // Stage 1 of docs/dialog-item-forms-plan.md — project_tasks is the proof-of-concept
             // screen whose detail/edit/new pages were converted into dialog fragments.
             detail_via_dialog: true,
+            // The in-place expand feature is opt-in per render call, not per item — the flat
+            // Tasks list's own row-building (`render_rows_with_virtual`/
+            // `indent_class`/`render_expandable_children` in `project_tasks/mod.rs`) overrides
+            // these two on top of this base row when it wants a given row expandable; every
+            // other caller of `from_item` (calendar screens, the item detail page's own
+            // Sub-items panel, save-as-template, etc.) leaves them at this default and keeps
+            // the plain decorative `has_children` arrow.
+            children_html: None,
+            indent_class: "",
         }
     }
 }

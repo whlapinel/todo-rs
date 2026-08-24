@@ -90,6 +90,10 @@ impl ProjectEventRow {
             // Stage 2 of docs/dialog-item-forms-plan.md — project_events' detail/edit/new
             // pages are now dialog fragments.
             detail_via_dialog: true,
+            // An Event never has children (see this impl's own doc comment) — the in-place
+            // expand feature never applies here.
+            children_html: None,
+            indent_class: "",
         }
     }
 }

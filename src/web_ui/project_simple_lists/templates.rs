@@ -57,6 +57,11 @@ impl ProjectSimpleItemRow {
             // Stage 2 of docs/dialog-item-forms-plan.md — project_simple_lists' detail/edit/
             // new pages are now dialog fragments.
             detail_via_dialog: true,
+            // The in-place expand feature (see `Row::children_html`) hasn't been extended to
+            // Simple Lists yet — this screen keeps the plain decorative `has_children` arrow
+            // and today's click-to-detail behavior.
+            children_html: None,
+            indent_class: "",
         }
     }
 }

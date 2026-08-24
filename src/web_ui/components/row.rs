@@ -105,4 +105,21 @@ pub struct Row {
     /// `assigned_items`, `project_activity` — see the plan doc's Out of scope section, plus any
     /// screen not yet reached by Stage 2) has no dialog fragment for this to open.
     pub detail_via_dialog: bool,
+    /// In-place children expansion (the Tasks list's "expand to view sub-items without leaving
+    /// the list" feature) — `Some(html)` when this row's caller already fetched and rendered
+    /// this item's full descendant subtree (recursively, each descendant's own `Row` carrying
+    /// its own nested `children_html` in turn) as ready-to-insert `<li>` markup. Everything is
+    /// fetched eagerly up front rather than lazily on click, so expand/collapse in the browser
+    /// is pure client-side (a hidden-class toggle, see `toggleChildren()` in base.html) with no
+    /// server round trip. `None` means either a leaf item (nothing to expand) or a screen that
+    /// hasn't opted into this feature (calendar screens, the item detail page's own Sub-items
+    /// panel, etc.) — those keep the plain decorative `has_children` arrow and the row's
+    /// original name-click behavior (dialog or navigation) unchanged. `Some(_)` repurposes the
+    /// name-click to toggle instead, and the row-actions menu (`row_actions_menu.html`) gains a
+    /// "Details" entry as the alternate way to reach what the name-click used to open.
+    pub children_html: Option<String>,
+    /// Fixed left-padding class for this row's nesting depth within an expanded branch (`""`
+    /// at the top level) — see `project_tasks::indent_class`'s doc comment for why this can't
+    /// just be a computed `pl-{depth}` (Tailwind's compiler needs literal class names).
+    pub indent_class: &'static str,
 }

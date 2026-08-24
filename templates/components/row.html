@@ -1,4 +1,4 @@
-<li id="item-{{ id }}" class="py-2"{% if let Some(ms) = dismiss_after_ms %} data-dismiss-after="{{ ms }}"{% endif %}>
+<li id="item-{{ id }}" class="py-2 {{ indent_class }}"{% if let Some(ms) = dismiss_after_ms %} data-dismiss-after="{{ ms }}"{% endif %}>
     <div class="flex items-center gap-x-3">
         {% if let Some(url) = complete_url %}
         <input type="checkbox" {% if complete %}checked{% endif %} hx-put="{{ url }}"
@@ -12,7 +12,17 @@
             class="shrink-0 inline-flex size-4 items-center justify-center rounded-full bg-gray-200 text-[10px] font-semibold text-gray-600 dark:bg-white/10 dark:text-gray-300">{{
             badge }}</span>
         {% endif %}
-        {% if detail_via_dialog %}
+        {% if let Some(children) = children_html %}
+        <!-- In-place expansion (see Row::children_html's doc comment): the name-click toggles
+             this row's already-inlined descendant subtree instead of opening details — the
+             row-actions menu's "Details" entry below is the alternate way in. Pure client-side
+             (toggleChildren() in base.html), since `children` was already fetched and rendered
+             server-side. -->
+        <button type="button" onclick="toggleChildren('{{ id }}')"
+            class="min-w-0 flex-1 truncate text-left cursor-pointer {% if complete %}line-through text-gray-400 dark:text-gray-500{% else %}text-gray-900 dark:text-white{% endif %}">
+            <span id="chevron-{{ id }}" class="inline-block text-gray-400 dark:text-gray-500">&#9656;</span> {{ name }}
+        </button>
+        {% else if detail_via_dialog %}
         <!-- Selects out #dialog-fragment (the conventional wrapper id every new/edit/detail
              dialog fragment uses — see docs/dialog-item-forms-plan.md Stage 1) rather than the
              whole (full-page) response, since this route also serves direct-URL/bookmark
@@ -58,6 +68,13 @@
         </template>
         {% endif %}
     </div>
+    {% if let Some(children) = children_html %}
+    <!-- Initially hidden (`hidden`, not absent) — the whole subtree is already in the DOM so
+         toggleChildren() (base.html) only ever needs to flip this class, never fetch. -->
+    <ul id="item-{{ id }}-children" class="hidden mt-2 ml-2 border-l border-gray-200 dark:border-white/10">
+        {{ children|safe }}
+    </ul>
+    {% endif %}
     {% if expanded_row %}
     <div class="mt-1 flex items-center gap-x-3 pl-7 text-xs text-gray-500 dark:text-gray-400">
         <div class="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1">
