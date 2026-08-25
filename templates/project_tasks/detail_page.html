@@ -25,7 +25,16 @@
     </div>
     <div class="mt-4 flex items-center gap-x-3 md:mt-0 md:ml-4">
       {% if !complete %}
-      <a href="/web/projects/{{ project_id }}/tasks/{{ id }}/edit" hx-target="#page" hx-select="#page" hx-swap="innerHTML"
+      <!-- Goes straight into the dialog, same as row_actions_menu.html's Edit link — not
+           through #page (see docs/issues_and_features.md's "Clicking edit from an item-details
+           full page" bug: routing an interactive click through #page here, then relying on
+           edit_page.html's bookmark-only auto-open script to relocate it, left #page blank and
+           the save form still targeting a `#item-{{ id }}` row that never existed on this page).
+           `?redirect=1` tells `project_task_edit_page`/`detail_fields.html` this Edit came from
+           the full detail page, not a list row, so the save form targets `#page` instead. -->
+      <a href="/web/projects/{{ project_id }}/tasks/{{ id }}/edit?redirect=1"
+         hx-get="/web/projects/{{ project_id }}/tasks/{{ id }}/edit?redirect=1"
+         hx-target="#action-dialog" hx-select="#dialog-fragment" hx-swap="innerHTML"
          class="inline-flex items-center justify-center rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-xs hover:bg-indigo-500 dark:bg-indigo-500 dark:shadow-none dark:hover:bg-indigo-400">Edit</a>
       {% endif %}
       <a href="/web/projects/{{ project_id }}/tasks" hx-target="#page" hx-select="#page" hx-swap="innerHTML"

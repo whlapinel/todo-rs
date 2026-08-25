@@ -13,15 +13,31 @@
     class="relative z-10 flex min-h-full items-end justify-center p-4 text-center focus:outline-none sm:items-center sm:p-0">
     <div class="relative transform overflow-hidden rounded-lg bg-white dark:bg-gray-800 px-4 pt-5 pb-4 text-left shadow-xl transition-all duration-300 ease-out translate-y-4 opacity-0 scale-95 group-open/dialog:translate-y-0 group-open/dialog:opacity-100 group-open/dialog:scale-100 sm:my-8 sm:w-full sm:max-w-lg sm:p-6 dark:outline dark:-outline-offset-1 dark:outline-white/10">
       <div id="item-{{ id }}-fields" class="space-y-3">
-        <!-- Submits in place against the row on whatever list page is underneath this dialog
-             (hx-select="#item-{{ id }}" plucks just the row out of update_project_task_form's
-             row+fields+view response) — see the plan doc's Stage 1 "Submit behavior" notes.
-             Saving from a direct-URL-loaded edit page (no list page underneath, so no
-             #item-{{ id }} to find) is a known, accepted gap — see that same section. -->
-        <form hx-put="/web/projects/{{ project_id }}/tasks/{{ id }}" hx-target="#item-{{ id }}"
-          hx-select="#item-{{ id }}" hx-swap="outerHTML"
+        <!-- Two save-target shapes, depending on where this dialog was opened from (see
+             `ProjectTaskDetailFields.via_full_page`'s doc comment):
+             - From a list row's "⋮ Edit"/detail dialog Edit button (`via_full_page == false`,
+               the default): submits in place against the row on whatever list page is
+               underneath this dialog (hx-select="#item-{{ id }}" plucks just the row out of
+               update_project_task_form's row+fields+view response).
+             - From the item's own full detail page's Edit link (`via_full_page == true`):
+               there's no `#item-{{ id }}` row on that page to target, so the form instead
+               carries a hidden `redirect=1` (mirroring every other create/update form's
+               redirect convention) and targets `#page`, which `update_project_task_form`'s
+               `close` branch re-renders as the full, freshly-saved detail page.
+             Saving from a direct-URL-loaded edit page with neither list page nor detail page
+             underneath (bookmark/typed URL, no `redirect=1`) is a known, accepted gap — see the
+             plan doc's Stage 1 "Submit behavior" notes. -->
+        <form hx-put="/web/projects/{{ project_id }}/tasks/{{ id }}"
+          {% if via_full_page %}
+          hx-target="#page" hx-select="#page" hx-swap="innerHTML"
+          {% else %}
+          hx-target="#item-{{ id }}" hx-select="#item-{{ id }}" hx-swap="outerHTML"
+          {% endif %}
           hx-on::after-request="if(event.detail.successful) document.getElementById('action-dialog').close()"
           class="space-y-3">
+          {% if via_full_page %}
+          <input type="hidden" name="redirect" value="1" />
+          {% endif %}
           <h3 class="text-base font-semibold text-gray-900 dark:text-white">Edit task</h3>
           <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Name <span
               class="text-red-500" aria-hidden="true">*</span>

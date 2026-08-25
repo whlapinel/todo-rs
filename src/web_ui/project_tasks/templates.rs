@@ -453,6 +453,14 @@ pub struct ProjectTaskDetailFields {
     /// Set only on the fragment returned by a successful save — see `items.rs`'s
     /// `DetailFields.just_saved` for the full rationale.
     pub just_saved: bool,
+    /// True only when this fragment was reached via the item's own full detail page's Edit
+    /// link (`?redirect=1` on `GET .../edit`, see `project_task_edit_page`) rather than a list
+    /// row's "⋮ Edit"/detail-dialog Edit button. There's no `#item-{id}` row to target/select
+    /// on a full detail page (only `#item-{id}-view` inside it) and the whole page needs its
+    /// header/view refreshed on save, not just a row — see `detail_fields.html`'s own comment.
+    /// Always `false` for the post-save row+fields+view fragment (that branch is only reached
+    /// when `redirect` was absent, i.e. the list-row case).
+    pub via_full_page: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -465,6 +473,7 @@ impl ProjectTaskDetailFields {
         is_team_admin: bool,
         tz: i32,
         just_saved: bool,
+        via_full_page: bool,
     ) -> Self {
         let local_due_date = item.due_date().map(|d| to_local(d, tz));
         let due_date_input = local_due_date
@@ -520,6 +529,7 @@ impl ProjectTaskDetailFields {
             is_team_admin,
             points_input: format_points_input(item.points()),
             just_saved,
+            via_full_page,
         }
     }
 }

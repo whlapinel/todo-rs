@@ -228,6 +228,16 @@ pub async fn project_task_detail_page(
     })
 }
 
+#[derive(serde::Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct EditItemQuery {
+    /// Set only by the item's own read-only detail page's Edit link (`detail_page.html`) — see
+    /// `ProjectTaskDetailFields.via_full_page`'s doc comment for why the edit form's save
+    /// target differs in that context. Absent (the default) for a list row's "⋮ Edit"/detail
+    /// dialog's Edit button, which keeps targeting the row in place.
+    redirect: Option<String>,
+}
+
 pub async fn project_task_edit_page(
     Path((project_id, item_id)): Path<(String, String)>,
     Extension(auth_user): Extension<AuthUser>,
@@ -235,6 +245,7 @@ pub async fn project_task_edit_page(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     TzOffset(tz): TzOffset,
+    Query(edit_q): Query<EditItemQuery>,
 ) -> Result<Html<String>, ItemError> {
     let project =
         project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
@@ -257,6 +268,7 @@ pub async fn project_task_edit_page(
         is_team_admin,
         tz,
         false,
+        edit_q.redirect.is_some(),
     )
     .render()?;
     let nav_html = nav::build_nav_html(
@@ -1167,6 +1179,7 @@ pub async fn update_project_task_form(
                 is_team_admin,
                 tz,
                 true,
+                false,
             )
             .render()?;
             let linked_event = resolve_linked_event(&repo, &project_id, &updated).await?;

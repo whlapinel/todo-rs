@@ -142,16 +142,26 @@ pub struct ProjectSimpleItemDetailFields {
     /// Set only on the fragment returned by a successful save — see `items.rs`'s
     /// `DetailFields.just_saved` for the full rationale.
     pub just_saved: bool,
+    /// True only when this fragment was reached via the item's own full detail page's Edit
+    /// link (`?redirect=1` on `GET .../edit`, see `project_simple_item_edit_page`) rather than
+    /// a list row's "⋮ Edit"/detail-dialog Edit button. There's no `#item-{id}` row to
+    /// target/select on a full detail page and the whole page needs its header/description
+    /// refreshed on save, not just a row — see `detail_fields.html`'s own comment and
+    /// `project_tasks::templates::ProjectTaskDetailFields.via_full_page`'s identical field.
+    /// Always `false` for the post-save row+fields fragment (only reached when `redirect` was
+    /// absent, i.e. the list-row case).
+    pub via_full_page: bool,
 }
 
 impl ProjectSimpleItemDetailFields {
-    pub fn from_item(item: &Item, project_id: &str, just_saved: bool) -> Self {
+    pub fn from_item(item: &Item, project_id: &str, just_saved: bool, via_full_page: bool) -> Self {
         Self {
             id: item.id.clone(),
             project_id: project_id.to_string(),
             name: item.name.clone(),
             description: item.description.clone().unwrap_or_default(),
             just_saved,
+            via_full_page,
         }
     }
 }

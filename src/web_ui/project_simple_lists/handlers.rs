@@ -121,12 +121,23 @@ pub async fn project_simple_item_detail_page(
     })
 }
 
+#[derive(serde::Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct EditItemQuery {
+    /// Set only by the item's own read-only detail page's Edit link (`detail_page.html`) — see
+    /// `ProjectSimpleItemDetailFields.via_full_page`'s doc comment for why the edit form's save
+    /// target differs in that context. Absent (the default) for a list row's "⋮ Edit"/detail
+    /// dialog's Edit button, which keeps targeting the row in place.
+    redirect: Option<String>,
+}
+
 pub async fn project_simple_item_edit_page(
     Path((project_id, item_id)): Path<(String, String)>,
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Query(edit_q): Query<EditItemQuery>,
 ) -> Result<Html<String>, ItemError> {
     let item = project_item_service::get_project_item(
         &repo,
@@ -138,7 +149,13 @@ pub async fn project_simple_item_edit_page(
     )
     .await?;
     let item = require_simple(item)?;
-    let fields = ProjectSimpleItemDetailFields::from_item(&item, &project_id, false).render()?;
+    let fields = ProjectSimpleItemDetailFields::from_item(
+        &item,
+        &project_id,
+        false,
+        edit_q.redirect.is_some(),
+    )
+    .render()?;
     let nav_html = nav::build_nav_html(
         &projects,
         &auth_user.user_id,
@@ -379,7 +396,8 @@ pub async fn update_project_simple_item_form(
         &siblings_ref,
     )
     .render()?;
-    let fields = ProjectSimpleItemDetailFields::from_item(&updated, &project_id, true).render()?;
+    let fields =
+        ProjectSimpleItemDetailFields::from_item(&updated, &project_id, true, false).render()?;
     Ok(Html(format!("{row}{fields}")).into_response())
 }
 

@@ -2,8 +2,10 @@
 
 Open issues and feature requests, merged from the former `docs/issues.md` and `docs/features.md` (2026-08-20) into a single sorted list. Completed or superseded items — including ones from the old files that were already resolved but hadn't been moved out yet — live in `docs/archived/archived_issues_and_features.md`.
 
-- Add reminder schema and UI to tasks, series, and events. 
-- Default value is reminders pushed on the instant they're scheduled for (for tasks and events), and on the instant they're due (for tasks)
+- Replace all "Back to <project/item-type>" page links in list page headings to "Up to <parent item>" (unless we're in a top-level item) 
+- Let's make the filters part of the URL at all times. 
+- Add reminder schema and UI to tasks, series, and events. (in-progress, possibly complete)
+    - Default value is reminders pushed on the instant they're scheduled for (for tasks and events), and on the instant they're due (for tasks)
 - Add in-app notifications for reminders.
 - Create user settings schema and UI 
     - Configure notifications to toggle e-mail on/off (default = on)
