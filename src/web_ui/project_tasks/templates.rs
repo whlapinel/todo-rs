@@ -136,12 +136,13 @@ impl ProjectTaskRow {
             // screen whose detail/edit/new pages were converted into dialog fragments.
             detail_via_dialog: true,
             // The in-place expand feature is opt-in per render call, not per item — the flat
-            // Tasks list's own row-building (`render_rows_with_virtual`/
-            // `indent_class`/`render_expandable_children` in `project_tasks/mod.rs`) overrides
-            // these two on top of this base row when it wants a given row expandable; every
-            // other caller of `from_item` (calendar screens, the item detail page's own
-            // Sub-items panel, save-as-template, etc.) leaves them at this default and keeps
-            // the plain decorative `has_children` arrow.
+            // Tasks list's own row-building (`render_rows_with_virtual`/`indent_class`/
+            // `render_expandable_children` in `project_tasks/mod.rs`) overrides these two on top
+            // of this base row when it wants a given row expandable, as does the item detail
+            // page's own Sub-items/linked-tasks panels (`handlers::render_children_fragment`/
+            // `render_source_event_fragment`) for any child that itself `has_children`; every
+            // other caller of `from_item` (calendar screens, save-as-template, etc.) leaves
+            // these at this default and keeps the plain decorative `has_children` arrow.
             children_html: None,
             indent_class: "",
         }

@@ -62,9 +62,12 @@ impl ProjectSimpleItemRow {
             // Stage 2 of docs/dialog-item-forms-plan.md — project_simple_lists' detail/edit/
             // new pages are now dialog fragments.
             detail_via_dialog: true,
-            // The in-place expand feature (see `Row::children_html`) hasn't been extended to
-            // Simple Lists yet — this screen keeps the plain decorative `has_children` arrow
-            // and today's click-to-detail behavior.
+            // The in-place expand feature is opt-in per render call, not per item — see
+            // `project_simple_lists::render_rows_expandable`/`render_expandable_children`, used
+            // by both the flat list page and the item detail page's Sub-items panel for any row
+            // that itself `has_children`. `from_item` itself just leaves this at the default;
+            // callers that haven't opted in (calendar screens, save-as-template, etc.) keep the
+            // plain decorative `has_children` arrow and today's click-to-detail behavior.
             children_html: None,
             indent_class: "",
         }

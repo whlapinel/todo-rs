@@ -710,6 +710,12 @@ pub async fn create_project_task_series_occurrence_child_form(
 /// Renders a parent item's children as `Row`s — see `tasks::render_children_fragment`'s
 /// identical rationale, project-scoped. Callers are responsible for their own membership gate
 /// before calling this (see `project_task_children_fragment`).
+///
+/// Each child that itself `has_children` gets its own descendant subtree eagerly inlined via
+/// `super::render_expandable_children`, the same in-place-expand treatment the flat Tasks list
+/// gives its own top-level rows (see `Row::children_html`'s doc comment) — otherwise a
+/// grandchild-bearing sub-item's name-click would fall through to `detail_via_dialog` instead
+/// of toggling, diverging from how the same item behaves when its row is rendered elsewhere.
 pub(crate) async fn render_children_fragment(
     repo: &Arc<dyn ItemRepo>,
     teams: &Arc<dyn TeamRepo>,
@@ -729,15 +735,39 @@ pub(crate) async fn render_children_fragment(
         Some(team_id) => names_for(teams, team_id, requester_user_id).await?,
         None => HashMap::new(),
     };
-    let rows = super::render_rows(
-        &children,
-        project_id,
-        &names,
-        true,
-        tz,
-        &HashMap::new(),
-        team_id,
-    )?;
+    let visible: Vec<&Item> = children.iter().collect();
+    let mut rows = Vec::with_capacity(visible.len());
+    for i in &visible {
+        let mut row = ProjectTaskRow::from_item(
+            i,
+            project_id,
+            &names,
+            &visible,
+            tz,
+            None,
+            team_id.is_some(),
+            true,
+            None,
+            None,
+        );
+        if i.has_children {
+            row.children_html = Some(
+                super::render_expandable_children(
+                    repo,
+                    &i.id,
+                    project_id,
+                    &names,
+                    true,
+                    tz,
+                    &HashMap::new(),
+                    team_id,
+                    1,
+                )
+                .await?,
+            );
+        }
+        rows.push(row.render()?);
+    }
     render(ProjectTaskRowsFragmentTemplate {
         rows,
         empty_message: "No sub-items yet.".to_string(),
@@ -765,15 +795,42 @@ pub(crate) async fn render_source_event_fragment(
         Some(team_id) => names_for(teams, team_id, requester_user_id).await?,
         None => HashMap::new(),
     };
-    let rows = super::render_rows(
-        &tasks,
-        project_id,
-        &names,
-        true,
-        tz,
-        &HashMap::new(),
-        team_id,
-    )?;
+    // Same in-place-expand treatment as `render_children_fragment` above — a linked task can
+    // still have its own sub-items (`add_child_url` doesn't require `source_event_id` to be
+    // unset), so its row needs the same `children_html` inlining to toggle rather than dialog.
+    let visible: Vec<&Item> = tasks.iter().collect();
+    let mut rows = Vec::with_capacity(visible.len());
+    for i in &visible {
+        let mut row = ProjectTaskRow::from_item(
+            i,
+            project_id,
+            &names,
+            &visible,
+            tz,
+            None,
+            team_id.is_some(),
+            true,
+            None,
+            None,
+        );
+        if i.has_children {
+            row.children_html = Some(
+                super::render_expandable_children(
+                    repo,
+                    &i.id,
+                    project_id,
+                    &names,
+                    true,
+                    tz,
+                    &HashMap::new(),
+                    team_id,
+                    1,
+                )
+                .await?,
+            );
+        }
+        rows.push(row.render()?);
+    }
     render(ProjectTaskRowsFragmentTemplate {
         rows,
         empty_message: "No linked tasks yet.".to_string(),

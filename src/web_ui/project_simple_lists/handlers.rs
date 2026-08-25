@@ -55,12 +55,6 @@ pub async fn project_simple_lists_page(
     })
 }
 
-// Thin re-export so this module doesn't need `crate::web_ui::project_simple_lists::render_rows`
-// imported alongside the identically-named local helpers above.
-fn render_rows_scoped(items: &[Item], project_id: &str) -> Result<Vec<String>, ItemError> {
-    crate::web_ui::project_simple_lists::render_rows(items, project_id)
-}
-
 pub async fn new_project_simple_item_page(
     Path(project_id): Path<String>,
     Extension(auth_user): Extension<AuthUser>,
@@ -196,7 +190,13 @@ pub async fn project_simple_item_children_fragment(
         Some(item_id.clone()),
     )
     .await?;
-    let rows = render_rows_scoped(&children, &project_id)?;
+    // Expandable, not the plain `render_rows_scoped` — a child that itself has children needs
+    // its own subtree inlined via `children_html` so its name-click toggles in place instead of
+    // falling through to the dialog/navigation branch (see `Row::children_html`'s doc comment
+    // and `project_tasks::handlers::render_children_fragment`'s identical fix).
+    let rows =
+        crate::web_ui::project_simple_lists::render_rows_expandable(&repo, &children, &project_id)
+            .await?;
     render(ProjectSimpleItemRowsFragmentTemplate {
         rows,
         empty_message: "No sub-items yet.".to_string(),

@@ -157,8 +157,11 @@ async fn render_expandable_children(
 /// The flat list page's own row-building — opts each top-level row with children into the
 /// in-place expand feature (see `Row::children_html`'s doc comment) by eagerly inlining its
 /// whole descendant subtree, so the browser's expand/collapse toggle never round-trips to the
-/// server. Unlike plain `render_rows` above (used by the children-fragment/create-fragment
-/// routes, which stay non-expandable), this is async and needs `repo` to walk each branch.
+/// server. Unlike plain `render_rows` above (used by the create-fragment route, which stays
+/// non-expandable), this is async and needs `repo` to walk each branch. The children-fragment
+/// route (the item detail page's Sub-items panel) also opts into this now, so a sub-item with
+/// its own children toggles in place instead of falling through to the dialog/navigation
+/// name-click branch (see `Row::children_html`'s doc comment).
 pub(crate) async fn render_rows_expandable(
     repo: &Arc<dyn ItemRepo>,
     items: &[Item],
