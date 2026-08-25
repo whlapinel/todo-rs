@@ -1,9 +1,9 @@
 # Retiring item detail "full pages"
 
-Status: **partially reverted** (2026-08-24, revised 2026-08-25) — see "Revert" and "Revision"
-sections at the end. Simple Lists' full page is back; Tasks/Events/Template children/series-
-occurrence pages are still in the dialog-only shape this doc originally describes, pending the
-same treatment.
+Status: **partially reverted** (2026-08-24, revised 2026-08-25, extended to Tasks same day) —
+see "Revert" and "Revision" sections at the end. Simple Lists' and Tasks' full pages are back;
+Events/Template children/series-occurrence pages are still in the dialog-only shape this doc
+originally describes, pending the same treatment.
 
 ## Context
 
@@ -175,3 +175,24 @@ destination a bookmark already reached. The dialog's own "View full page" link r
 `detail_page.html`'s Decision-3 removal, were only done for Simple Lists — Tasks/Events/Template
 children/series-occurrences still have their in-dialog link and auto-open behavior untouched,
 pending the same full-page-restoration treatment this doc's Status line describes.
+
+## Tasks restoration (2026-08-25, later same day)
+
+Applied the same revert+revision treatment to Tasks. `ProjectTaskDetailPageTemplate` regained
+`id`/`project_id`/`complete`/`view` (the pre-retirement fields); `detail_page.html` is back to
+its original header (Edit/Back to tasks/Delete) and Sub-items management (single-add form with
+`dueOffsetDays`), verbatim from before retirement. Unlike Simple Lists, no separate Move button
+or header parent-link was needed — `detail_view.html` (rendered into `view`) already has both
+inline (its own checkbox row's Move button, and a "Parent"/"Linked event"/"Part of series" `<dl>`
+row), so restoring `view` onto the page for free restores those too. The pre-retirement page's
+"Save as template" button (next to the Sub-items heading) and "Add multiple at once" batch form
+were **not** restored — both are already reachable from the row's "⋮" menu
+(`save_as_template_url`, and `add_child_dialog.html`'s batch-add section via `post_batch_url`;
+see the "What changed" section above), so re-adding them to the page would just be a second path
+to the same action — the same "already redundant, don't restore" call this doc's Revert section
+made for Simple Lists' Move button. `detail_page.html` follows the same `hidden`-wrapped
+`{{ dialog|safe }}` embed and no-auto-open-script shape the Revision section describes; the
+dialog fragment itself never had a "View full page" link to remove (Tasks' dialog was built
+after the original retirement pass, so it was already this shape). `detail_dialog.html`'s doc
+comment was updated to say Sub-items management lives on the full page again, not "the row's own
+'Add sub-item' action" only.

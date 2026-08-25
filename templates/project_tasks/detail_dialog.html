@@ -1,14 +1,17 @@
 <!-- Stage 1 of docs/dialog-item-forms-plan.md — the read-only detail dialog (Decision 1):
      reuses whatever detail_view.html already rendered (`view`, computed once by the handler,
      see ProjectTaskDetailDialog::new) plus Edit/Close buttons. No Sub-items management/
-     Save-as-template/Delete here — Sub-items management is the row's own "Add sub-item" action
-     (now including batch-add, see add_child_dialog.html), Save-as-template and Delete are on
-     the row's "⋮" menu. The full detail page this dialog used to sit on top of ("View full
-     page") is retired — see docs/item-detail-full-page-retirement.md: it duplicated this
-     dialog's content and its "View full page" link's hx-target="#page" swap racing this
-     dialog's own onclick-close was the source of a real bug (the swapped-in page's auto-open
-     script would re-open this same dialog an instant after the click closed it). #dialog-
-     fragment is the conventional wrapper id every new/edit/detail dialog fragment uses. -->
+     Save-as-template/Delete here — Sub-items management lives on the full detail page
+     (detail_page.html, restored 2026-08-25 — see docs/item-detail-full-page-retirement.md's
+     revert note), Save-as-template and Delete are on the row's "⋮" menu (Delete is also on the
+     full page). No "View full page" link here — a prior revision had one, closed via
+     `hx-on::after-request` to dodge a race with detail_page.html's own auto-open script; that
+     race is gone by construction now (see item-detail-full-page-retirement.md's Revision
+     section): full-page access lives only in the row's action popover
+     (components/row_actions_menu.html's "View full page" entry), never reachable while this
+     modal `<dialog>` is open, and detail_page.html no longer auto-opens a dialog on load at
+     all. #dialog-fragment is the conventional wrapper id every new/edit/detail dialog fragment
+     uses. -->
 <div id="dialog-fragment">
   <div id="dialog-backdrop"
     class="fixed inset-0 bg-gray-500/75 dark:bg-gray-900/50 transition-opacity duration-300 ease-out opacity-0 group-open/dialog:opacity-100">

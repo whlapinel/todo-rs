@@ -202,9 +202,14 @@ pub async fn project_task_detail_page(
         series_link,
     )
     .render()?;
-    let dialog =
-        ProjectTaskDetailDialog::new(&item.id, &project_id, &item.name, item.complete, view)
-            .render()?;
+    let dialog = ProjectTaskDetailDialog::new(
+        &item.id,
+        &project_id,
+        &item.name,
+        item.complete,
+        view.clone(),
+    )
+    .render()?;
     let nav_html = nav::build_nav_html(
         &projects,
         &auth_user.user_id,
@@ -213,7 +218,11 @@ pub async fn project_task_detail_page(
     )
     .await?;
     render(ProjectTaskDetailPageTemplate {
+        id: item.id,
+        project_id,
         name: item.name,
+        complete: item.complete,
+        view,
         dialog,
         nav_html,
     })
@@ -980,7 +989,7 @@ pub async fn update_project_task_form(
                 &project_id,
                 &updated.name,
                 updated.complete,
-                view,
+                view.clone(),
             )
             .render()?;
             let nav_html = nav::build_nav_html(
@@ -991,7 +1000,11 @@ pub async fn update_project_task_form(
             )
             .await?;
             Ok(render(ProjectTaskDetailPageTemplate {
+                id: updated.id.clone(),
+                project_id: project_id.clone(),
                 name: updated.name.clone(),
+                complete: updated.complete,
+                view,
                 dialog,
                 nav_html,
             })?

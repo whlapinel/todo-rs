@@ -1021,14 +1021,25 @@ impl ProjectTaskDetailDialog {
     }
 }
 
-/// See docs/item-detail-full-page-retirement.md — this page is now just the read-only detail
-/// dialog fragment plus the Decision-3 auto-open script, the same minimal shape
-/// `ProjectTaskEditPageTemplate`/new_page.html already use, not a full page with its own
-/// duplicate header/Sub-items/Save-as-template section.
+/// See docs/item-detail-full-page-retirement.md's revert note — this full page is back
+/// (header with Edit/Back/Delete, `view`'s own read-only fields including its inline Move
+/// button and Parent/Linked event/Series links, Sub-items management). `dialog` is still
+/// rendered and embedded (`hidden`, in detail_page.html) purely so the row's own hx-get
+/// (target=#action-dialog, select=#dialog-fragment — see components/row.html) can pluck it out
+/// of this same route's response; as of 2026-08-25 nothing auto-opens it when this page is
+/// loaded directly (see detail_page.html's own comment) — full-page access is popover-only now
+/// (components/row_actions_menu.html's "View full page" entry), never from inside the dialog
+/// itself, so the two navigation modes never race each other. Unlike Simple Lists' restored
+/// page, no separate Move button or parent-link header is needed here — `view` already renders
+/// both inline (see detail_view.html).
 #[derive(Template)]
 #[template(path = "project_tasks/detail_page.html")]
 pub struct ProjectTaskDetailPageTemplate {
+    pub id: String,
+    pub project_id: String,
     pub name: String,
+    pub complete: bool,
+    pub view: String,
     pub dialog: String,
     pub nav_html: String,
 }
