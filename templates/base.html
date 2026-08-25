@@ -29,7 +29,22 @@
   hx-select="#page" hx-swap="innerHTML">
   {% block header %}{{ nav_html|safe }}{% endblock %}
 
-  <main id="page">
+  <!-- hx-history-elt: htmx's back/forward history cache defaults to snapshotting and
+       restoring the ENTIRE `document.body` on popstate (see htmx's `_t()`/`getHistoryElement`)
+       — that includes #action-dialog/#error-dialog/#action-menu-popover below (persistent,
+       stateful elements meant to survive navigation, not be duplicated per-snapshot) and every
+       inline <script> in this file (meant to run exactly once per real page load, not
+       re-execute on every back/forward). Left at the default, a popstate back to a URL last
+       seen with, say, #action-dialog open (e.g. mid dialog-item-forms-plan.md flow, right
+       before clicking "View full page" — see docs/item-detail-full-page-retirement.md's
+       revert note) restores that dialog open again — a stale, closed-over-since state
+       reappearing uninvited — and re-executing this file's top-level `let`/`const` inline
+       scripts a second time throws (`Identifier '...' has already been declared`), corrupting
+       whatever htmx:afterSwap listeners hadn't finished (re-)registering yet. Marking #page as
+       the sole `hx-history-elt` scopes htmx's save/restore to just #page's own innerHTML —
+       matching what already actually changes across boosted navigation — so back/forward goes
+       back to being a plain #page swap and none of the above is ever in scope to restore. -->
+  <main id="page" hx-history-elt>
     <div class="max-w-7xl mx-auto px-4 py-8 sm:px-6 lg:px-8">
       {% block content %}{% endblock %}
     </div>
@@ -116,9 +131,37 @@
     // calendar_page.html's own has_selected_date-gated inline <script>, which htmx already
     // executes on every swap (including full #page ones) — so removing the fallback here
     // doesn't lose that case.
+    // `e.detail.target` isn't always present: htmx's history-restore path (a popstate landing
+    // on a cached #page snapshot — see #page's `hx-history-elt` doc comment above) dispatches
+    // this same event without populating `detail.target`, so every listener here needs to
+    // tolerate that rather than assume a normal ajax-swap's shape.
     document.addEventListener('htmx:afterSwap', (e) => {
-      const dialog = e.detail.target.matches?.('dialog') ? e.detail.target : null;
+      const dialog = e.detail.target?.matches?.('dialog') ? e.detail.target : null;
       if (dialog && !dialog.open) dialog.showModal();
+    });
+
+    // #action-dialog/#error-dialog live outside #page specifically so they survive normal
+    // navigation (see their own doc comments) — but that means nothing ever closes them again
+    // on a history-restore (`hx-history-elt` scopes save/restore to #page alone; see #page's
+    // own doc comment). A dialog can only ever be left open across a #page-level navigation via
+    // a link that lives *inside* it (a modal <dialog> blocks every other click) — a day-drawer
+    // item link, or the Simple Lists "View full page" link (detail_dialog.html) — and each of
+    // those already decides for itself, per-link, whether the *forward* navigation should leave
+    // a dialog showing (a day-drawer item's own detail dialog, correctly, via Decision 3) or not
+    // (View full page's own `hx-on::after-request` close). None of that logic runs again on the
+    // way *back*, though, since #page's cached snapshot was captured mid-navigation with
+    // whichever of those was true at that instant — so a dialog left open when the snapshot was
+    // taken reappears untouched on every subsequent restore of it, forever, regardless of what's
+    // actually showing now. Scoped to the history-restore path only (`htmx:historyCacheHit`,
+    // not a general `htmx:beforeSwap`) so it never fights a *forward* navigation's own
+    // already-correct per-link decision above.
+    document.addEventListener('htmx:historyCacheHit', function () {
+      var actionDialog = document.getElementById('action-dialog');
+      if (actionDialog && actionDialog.open) actionDialog.close();
+      var errorDialog = document.getElementById('error-dialog');
+      if (errorDialog && errorDialog.open) errorDialog.close();
+      var popover = document.getElementById('action-menu-popover');
+      if (popover && popover.matches(':popover-open')) popover.hidePopover();
     });
 
     // Stage 2 of docs/calendar-day-drawer-plan.md: keeps the month grid's selected-day ring
@@ -131,7 +174,7 @@
     // date. Scoped to `#day-drawer` specifically so an unrelated #page boost (which also fires
     // htmx:afterSwap) never mistakes some other `[data-date]` element for a selection change.
     document.addEventListener('htmx:afterSwap', function (e) {
-      if (e.detail.target.id !== 'day-drawer') return;
+      if (e.detail.target?.id !== 'day-drawer') return;
       var marker = e.detail.target.querySelector('[data-date]');
       if (!marker) return;
       var date = marker.getAttribute('data-date');

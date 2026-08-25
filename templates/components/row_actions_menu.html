@@ -21,6 +21,17 @@
         {% if detail_via_dialog %}hx-get="{{ item_url }}" hx-target="#action-dialog" hx-select="#dialog-fragment" hx-swap="innerHTML"{% else %}hx-target="#page" hx-select="#page" hx-swap="innerHTML"{% endif %}
         class="block px-4 py-3 text-sm text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-white/5">Details</a>
     {% endif %}
+    {% if detail_via_dialog %}
+    <!-- The only way to reach this item's full page (2026-08-25, see docs/item-detail-full-
+         page-retirement.md) — the read-only detail dialog itself no longer links out to it.
+         Deliberately not reachable from inside that dialog: a modal `<dialog>` blocks all
+         clicks on anything outside it, so the dialog and full-page navigation can never race
+         each other now that this popover link is the sole entry point. `item_url`'s route
+         renders the same full page regardless of `detail_via_dialog` (see components/row.html's
+         name-click branch for the dialog-open case, which hits this same URL a different way). -->
+    <a href="{{ item_url }}" hx-target="#page" hx-select="#page" hx-swap="innerHTML"
+        class="block px-4 py-3 text-sm text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-white/5">View full page</a>
+    {% endif %}
     {% if let Some(url) = edit_url %}
     <!-- Goes straight to the edit dialog fragment, not through the detail dialog first — see
          Decision 1 of docs/dialog-item-forms-plan.md's Stage 1. #dialog-fragment is the

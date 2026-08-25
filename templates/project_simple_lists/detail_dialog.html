@@ -4,11 +4,18 @@
      `view: String` field), so this fragment inlines the description directly rather than
      embedding a pre-rendered sub-template — matching detail_page.html's own existing plain
      `<p>`-only style rather than inventing a `<dl>` this screen never had. No complete-toggle
-     gating on Edit — Simple items have no complete concept at all. See
-     docs/item-detail-full-page-retirement.md — the full detail page this used to sit on top of
-     ("View full page") is retired; its own Move button was redundant with the row's own Move
-     action and its Sub-items management is the row's own "Add sub-item" action (now including
-     batch-add). -->
+     gating on Edit — Simple items have no complete concept at all.
+
+     No "View full page" link here (2026-08-25 revision, see docs/item-detail-full-page-
+     retirement.md) — a prior revision had one, closed via `hx-on::after-request` to dodge a
+     race with detail_page.html's own auto-open script. That race, and the "two dialogs stacked"
+     bug it eventually caused, is gone by construction now: full-page access lives only in the
+     row's action popover (components/row_actions_menu.html's "View full page" entry), which is
+     never reachable while this modal `<dialog>` is open (a modal blocks all clicks outside
+     itself), and detail_page.html no longer auto-opens a dialog on load at all. So there is no
+     longer any path that navigates away while this dialog is still open — the only ways out are
+     Edit, Close, or browser back (handled separately, see base.html's `htmx:historyCacheHit`
+     listener). -->
 <div id="dialog-fragment">
   <div id="dialog-backdrop"
     class="fixed inset-0 bg-gray-500/75 dark:bg-gray-900/50 transition-opacity duration-300 ease-out opacity-0 group-open/dialog:opacity-100">

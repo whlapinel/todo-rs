@@ -203,13 +203,27 @@ impl ProjectSimpleItemDetailDialog {
     }
 }
 
-/// See docs/item-detail-full-page-retirement.md — this page is now just the read-only detail
-/// dialog fragment plus the Decision-3 auto-open script, not a full page with its own duplicate
-/// header/Move button/Sub-items section.
+/// See docs/item-detail-full-page-retirement.md's revert note — this full page is back
+/// (header with Edit/Back-or-parent-link/Delete, Move button, Sub-items management). `dialog`
+/// is still rendered and embedded (`hidden`, in detail_page.html) purely so the row's own
+/// hx-get (target=#action-dialog, select=#dialog-fragment — see components/row.html) can pluck
+/// it out of this same route's response; as of 2026-08-25 nothing auto-opens it when this page
+/// is loaded directly (see detail_page.html's own comment) — full-page access is popover-only
+/// now (components/row_actions_menu.html's "View full page" entry), never from inside the
+/// dialog itself, so the two navigation modes never race each other.
 #[derive(Template)]
 #[template(path = "project_simple_lists/detail_page.html")]
 pub struct ProjectSimpleItemDetailPageTemplate {
+    pub id: String,
+    pub project_id: String,
     pub name: String,
+    pub description: Option<String>,
+    /// `Some((parent_name, parent_url))` when this item has a `parent_item_id` — reuses
+    /// `project_tasks::templates::resolve_parent_link` (see that function's own doc comment;
+    /// `project_events` already reuses it the same way). Drives the "⬆️ to {parent}" link that
+    /// replaces the plain "Back to simple lists" one for a sub-item — see detail_page.html.
+    /// `None` for a top-level item, or (gracefully) if the parent has since been deleted.
+    pub parent_link: Option<(String, String)>,
     pub dialog: String,
     pub nav_html: String,
 }

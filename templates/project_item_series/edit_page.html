@@ -216,6 +216,7 @@
     var dialog = document.getElementById('action-dialog');
     var frag = document.getElementById('dialog-fragment');
     if (dialog && frag && !dialog.open) {
+      dialog.innerHTML = '';
       while (frag.firstChild) dialog.appendChild(frag.firstChild);
       frag.remove();
       htmx.process(dialog);

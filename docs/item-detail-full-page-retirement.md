@@ -1,6 +1,9 @@
 # Retiring item detail "full pages"
 
-Status: **done** (2026-08-24).
+Status: **partially reverted** (2026-08-24, revised 2026-08-25) — see "Revert" and "Revision"
+sections at the end. Simple Lists' full page is back; Tasks/Events/Template children/series-
+occurrence pages are still in the dialog-only shape this doc originally describes, pending the
+same treatment.
 
 ## Context
 
@@ -108,3 +111,67 @@ logic, same precedent `docs/archived/dialog-item-forms-plan.md` itself used). `t
 run, no `static/style.css` diff (every class used was already present elsewhere). Not yet
 verified live in a browser — the user's own pass per this repo's standing "no Playwright
 click-through" policy (see CLAUDE.md).
+
+## Revert (2026-08-24, later same day)
+
+Retiring the full pages turned out to be the wrong call — trading a real but narrow bug (see
+"Context" above) for losing the pages outright. Reverted for **Simple Lists only** as a first
+trial; the same treatment is expected to follow for Tasks/Events/Template children/series
+occurrences once this is confirmed to feel right.
+
+The actual fix for the original race: `detail_dialog.html`'s "View full page" link no longer
+closes `#action-dialog` via a synchronous `onclick` (which ran at click time, before the async
+full-page request even started — so by the time the response landed and its own Decision-3
+auto-open script ran, `dialog.open` already read `false` and the script reopened it). It now
+closes the dialog via `hx-on::after-request="if(event.detail.successful) …close()"` instead —
+the same "close `#action-dialog` once a targeted request lands" convention already used by
+`reschedule_dialog.html`/`quick_assign_dialog.html`/each screen's own `detail_fields.html`. That
+guarantees the full-page swap (and its embedded auto-open script) runs first, while the dialog
+is still open, so the script's `!dialog.open` guard correctly no-ops; only afterward does the
+link's own handler close it. Restored in full otherwise: `ProjectSimpleItemDetailPageTemplate`
+regained `id`/`project_id`/`description`; `ProjectSimpleItemDetailDialog` regained
+`full_page_url`; `detail_page.html` is back to its original header (Edit/Back/Delete), Move
+button, and Sub-items section verbatim. The batch-add addition to `add_child_dialog.html` from
+the retirement pass was left in place (additive, not conflicting with the restored page's own
+single-add form).
+
+## Revision (2026-08-25) — full-page access moved to the row popover, not the dialog
+
+Even with the previous fix's close-timing corrected, the dialog↔full-page round trip (dialog's
+"View full page" link → full page auto-opens its own dialog via Decision 3 → that dialog's own
+"View full page"/parent link → …) kept surfacing new bugs as it was driven around by hand:
+htmx's default whole-`document.body` history-cache snapshot fighting with `#action-dialog`'s
+open state on back/forward (fixed via `hx-history-elt` on `#page`), a stale dialog left open
+after an unrelated navigation elsewhere (fixed via a `htmx:historyCacheHit` listener that closes
+`#action-dialog`/`#error-dialog`/the row-actions popover), and finally two items' dialog markup
+stacking in the same `<dialog>` at once (fixed via clearing `#action-dialog`'s content before
+each move-in). Each fix addressed a real bug, but the pattern kept producing new ones — because
+the underlying design let the dialog and the full page navigate into each other, and a modal
+`<dialog>`'s "nothing outside it is clickable" invariant only holds if nothing *inside* it can
+trigger navigation either.
+
+The actual fix: stop letting the dialog navigate to the full page at all. `detail_dialog.html`'s
+"View full page" link is gone; the *only* way to reach an item's full page is now
+`components/row_actions_menu.html`'s new "View full page" entry, on the row's `⋮` popover
+(non-modal, only reachable when no dialog is open in the first place). `detail_page.html` no
+longer auto-opens a dialog on load either (Decision 3 retired) — a full-page load, however
+reached (popover link, bookmark, back/forward), just renders the plain page; the dialog fragment
+is still embedded in the same GET response (wrapped `<div hidden>`) purely so the row's own
+`hx-get`/`hx-select="#dialog-fragment"` click can still pluck it out of that same route, but
+nothing ever shows it there automatically anymore. With the dialog never triggering navigation
+and the full page never auto-showing a dialog, the two can't race — the earlier three fixes
+(`hx-history-elt`, `historyCacheHit`, dialog-content-clear) are still in place as defense in
+depth, but none of them have anything left to defend against on this particular path.
+
+`ProjectSimpleItemDetailDialog` lost `full_page_url` (nothing renders it anymore).
+`ProjectSimpleItemDetailPageTemplate` keeps `dialog` (still needed for the `hidden`-wrapped
+embed) but the field's own doc comment no longer describes an auto-open.
+
+Scope note: `components/row_actions_menu.html` is shared by every screen using the common `Row`
+(Tasks, Events, Simple Lists, the cross-project/calendar screens), so the new "View full page"
+entry now shows up for all of them, not just Simple Lists — harmless today since it just points
+at the same dialog-only `detail_page.html` those screens already had (see "Status" above), same
+destination a bookmark already reached. The dialog's own "View full page" link removal, and
+`detail_page.html`'s Decision-3 removal, were only done for Simple Lists — Tasks/Events/Template
+children/series-occurrences still have their in-dialog link and auto-open behavior untouched,
+pending the same full-page-restoration treatment this doc's Status line describes.

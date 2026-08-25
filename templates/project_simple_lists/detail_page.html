@@ -1,26 +1,71 @@
 {% extends "base.html" %}
 {% block title %}{{ name }} · Todo{% endblock %}
 {% block content %}
-{{ dialog|safe }}
-<!-- Direct-URL/bookmark access only (Decision 3 of docs/dialog-item-forms-plan.md) — see
-     docs/item-detail-full-page-retirement.md: this page used to also render a full duplicate
-     of the dialog's content (header, Move button, Sub-items management) underneath the
-     auto-opened dialog; that's retired now, matching edit_page.html/new_page.html's own
-     dialog-only shape. An htmx-triggered open already selected just #dialog-fragment out of
-     this response, so this sibling <script> is never part of what gets swapped in that path;
-     it only runs on an actual full-page load. Moves (not copies) #dialog-fragment's children
-     into base.html's persistent #action-dialog so nothing inert is left behind in #page once
-     the dialog is showing. -->
-<script>
-  (function () {
-    var dialog = document.getElementById('action-dialog');
-    var frag = document.getElementById('dialog-fragment');
-    if (dialog && frag && !dialog.open) {
-      while (frag.firstChild) dialog.appendChild(frag.firstChild);
-      frag.remove();
-      htmx.process(dialog);
-      dialog.showModal();
-    }
-  })();
-</script>
+<!-- 2026-08-25: this route serves two callers with the same GET — the row's own hx-get
+     (target=#action-dialog, select=#dialog-fragment; see components/row.html) picks the dialog
+     markup straight out of this response, while a full navigation (the popover's "View full
+     page" link, a bookmark, browser back/forward) renders the whole document below and never
+     touches #dialog-fragment at all — nothing here auto-opens a dialog on top of a full page
+     load anymore (that was Decision 3 of docs/dialog-item-forms-plan.md; retired, see
+     docs/item-detail-full-page-retirement.md's 2026-08-25 note, once the dialog's own "View
+     full page" link was removed and full-page access became popover-only, so there was no
+     longer any in-dialog path for this auto-open to be reopening *from*).
+
+     The `hidden` wrapper keeps #dialog-fragment's markup (a `fixed inset-0` backdrop plus panel)
+     out of #page's visible/interactive flow when this response is rendered as a full page —
+     hx-select="#dialog-fragment" still finds the div by id regardless of the wrapper (selection
+     walks the parsed response tree, not just visible nodes), and only the matched div itself
+     (not this wrapper) is what gets moved into #action-dialog, so the copy that ends up in the
+     dialog carries no `hidden` of its own. -->
+<div hidden>{{ dialog|safe }}</div>
+<div class="space-y-6">
+  <div class="md:flex md:items-center md:justify-between">
+    <div class="min-w-0 flex-1">
+      <h2 class="text-2xl/7 font-bold text-gray-900 sm:truncate sm:text-3xl sm:tracking-tight dark:text-white">{{ name }}</h2>
+    </div>
+    <div class="mt-4 flex items-center gap-x-3 md:mt-0 md:ml-4">
+      <a href="/web/projects/{{ project_id }}/simple-lists/{{ id }}/edit" hx-target="#page" hx-select="#page" hx-swap="innerHTML"
+         class="inline-flex items-center justify-center rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-xs hover:bg-indigo-500 dark:bg-indigo-500 dark:shadow-none dark:hover:bg-indigo-400">Edit</a>
+      {% if let Some(p) = parent_link %}
+      <a href="{{ p.1 }}" hx-target="#page" hx-select="#page" hx-swap="innerHTML"
+         class="inline-flex items-center justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-xs inset-ring-1 inset-ring-gray-300 hover:bg-gray-50 dark:bg-white/10 dark:text-white dark:shadow-none dark:inset-ring-white/5 dark:hover:bg-white/20">⬆️ to {{ p.0 }}</a>
+      {% else %}
+      <a href="/web/projects/{{ project_id }}/simple-lists" hx-target="#page" hx-select="#page" hx-swap="innerHTML"
+         class="inline-flex items-center justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-xs inset-ring-1 inset-ring-gray-300 hover:bg-gray-50 dark:bg-white/10 dark:text-white dark:shadow-none dark:inset-ring-white/5 dark:hover:bg-white/20">Back to simple lists</a>
+      {% endif %}
+      <button hx-delete="/web/projects/{{ project_id }}/simple-lists/{{ id }}?redirect=1"
+              hx-confirm="Delete {{ name }} and all its sub-items? This cannot be undone."
+              hx-target="this" hx-swap="none"
+              class="inline-flex items-center justify-center rounded-md bg-red-600 px-3 py-2 text-sm font-semibold text-white shadow-xs hover:bg-red-500 dark:bg-red-500 dark:shadow-none dark:hover:bg-red-400">Delete</button>
+    </div>
+  </div>
+
+  <button type="button" hx-get="/web/projects/{{ project_id }}/simple-lists/{{ id }}/move"
+          hx-target="#action-dialog" hx-select="unset" hx-swap="innerHTML"
+          class="text-sm text-indigo-600 hover:text-indigo-500 dark:text-indigo-400 dark:hover:text-indigo-300">Move</button>
+
+  {% if let Some(d) = description %}
+  <p class="text-sm whitespace-pre-wrap text-gray-700 dark:text-gray-300">{{ d }}</p>
+  {% endif %}
+
+  <div>
+    <h3 class="text-base/7 font-semibold text-gray-900 dark:text-white mb-2">Sub-items</h3>
+    <ul id="children-list" class="divide-y divide-gray-100 rounded-lg border border-gray-200 bg-white px-4 dark:divide-white/5 dark:border-white/10 dark:bg-gray-800/50"
+        hx-get="/web/projects/{{ project_id }}/simple-lists/{{ id }}/children" hx-trigger="load"
+        hx-target="this" hx-select="unset" hx-swap="innerHTML"></ul>
+
+    <form hx-post="/web/projects/{{ project_id }}/simple-lists" hx-target="#children-list" hx-select="unset" hx-swap="innerHTML"
+          hx-on::after-request="if(event.detail.successful) this.reset()"
+          class="mt-4 flex items-end gap-x-2">
+      <input type="hidden" name="parentItemId" value="{{ id }}" />
+      <label class="flex-1 block text-sm/6 font-medium text-gray-900 dark:text-white">New sub-item <span class="text-red-500" aria-hidden="true">*</span>
+        <div class="mt-2">
+          <input type="text" name="name" placeholder="Name" required maxlength="200"
+                 class="block w-full rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 placeholder:text-gray-400 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:placeholder:text-gray-500 dark:focus:outline-indigo-500" />
+        </div>
+      </label>
+      <button type="submit" class="inline-flex items-center justify-center rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-xs hover:bg-indigo-500 dark:bg-indigo-500 dark:shadow-none dark:hover:bg-indigo-400">Add</button>
+    </form>
+  </div>
+</div>
 {% endblock %}

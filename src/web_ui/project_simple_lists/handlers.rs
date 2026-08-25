@@ -99,6 +99,9 @@ pub async fn project_simple_item_detail_page(
     )
     .await?;
     let item = require_simple(item)?;
+    let parent_link =
+        crate::web_ui::project_tasks::templates::resolve_parent_link(&repo, &project_id, &item)
+            .await?;
     let dialog = ProjectSimpleItemDetailDialog::new(
         &item.id,
         &project_id,
@@ -114,7 +117,11 @@ pub async fn project_simple_item_detail_page(
     )
     .await?;
     render(ProjectSimpleItemDetailPageTemplate {
+        id: item.id,
+        project_id,
         name: item.name,
+        description: item.description.clone(),
+        parent_link,
         dialog,
         nav_html,
     })
@@ -333,6 +340,12 @@ pub async fn update_project_simple_item_form(
     let updated =
         project_item_service::get_project_item_unchecked(&repo, &project_id, &item_id).await?;
     if close {
+        let parent_link = crate::web_ui::project_tasks::templates::resolve_parent_link(
+            &repo,
+            &project_id,
+            &updated,
+        )
+        .await?;
         let dialog = ProjectSimpleItemDetailDialog::new(
             &updated.id,
             &project_id,
@@ -348,7 +361,11 @@ pub async fn update_project_simple_item_form(
         )
         .await?;
         return Ok(render(ProjectSimpleItemDetailPageTemplate {
+            id: updated.id.clone(),
+            project_id: project_id.clone(),
             name: updated.name.clone(),
+            description: updated.description.clone(),
+            parent_link,
             dialog,
             nav_html,
         })?
