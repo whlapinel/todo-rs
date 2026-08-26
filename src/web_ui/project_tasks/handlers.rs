@@ -197,7 +197,7 @@ pub async fn project_task_detail_page(
         project.team_id.is_some(),
         &names,
         tz,
-        parent_link,
+        parent_link.clone(),
         linked_event,
         series_link,
     )
@@ -225,6 +225,7 @@ pub async fn project_task_detail_page(
         view,
         dialog,
         nav_html,
+        parent_link,
     })
 }
 
@@ -1048,7 +1049,7 @@ pub async fn update_project_task_form(
                 project.team_id.is_some(),
                 &names,
                 tz,
-                parent_link,
+                parent_link.clone(),
                 linked_event,
                 series_link,
             )
@@ -1076,6 +1077,7 @@ pub async fn update_project_task_form(
                 view,
                 dialog,
                 nav_html,
+                parent_link,
             })?
             .into_response())
         }

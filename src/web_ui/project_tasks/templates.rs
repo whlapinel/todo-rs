@@ -1040,9 +1040,10 @@ impl ProjectTaskDetailDialog {
 /// of this same route's response; as of 2026-08-25 nothing auto-opens it when this page is
 /// loaded directly (see detail_page.html's own comment) — full-page access is popover-only now
 /// (components/row_actions_menu.html's "View full page" entry), never from inside the dialog
-/// itself, so the two navigation modes never race each other. Unlike Simple Lists' restored
-/// page, no separate Move button or parent-link header is needed here — `view` already renders
-/// both inline (see detail_view.html).
+/// itself, so the two navigation modes never race each other. No separate Move button is
+/// needed here (`view` already renders it inline) but the header link now mirrors Simple
+/// Lists' — see `parent_link` below — closing `docs/issues_and_features.md`'s "Back to
+/// <item-type>" → "Up to <parent item>" item.
 #[derive(Template)]
 #[template(path = "project_tasks/detail_page.html")]
 pub struct ProjectTaskDetailPageTemplate {
@@ -1053,6 +1054,10 @@ pub struct ProjectTaskDetailPageTemplate {
     pub view: String,
     pub dialog: String,
     pub nav_html: String,
+    /// `Some((parent_name, parent_url))` when this task has a `parent_item_id` — the header
+    /// link then reads "Up to {parent_name}" (linking to the parent's own detail page) instead
+    /// of the generic "Back to tasks" list link, matching `project_simple_lists/detail_page.html`.
+    pub parent_link: Option<(String, String)>,
 }
 
 #[derive(Template)]
