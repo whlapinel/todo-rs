@@ -2,14 +2,21 @@
 
 Open issues and feature requests, merged from the former `docs/issues.md` and `docs/features.md` (2026-08-20) into a single sorted list. Completed or superseded items — including ones from the old files that were already resolved but hadn't been moved out yet — live in `docs/archived/archived_issues_and_features.md`.
 
-- Tasks list: add pagination - show max 25 per page
-- Tasks list: add option to show as flattened list
-- Tasks list: add sort option: sort by due date or by scheduled start date
 - Calendar view: clicking a virtual occurrence item on day-drawer seems to have target #page, so page is blanked out when dialog is sent in. 
 - Calendar view: Clicking an item takes user to full page instead of sending dialog. Should send dialog.
 - Calendar view: Clicking an item with sub-items should expand to show sub-items.
 - Calendar view: row-actions menu doesn't include details or full page actions.
 - Calendar view: something is wrong with the row-actions menu with the click area - it seems the menu is shown but not clickable
+- All-projects task list: clicking row with sub-items doesn't expand to show sub-items; instead it shows details dialog.
+- All-projects task list: completing an item has different behavior from project task list. Should be same. (show completed confirmation, disappear row after delay). Let's unify this code as much as feasible so we don't have to deal with this sort of drift again.
+- Item parent info (e.g. assignee, due date, scheduled dates) show beneath last child instead of directly beneath parent when expanded to show sub-items. 
+- Replace all "Back to <project/item-type>" page links in list page headings to "Up to <parent item>" (unless we're in a top-level item) 
+- Series Occurrences: I am wondering if we should materialize current occurrences on read. What prompted this thought?
+    - There is a feature for task series to have associated templates that will be copied to the item as sub-items upon materialization. But it's not really useful since those sub-items won't show up until the item is materialized, which is typically when it's marked complete. (for example, a template might include items with an offset of 30 days prior to the due date. What should happen is these items should show up in the calendar 30 days prior to the task series due date. But you'd have to edit the item in order for that to happen). It seems the solution would be to just materialize all current occurrences on read. But what if a task series has template items with a long lead time?  e.g. something that has an offset of -60 might already be overdue by the time the occurrence is materialized and the template is instantiated. An alternative might be to materialize the next current occurrence as soon as an occurrence is skipped or completed. COULD make this eager-materialization conditioned on the series having a template. Possibly the most appealing solution is to allow a task series to have children. That way we don't have to materialize in advance in order to see them, because they'll all be virtual occurrences. I think is my preference if it's feasible. But until this is addressed, we just have to edit the item in advance to trigger materialization.
+    - A related but different issue is that offsets are for due dates. but task series can have scheduled or due dates. if a task series has a scheduled date and a template assigned, those sub-items won't be assigned any scheduled or due dates, which might confuse the user. Solution is probably just don't allow having schedule for task series, only allow due dates. This makes more sense semantically anyway, since scheduling seems more particular to an instance of a series.
+- Tasks list: add pagination - show max 25 per page
+- Tasks list: add option to show as flattened list
+- Tasks list: add sort option: sort by due date or by scheduled start date
 - Multi-select: let's change UI so that checkbox is used to select an item for bulk actions rather than completing it, but stays on far left. Add a nice checkmark button next to the left which performs current function of checkbox, to mark complete.
     - Would like to provide following actions eventually:
         - Set Assignee (for team-items)
@@ -21,12 +28,10 @@ Open issues and feature requests, merged from the former `docs/issues.md` and `d
 
     - The item that follows this one may be completely stale, but including it here because it's relevant. Need to look into it. 
     - Mass rescheduling ("skip current" without completing), across projects. The single-row version already shipped (`bd000b1`, "Finish the quick-reschedule dialog and extend it to Events") — see the archived doc. The mass/bulk version is fully designed in `docs/scheduled-catchup-plan.md` but not yet built: needs a new cross-project screen, a new repo method, and a bulk-action pattern this codebase doesn't have precedent for yet. **Before implementing:** that plan doc predates the item_series redesign and has zero series-awareness in its "overdue" query — add a `series_id IS NULL` guard (or equivalent) before implementing, or it will desync a stale materialized series occurrence from its cursor.
-- Calendar view - filters should be shown on the day drawer instead of the month grid. But they should survive navigation between days. 
-- Change all date displays to e.g. Thu 27 Aug
+- Calendar view - filters should be shown on the day drawer instead of the month grid. But they should still survive navigation between days. 
+- Change ALL date displays to e.g. Thu 27 Aug
 - For sub-task scheduling we only allow setting offset but row-actions returns same schedule form as top-level items. Let's just hide that row-action and let the edit form be the only way. But we also should ideally have a client-side helper that shows the conversion from offset to date beside the field as it is changed. 
-    - Design discussion on this topic please. It appears we are persisting the due date whenever a due-date-offset is updated. I wonder if this is necessary? This is a computed value based on the top-level parent's due date and changes with it based on the offset. So in theory it could be computed on the fly whenever it's needed. Let's weigh the options here and reevaluate. But, I really want to change it unless there's an obvious large benefit in terms of performance gains or reduction of complexity.
-- Item parent info (e.g. assignee, due date, scheduled dates) show beneath last child instead of directly beneath parent when expanded to show sub-items. 
-- Replace all "Back to <project/item-type>" page links in list page headings to "Up to <parent item>" (unless we're in a top-level item) 
+    - Design discussion on this topic please. It appears we are persisting the due date whenever a due-date-offset is updated. I wonder if this is necessary? This is a computed value based on the top-level parent's due date and changes with it based on the offset. So in theory it could be computed on the fly whenever it's needed. Let's weigh the options here and reevaluate. But, I really want to change it unless there's an obvious benefit in terms of performance gains or reduction of complexity.
 - Let's make the filters part of the URL at all times. 
 - Add reminder schema and UI to tasks, series, and events. (in-progress, possibly complete)
     - Default value is reminders pushed on the instant they're scheduled for (for tasks and events), and on the instant they're due (for tasks)
