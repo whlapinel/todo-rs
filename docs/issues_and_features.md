@@ -2,16 +2,41 @@
 
 Open issues and feature requests, merged from the former `docs/issues.md` and `docs/features.md` (2026-08-20) into a single sorted list. Completed or superseded items — including ones from the old files that were already resolved but hadn't been moved out yet — live in `docs/archived/archived_issues_and_features.md`.
 
+- Tasks list: add pagination - show max 25 per page
+- Tasks list: add option to show as flattened list
+- Tasks list: add sort option: sort by due date or by scheduled start date
+- Calendar view: clicking a virtual occurrence item on day-drawer seems to have target #page, so page is blanked out when dialog is sent in. 
+- Calendar view: Clicking an item takes user to full page instead of sending dialog. Should send dialog.
+- Calendar view: Clicking an item with sub-items should expand to show sub-items.
+- Calendar view: row-actions menu doesn't include details or full page actions.
+- Calendar view: something is wrong with the row-actions menu with the click area - it seems the menu is shown but not clickable
+- Multi-select: let's change UI so that checkbox is used to select an item for bulk actions rather than completing it, but stays on far left. Add a nice checkmark button next to the left which performs current function of checkbox, to mark complete.
+    - Would like to provide following actions eventually:
+        - Set Assignee (for team-items)
+        - Set offset (for sub-tasks)
+        - Set Schedule dates
+        - Set Due date
+        - Mark complete
+        - Mark incomplete
+
+    - The item that follows this one may be completely stale, but including it here because it's relevant. Need to look into it. 
+    - Mass rescheduling ("skip current" without completing), across projects. The single-row version already shipped (`bd000b1`, "Finish the quick-reschedule dialog and extend it to Events") — see the archived doc. The mass/bulk version is fully designed in `docs/scheduled-catchup-plan.md` but not yet built: needs a new cross-project screen, a new repo method, and a bulk-action pattern this codebase doesn't have precedent for yet. **Before implementing:** that plan doc predates the item_series redesign and has zero series-awareness in its "overdue" query — add a `series_id IS NULL` guard (or equivalent) before implementing, or it will desync a stale materialized series occurrence from its cursor.
+- Calendar view - filters should be shown on the day drawer instead of the month grid. But they should survive navigation between days. 
+- Change all date displays to e.g. Thu 27 Aug
+- For sub-task scheduling we only allow setting offset but row-actions returns same schedule form as top-level items. Let's just hide that row-action and let the edit form be the only way. But we also should ideally have a client-side helper that shows the conversion from offset to date beside the field as it is changed. 
+    - Design discussion on this topic please. It appears we are persisting the due date whenever a due-date-offset is updated. I wonder if this is necessary? This is a computed value based on the top-level parent's due date and changes with it based on the offset. So in theory it could be computed on the fly whenever it's needed. Let's weigh the options here and reevaluate. But, I really want to change it unless there's an obvious large benefit in terms of performance gains or reduction of complexity.
+- Item parent info (e.g. assignee, due date, scheduled dates) show beneath last child instead of directly beneath parent when expanded to show sub-items. 
 - Replace all "Back to <project/item-type>" page links in list page headings to "Up to <parent item>" (unless we're in a top-level item) 
 - Let's make the filters part of the URL at all times. 
 - Add reminder schema and UI to tasks, series, and events. (in-progress, possibly complete)
     - Default value is reminders pushed on the instant they're scheduled for (for tasks and events), and on the instant they're due (for tasks)
 - Add in-app notifications for reminders.
-- Create user settings schema and UI 
+- Create user settings schema and UI
     - Configure notifications to toggle e-mail on/off (default = on)
     - Comment notifications configurability
         - radio with (default = all comments ) or only tasks I'm assigned, 
         - events (checkbox)
+    - Allow user to change their screen name 
 - Add metadata fields to `Item`: `created_at`, `created_by`, `deleted_at`, `deleted_by` (tag for deletion instead of deleting outright, allowing recovery), with a TTL after which the item is actually deleted. Depends on the soft-delete design question mentioned elsewhere. Add completed_by field to activity log.
     - Open design question: should delete mark a `deleted` column true instead of actually deleting, to allow undo within a timeframe and easy viewing of recently-deleted items? Unsure this is the right pattern — wants a tradeoffs discussion before deciding. If adopted, pairs with the metadata-fields item.
 - All completions should get an undo button in the activity log
@@ -34,6 +59,6 @@ Open issues and feature requests, merged from the former `docs/issues.md` and `d
 - Audit `src/storage/migrations/` for `CREATE INDEX` statements that run before the column-adding migration they depend on — only the `source_event_id` one is confirmed fixed; there may be others in the same wrong position.
 - Contrast issue for the series "Children Template" select box: reported as white text on white background. The current markup (`templates/project_item_series/new_page.html`) already uses the standard dark-mode-aware select classes used everywhere else in the app, so this may already be fixed or may be browser/theme-specific — re-verify live in both themes before scoping any code change.
 - Ctrl+click or tap+hold should select rows, allowing bulk actions: "delete-selected", "reschedule-selected", "assign-selected".
-- Mass rescheduling ("skip current" without completing), across projects. The single-row version already shipped (`bd000b1`, "Finish the quick-reschedule dialog and extend it to Events") — see the archived doc. The mass/bulk version is fully designed in `docs/scheduled-catchup-plan.md` but not yet built: needs a new cross-project screen, a new repo method, and a bulk-action pattern this codebase doesn't have precedent for yet. **Before implementing:** that plan doc predates the item_series redesign and has zero series-awareness in its "overdue" query — add a `series_id IS NULL` guard (or equivalent) before implementing, or it will desync a stale materialized series occurrence from its cursor.
 - Need a plan for deleting old data to keep the DB from growing infinitely (completed recurring/series occurrences, activity log rows), likely via a user-configurable retention/row-limit policy. No design doc exists yet — needs its own planning pass (retention shape, global vs. per-user config, delete vs. archive) before implementation.
 - Should events have "save as template" ability? Not sure we need event templates, but perhaps — maybe templates should be called task templates to clarify the narrower purpose if we decide to rule out event templates. Needs a decision from the user, not sized as a task.
+- It doesn't really make sense to allow sub-tasks to have a due date after the parent's due date. So maybe we should modify the semantics to mean "days before top-level parent due date" and only allow positive values instead of both positive and negative ones. Would require migration and logic changes, unless we just change the presentation layer and disallow positive values in the db (this actually might make more sense).
