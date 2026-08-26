@@ -19,6 +19,10 @@ fn anchor_from_input(dt: &SmithyDateTime) -> chrono::DateTime<chrono::Utc> {
     chrono::DateTime::from_timestamp(dt.secs(), 0).unwrap_or_default()
 }
 
+fn anchor_from_input_opt(dt: &Option<SmithyDateTime>) -> Option<chrono::DateTime<chrono::Utc>> {
+    dt.as_ref().map(anchor_from_input)
+}
+
 fn to_summary(series: ItemSeries, rotation_user_ids: Vec<String>) -> model::ItemSeriesSummary {
     model::ItemSeriesSummary {
         series_id: series.id,
@@ -27,7 +31,9 @@ fn to_summary(series: ItemSeries, rotation_user_ids: Vec<String>) -> model::Item
         description: series.description,
         event_type: series.event_type,
         recurrence: series.recurrence,
-        anchor_date: SmithyDateTime::from_secs(series.anchor_date.timestamp()),
+        anchor_date: series
+            .anchor_date
+            .map(|d| SmithyDateTime::from_secs(d.timestamp())),
         item_type: to_sdk_item_type(series.item_type),
         basis: series.basis,
         parent_series_id: series.parent_series_id,
@@ -56,7 +62,7 @@ pub async fn create_item_series(
             description: input.description,
             event_type: input.event_type,
             recurrence: input.recurrence,
-            anchor_date: anchor_from_input(&input.anchor_date),
+            anchor_date: anchor_from_input_opt(&input.anchor_date),
             item_type: to_domain_item_type(Some(input.item_type)).unwrap(),
             basis: input.basis,
             parent_series_id: input.parent_series_id,
@@ -98,7 +104,9 @@ pub async fn get_item_series(
         description: series.description,
         event_type: series.event_type,
         recurrence: series.recurrence,
-        anchor_date: SmithyDateTime::from_secs(series.anchor_date.timestamp()),
+        anchor_date: series
+            .anchor_date
+            .map(|d| SmithyDateTime::from_secs(d.timestamp())),
         item_type: to_sdk_item_type(series.item_type),
         basis: series.basis,
         parent_series_id: series.parent_series_id,
@@ -127,7 +135,7 @@ pub async fn update_item_series(
             description: input.description,
             event_type: input.event_type,
             recurrence: input.recurrence,
-            anchor_date: anchor_from_input(&input.anchor_date),
+            anchor_date: anchor_from_input_opt(&input.anchor_date),
             item_type: to_domain_item_type(Some(input.item_type)).unwrap(),
             basis: input.basis,
             parent_series_id: input.parent_series_id,

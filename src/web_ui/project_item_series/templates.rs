@@ -1,6 +1,7 @@
 use crate::domain::item_series::ItemSeries;
 use crate::web_ui::{format_display_date, to_local};
 use askama::Template;
+use chrono::Utc;
 
 pub struct ProjectItemSeriesRow;
 
@@ -10,9 +11,16 @@ impl ProjectItemSeriesRow {
             id: s.id.clone(),
             project_id: s.project_id.clone(),
             name: s.name.clone(),
-            recurrence: s.recurrence.clone(),
+            // docs/series-sub-items-plan.md: no web UI can create a child series yet
+            // (Stage 3) — a genuine child reaching this row (e.g. created via the JSON
+            // API/CLI) falls back to a blank recurrence / this render time's date rather
+            // than panicking.
+            recurrence: s.recurrence.clone().unwrap_or_default(),
             event_type: s.event_type.clone(),
-            anchor_date_label: format_display_date(to_local(s.anchor_date, tz), true),
+            anchor_date_label: format_display_date(
+                to_local(s.anchor_date.unwrap_or_else(Utc::now), tz),
+                true,
+            ),
             item_type_label: s.item_type.label(),
             item_type_badge_color: s.item_type.badge_color(),
             assignee_name,

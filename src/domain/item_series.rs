@@ -21,8 +21,14 @@ pub struct ItemSeries {
     pub event_type: Option<String>,
     /// Raw English pattern, parsed via `domain::recurrence::parse` — same
     /// convention as `Item::recurrence`, not a pre-parsed `RecurrenceRule` column.
-    pub recurrence: String,
-    pub anchor_date: DateTime<Utc>,
+    /// `None` only for a child series (`parent_series_id.is_some()`) — a child has no
+    /// cadence of its own, see `parent_series_id`'s doc comment below. `Some` and
+    /// required for a root series, enforced at the service layer
+    /// (`validate_series_recurrence_required`), not structurally.
+    pub recurrence: Option<String>,
+    /// `None` only for a child series — see `recurrence`'s doc comment above, same
+    /// required-only-for-a-root-series convention.
+    pub anchor_date: Option<DateTime<Utc>>,
     /// Restricted to `Task`/`Event` at the service layer (stage 7b) — `Template`/
     /// `Simple` are not valid series kinds. Every series created before stage 7a
     /// (when this field didn't exist) carries `Event`, via the migration's

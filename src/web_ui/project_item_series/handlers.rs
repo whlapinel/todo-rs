@@ -396,8 +396,8 @@ pub async fn create_project_item_series_form(
             name: form.name.trim().to_string(),
             description: non_empty(&form.description),
             event_type: non_empty(&form.event_type),
-            recurrence: form.recurrence.trim().to_string(),
-            anchor_date,
+            recurrence: Some(form.recurrence.trim().to_string()),
+            anchor_date: Some(anchor_date),
             item_type,
             basis,
             parent_series_id: None,
@@ -848,7 +848,12 @@ pub async fn edit_project_item_series_page(
         ),
         None => (Vec::new(), false),
     };
-    let local_anchor = to_local(series.anchor_date, tz);
+    // docs/series-sub-items-plan.md: a series reachable through the edit page today is
+    // always a root series — this screen doesn't yet let a user set parentSeriesId (that
+    // real form is Stage 3's work), so anchor_date is always Some in practice. Falls back
+    // to now() rather than panicking if a child series is ever reached here directly
+    // (e.g. via the JSON API/CLI) before Stage 3 ships its real display.
+    let local_anchor = to_local(series.anchor_date.unwrap_or_else(Utc::now), tz);
     // Stage 4 of docs/assignment-rotation-plan.md — pre-populates the checkbox group and
     // decides which of the Fixed/Rotate radio buttons starts checked.
     let rotation_user_ids = item_series.list_rotation_members(&series_id).await?;
@@ -867,7 +872,9 @@ pub async fn edit_project_item_series_page(
         name: series.name,
         description: series.description.unwrap_or_default(),
         is_task: series.item_type == ItemKind::Task,
-        recurrence: series.recurrence,
+        // See the anchor_date fallback comment above — child series have no real edit
+        // form yet (Stage 3), so this is always Some for anything reachable from here.
+        recurrence: series.recurrence.unwrap_or_default(),
         basis: series.basis.unwrap_or_default(),
         anchor_date: local_anchor.format("%Y-%m-%d").to_string(),
         anchor_time: local_anchor.format("%H:%M").to_string(),
@@ -911,8 +918,8 @@ pub async fn update_project_item_series_form(
             name: form.name.trim().to_string(),
             description: non_empty(&form.description),
             event_type: non_empty(&form.event_type),
-            recurrence: form.recurrence.trim().to_string(),
-            anchor_date,
+            recurrence: Some(form.recurrence.trim().to_string()),
+            anchor_date: Some(anchor_date),
             item_type,
             basis,
             parent_series_id: None,

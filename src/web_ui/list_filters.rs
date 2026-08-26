@@ -329,6 +329,7 @@ mod tests {
             item_type: ItemKind::Task,
             event_type: None,
             occurrence_date,
+            display_date: occurrence_date,
             is_current: true,
             assigned_to_user_id: None,
             assigned_to_user_name: None,

@@ -1,6 +1,6 @@
 # Task series sub-items (replacing `template_item_id`)
 
-Status: **Stage 1 complete** (2026-08-26, commit `a79d81c`). Stages 2–4 not started. Written
+Status: **Stages 1–2 complete** (2026-08-26). Stages 3–4 not started. Written
 2026-08-26 after a design discussion in this repo. Supersedes Stage 10 gap 3 of
 `docs/archived/recurring-events-virtual-occurrences-rough-plan.md`
 (the `template_item_id`/`copy_template_children`-at-materialize-time mechanism) before that
@@ -107,6 +107,92 @@ doc as background/rationale, not as a description of current state.
    longer has that field — `cd todo-cli && cargo build` will fail until Stage 4). This is
    expected per the Staging section's original stage assignment (CLI/MCP is Stage 4), not a
    regression introduced early.
+
+## Stage 2 completion notes (2026-08-26) — read this before starting Stage 3
+
+Stage 2 did the deferred `recurrence`/`anchor_date` Option-ification (domain, sqlite repo,
+Smithy `@required` drop + `task codegen`, `json_api/item_series.rs`, and every
+`recurrence::parse`/`.anchor_date` call site) that Stage 1's completion notes pushed here,
+plus the full service-layer design below. A few deviations from the pre-implementation
+Design section, found mid-implementation:
+
+1. **Migration is version 30**, `src/storage/migrations/item_series_children_relax_recurrence.rs`
+   (`ItemSeriesChildrenRelaxRecurrence`) — a separate migration from `AddItemSeriesChildren`
+   (version 29, already shipped), exactly as the Design section recommended. Uses the
+   `ActivityLogTeamIdNullable` rebuild-and-copy shape.
+2. **`current_occurrence_date` keeps its original `&ItemSeries` signature** (not refactored to
+   take a pre-resolved `anchor_date: DateTime<Utc>` parameter) — it reads
+   `series.anchor_date.expect(...)` on the `None`-cursor branch, with a doc comment stating the
+   invariant. Every caller is now funneled through a new `recurrence_source`/
+   `resolve_current_occurrence_date` pair (see below) that resolves to a *root* series first, so
+   this `expect` is unreachable in practice; a bare `.unwrap_or_default()` was rejected as
+   silently hiding a real invariant violation instead of surfacing it.
+3. **New private helper `recurrence_source(series_repo, series)`** — not in the Design section —
+   factors out "the series whose recurrence/anchor actually govern cadence: `series` itself for a
+   root series, or its parent for a child" (decision 2). `resolve_current_occurrence_date` is
+   built on top of it, and it's also reused by `resolve_occurrence_assignee`/
+   `current_series_assignee` for a rotating child series' turn-index calculation (not called out
+   in the Design section, which only listed cadence/current-occurrence call sites, but rotation
+   index math has the exact same "which series' rule do I measure from" question).
+4. **Cursor machinery (`advance_cursor`/`retreat_cursor`/`clear_cursor`, and the
+   `require_current_occurrence`/`require_cursor_occurrence` ordering guards) now also checks
+   `series.parent_series_id.is_none()`, everywhere it already checked
+   `series.item_type == ItemKind::Task`** (`skip_occurrence`, `unskip_occurrence`,
+   `record_task_completion`, `record_task_uncompletion`, and the two `require_*` guards). This
+   wasn't spelled out in the Design section beyond "`cursor_date` is simply never written for a
+   child series" — treating a child exactly like an Event-typed series for every cursor-related
+   codepath (no ordering enforcement, no cursor writes) was the concrete decision made to realize
+   that. Settling a child's own occurrence out of order is therefore unguarded, the same as it
+   already is for an Event series today — considered acceptable since nothing shared (a cursor)
+   is at risk, and revisiting it only means adding a check, not a schema change.
+5. **`is_due_date_basis(series)` was repointed to `series.item_type == ItemKind::Task`** instead
+   of being deleted — the Design section's materialization rule ("Task always due_date, Event
+   always scheduled_date") made the old `basis: "DUE_DATE"`-reading body dead, but the function
+   itself is also called directly from `project_tasks`/`project_events` templates to decide a
+   still-*virtual* occurrence's display (💀 vs 📅 icon, overdue styling) — repointing its body
+   preserves every one of those call sites' correctness for free, so nothing in `web_ui` needed
+   touching for this part.
+6. **`validate_completable` gained an `ItemRepo` parameter** (`repo: &Arc<dyn ItemRepo>`, first
+   argument) — needed to fetch a materialized child occurrence's `Item.complete` flag for the new
+   completion guard (`require_no_incomplete_materialized_child_occurrence`). Its one caller,
+   `service::project_items::update_project_item`, already had `repo` in scope.
+7. **Rendering's `display_date` field was added to `ProjectOccurrence` and correctly populated
+   (service layer), but no `web_ui` template/handler was switched from `occurrence_date` to
+   `display_date`** — per the Staging section, that switch is explicitly Stage 3's job
+   ("Web UI... switched to `display_date`"), and since no UI can create a child series yet
+   (Stage 1/2 note: `parentSeriesId`/`dueOffsetDays` have no form field), `occurrence_date` and
+   `display_date` are identical for every series reachable through the UI today — so this is a
+   no-op in practice, not a latent bug, until Stage 3 ships the parent-series picker.
+8. **`web_ui/project_item_series/` compile fixes were minimal, mirroring Stage 1's precedent**:
+   the create/update handlers now send `recurrence: Some(...)`/`anchor_date: Some(...)` (always
+   creating a root series, since there's still no parent-series `<select>`), and the
+   list/edit-page display code falls back to `unwrap_or_default()`/`Utc::now()` for the
+   (currently unreachable via the UI) case of a child series' `None` recurrence/anchor_date
+   reaching a display path built for a root series. Real child-aware UI is still entirely
+   Stage 3's work.
+9. Test coverage added for the new pieces: `validate_series_parent` (parent must be TASK, same
+   project, itself root, no self-reference), `validate_series_recurrence_required` (root requires
+   both fields, child rejects either), `validate_series_offset` (offset only valid on a child),
+   the `basis: DUE_DATE` outright rejection (replacing the old
+   `create_series_allows_due_date_basis_on_any_recurrence_pattern_for_a_task_series` test, which
+   asserted the now-retired opposite behavior), the completion guard (blocks on a materialized+
+   incomplete child occurrence, allows through a still-virtual one), the delete cascade (child
+   series deleted before parent), and the rendering second pass (one synthesized child
+   `ProjectOccurrence` per parent cycle, with `occurrence_date` as the lookup identity and
+   `display_date` offset-shifted). Not exhaustive — e.g. `duplicate_series`'s child-duplication
+   path and the rotating-child-assignee path have no dedicated new test, verified by code reading
+   only.
+10. Verification performed: `task codegen` (twice — first pass caught that only
+    `ItemSeriesSummary`'s `@required` had been dropped, not the three operation blocks', fixed
+    and re-run), `cargo build`, `cargo test` (513 passed, 0 failed, up from 497), `cargo fmt`
+    (plain, repo-root, no path args). **Not verified**: live-in-browser behavior (per CLAUDE.md's
+    no-Playwright convention). `todo-cli` was already broken since Stage 1
+    (`template_item_id`/`--template`); this stage adds new, distinct breakage from the same root
+    cause category — `recurrence`/`anchorDate` becoming optional on the generated client types
+    (`Option<&str>` no longer implements `Display` where `todo-cli` prints them directly) — on
+    top of the still-unresolved `template_item_id` breakage. Both are Stage 4's to fix in one
+    pass; `mcp-server` (TypeScript, separate build) was not touched or built, per the Staging
+    section.
 
 ## Context
 

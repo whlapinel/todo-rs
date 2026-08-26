@@ -404,6 +404,7 @@ pub async fn update_project_item(
     // persist, so it can no longer be the rejection point.
     if complete {
         item_series::validate_completable(
+            repo,
             series,
             &item_id,
             params.timezone_offset_minutes.unwrap_or(0),
@@ -1195,8 +1196,8 @@ mod tests {
             name: "Standup".to_string(),
             description: None,
             event_type: None,
-            recurrence: series_recurrence,
-            anchor_date: occurrence_date - chrono::Duration::days(7),
+            recurrence: Some(series_recurrence),
+            anchor_date: Some(occurrence_date - chrono::Duration::days(7)),
             item_type: ItemKind::Task,
             cursor_date: Some(occurrence_date),
             basis: None,

@@ -10,13 +10,19 @@ namespace common
 // precedent, where the acting user comes from the AuthUser extracted from the bearer
 // token, not a path parameter.
 //
-// name/recurrence/anchorDate/itemType are required on both Create and Update
-// (full-replace, no partial-update semantics — matches UpdateProject's always-required
-// `name`). itemType has no server-side default: every caller must be explicit about
-// whether a series materializes Task or Event occurrences. description/eventType are
-// optional, direct-overwrite fields (Update always round-trips them; omitting one clears
-// it) — same convention Item's own optional fields (dueDate, eventType, etc.) already
-// follow.
+// name/itemType are required on both Create and Update (full-replace, no partial-update
+// semantics — matches UpdateProject's always-required `name`). itemType has no
+// server-side default: every caller must be explicit about whether a series
+// materializes Task or Event occurrences. description/eventType are optional,
+// direct-overwrite fields (Update always round-trips them; omitting one clears it) —
+// same convention Item's own optional fields (dueDate, eventType, etc.) already follow.
+//
+// recurrence/anchorDate are optional on the wire (docs/series-sub-items-plan.md, stage
+// 2) — required only for a root series (no parentSeriesId), enforced at the service
+// layer (`validate_series_recurrence_required`), not by Smithy `@required`, since a
+// child series has neither (decision 2: its cycle is entirely inherited from its
+// parent). A child series' GetItemSeries/ItemSeriesSummary simply omits both on the
+// wire.
 //
 // DeleteItemSeries (added 2026-08-15) resolves the deferred question above as an orphan,
 // not a cascade: it deletes the item_series row and all its item_occurrences rows, but
@@ -31,10 +37,10 @@ namespace common
 // docs/series-sub-items-plan.md (stage 1, 2026-08-26): removed `templateItemId` outright
 // (no migration/backfill — confirmed nothing depended on it) and added `parentSeriesId`/
 // `dueOffsetDays`, letting a Task-typed series be a sub-item of another Task-typed series.
-// Validation (only a Task series may set `parentSeriesId`, one level of nesting only, etc.)
-// lands in a later stage — these two fields are unvalidated on the wire for now. A child
-// series will eventually have no `recurrence`/`anchorDate` of its own (inherited from its
-// parent), but those two fields stay `@required` here until that stage relaxes them.
+// Stage 2 added the validation (only a Task series may set `parentSeriesId`, one level of
+// nesting only, `dueOffsetDays` only valid on a child, etc. — `service::item_series`'s
+// `validate_series_parent`/`validate_series_offset`) and relaxed `recurrence`/`anchorDate`
+// to optional (see above).
 structure ItemSeriesSummary {
     @required
     seriesId: String
@@ -49,10 +55,8 @@ structure ItemSeriesSummary {
 
     eventType: String
 
-    @required
     recurrence: String
 
-    @required
     anchorDate: Timestamp
 
     @required
@@ -100,11 +104,9 @@ operation CreateItemSeries {
         @notProperty
         eventType: String
 
-        @required
         @notProperty
         recurrence: String
 
-        @required
         @notProperty
         anchorDate: Timestamp
 
@@ -175,11 +177,9 @@ operation GetItemSeries {
         @notProperty
         eventType: String
 
-        @required
         @notProperty
         recurrence: String
 
-        @required
         @notProperty
         anchorDate: Timestamp
 
@@ -234,11 +234,9 @@ operation UpdateItemSeries {
         @notProperty
         eventType: String
 
-        @required
         @notProperty
         recurrence: String
 
-        @required
         @notProperty
         anchorDate: Timestamp
 
