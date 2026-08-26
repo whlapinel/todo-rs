@@ -772,7 +772,7 @@ pub(crate) async fn render_children_fragment(
                     true,
                     tz,
                     &HashMap::new(),
-                    team_id,
+                    team_id.is_some(),
                     1,
                 )
                 .await?,
@@ -835,7 +835,7 @@ pub(crate) async fn render_source_event_fragment(
                     true,
                     tz,
                     &HashMap::new(),
-                    team_id,
+                    team_id.is_some(),
                     1,
                 )
                 .await?,
@@ -1107,6 +1107,27 @@ pub async fn update_project_task_form(
             // series cursor, so a single-row swap (not a whole-list rebuild, unlike
             // `complete_project_item_series_occurrence_form`) is always correct here.
             let parent_name = parent_link.as_ref().map(|(name, _)| name.clone());
+            // Mirrors `project_calendar`/`main_calendar`'s own `children_html_for` — a
+            // Reschedule/Assign save never changes an item's children, so this just re-derives
+            // the same in-place-expansion subtree those screens' own row builders would.
+            let children_html = if updated.has_children {
+                Some(
+                    super::render_expandable_children(
+                        &repo,
+                        &updated.id,
+                        &project_id,
+                        &names,
+                        show_complete,
+                        tz,
+                        &HashMap::new(),
+                        project.team_id.is_some(),
+                        1,
+                    )
+                    .await?,
+                )
+            } else {
+                None
+            };
             let row = match row_view.as_deref() {
                 Some("project-calendar") => crate::web_ui::project_calendar::calendar_row(
                     &updated,
@@ -1119,6 +1140,7 @@ pub async fn update_project_task_form(
                     show_complete,
                     confirmation,
                     dismiss_after_ms,
+                    children_html,
                 )?,
                 Some("main-calendar") => crate::web_ui::main_calendar::calendar_row(
                     &updated,
@@ -1131,6 +1153,7 @@ pub async fn update_project_task_form(
                     skip_url,
                     confirmation,
                     dismiss_after_ms,
+                    children_html,
                 )?,
                 Some("all-tasks") => crate::web_ui::all_projects_tasks::all_projects_task_row(
                     &updated,
@@ -1143,6 +1166,7 @@ pub async fn update_project_task_form(
                     show_complete,
                     confirmation,
                     dismiss_after_ms,
+                    children_html,
                 )?,
                 _ => ProjectTaskRow::from_item(
                     &updated,

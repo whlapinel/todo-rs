@@ -101,6 +101,41 @@ async fn names_for(
         .collect())
 }
 
+/// Eagerly renders `item`'s full descendant subtree for `Row::children_html`'s in-place expand
+/// feature (issue #3 of docs/issues_and_features.md's calendar-view entries) — `None` for a
+/// leaf item or an Event (Events can't have structural children), otherwise reuses
+/// `project_tasks::render_expandable_children` unchanged rather than a calendar-specific copy,
+/// same "no separate template to drift out of sync" rationale as `calendar_row` itself. An empty
+/// `skip_urls` map is passed (unlike the flat Tasks list's own batch-built map) — a nested
+/// child's own Skip action, if it's a materialized series occurrence, is a minor, acceptable gap
+/// here since expansion is a secondary affordance, not this screen's primary listing.
+async fn children_html_for(
+    repo: &Arc<dyn ItemRepo>,
+    item: &Item,
+    project_id: &str,
+    names: &HashMap<String, String>,
+    tz: i32,
+    is_team_project: bool,
+) -> Result<Option<String>, ItemError> {
+    if !item.has_children {
+        return Ok(None);
+    }
+    Ok(Some(
+        super::project_tasks::render_expandable_children(
+            repo,
+            &item.id,
+            project_id,
+            names,
+            true,
+            tz,
+            &HashMap::new(),
+            is_team_project,
+            1,
+        )
+        .await?,
+    ))
+}
+
 /// Builds a materialized calendar row's `components::row::Row` — reuses `ProjectTaskRow`/
 /// `ProjectEventRow::from_item` exactly (rather than a calendar-specific template of its own)
 /// so the day-drawer/flat calendar list get the same row-actions menu (Edit/Reschedule/Assign/
@@ -129,6 +164,7 @@ pub(crate) fn calendar_row(
     show_complete: bool,
     confirmation: Option<String>,
     dismiss_after_ms: Option<u32>,
+    children_html: Option<String>,
 ) -> Result<String, ItemError> {
     let mut row = match item.kind() {
         ItemKind::Event => {
@@ -160,10 +196,19 @@ pub(crate) fn calendar_row(
     row.type_badge = Some(type_symbol(item.kind()));
     row.parent_name = parent_name;
     row.expanded_row = true;
-    // Out of scope for Stage 1 of docs/dialog-item-forms-plan.md (see its Out of scope
-    // section) — the calendar keeps today's page-nav behavior even though `ProjectTaskRow::
-    // from_item` now defaults this `true` for its own screen.
-    row.detail_via_dialog = false;
+    // #3 of docs/issues_and_features.md's calendar-view entries — same in-place expansion
+    // `project_tasks`'s flat list already has (see `Row::children_html`'s doc comment); an
+    // Event is never eligible (Events can't have structural children) so this is only ever
+    // `Some` when `item` is a Task with `has_children`, per `day_list_rows`'s own gate.
+    row.children_html = children_html;
+    // Previously forced `false` (deferred out of scope for Stage 1 of
+    // docs/dialog-item-forms-plan.md) — the calendar now opts into the same dialog behavior
+    // every other screen already defaults to via `ProjectTaskRow::from_item`. Nested atop the
+    // day-drawer's own modal `<dialog>` this way is already a proven pattern: this same row's
+    // `reschedule_url`/`assign_url` below have always opened `#action-dialog` from inside the
+    // day-drawer unconditionally, so a second modal `<dialog>` stacking on top of `#day-drawer`
+    // is known to work correctly (see docs/issues_and_features.md's calendar-dialog entries).
+    row.detail_via_dialog = true;
     // Re-point the checkbox at this screen's own toggle route (rather than the item's own
     // resource PUT route `ProjectTaskRow::from_item` sets by default) so a subsequent toggle
     // keeps re-rendering with this function's calendar-flavored row instead of reverting to the
@@ -271,6 +316,7 @@ impl ProjectCalendarVirtualRow {
 /// team-backed project (2026-08-24 bug fix).
 #[allow(clippy::too_many_arguments)]
 async fn day_list_rows(
+    repo: &Arc<dyn ItemRepo>,
     due_items: &[DueItem],
     virtual_occurrences: &[ProjectOccurrence],
     project_id: &str,
@@ -301,6 +347,8 @@ async fn day_list_rows(
             .unwrap_or(i64::MAX);
         let skip_url = series_service::skip_url_for_item(series, &di.item, project_id).await?;
         let parent_name = (!di.parent_name.is_empty()).then(|| di.parent_name.clone());
+        let children_html =
+            children_html_for(repo, &di.item, project_id, names, tz, is_team_project).await?;
         let html = calendar_row(
             &di.item,
             parent_name,
@@ -312,6 +360,7 @@ async fn day_list_rows(
             true,
             None,
             None,
+            children_html,
         )?;
         entries.push((ts, html));
     }
@@ -706,6 +755,7 @@ pub async fn project_calendar_page(
     let day_rows = match selected_date {
         Some(date) => {
             day_list_rows(
+                &repo,
                 &due_items,
                 &virtual_occurrences,
                 &project_id,
@@ -802,6 +852,7 @@ pub async fn project_calendar_day_fragment(
         None => HashMap::new(),
     };
     let day_rows = day_list_rows(
+        &repo,
         &due_items,
         &virtual_occurrences,
         &project_id,
@@ -893,6 +944,15 @@ pub async fn toggle_project_calendar_item_complete(
         Ok(updated) => {
             let skip_url =
                 series_service::skip_url_for_item(&series, &updated, &project_id).await?;
+            let children_html = children_html_for(
+                &repo,
+                &updated,
+                &project_id,
+                &names,
+                tz,
+                project.team_id.is_some(),
+            )
+            .await?;
             Ok(Html(calendar_row(
                 &updated,
                 None,
@@ -904,6 +964,7 @@ pub async fn toggle_project_calendar_item_complete(
                 false,
                 None,
                 None,
+                children_html,
             )?))
         }
         // Recurring item just completed and got replaced under a new id (see

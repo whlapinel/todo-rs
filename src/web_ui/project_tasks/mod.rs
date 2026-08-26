@@ -407,12 +407,14 @@ fn indent_class(depth: u8) -> &'static str {
 
 /// Recursively renders `parent_item_id`'s full descendant subtree as ready-to-insert `<li>`
 /// markup, each descendant's own row in turn carrying its own nested `children_html` — the
-/// flat Tasks list's in-place "expand to view sub-items" feature (see `Row::children_html`'s
-/// doc comment). Everything is fetched and rendered eagerly, up front — one query per
-/// `has_children` node — so the browser's expand/collapse toggle never round-trips to the
-/// server; the cost is paid on every list load regardless of whether a branch is ever expanded.
+/// in-place "expand to view sub-items" feature (see `Row::children_html`'s doc comment).
+/// Everything is fetched and rendered eagerly, up front — one query per `has_children` node —
+/// so the browser's expand/collapse toggle never round-trips to the server; the cost is paid on
+/// every list load regardless of whether a branch is ever expanded. `pub(crate)` (not just this
+/// module's own flat Tasks list) since the calendar screens (`project_calendar`/`main_calendar`)
+/// reuse it unchanged rather than duplicating it — see their own `calendar_row` doc comments.
 #[async_recursion]
-async fn render_expandable_children(
+pub(crate) async fn render_expandable_children(
     repo: &Arc<dyn ItemRepo>,
     parent_item_id: &str,
     project_id: &str,
@@ -420,7 +422,7 @@ async fn render_expandable_children(
     show_complete: bool,
     tz: i32,
     skip_urls: &HashMap<String, String>,
-    team_id: Option<&str>,
+    is_team_project: bool,
     depth: u8,
 ) -> Result<String, ItemError> {
     let children =
@@ -438,7 +440,7 @@ async fn render_expandable_children(
             &visible,
             tz,
             skip_urls.get(&i.id).cloned(),
-            team_id.is_some(),
+            is_team_project,
             show_complete,
             None,
             None,
@@ -454,7 +456,7 @@ async fn render_expandable_children(
                     show_complete,
                     tz,
                     skip_urls,
-                    team_id,
+                    is_team_project,
                     depth + 1,
                 )
                 .await?,
@@ -583,7 +585,7 @@ pub(crate) async fn render_rows_with_virtual(
                     filters.show_complete,
                     tz,
                     skip_urls,
-                    team_id,
+                    team_id.is_some(),
                     1,
                 )
                 .await?,

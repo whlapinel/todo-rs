@@ -68,13 +68,6 @@
         </template>
         {% endif %}
     </div>
-    {% if let Some(children) = children_html %}
-    <!-- Initially hidden (`hidden`, not absent) — the whole subtree is already in the DOM so
-         toggleChildren() (base.html) only ever needs to flip this class, never fetch. -->
-    <ul id="item-{{ id }}-children" class="hidden mt-2 ml-2 border-l border-gray-200 dark:border-white/10">
-        {{ children|safe }}
-    </ul>
-    {% endif %}
     {% if expanded_row %}
     <div class="mt-1 flex items-center gap-x-3 pl-7 text-xs text-gray-500 dark:text-gray-400">
         <div class="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1">
@@ -94,5 +87,12 @@
                 }}</span>{% endif %}
         </div>
     </div>
+    {% endif %}
+    {% if let Some(children) = children_html %}
+    <!-- Initially hidden (`hidden`, not absent) — the whole subtree is already in the DOM so
+         toggleChildren() (base.html) only ever needs to flip this class, never fetch. -->
+    <ul id="item-{{ id }}-children" class="hidden mt-2 ml-2 border-l border-gray-200 dark:border-white/10">
+        {{ children|safe }}
+    </ul>
     {% endif %}
 </li>

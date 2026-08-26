@@ -104,6 +104,35 @@ fn is_included(
     }
 }
 
+/// See `project_calendar::children_html_for`'s identical rationale — the cross-project
+/// counterpart, otherwise unchanged.
+async fn children_html_for(
+    repo: &Arc<dyn ItemRepo>,
+    item: &Item,
+    project_id: &str,
+    names: &HashMap<String, String>,
+    tz: i32,
+    is_team_project: bool,
+) -> Result<Option<String>, ItemError> {
+    if !item.has_children {
+        return Ok(None);
+    }
+    Ok(Some(
+        super::project_tasks::render_expandable_children(
+            repo,
+            &item.id,
+            project_id,
+            names,
+            true,
+            tz,
+            &HashMap::new(),
+            is_team_project,
+            1,
+        )
+        .await?,
+    ))
+}
+
 /// Cross-project counterpart to `project_calendar::calendar_row` — see that function's doc
 /// comment for the full rationale (reuses `ProjectTaskRow`/`ProjectEventRow::from_item` rather
 /// than a calendar-specific template, to bring the row-actions menu here with no drift risk).
@@ -121,6 +150,7 @@ pub(crate) fn calendar_row(
     skip_url: Option<String>,
     confirmation: Option<String>,
     dismiss_after_ms: Option<u32>,
+    children_html: Option<String>,
 ) -> Result<String, ItemError> {
     let mut row = match item.kind() {
         ItemKind::Event => {
@@ -149,10 +179,14 @@ pub(crate) fn calendar_row(
     row.parent_name = parent_name;
     row.project_name = Some(project_name.to_string());
     row.expanded_row = true;
-    // Out of scope for Stage 1 of docs/dialog-item-forms-plan.md (see its Out of scope
-    // section) — the calendar keeps today's page-nav behavior even though `ProjectTaskRow::
-    // from_item` now defaults this `true` for its own screen.
-    row.detail_via_dialog = false;
+    // See `project_calendar::calendar_row`'s identical `children_html_for`-built rationale (#3
+    // of docs/issues_and_features.md's calendar-view entries).
+    row.children_html = children_html;
+    // See `project_calendar::calendar_row`'s identical rationale — previously forced `false`
+    // (deferred out of scope for Stage 1 of docs/dialog-item-forms-plan.md), now opted in since
+    // `reschedule_url`/`assign_url` below already prove nested `#action-dialog`-atop-`#day-drawer`
+    // works.
+    row.detail_via_dialog = true;
     row.complete_url = row
         .complete_url
         .as_ref()
@@ -439,6 +473,7 @@ fn build_calendar_days(
 /// `gather_calendar_data` (the caller), so `due_items`/`virtual_occurrences` arrive pre-filtered
 /// for both the caller and this function.
 async fn day_list_rows(
+    repo: &Arc<dyn ItemRepo>,
     due_items: &[(DueItem, String, String)],
     virtual_occurrences: &[(ProjectOccurrence, String, String)],
     names_by_project: &HashMap<String, HashMap<String, String>>,
@@ -467,6 +502,8 @@ async fn day_list_rows(
         let names = names_by_project.get(project_id).unwrap_or(&empty);
         let skip_url = series_service::skip_url_for_item(series, item, project_id).await?;
         let parent_name = (!di.parent_name.is_empty()).then(|| di.parent_name.clone());
+        let children_html =
+            children_html_for(repo, item, project_id, names, tz, is_team_project).await?;
         entries.push((
             dt.timestamp(),
             calendar_row(
@@ -480,6 +517,7 @@ async fn day_list_rows(
                 skip_url,
                 None,
                 None,
+                children_html,
             )?,
         ));
     }
@@ -662,6 +700,7 @@ pub async fn main_calendar_page(
     let day_rows = match selected_date {
         Some(date) => {
             day_list_rows(
+                &repo,
                 &due_bucket,
                 &occ_bucket,
                 &names_by_project,
@@ -731,6 +770,7 @@ pub async fn main_calendar_day_fragment(
     )
     .await?;
     let day_rows = day_list_rows(
+        &repo,
         &due_bucket,
         &occ_bucket,
         &names_by_project,
@@ -817,6 +857,15 @@ pub async fn toggle_main_calendar_item_complete(
         Ok(updated) => {
             let skip_url =
                 series_service::skip_url_for_item(&series, &updated, &project_id).await?;
+            let children_html = children_html_for(
+                &repo,
+                &updated,
+                &project_id,
+                &names,
+                tz,
+                project.team_id.is_some(),
+            )
+            .await?;
             Ok(Html(calendar_row(
                 &updated,
                 None,
@@ -828,6 +877,7 @@ pub async fn toggle_main_calendar_item_complete(
                 skip_url,
                 None,
                 None,
+                children_html,
             )?))
         }
         // See `project_calendar::toggle_project_calendar_item_complete`'s identical

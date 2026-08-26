@@ -8,7 +8,12 @@
     <input type="checkbox" hx-post="{{ complete_url }}"
       {% if in_list_view %}hx-target="#items-list" hx-select="unset" hx-swap="innerHTML"{% endif %}
       class="shrink-0 size-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-600 dark:border-white/20 dark:bg-white/5" />
-    <a href="{{ materialize_url }}"
+    <!-- See project_calendar/virtual_row.html's identical doc comment — explicit
+         hx-get/target/select avoids blanking #page (#1 of docs/issues_and_features.md's
+         calendar-view entries; the same bug on this flat list too, just harder to notice since
+         the open dialog visually covers the blanked area underneath it). -->
+    <a href="{{ materialize_url }}" hx-get="{{ materialize_url }}" hx-target="#action-dialog"
+      hx-select="#dialog-fragment" hx-swap="innerHTML"
       class="min-w-0 flex-1 truncate text-gray-900 dark:text-white">{{ name }}</a>
     {% if is_current %}
     <span class="shrink-0 text-[10px] uppercase tracking-wide font-semibold text-indigo-600 dark:text-indigo-400">Current</span>

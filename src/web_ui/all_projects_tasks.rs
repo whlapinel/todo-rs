@@ -113,6 +113,7 @@ impl AllProjectsTaskVirtualRow {
 /// and by `project_tasks::handlers::complete_project_item_series_occurrence_form`'s `"all-tasks"`
 /// rebuild branch.
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn all_projects_task_row(
     item: &Item,
     project_id: &str,
@@ -124,6 +125,7 @@ pub(crate) fn all_projects_task_row(
     show_complete: bool,
     confirmation: Option<String>,
     dismiss_after_ms: Option<u32>,
+    children_html: Option<String>,
 ) -> Result<String, ItemError> {
     let mut row = ProjectTaskRow::from_item(
         item,
@@ -139,6 +141,12 @@ pub(crate) fn all_projects_task_row(
     );
     row.expanded_row = true;
     row.project_name = Some(project_name.to_string());
+    // #6 of docs/issues_and_features.md — a row with children was falling into the
+    // `detail_via_dialog` name-click branch instead of expanding in place, since this function
+    // never set `children_html` (unlike `project_tasks`'s own flat-list row assembly). Reuses
+    // `project_tasks::render_expandable_children` unchanged — see this module's own callers of
+    // this function for where `children_html` is actually built.
+    row.children_html = children_html;
     // Stage 3 of docs/dialog-item-forms-plan.md: opted in — `ProjectTaskRow::from_item`
     // already sets `detail_via_dialog: true`, so no override is needed here (unlike
     // `main_calendar`/`project_calendar`'s own rows, which explicitly opt back out).
@@ -278,6 +286,24 @@ pub(crate) async fn list_all_projects_task_rows(
                 item_series_service::skip_url_for_item(series, item, &project.id).await?;
             let confirmation = just_completed.then(|| "Completed".to_string());
             let dismiss_after_ms = (just_completed && !filters.show_complete).then_some(1800u32);
+            let children_html = if item.has_children {
+                Some(
+                    crate::web_ui::project_tasks::render_expandable_children(
+                        repo,
+                        &item.id,
+                        &project.id,
+                        &names,
+                        filters.show_complete,
+                        tz,
+                        &HashMap::new(),
+                        is_team_project,
+                        1,
+                    )
+                    .await?,
+                )
+            } else {
+                None
+            };
             let html = all_projects_task_row(
                 item,
                 &project.id,
@@ -289,6 +315,7 @@ pub(crate) async fn list_all_projects_task_rows(
                 filters.show_complete,
                 confirmation,
                 dismiss_after_ms,
+                children_html,
             )?;
             entries.push((ts, html));
         }
@@ -506,6 +533,13 @@ pub async fn new_all_projects_task_dialog(
 #[serde(rename_all = "camelCase")]
 pub struct ToggleAllProjectsTaskForm {
     complete: Option<String>,
+    /// Round-tripped from the checkbox's own `hx-vals` (`components/row.html`'s
+    /// `show_complete`-gated `showComplete` field) — previously absent from this struct, so
+    /// axum's `Form` extractor silently dropped it and `show_complete` below always defaulted
+    /// to `false`, the root cause of #7 of docs/issues_and_features.md's calendar/list-view
+    /// entries (completing a task here never showed the "Completed" confirm-then-fade badge
+    /// `update_project_task_form` already gives the same checkbox on the per-project screen).
+    show_complete: Option<String>,
 }
 
 /// The row-checkbox target for a real (materialized) Task on this screen — mirrors
@@ -575,6 +609,32 @@ pub async fn toggle_all_projects_task_complete(
         Ok(updated) => {
             let skip_url =
                 item_series_service::skip_url_for_item(&series, &updated, &project_id).await?;
+            // #7 of docs/issues_and_features.md — mirrors `update_project_task_form`'s identical
+            // confirm-then-fade computation, previously missing here entirely (this handler
+            // always passed `None, None`, so completing a task on this screen never showed the
+            // "Completed" badge the per-project Tasks list already gives the same checkbox).
+            let show_complete = form.show_complete.is_some();
+            let just_completed = !current.complete && updated.complete;
+            let confirmation = just_completed.then(|| "Completed".to_string());
+            let dismiss_after_ms = (just_completed && !show_complete).then_some(1800u32);
+            let children_html = if updated.has_children {
+                Some(
+                    crate::web_ui::project_tasks::render_expandable_children(
+                        &repo,
+                        &updated.id,
+                        &project_id,
+                        &names,
+                        show_complete,
+                        tz,
+                        &HashMap::new(),
+                        project.team_id.is_some(),
+                        1,
+                    )
+                    .await?,
+                )
+            } else {
+                None
+            };
             Ok(Html(all_projects_task_row(
                 &updated,
                 &project_id,
@@ -583,9 +643,10 @@ pub async fn toggle_all_projects_task_complete(
                 project.team_id.is_some(),
                 tz,
                 skip_url,
-                false,
-                None,
-                None,
+                show_complete,
+                confirmation,
+                dismiss_after_ms,
+                children_html,
             )?))
         }
         // Same rationale as `main_calendar::toggle_main_calendar_item_complete`'s identical

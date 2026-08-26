@@ -4,7 +4,10 @@
     <span class="min-w-0 flex-1 truncate line-through text-gray-400 dark:text-gray-500">{{ name }}</span>
     <span class="shrink-0 text-[10px] uppercase tracking-wide font-semibold text-gray-400 dark:text-gray-500">Skipped</span>
     {% else %}
-    <a href="{{ materialize_url }}"
+    <!-- See project_calendar/virtual_row.html's identical doc comment — explicit
+         hx-get/target/select avoids blanking #page. -->
+    <a href="{{ materialize_url }}" hx-get="{{ materialize_url }}" hx-target="#action-dialog"
+      hx-select="#dialog-fragment" hx-swap="innerHTML"
       class="min-w-0 flex-1 truncate text-gray-900 dark:text-white">{{ name }}</a>
     {% endif %}
   </div>

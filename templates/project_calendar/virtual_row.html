@@ -15,7 +15,16 @@
     <span class="min-w-0 flex-1 truncate line-through text-gray-400 dark:text-gray-500">{{ name }}</span>
     <span class="shrink-0 text-[10px] uppercase tracking-wide font-semibold text-gray-400 dark:text-gray-500">Skipped</span>
     {% else %}
-    <a href="{{ materialize_url }}"
+    <!-- Explicit hx-get/target/select rather than inheriting body's hx-boost default
+         (hx-target="#page" hx-select="#page") — the response is a full page whose #page
+         contains a #dialog-fragment plus a same-page <script> that MOVES it into #action-dialog
+         (see series_occurrence_detail_page.html's own doc comment). Selecting #page would pull
+         that script in too, which then empties #page by relocating the dialog out of it,
+         leaving #page visibly blank once the swap lands (#1 of docs/issues_and_features.md's
+         calendar-view entries). Selecting only #dialog-fragment into #action-dialog matches
+         every other detail-dialog link in this app and skips the blanking entirely. -->
+    <a href="{{ materialize_url }}" hx-get="{{ materialize_url }}" hx-target="#action-dialog"
+      hx-select="#dialog-fragment" hx-swap="innerHTML"
       class="min-w-0 flex-1 truncate text-gray-900 dark:text-white">{{ name }}</a>
     {% if is_current %}
     <span

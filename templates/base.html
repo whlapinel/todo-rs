@@ -242,6 +242,19 @@
       }
       const tpl = document.getElementById('row-actions-menu-' + rowId);
       if (!tpl) return;
+      // #5 of docs/issues_and_features.md's calendar-view entries: a native modal <dialog>
+      // (e.g. #day-drawer) makes everything outside its own subtree inert, and #action-menu-
+      // popover normally lives as a direct child of <body> (see its own doc comment) — so
+      // opening this menu from a row inside #day-drawer rendered it (still visually on top,
+      // since popovers are top-layer too) but left it unable to receive clicks. Re-parenting it
+      // into whichever <dialog> is currently modal keeps it inside that dialog's own
+      // inert-exempt subtree; moving it back under <body> when nothing is modal leaves every
+      // non-drawer screen's existing behavior unchanged. Safe to move regardless of open state —
+      // popover-shown elements are positioned via the top layer (viewport-relative, see
+      // positionActionMenuPopover below), not by DOM ancestry, so reparenting never affects
+      // where it visually lands.
+      const home = document.querySelector('dialog[open]') || document.body;
+      if (popover.parentElement !== home) home.appendChild(popover);
       popover.innerHTML = tpl.innerHTML;
       popover.dataset.rowId = rowId;
       htmx.process(popover);

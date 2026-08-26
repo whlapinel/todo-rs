@@ -682,6 +682,10 @@ pub async fn update_project_event_form(
                     skip_url,
                     None,
                     None,
+                    // An Event can never have structural children — see CLAUDE.md's Events
+                    // section — so this is always `None` here, unlike the Task branches of
+                    // `calendar_row`'s other callers.
+                    None,
                 )?
             }
             "all-events" => crate::web_ui::all_projects_events::all_projects_event_row(
@@ -716,6 +720,9 @@ pub async fn update_project_event_form(
                     skip_url,
                     false,
                     None,
+                    None,
+                    // See the `main-calendar` branch above's identical rationale — an Event
+                    // never has structural children.
                     None,
                 )?
             }
