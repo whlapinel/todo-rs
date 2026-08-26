@@ -4,7 +4,7 @@ use crate::domain::item_series::ItemSeries;
 use crate::service::item_series as item_series_service;
 use crate::service::item_series::{CreateItemSeriesParams, UpdateItemSeriesParams};
 use crate::service::items::ItemError;
-use crate::storage::sqlite::{ItemSeriesRepo, ProjectRepo, TeamRepo};
+use crate::storage::sqlite::{ItemRepo, ItemSeriesRepo, ProjectRepo, TeamRepo};
 use std::sync::Arc;
 use todo_server_sdk::{error, input, model, output, server, types::DateTime as SmithyDateTime};
 
@@ -30,8 +30,7 @@ fn to_summary(series: ItemSeries, rotation_user_ids: Vec<String>) -> model::Item
         anchor_date: SmithyDateTime::from_secs(series.anchor_date.timestamp()),
         item_type: to_sdk_item_type(series.item_type),
         basis: series.basis,
-        parent_series_id: series.parent_series_id,
-        due_offset_days: series.due_offset_days,
+        template_item_id: series.template_item_id,
         assigned_to_user_id: series.assigned_to_user_id,
         rotation_user_ids: (!rotation_user_ids.is_empty()).then_some(rotation_user_ids),
         points: series.points,
@@ -40,12 +39,14 @@ fn to_summary(series: ItemSeries, rotation_user_ids: Vec<String>) -> model::Item
 
 pub async fn create_item_series(
     input: input::CreateItemSeriesInput,
+    server::Extension(repo): server::Extension<Arc<dyn ItemRepo>>,
     server::Extension(projects): server::Extension<Arc<dyn ProjectRepo>>,
     server::Extension(teams): server::Extension<Arc<dyn TeamRepo>>,
     server::Extension(item_series): server::Extension<Arc<dyn ItemSeriesRepo>>,
     server::Extension(auth): server::Extension<AuthUser>,
 ) -> Result<output::CreateItemSeriesOutput, error::CreateItemSeriesError> {
     let series_id = item_series_service::create_series(
+        &repo,
         &projects,
         &teams,
         &item_series,
@@ -59,8 +60,7 @@ pub async fn create_item_series(
             anchor_date: anchor_from_input(&input.anchor_date),
             item_type: to_domain_item_type(Some(input.item_type)).unwrap(),
             basis: input.basis,
-            parent_series_id: input.parent_series_id,
-            due_offset_days: input.due_offset_days,
+            template_item_id: input.template_item_id,
             assigned_to_user_id: input.assigned_to_user_id,
             rotation_user_ids: input.rotation_user_ids,
             points: input.points,
@@ -101,8 +101,7 @@ pub async fn get_item_series(
         anchor_date: SmithyDateTime::from_secs(series.anchor_date.timestamp()),
         item_type: to_sdk_item_type(series.item_type),
         basis: series.basis,
-        parent_series_id: series.parent_series_id,
-        due_offset_days: series.due_offset_days,
+        template_item_id: series.template_item_id,
         assigned_to_user_id: series.assigned_to_user_id,
         rotation_user_ids: (!rotation_user_ids.is_empty()).then_some(rotation_user_ids),
         points: series.points,
@@ -111,12 +110,14 @@ pub async fn get_item_series(
 
 pub async fn update_item_series(
     input: input::UpdateItemSeriesInput,
+    server::Extension(repo): server::Extension<Arc<dyn ItemRepo>>,
     server::Extension(projects): server::Extension<Arc<dyn ProjectRepo>>,
     server::Extension(teams): server::Extension<Arc<dyn TeamRepo>>,
     server::Extension(item_series): server::Extension<Arc<dyn ItemSeriesRepo>>,
     server::Extension(auth): server::Extension<AuthUser>,
 ) -> Result<output::UpdateItemSeriesOutput, error::UpdateItemSeriesError> {
     item_series_service::update_series(
+        &repo,
         &projects,
         &teams,
         &item_series,
@@ -130,8 +131,7 @@ pub async fn update_item_series(
             anchor_date: anchor_from_input(&input.anchor_date),
             item_type: to_domain_item_type(Some(input.item_type)).unwrap(),
             basis: input.basis,
-            parent_series_id: input.parent_series_id,
-            due_offset_days: input.due_offset_days,
+            template_item_id: input.template_item_id,
             assigned_to_user_id: input.assigned_to_user_id,
             rotation_user_ids: input.rotation_user_ids,
             points: input.points,

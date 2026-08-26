@@ -1136,8 +1136,7 @@ mod tests {
             item_type: crate::domain::item::ItemKind::Task,
             cursor_date: None,
             basis: None,
-            parent_series_id: None,
-            due_offset_days: None,
+            template_item_id: None,
             assigned_to_user_id: None,
             points: None,
         }
