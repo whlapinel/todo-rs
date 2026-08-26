@@ -5,12 +5,7 @@ use askama::Template;
 pub struct ProjectItemSeriesRow;
 
 impl ProjectItemSeriesRow {
-    pub fn from_series(
-        s: &ItemSeries,
-        tz: i32,
-        template_name: Option<String>,
-        assignee_name: Option<String>,
-    ) -> Row {
+    pub fn from_series(s: &ItemSeries, tz: i32, assignee_name: Option<String>) -> Row {
         Row {
             id: s.id.clone(),
             project_id: s.project_id.clone(),
@@ -20,7 +15,6 @@ impl ProjectItemSeriesRow {
             anchor_date_label: format_display_date(to_local(s.anchor_date, tz), true),
             item_type_label: s.item_type.label(),
             item_type_badge_color: s.item_type.badge_color(),
-            template_name,
             assignee_name,
             points: s.points,
             duplicate_url: Some(format!(
@@ -42,7 +36,6 @@ pub struct Row {
     pub anchor_date_label: String,
     pub item_type_label: &'static str,
     pub item_type_badge_color: &'static str,
-    pub template_name: Option<String>,
     pub assignee_name: Option<String>,
     pub points: Option<i32>,
     pub duplicate_url: Option<String>,
@@ -61,10 +54,6 @@ pub struct ProjectItemSeriesListPageTemplate {
 pub struct NewProjectItemSeriesPageTemplate {
     pub project_id: String,
     pub nav_html: String,
-    /// (id, name) pairs for the project's Template items — Task-typed series only
-    /// (see the create form's TASK/EVENT toggle script), populated regardless of
-    /// which kind is initially selected since the toggle can flip client-side.
-    pub templates: Vec<(String, String)>,
     /// Gates the Assign to/Points markup, same as `project_tasks`' own new-task form —
     /// both are Task-series-only (see the TASK/EVENT toggle script) and additionally
     /// only ever meaningful on a team-backed project.
@@ -87,9 +76,6 @@ pub struct EditProjectItemSeriesPageTemplate {
     pub basis: String,
     pub anchor_date: String,
     pub anchor_time: String,
-    /// Same shape as `NewProjectItemSeriesPageTemplate` — see its own field docs.
-    pub templates: Vec<(String, String)>,
-    pub template_item_id: Option<String>,
     pub is_team_project: bool,
     pub assignee_options: Vec<(String, String)>,
     pub assigned_to_user_id: Option<String>,

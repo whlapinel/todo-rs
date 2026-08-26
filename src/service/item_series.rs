@@ -1,4 +1,4 @@
-use crate::domain::item::{self, Item, ItemKind};
+use crate::domain::item::{Item, ItemKind};
 use crate::domain::item_series::{ItemOccurrence, ItemSeries};
 use crate::domain::recurrence;
 use crate::service::error::ItemError;
@@ -22,13 +22,11 @@ use std::sync::Arc;
 /// (a detail page, an edit, a `sourceEventId` link) calls into; it does not run on
 /// every read of a series, only when a specific occurrence is actually touched.
 ///
-/// Stage 10 gap 3: if `series.template_item_id` is set, the newly materialized
-/// occurrence's children are copied from that template via the existing
-/// `service::items::copy_template_children` — the same function
-/// `project_templates/`'s "Use" flow and the event-trigger mechanism already call, so
-/// this reuses proven, non-destructive subtree-copy logic rather than adding new. Only
-/// runs on the "create new" branch — an already-materialized occurrence already has
-/// whatever children it was given the first time.
+/// docs/series-sub-items-plan.md removed the Stage 10 gap 3 `template_item_id`-linked-
+/// template mechanism that used to live here outright (no replacement in this stage —
+/// see that plan for what replaces it): a lead-time child now belongs to its own child
+/// `ItemSeries` instead, materialized independently rather than copied in as part of
+/// its parent's own materialization.
 pub async fn get_or_materialize_occurrence(
     repo: &Arc<dyn ItemRepo>,
     projects: &Arc<dyn ProjectRepo>,
@@ -110,17 +108,6 @@ pub async fn get_or_materialize_occurrence(
     series_repo
         .record_materialized_occurrence(series_id, occurrence_date, &item_id)
         .await?;
-
-    if let Some(template_id) = &series.template_item_id {
-        crate::service::items::copy_template_children(
-            repo,
-            template_id,
-            &item_id,
-            Some(occurrence_date),
-            tz_offset_minutes,
-        )
-        .await?;
-    }
 
     project_items::get_project_item_unchecked(repo, &series.project_id, &item_id).await
 }
@@ -645,7 +632,11 @@ pub struct CreateItemSeriesParams {
     pub anchor_date: DateTime<Utc>,
     pub item_type: ItemKind,
     pub basis: Option<String>,
-    pub template_item_id: Option<String>,
+    /// docs/series-sub-items-plan.md, stage 1: threaded through but not yet validated —
+    /// `validate_series_parent`/`validate_series_recurrence_required`/
+    /// `validate_series_offset` land in a later stage. Until then this is stored as-is.
+    pub parent_series_id: Option<String>,
+    pub due_offset_days: Option<i32>,
     pub assigned_to_user_id: Option<String>,
     /// Stage 2 of docs/assignment-rotation-plan.md — mutually exclusive with
     /// `assigned_to_user_id`, validated in `resolve_series_assignment`.
@@ -730,39 +721,6 @@ fn validate_series_event_type(event_type: &Option<String>) -> Result<(), ItemErr
     if event_type.is_some() {
         return Err(ItemError::Invalid(
             "event_type is not currently supported on an item series".to_string(),
-        ));
-    }
-    Ok(())
-}
-
-/// Stage 10 gap 3: `template_item_id` is only ever settable on a `Task`-typed series —
-/// `copy_template_children` (called from `get_or_materialize_occurrence` when this is
-/// set) creates children via `repo.create()` directly, bypassing `create_item`'s own
-/// "Events cannot have children" check, so allowing this on an `Event` series would let
-/// materialization silently create orphaned children nested under an Event. When set,
-/// the referenced item must exist in the same project and actually be a `Template` —
-/// mirrors `validate_series_basis`'s "reject early, at the input boundary" precedent.
-async fn validate_series_template_item(
-    repo: &Arc<dyn ItemRepo>,
-    project_id: &str,
-    item_type: ItemKind,
-    template_item_id: &Option<String>,
-) -> Result<(), ItemError> {
-    let Some(id) = template_item_id else {
-        return Ok(());
-    };
-    if item_type != ItemKind::Task {
-        return Err(ItemError::Invalid(
-            "template_item_id is only valid on a TASK series".to_string(),
-        ));
-    }
-    let item = repo
-        .get_by_project(project_id, id)
-        .await
-        .map_err(ItemError::from)?;
-    if item.kind() != ItemKind::Template {
-        return Err(ItemError::Invalid(
-            "template_item_id must reference a Template item".to_string(),
         ));
     }
     Ok(())
@@ -857,7 +815,6 @@ async fn resolve_series_assignment(
 }
 
 pub async fn create_series(
-    repo: &Arc<dyn ItemRepo>,
     projects: &Arc<dyn ProjectRepo>,
     teams: &Arc<dyn TeamRepo>,
     series_repo: &Arc<dyn ItemSeriesRepo>,
@@ -868,13 +825,6 @@ pub async fn create_series(
     validate_series_item_type(params.item_type)?;
     validate_series_event_type(&params.event_type)?;
     validate_series_basis(params.item_type, &params.basis, &params.recurrence)?;
-    validate_series_template_item(
-        repo,
-        &params.project_id,
-        params.item_type,
-        &params.template_item_id,
-    )
-    .await?;
     let (assigned_to_user_id, rotation_user_ids, points) = resolve_series_assignment(
         projects,
         teams,
@@ -900,7 +850,8 @@ pub async fn create_series(
             // its own anchor_date (see current_occurrence_date below).
             cursor_date: None,
             basis: params.basis,
-            template_item_id: params.template_item_id,
+            parent_series_id: params.parent_series_id,
+            due_offset_days: params.due_offset_days,
             assigned_to_user_id,
             points,
         })
@@ -973,7 +924,10 @@ pub struct UpdateItemSeriesParams {
     pub anchor_date: DateTime<Utc>,
     pub item_type: ItemKind,
     pub basis: Option<String>,
-    pub template_item_id: Option<String>,
+    /// docs/series-sub-items-plan.md, stage 1: see `CreateItemSeriesParams`'s identical
+    /// field doc — threaded through but not yet validated.
+    pub parent_series_id: Option<String>,
+    pub due_offset_days: Option<i32>,
     pub assigned_to_user_id: Option<String>,
     /// Stage 2 of docs/assignment-rotation-plan.md — mutually exclusive with
     /// `assigned_to_user_id`, validated in `resolve_series_assignment`.
@@ -982,7 +936,6 @@ pub struct UpdateItemSeriesParams {
 }
 
 pub async fn update_series(
-    repo: &Arc<dyn ItemRepo>,
     projects: &Arc<dyn ProjectRepo>,
     teams: &Arc<dyn TeamRepo>,
     series_repo: &Arc<dyn ItemSeriesRepo>,
@@ -995,13 +948,6 @@ pub async fn update_series(
     validate_series_item_type(params.item_type)?;
     validate_series_event_type(&params.event_type)?;
     validate_series_basis(params.item_type, &params.basis, &params.recurrence)?;
-    validate_series_template_item(
-        repo,
-        &current.project_id,
-        params.item_type,
-        &params.template_item_id,
-    )
-    .await?;
     let (assigned_to_user_id, rotation_user_ids, points) = resolve_series_assignment(
         projects,
         teams,
@@ -1035,9 +981,10 @@ pub async fn update_series(
                 // basis is a normal round-trip field, same category as recurrence/
                 // anchor_date — omitting it does not preserve current.basis.
                 basis: params.basis,
-                // Same round-trip convention as basis — omitting it clears it, not
-                // preserves current.template_item_id.
-                template_item_id: params.template_item_id,
+                // Same round-trip convention as basis — omitting either clears it, not
+                // preserves current.parent_series_id/due_offset_days.
+                parent_series_id: params.parent_series_id,
+                due_offset_days: params.due_offset_days,
                 // Same round-trip convention — omitting either clears it, not preserves
                 // current.assigned_to_user_id/points. Already re-validated above (a prior
                 // admin's points value doesn't survive a non-admin's edit of anything else).
@@ -1337,7 +1284,8 @@ mod tests {
             item_type: ItemKind::Event,
             cursor_date: None,
             basis: None,
-            template_item_id: None,
+            parent_series_id: None,
+            due_offset_days: None,
             assigned_to_user_id: None,
             points: None,
         }
@@ -1633,95 +1581,6 @@ mod tests {
         )
         .await
         .expect("should materialize a task occurrence");
-
-        assert_eq!(item.name, "Standup");
-    }
-
-    #[tokio::test]
-    async fn materializes_a_task_and_copies_the_linked_templates_children() {
-        let mut task_series = series("p1");
-        task_series.item_type = ItemKind::Task;
-        task_series.template_item_id = Some("template-1".to_string());
-        let mut series_mock = MockItemSeriesRepo::new();
-        series_mock
-            .expect_get_series()
-            .returning(move |_| Ok(task_series.clone()));
-        series_mock
-            .expect_get_occurrence()
-            .returning(|_, _| Ok(None));
-        series_mock
-            .expect_list_rotation_members()
-            .returning(|_| Ok(Vec::new()));
-        series_mock
-            .expect_record_materialized_occurrence()
-            .times(1)
-            .returning(|_, _, _| Ok(()));
-        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
-
-        let mut projects_mock = MockProjectRepo::new();
-        projects_mock
-            .expect_get()
-            .returning(|_| Ok(personal_project()));
-        projects_mock
-            .expect_find_personal_project()
-            .returning(|_| Ok(None));
-        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
-
-        let mut items_mock = MockItemRepo::new();
-        // The occurrence's own item.
-        items_mock
-            .expect_create()
-            .withf(|item: &Item| item.kind() == ItemKind::Task && item.parent_item_id.is_none())
-            .times(1)
-            .returning(|_| Ok("new-item-id".to_string()));
-        // The template's one child, copied via copy_template_children.
-        items_mock
-            .expect_create()
-            .withf(|item: &Item| {
-                item.kind() == ItemKind::Task
-                    && item.parent_item_id.as_deref() == Some("new-item-id")
-                    && item.due_date().is_some()
-            })
-            .times(1)
-            .returning(|_| Ok("new-child-id".to_string()));
-        items_mock
-            .expect_list_children()
-            .withf(|parent_id: &str| parent_id == "template-1")
-            .times(1)
-            .returning(|_| {
-                let mut child = Item::new_project_item("p1", "Prep agenda");
-                child.id = "template-child-1".to_string();
-                child.parent_item_id = Some("template-1".to_string());
-                if let Some(recurrence) = child.item_type.recurrence_mut() {
-                    recurrence.due_offset_days = Some(2);
-                }
-                Ok(vec![child])
-            });
-        items_mock
-            .expect_list_children()
-            .withf(|parent_id: &str| parent_id == "template-child-1")
-            .times(1)
-            .returning(|_| Ok(vec![]));
-        items_mock
-            .expect_get_by_project()
-            .returning(|_, _| Ok(Item::new_project_item("p1", "Standup")));
-        let repo: Arc<dyn ItemRepo> = Arc::new(items_mock);
-
-        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
-
-        let item = get_or_materialize_occurrence(
-            &repo,
-            &projects,
-            &teams,
-            &series_repo,
-            &no_op_reminders(),
-            "owner1",
-            "s1",
-            occurrence_date(),
-            0,
-        )
-        .await
-        .expect("should materialize a task occurrence and copy the template's children");
 
         assert_eq!(item.name, "Standup");
     }
@@ -2879,20 +2738,6 @@ mod tests {
         assert!(matches!(result, Err(ItemError::NotFound)));
     }
 
-    fn no_template_repo() -> Arc<dyn ItemRepo> {
-        Arc::new(MockItemRepo::new())
-    }
-
-    fn template_item(id: &str, project_id: &str) -> Item {
-        Item {
-            id: id.to_string(),
-            project_id: Some(project_id.to_string()),
-            name: "Weekly prep".to_string(),
-            item_type: crate::domain::item::ItemType::from_kind(ItemKind::Template),
-            ..Item::default()
-        }
-    }
-
     fn create_params(project_id: &str) -> CreateItemSeriesParams {
         CreateItemSeriesParams {
             project_id: project_id.to_string(),
@@ -2903,7 +2748,8 @@ mod tests {
             anchor_date: occurrence_date(),
             item_type: ItemKind::Event,
             basis: None,
-            template_item_id: None,
+            parent_series_id: None,
+            due_offset_days: None,
             assigned_to_user_id: None,
             rotation_user_ids: None,
             points: None,
@@ -2922,7 +2768,8 @@ mod tests {
             anchor_date: occurrence_date(),
             item_type: ItemKind::Event,
             basis: None,
-            template_item_id: None,
+            parent_series_id: None,
+            due_offset_days: None,
             assigned_to_user_id: None,
             rotation_user_ids: None,
             points: None,
@@ -2947,7 +2794,6 @@ mod tests {
         let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let id = create_series(
-            &no_template_repo(),
             &projects,
             &teams,
             &series_repo,
@@ -2970,7 +2816,6 @@ mod tests {
         let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(MockItemSeriesRepo::new());
 
         let result = create_series(
-            &no_template_repo(),
             &projects,
             &teams,
             &series_repo,
@@ -3000,16 +2845,9 @@ mod tests {
 
         let mut params = create_params("p1");
         params.item_type = ItemKind::Task;
-        let id = create_series(
-            &no_template_repo(),
-            &projects,
-            &teams,
-            &series_repo,
-            "owner1",
-            params,
-        )
-        .await
-        .expect("owner should be able to create a task-typed series");
+        let id = create_series(&projects, &teams, &series_repo, "owner1", params)
+            .await
+            .expect("owner should be able to create a task-typed series");
         assert_eq!(id, "new-series-id");
     }
 
@@ -3031,15 +2869,7 @@ mod tests {
         let mut params = create_params("p1");
         params.item_type = ItemKind::Event;
         params.assigned_to_user_id = Some("member1".to_string());
-        let result = create_series(
-            &no_template_repo(),
-            &projects,
-            &teams,
-            &series_repo,
-            "owner1",
-            params,
-        )
-        .await;
+        let result = create_series(&projects, &teams, &series_repo, "owner1", params).await;
         assert!(matches!(result, Err(ItemError::Invalid(_))));
     }
 
@@ -3058,15 +2888,7 @@ mod tests {
         let mut params = create_params("p1");
         params.item_type = ItemKind::Task;
         params.points = Some(10);
-        let result = create_series(
-            &no_template_repo(),
-            &projects,
-            &teams,
-            &series_repo,
-            "owner1",
-            params,
-        )
-        .await;
+        let result = create_series(&projects, &teams, &series_repo, "owner1", params).await;
         assert!(matches!(result, Err(ItemError::Invalid(_))));
     }
 
@@ -3096,16 +2918,9 @@ mod tests {
         params.item_type = ItemKind::Task;
         params.assigned_to_user_id = Some("member1".to_string());
         params.points = Some(10);
-        let id = create_series(
-            &no_template_repo(),
-            &projects,
-            &teams,
-            &series_repo,
-            "admin1",
-            params,
-        )
-        .await
-        .expect("admin should be able to set assignment and points");
+        let id = create_series(&projects, &teams, &series_repo, "admin1", params)
+            .await
+            .expect("admin should be able to set assignment and points");
         assert_eq!(id, "new-series-id");
     }
 
@@ -3135,16 +2950,9 @@ mod tests {
         params.item_type = ItemKind::Task;
         params.assigned_to_user_id = Some("member1".to_string());
         params.points = Some(10);
-        let id = create_series(
-            &no_template_repo(),
-            &projects,
-            &teams,
-            &series_repo,
-            "member1",
-            params,
-        )
-        .await
-        .expect("non-admin member should still be able to set assignment");
+        let id = create_series(&projects, &teams, &series_repo, "member1", params)
+            .await
+            .expect("non-admin member should still be able to set assignment");
         assert_eq!(id, "new-series-id");
     }
 
@@ -3167,15 +2975,7 @@ mod tests {
         params.item_type = ItemKind::Task;
         params.assigned_to_user_id = Some("member1".to_string());
         params.rotation_user_ids = Some(vec!["member1".to_string(), "member2".to_string()]);
-        let result = create_series(
-            &no_template_repo(),
-            &projects,
-            &teams,
-            &series_repo,
-            "member1",
-            params,
-        )
-        .await;
+        let result = create_series(&projects, &teams, &series_repo, "member1", params).await;
         assert!(matches!(result, Err(ItemError::Invalid(_))));
     }
 
@@ -3197,15 +2997,7 @@ mod tests {
         let mut params = create_params("p1");
         params.item_type = ItemKind::Task;
         params.rotation_user_ids = Some(vec![]);
-        let result = create_series(
-            &no_template_repo(),
-            &projects,
-            &teams,
-            &series_repo,
-            "member1",
-            params,
-        )
-        .await;
+        let result = create_series(&projects, &teams, &series_repo, "member1", params).await;
         assert!(matches!(result, Err(ItemError::Invalid(_))));
     }
 
@@ -3231,15 +3023,7 @@ mod tests {
         let mut params = create_params("p1");
         params.item_type = ItemKind::Task;
         params.rotation_user_ids = Some(vec!["member1".to_string(), "stranger".to_string()]);
-        let result = create_series(
-            &no_template_repo(),
-            &projects,
-            &teams,
-            &series_repo,
-            "member1",
-            params,
-        )
-        .await;
+        let result = create_series(&projects, &teams, &series_repo, "member1", params).await;
         assert!(matches!(result, Err(ItemError::Invalid(_))));
     }
 
@@ -3274,16 +3058,9 @@ mod tests {
         let mut params = create_params("p1");
         params.item_type = ItemKind::Task;
         params.rotation_user_ids = Some(vec!["member1".to_string(), "member2".to_string()]);
-        let id = create_series(
-            &no_template_repo(),
-            &projects,
-            &teams,
-            &series_repo,
-            "member1",
-            params,
-        )
-        .await
-        .expect("member should be able to set up a rotation");
+        let id = create_series(&projects, &teams, &series_repo, "member1", params)
+            .await
+            .expect("member should be able to set up a rotation");
         assert_eq!(id, "new-series-id");
     }
 
@@ -3301,15 +3078,7 @@ mod tests {
 
         let mut params = create_params("p1");
         params.item_type = ItemKind::Template;
-        let result = create_series(
-            &no_template_repo(),
-            &projects,
-            &teams,
-            &series_repo,
-            "owner1",
-            params,
-        )
-        .await;
+        let result = create_series(&projects, &teams, &series_repo, "owner1", params).await;
         assert!(matches!(result, Err(ItemError::Invalid(_))));
     }
 
@@ -3327,15 +3096,7 @@ mod tests {
 
         let mut params = create_params("p1");
         params.item_type = ItemKind::Simple;
-        let result = create_series(
-            &no_template_repo(),
-            &projects,
-            &teams,
-            &series_repo,
-            "owner1",
-            params,
-        )
-        .await;
+        let result = create_series(&projects, &teams, &series_repo, "owner1", params).await;
         assert!(matches!(result, Err(ItemError::Invalid(_))));
     }
 
@@ -3354,15 +3115,7 @@ mod tests {
         let mut params = create_params("p1");
         params.item_type = ItemKind::Task;
         params.event_type = Some("rain".to_string());
-        let result = create_series(
-            &no_template_repo(),
-            &projects,
-            &teams,
-            &series_repo,
-            "owner1",
-            params,
-        )
-        .await;
+        let result = create_series(&projects, &teams, &series_repo, "owner1", params).await;
         assert!(matches!(result, Err(ItemError::Invalid(_))));
     }
 
@@ -3383,15 +3136,7 @@ mod tests {
         let mut params = create_params("p1");
         params.item_type = ItemKind::Event;
         params.event_type = Some("rain".to_string());
-        let result = create_series(
-            &no_template_repo(),
-            &projects,
-            &teams,
-            &series_repo,
-            "owner1",
-            params,
-        )
-        .await;
+        let result = create_series(&projects, &teams, &series_repo, "owner1", params).await;
         assert!(matches!(result, Err(ItemError::Invalid(_))));
     }
 
@@ -3413,15 +3158,7 @@ mod tests {
         let mut params = create_params("p1");
         params.item_type = ItemKind::Task;
         params.event_type = None;
-        let result = create_series(
-            &no_template_repo(),
-            &projects,
-            &teams,
-            &series_repo,
-            "owner1",
-            params,
-        )
-        .await;
+        let result = create_series(&projects, &teams, &series_repo, "owner1", params).await;
         assert!(result.is_ok());
     }
 
@@ -3440,15 +3177,7 @@ mod tests {
         let mut params = create_params("p1");
         params.item_type = ItemKind::Event;
         params.basis = Some("COMPLETION".to_string());
-        let result = create_series(
-            &no_template_repo(),
-            &projects,
-            &teams,
-            &series_repo,
-            "owner1",
-            params,
-        )
-        .await;
+        let result = create_series(&projects, &teams, &series_repo, "owner1", params).await;
         assert!(matches!(result, Err(ItemError::Invalid(_))));
     }
 
@@ -3467,15 +3196,7 @@ mod tests {
         let mut params = create_params("p1");
         params.item_type = ItemKind::Event;
         params.basis = Some("DUE_DATE".to_string());
-        let result = create_series(
-            &no_template_repo(),
-            &projects,
-            &teams,
-            &series_repo,
-            "owner1",
-            params,
-        )
-        .await;
+        let result = create_series(&projects, &teams, &series_repo, "owner1", params).await;
         assert!(matches!(result, Err(ItemError::Invalid(_))));
     }
 
@@ -3502,15 +3223,7 @@ mod tests {
         // DUE_DATE has no "every N units" restriction (it doesn't affect cursor
         // advancement, only which field materialization writes to).
         params.basis = Some("DUE_DATE".to_string());
-        let result = create_series(
-            &no_template_repo(),
-            &projects,
-            &teams,
-            &series_repo,
-            "owner1",
-            params,
-        )
-        .await;
+        let result = create_series(&projects, &teams, &series_repo, "owner1", params).await;
         assert!(result.is_ok());
     }
 
@@ -3532,15 +3245,7 @@ mod tests {
         // create_params()'s default recurrence is "every weekday" — a WeeklyDay pattern,
         // not an "every N units" one.
         params.basis = Some("COMPLETION".to_string());
-        let result = create_series(
-            &no_template_repo(),
-            &projects,
-            &teams,
-            &series_repo,
-            "owner1",
-            params,
-        )
-        .await;
+        let result = create_series(&projects, &teams, &series_repo, "owner1", params).await;
         assert!(matches!(result, Err(ItemError::Invalid(_))));
     }
 
@@ -3565,118 +3270,7 @@ mod tests {
         params.event_type = None;
         params.recurrence = "every 3 days".to_string();
         params.basis = Some("COMPLETION".to_string());
-        let result = create_series(
-            &no_template_repo(),
-            &projects,
-            &teams,
-            &series_repo,
-            "owner1",
-            params,
-        )
-        .await;
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn create_series_rejects_template_item_id_on_an_event_series() {
-        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
-        let mut series_mock = MockItemSeriesRepo::new();
-        series_mock.expect_create_series().times(0);
-        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
-        let mut projects_mock = MockProjectRepo::new();
-        projects_mock
-            .expect_get()
-            .returning(|_| Ok(personal_project()));
-        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
-        let repo: Arc<dyn ItemRepo> = Arc::new(MockItemRepo::new());
-
-        let mut params = create_params("p1");
-        params.item_type = ItemKind::Event;
-        params.template_item_id = Some("template-1".to_string());
-        let result = create_series(&repo, &projects, &teams, &series_repo, "owner1", params).await;
-        assert!(matches!(result, Err(ItemError::Invalid(_))));
-    }
-
-    #[tokio::test]
-    async fn create_series_rejects_a_non_template_item_as_the_template() {
-        let mut projects_mock = MockProjectRepo::new();
-        projects_mock
-            .expect_get()
-            .returning(|_| Ok(personal_project()));
-        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
-        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
-        let mut series_mock = MockItemSeriesRepo::new();
-        series_mock.expect_create_series().times(0);
-        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
-
-        let mut items_mock = MockItemRepo::new();
-        items_mock
-            .expect_get_by_project()
-            .withf(|project_id: &str, item_id: &str| {
-                project_id == "p1" && item_id == "not-a-template"
-            })
-            .returning(|_, _| Ok(Item::new_project_item("p1", "Just a task")));
-        let repo: Arc<dyn ItemRepo> = Arc::new(items_mock);
-
-        let mut params = create_params("p1");
-        params.item_type = ItemKind::Task;
-        params.template_item_id = Some("not-a-template".to_string());
-        let result = create_series(&repo, &projects, &teams, &series_repo, "owner1", params).await;
-        assert!(matches!(result, Err(ItemError::Invalid(_))));
-    }
-
-    #[tokio::test]
-    async fn create_series_rejects_a_template_item_from_another_project() {
-        let mut projects_mock = MockProjectRepo::new();
-        projects_mock
-            .expect_get()
-            .returning(|_| Ok(personal_project()));
-        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
-        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
-        let mut series_mock = MockItemSeriesRepo::new();
-        series_mock.expect_create_series().times(0);
-        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
-
-        let mut items_mock = MockItemRepo::new();
-        items_mock
-            .expect_get_by_project()
-            .returning(|_, _| Err(RepoError::NotFound));
-        let repo: Arc<dyn ItemRepo> = Arc::new(items_mock);
-
-        let mut params = create_params("p1");
-        params.item_type = ItemKind::Task;
-        params.template_item_id = Some("other-projects-template".to_string());
-        let result = create_series(&repo, &projects, &teams, &series_repo, "owner1", params).await;
-        assert!(matches!(result, Err(ItemError::NotFound)));
-    }
-
-    #[tokio::test]
-    async fn create_series_accepts_a_valid_template_item_id() {
-        let mut projects_mock = MockProjectRepo::new();
-        projects_mock
-            .expect_get()
-            .returning(|_| Ok(personal_project()));
-        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
-        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
-        let mut series_mock = MockItemSeriesRepo::new();
-        series_mock
-            .expect_create_series()
-            .withf(|s: &ItemSeries| s.template_item_id.as_deref() == Some("template-1"))
-            .times(1)
-            .returning(|_| Ok("new-series-id".to_string()));
-        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
-
-        let mut items_mock = MockItemRepo::new();
-        items_mock
-            .expect_get_by_project()
-            .withf(|project_id: &str, item_id: &str| project_id == "p1" && item_id == "template-1")
-            .returning(|project_id, id| Ok(template_item(id, project_id)));
-        let repo: Arc<dyn ItemRepo> = Arc::new(items_mock);
-
-        let mut params = create_params("p1");
-        params.item_type = ItemKind::Task;
-        params.template_item_id = Some("template-1".to_string());
-        let result = create_series(&repo, &projects, &teams, &series_repo, "owner1", params).await;
+        let result = create_series(&projects, &teams, &series_repo, "owner1", params).await;
         assert!(result.is_ok());
     }
 
@@ -3699,16 +3293,7 @@ mod tests {
         let mut params = update_params();
         params.item_type = ItemKind::Task;
         params.event_type = Some("meeting".to_string());
-        let result = update_series(
-            &no_template_repo(),
-            &projects,
-            &teams,
-            &series_repo,
-            "owner1",
-            "s1",
-            params,
-        )
-        .await;
+        let result = update_series(&projects, &teams, &series_repo, "owner1", "s1", params).await;
         assert!(matches!(result, Err(ItemError::Invalid(_))));
     }
 
@@ -3733,16 +3318,7 @@ mod tests {
         let mut params = update_params();
         params.item_type = ItemKind::Event;
         params.event_type = Some("meeting".to_string());
-        let result = update_series(
-            &no_template_repo(),
-            &projects,
-            &teams,
-            &series_repo,
-            "owner1",
-            "s1",
-            params,
-        )
-        .await;
+        let result = update_series(&projects, &teams, &series_repo, "owner1", "s1", params).await;
         assert!(matches!(result, Err(ItemError::Invalid(_))));
     }
 
@@ -3764,64 +3340,8 @@ mod tests {
 
         let mut params = update_params();
         params.item_type = ItemKind::Template;
-        let result = update_series(
-            &no_template_repo(),
-            &projects,
-            &teams,
-            &series_repo,
-            "owner1",
-            "s1",
-            params,
-        )
-        .await;
+        let result = update_series(&projects, &teams, &series_repo, "owner1", "s1", params).await;
         assert!(matches!(result, Err(ItemError::Invalid(_))));
-    }
-
-    #[tokio::test]
-    async fn update_series_accepts_a_valid_template_item_id() {
-        let mut series_mock = MockItemSeriesRepo::new();
-        series_mock
-            .expect_get_series()
-            .returning(|_| Ok(series("p1")));
-        series_mock
-            .expect_update_series()
-            .withf(|_, s: &ItemSeries| s.template_item_id.as_deref() == Some("template-1"))
-            .times(1)
-            .returning(|_, _| Ok(()));
-        series_mock
-            .expect_set_rotation_members()
-            .withf(|_, ids: &[String]| ids.is_empty())
-            .returning(|_, _| Ok(()));
-        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
-
-        let mut projects_mock = MockProjectRepo::new();
-        projects_mock
-            .expect_get()
-            .returning(|_| Ok(personal_project()));
-        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
-        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
-
-        let mut items_mock = MockItemRepo::new();
-        items_mock
-            .expect_get_by_project()
-            .withf(|project_id: &str, item_id: &str| project_id == "p1" && item_id == "template-1")
-            .returning(|project_id, id| Ok(template_item(id, project_id)));
-        let repo: Arc<dyn ItemRepo> = Arc::new(items_mock);
-
-        let mut params = update_params();
-        params.item_type = ItemKind::Task;
-        params.template_item_id = Some("template-1".to_string());
-        let result = update_series(
-            &repo,
-            &projects,
-            &teams,
-            &series_repo,
-            "owner1",
-            "s1",
-            params,
-        )
-        .await;
-        assert!(result.is_ok());
     }
 
     #[tokio::test]
@@ -3946,7 +3466,6 @@ mod tests {
         let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
 
         update_series(
-            &no_template_repo(),
             &projects,
             &teams,
             &series_repo,
@@ -3975,7 +3494,6 @@ mod tests {
         let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
 
         let result = update_series(
-            &no_template_repo(),
             &projects,
             &teams,
             &series_repo,
@@ -4041,7 +3559,8 @@ mod tests {
             item_type: ItemKind::Event,
             cursor_date: None,
             basis: None,
-            template_item_id: None,
+            parent_series_id: None,
+            due_offset_days: None,
             assigned_to_user_id: None,
             points: None,
         }

@@ -27,6 +27,14 @@ namespace common
 // use, since a materialized occurrence is a full standalone item with its own
 // completion/points history, not a structural child of the series. Gated by project
 // membership, matching Create/Update/List above.
+//
+// docs/series-sub-items-plan.md (stage 1, 2026-08-26): removed `templateItemId` outright
+// (no migration/backfill — confirmed nothing depended on it) and added `parentSeriesId`/
+// `dueOffsetDays`, letting a Task-typed series be a sub-item of another Task-typed series.
+// Validation (only a Task series may set `parentSeriesId`, one level of nesting only, etc.)
+// lands in a later stage — these two fields are unvalidated on the wire for now. A child
+// series will eventually have no `recurrence`/`anchorDate` of its own (inherited from its
+// parent), but those two fields stay `@required` here until that stage relaxes them.
 structure ItemSeriesSummary {
     @required
     seriesId: String
@@ -52,7 +60,9 @@ structure ItemSeriesSummary {
 
     basis: String
 
-    templateItemId: String
+    parentSeriesId: String
+
+    dueOffsetDays: Integer
 
     assignedToUserId: String
 
@@ -106,7 +116,10 @@ operation CreateItemSeries {
         basis: String
 
         @notProperty
-        templateItemId: String
+        parentSeriesId: String
+
+        @notProperty
+        dueOffsetDays: Integer
 
         @notProperty
         assignedToUserId: String
@@ -178,7 +191,10 @@ operation GetItemSeries {
         basis: String
 
         @notProperty
-        templateItemId: String
+        parentSeriesId: String
+
+        @notProperty
+        dueOffsetDays: Integer
 
         @notProperty
         assignedToUserId: String
@@ -234,7 +250,10 @@ operation UpdateItemSeries {
         basis: String
 
         @notProperty
-        templateItemId: String
+        parentSeriesId: String
+
+        @notProperty
+        dueOffsetDays: Integer
 
         @notProperty
         assignedToUserId: String

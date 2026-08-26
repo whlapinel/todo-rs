@@ -661,7 +661,8 @@ mod tests {
             item_type: crate::domain::item::ItemKind::Event,
             cursor_date: None,
             basis: None,
-            template_item_id: None,
+            parent_series_id: None,
+            due_offset_days: None,
             assigned_to_user_id: None,
             points: None,
         }

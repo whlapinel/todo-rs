@@ -27,7 +27,6 @@
   <div class="flex items-center gap-x-3 text-xs text-gray-500 dark:text-gray-400">
     <span>Anchor: {{ anchor_date_label }}</span>
     {% if let Some(t) = event_type %}<span>Type: {{ t }}</span>{% endif %}
-    {% if let Some(t) = template_name %}<span>Template: {{ t }}</span>{% endif %}
     {% if let Some(a) = assignee_name %}<span>Assigned to: {{ a }}</span>{% endif %}
     {% if let Some(p) = points %}<span>Points: {{ p }}</span>{% endif %}
   </div>

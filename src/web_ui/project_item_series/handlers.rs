@@ -204,7 +204,6 @@ pub async fn project_item_series_occurrence_edit_page(
 pub async fn project_item_series_page(
     Path(project_id): Path<String>,
     Extension(auth_user): Extension<AuthUser>,
-    Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(item_series): Extension<Arc<dyn ItemSeriesRepo>>,
@@ -218,12 +217,6 @@ pub async fn project_item_series_page(
         &project_id,
     )
     .await?;
-    let template_names: HashMap<String, String> = repo
-        .list_templates_by_project(&project_id)
-        .await?
-        .into_iter()
-        .map(|t| (t.id, t.name))
-        .collect();
     let project =
         project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
     let member_names = match &project.team_id {
@@ -232,17 +225,13 @@ pub async fn project_item_series_page(
     };
     let mut rows = Vec::with_capacity(series.len());
     for s in &series {
-        let template_name = s
-            .template_item_id
-            .as_ref()
-            .and_then(|id| template_names.get(id).cloned());
         // Stage 4 of docs/assignment-rotation-plan.md: resolves to the series' fixed
         // assignee, or — for a rotating series — the current occurrence's computed
         // rotation assignee (open question 4).
         let assignee_id = item_series_service::current_series_assignee(&item_series, s, tz).await?;
         let assignee_name = assignee_id.and_then(|id| member_names.get(&id).cloned());
         rows.push(
-            ProjectItemSeriesRow::from_series(s, tz, template_name, assignee_name)
+            ProjectItemSeriesRow::from_series(s, tz, assignee_name)
                 .render()
                 .map_err(ItemError::from)?,
         );
@@ -264,18 +253,11 @@ pub async fn project_item_series_page(
 pub async fn new_project_item_series_page(
     Path(project_id): Path<String>,
     Extension(auth_user): Extension<AuthUser>,
-    Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
 ) -> Result<Html<String>, ItemError> {
     let project =
         project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
-    let templates = repo
-        .list_templates_by_project(&project_id)
-        .await?
-        .into_iter()
-        .map(|t| (t.id, t.name))
-        .collect();
     let is_team_project = project.team_id.is_some();
     let (assignee_options, is_team_admin) = match &project.team_id {
         Some(team_id) => (
@@ -295,7 +277,6 @@ pub async fn new_project_item_series_page(
     render(NewProjectItemSeriesPageTemplate {
         project_id,
         nav_html,
-        templates,
         is_team_project,
         assignee_options,
         is_team_admin,
@@ -315,11 +296,8 @@ pub struct CreateItemSeriesForm {
     /// A `<select>` of "" (schedule, the default) / "COMPLETION" / "DUE_DATE" — see
     /// `ItemSeries::basis`'s doc comment. A blank selection submits as `Some("")`;
     /// normalized to `None` via `non_empty` at each call site below, same convention as
-    /// `template_item_id`.
+    /// `description`/`event_type`.
     basis: Option<String>,
-    /// Blank `<option value="">` submits as `Some("")` — `non_empty` (this module)
-    /// normalizes that to `None`, same convention as `description`/`event_type`.
-    template_item_id: Option<String>,
     /// Only present/honored server-side on a team-backed project, Task-typed series —
     /// see `service::item_series::resolve_series_assignment`'s own gate.
     assigned_to_user_id: Option<String>,
@@ -391,7 +369,6 @@ fn anchor_default_time(basis: &Option<String>) -> chrono::NaiveTime {
 pub async fn create_project_item_series_form(
     Path(project_id): Path<String>,
     Extension(auth_user): Extension<AuthUser>,
-    Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(item_series): Extension<Arc<dyn ItemSeriesRepo>>,
@@ -410,7 +387,6 @@ pub async fn create_project_item_series_form(
     let (assigned_to_user_id, rotation_user_ids) = resolve_assignment_mode_fields(&form);
 
     item_series_service::create_series(
-        &repo,
         &projects,
         &teams,
         &item_series,
@@ -424,7 +400,8 @@ pub async fn create_project_item_series_form(
             anchor_date,
             item_type,
             basis,
-            template_item_id: non_empty(&form.template_item_id),
+            parent_series_id: None,
+            due_offset_days: None,
             assigned_to_user_id,
             rotation_user_ids,
             points: form
@@ -844,7 +821,6 @@ async fn rebuild_all_events_list_response(
 pub async fn edit_project_item_series_page(
     Path((project_id, series_id)): Path<(String, String)>,
     Extension(auth_user): Extension<AuthUser>,
-    Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(item_series): Extension<Arc<dyn ItemSeriesRepo>>,
@@ -863,12 +839,6 @@ pub async fn edit_project_item_series_page(
     }
     let project =
         project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
-    let templates = repo
-        .list_templates_by_project(&project_id)
-        .await?
-        .into_iter()
-        .map(|t| (t.id, t.name))
-        .collect();
     let is_team_project = project.team_id.is_some();
     let (assignee_options, is_team_admin) = match &project.team_id {
         Some(team_id) => (
@@ -901,8 +871,6 @@ pub async fn edit_project_item_series_page(
         basis: series.basis.unwrap_or_default(),
         anchor_date: local_anchor.format("%Y-%m-%d").to_string(),
         anchor_time: local_anchor.format("%H:%M").to_string(),
-        templates,
-        template_item_id: series.template_item_id,
         is_team_project,
         assignee_options,
         assigned_to_user_id: series.assigned_to_user_id,
@@ -916,7 +884,6 @@ pub async fn edit_project_item_series_page(
 pub async fn update_project_item_series_form(
     Path((project_id, series_id)): Path<(String, String)>,
     Extension(auth_user): Extension<AuthUser>,
-    Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(item_series): Extension<Arc<dyn ItemSeriesRepo>>,
@@ -935,7 +902,6 @@ pub async fn update_project_item_series_form(
     let (assigned_to_user_id, rotation_user_ids) = resolve_assignment_mode_fields(&form);
 
     item_series_service::update_series(
-        &repo,
         &projects,
         &teams,
         &item_series,
@@ -949,7 +915,8 @@ pub async fn update_project_item_series_form(
             anchor_date,
             item_type,
             basis,
-            template_item_id: non_empty(&form.template_item_id),
+            parent_series_id: None,
+            due_offset_days: None,
             assigned_to_user_id,
             rotation_user_ids,
             points: form

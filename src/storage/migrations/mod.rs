@@ -8,6 +8,7 @@ mod add_item_points;
 mod add_item_series;
 mod add_item_series_assignment;
 mod add_item_series_basis;
+mod add_item_series_children;
 mod add_item_series_cursor_date;
 mod add_item_series_id;
 mod add_item_series_rotation_members;
@@ -37,6 +38,7 @@ use add_item_points::AddItemPoints;
 use add_item_series::AddItemSeries;
 use add_item_series_assignment::AddItemSeriesAssignment;
 use add_item_series_basis::AddItemSeriesBasis;
+use add_item_series_children::AddItemSeriesChildren;
 use add_item_series_cursor_date::AddItemSeriesCursorDate;
 use add_item_series_id::AddItemSeriesId;
 use add_item_series_rotation_members::AddItemSeriesRotationMembers;
@@ -119,6 +121,7 @@ fn all_migrations() -> Vec<Box<dyn Migration>> {
         Box::new(AddUserTimezone),
         Box::new(AddUserPersonalProjectId),
         Box::new(AddReminders),
+        Box::new(AddItemSeriesChildren),
     ]
 }
 
@@ -352,7 +355,12 @@ mod tests {
                 recurrence TEXT NOT NULL,
                 anchor_date INTEGER NOT NULL,
                 item_type TEXT NOT NULL DEFAULT 'EVENT',
-                cursor_date INTEGER
+                cursor_date INTEGER,
+                basis TEXT,
+                parent_series_id TEXT,
+                due_offset_days INTEGER,
+                assigned_to_user_id TEXT,
+                points INTEGER
             )",
         )
         .execute(&pool)
@@ -545,7 +553,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 28);
+        assert_eq!(applied_count, 29);
     }
 
     #[tokio::test]
@@ -558,7 +566,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 28);
+        assert_eq!(applied_count, 29);
     }
 
     #[tokio::test]
@@ -572,6 +580,6 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 28);
+        assert_eq!(applied_count, 29);
     }
 }
