@@ -782,8 +782,8 @@ mod tests {
                 name: "Standup".to_string(),
                 description: None,
                 event_type: None,
-                recurrence: Some("every 7 days".to_string()),
-                anchor_date: Some(occurrence_date),
+                recurrence: "every 7 days".to_string(),
+                anchor_date: occurrence_date,
                 item_type: crate::domain::item::ItemKind::Task,
                 // The cursor has already moved past this occurrence — some later
                 // occurrence was completed/skipped after it.

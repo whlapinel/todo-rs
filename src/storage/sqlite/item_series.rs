@@ -19,7 +19,7 @@ fn from_secs(secs: i64) -> DateTime<Utc> {
 }
 
 fn row_to_series(row: &sqlx::sqlite::SqliteRow) -> ItemSeries {
-    let anchor_secs: Option<i64> = row.get("anchor_date");
+    let anchor_secs: i64 = row.get("anchor_date");
     let item_type: String = row.get("item_type");
     let cursor_secs: Option<i64> = row.get("cursor_date");
     ItemSeries {
@@ -29,7 +29,7 @@ fn row_to_series(row: &sqlx::sqlite::SqliteRow) -> ItemSeries {
         description: row.get("description"),
         event_type: row.get("event_type"),
         recurrence: row.get("recurrence"),
-        anchor_date: anchor_secs.map(from_secs),
+        anchor_date: from_secs(anchor_secs),
         item_type: item_type.parse().unwrap_or(ItemKind::Event),
         cursor_date: cursor_secs.map(from_secs),
         basis: row.get("basis"),
@@ -65,7 +65,7 @@ impl ItemSeriesRepo for SqliteItemSeriesRepo {
         .bind(&series.description)
         .bind(&series.event_type)
         .bind(&series.recurrence)
-        .bind(series.anchor_date.map(to_secs))
+        .bind(to_secs(series.anchor_date))
         .bind(series.item_type.as_str())
         .bind(&series.basis)
         .bind(&series.parent_series_id)
@@ -87,7 +87,7 @@ impl ItemSeriesRepo for SqliteItemSeriesRepo {
         .bind(&series.description)
         .bind(&series.event_type)
         .bind(&series.recurrence)
-        .bind(series.anchor_date.map(to_secs))
+        .bind(to_secs(series.anchor_date))
         .bind(series.item_type.as_str())
         .bind(&series.basis)
         .bind(&series.parent_series_id)
@@ -376,8 +376,8 @@ mod tests {
                 name TEXT NOT NULL,
                 description TEXT,
                 event_type TEXT,
-                recurrence TEXT,
-                anchor_date INTEGER,
+                recurrence TEXT NOT NULL,
+                anchor_date INTEGER NOT NULL,
                 item_type TEXT NOT NULL DEFAULT 'EVENT',
                 cursor_date INTEGER,
                 basis TEXT,
@@ -426,8 +426,8 @@ mod tests {
             name: "Standup".to_string(),
             description: Some("Daily sync".to_string()),
             event_type: Some("meeting".to_string()),
-            recurrence: Some("every weekday".to_string()),
-            anchor_date: Some(dt(1_000_000)),
+            recurrence: "every weekday".to_string(),
+            anchor_date: dt(1_000_000),
             item_type: ItemKind::Event,
             cursor_date: None,
             basis: None,
@@ -450,8 +450,8 @@ mod tests {
         assert_eq!(series.name, "Standup");
         assert_eq!(series.description, Some("Daily sync".to_string()));
         assert_eq!(series.event_type, Some("meeting".to_string()));
-        assert_eq!(series.recurrence, Some("every weekday".to_string()));
-        assert_eq!(series.anchor_date, Some(dt(1_000_000)));
+        assert_eq!(series.recurrence, "every weekday");
+        assert_eq!(series.anchor_date, dt(1_000_000));
         assert_eq!(series.item_type, ItemKind::Event);
         assert_eq!(series.parent_series_id, None);
         assert_eq!(series.due_offset_days, None);
@@ -526,8 +526,8 @@ mod tests {
         update.name = "Retro".to_string();
         update.description = None;
         update.event_type = None;
-        update.recurrence = Some("every friday".to_string());
-        update.anchor_date = Some(dt(2_000_000));
+        update.recurrence = "every friday".to_string();
+        update.anchor_date = dt(2_000_000);
         update.item_type = ItemKind::Task;
         update.basis = Some("COMPLETION".to_string());
         update.parent_series_id = Some("parent-1".to_string());
@@ -541,8 +541,8 @@ mod tests {
         assert_eq!(series.name, "Retro");
         assert_eq!(series.description, None);
         assert_eq!(series.event_type, None);
-        assert_eq!(series.recurrence, Some("every friday".to_string()));
-        assert_eq!(series.anchor_date, Some(dt(2_000_000)));
+        assert_eq!(series.recurrence, "every friday");
+        assert_eq!(series.anchor_date, dt(2_000_000));
         assert_eq!(series.item_type, ItemKind::Task);
         assert_eq!(series.basis, Some("COMPLETION".to_string()));
         assert_eq!(series.parent_series_id, Some("parent-1".to_string()));

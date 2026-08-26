@@ -23,7 +23,6 @@ mod backfill_projects;
 mod drop_items_team_id;
 mod drop_team_member_points;
 mod has_tasks_to_simple;
-mod item_series_children_relax_recurrence;
 mod item_type_event_type;
 mod migrate_legacy_recurring_items;
 mod scheduled_end_date;
@@ -55,7 +54,6 @@ use backfill_projects::BackfillProjects;
 use drop_items_team_id::DropItemsTeamId;
 use drop_team_member_points::DropTeamMemberPoints;
 use has_tasks_to_simple::HasTasksToSimple;
-use item_series_children_relax_recurrence::ItemSeriesChildrenRelaxRecurrence;
 use item_type_event_type::ItemTypeEventType;
 use migrate_legacy_recurring_items::MigrateLegacyRecurringItems;
 use scheduled_end_date::ScheduledEndDate;
@@ -124,7 +122,6 @@ fn all_migrations() -> Vec<Box<dyn Migration>> {
         Box::new(AddUserPersonalProjectId),
         Box::new(AddReminders),
         Box::new(AddItemSeriesChildren),
-        Box::new(ItemSeriesChildrenRelaxRecurrence),
     ]
 }
 
@@ -355,8 +352,8 @@ mod tests {
                 name TEXT NOT NULL,
                 description TEXT,
                 event_type TEXT,
-                recurrence TEXT,
-                anchor_date INTEGER,
+                recurrence TEXT NOT NULL,
+                anchor_date INTEGER NOT NULL,
                 item_type TEXT NOT NULL DEFAULT 'EVENT',
                 cursor_date INTEGER,
                 basis TEXT,
@@ -556,7 +553,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 30);
+        assert_eq!(applied_count, 29);
     }
 
     #[tokio::test]
@@ -569,7 +566,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 30);
+        assert_eq!(applied_count, 29);
     }
 
     #[tokio::test]
@@ -583,6 +580,6 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 30);
+        assert_eq!(applied_count, 29);
     }
 }

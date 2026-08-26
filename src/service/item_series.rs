@@ -63,28 +63,17 @@ pub async fn get_or_materialize_occurrence(
     let occurrence_assignee =
         resolve_occurrence_assignee(series_repo, &series, occurrence_date, tz_offset_minutes)
             .await?;
-    // docs/series-sub-items-plan.md decision 5: a Task series always materializes onto
-    // due_date now (the old basis: "DUE_DATE" toggle is retired — is_due_date_basis is
-    // just item_type == Task); Event series are unaffected and still materialize onto
-    // scheduled_date. `occurrence_date` here is always the identity/lookup cycle date —
-    // for a child series that's its *parent's* cycle date (decision 2), so a child's
-    // actual due_date is offset from it via due_offset_days, the same
-    // deadline_from_offset domain logic item-level children already use.
-    let params = if series.item_type == ItemKind::Task {
-        let due_date = match series.due_offset_days {
-            Some(days) => recurrence::apply_end_of_day(
-                occurrence_date + chrono::Duration::days(days as i64),
-                tz_offset_minutes,
-            ),
-            None => occurrence_date,
-        };
+    // Due-date-basis materializes onto due_date instead of scheduled_date (see
+    // ItemSeries::basis's doc comment) — everything else about the created item is
+    // identical between the two branches.
+    let params = if is_due_date_basis(&series) {
         CreateProjectItemParams {
             project_id: series.project_id.clone(),
             name: series.name.clone(),
             description: series.description.clone(),
             item_type: Some(series.item_type),
             event_type: series.event_type.clone(),
-            due_date: Some(due_date),
+            due_date: Some(occurrence_date),
             has_due_time: Some(true),
             assigned_to_user_id: occurrence_assignee,
             points: series.points,
@@ -223,10 +212,7 @@ pub async fn unskip_occurrence(
             "this occurrence is not skipped".to_string(),
         ));
     }
-    // docs/series-sub-items-plan.md: a child series has no cursor of its own (decision 2)
-    // — this cursor-restore machinery only ever applies to a root Task series, same as the
-    // guard `skip_occurrence`/`record_task_completion`/`record_task_uncompletion` all add.
-    if series.item_type == ItemKind::Task && series.parent_series_id.is_none() {
+    if series.item_type == ItemKind::Task {
         if series.cursor_date != Some(occurrence_date) {
             return Err(ItemError::Invalid(format!(
                 "cannot unskip this occurrence out of order — only the series' most \
@@ -236,13 +222,10 @@ pub async fn unskip_occurrence(
         }
         // Same shape as record_task_uncompletion's cursor restore: retreat one step, or
         // clear back to the pre-anything-settled None state if this was the anchor.
-        if Some(occurrence_date) == series.anchor_date {
+        if occurrence_date == series.anchor_date {
             series_repo.clear_cursor(series_id, occurrence_date).await?;
         } else {
-            let rule = recurrence::parse(series.recurrence.as_deref().ok_or_else(|| {
-                ItemError::Internal("root task series missing recurrence".to_string())
-            })?)
-            .map_err(ItemError::Invalid)?;
+            let rule = recurrence::parse(&series.recurrence).map_err(ItemError::Invalid)?;
             let previous = recurrence::retreat_once(&rule, occurrence_date, tz_offset_minutes);
             series_repo.retreat_cursor(series_id, previous).await?;
         }
@@ -282,18 +265,10 @@ async fn require_current_occurrence(
     occurrence_date: DateTime<Utc>,
     tz_offset_minutes: i32,
 ) -> Result<(), ItemError> {
-    // docs/series-sub-items-plan.md: a child series has no cursor/ordering of its own to
-    // protect (decision 2) — same treatment as an Event-typed series, which never had one
-    // either. Nothing stops an out-of-order complete/skip of a child's own occurrence, the
-    // same way nothing stops one for an Event series today.
-    if series.item_type != ItemKind::Task || series.parent_series_id.is_some() {
+    if series.item_type != ItemKind::Task {
         return Ok(());
     }
-    let rule =
-        recurrence::parse(series.recurrence.as_deref().ok_or_else(|| {
-            ItemError::Internal("root task series missing recurrence".to_string())
-        })?)
-        .map_err(ItemError::Invalid)?;
+    let rule = recurrence::parse(&series.recurrence).map_err(ItemError::Invalid)?;
     let mut current = current_occurrence_date(series, &rule, tz_offset_minutes);
     while let Some(occurrence) = series_repo.get_occurrence(&series.id, current).await? {
         if !occurrence.is_exdate {
@@ -326,9 +301,7 @@ async fn require_cursor_occurrence(
     series: &ItemSeries,
     occurrence_date: DateTime<Utc>,
 ) -> Result<(), ItemError> {
-    // Same "no cursor to protect" treatment as `require_current_occurrence` — see its
-    // doc comment.
-    if series.item_type != ItemKind::Task || series.parent_series_id.is_some() {
+    if series.item_type != ItemKind::Task {
         return Ok(());
     }
     let Some(cursor) = series.cursor_date else {
@@ -363,7 +336,6 @@ async fn require_cursor_occurrence(
 /// Cheap no-op for the overwhelmingly common case (item never came from a series),
 /// same shape as `record_task_completion`/`unlink_deleted_item_occurrence`.
 pub async fn validate_completable(
-    repo: &Arc<dyn ItemRepo>,
     series_repo: &Arc<dyn ItemSeriesRepo>,
     item_id: &str,
     tz_offset_minutes: i32,
@@ -377,63 +349,6 @@ pub async fn validate_completable(
             tz_offset_minutes,
         )
         .await?;
-        require_no_incomplete_materialized_child_occurrence(
-            repo,
-            series_repo,
-            &series,
-            occurrence.occurrence_date,
-        )
-        .await?;
-    }
-    Ok(())
-}
-
-/// docs/series-sub-items-plan.md: completing a root series' current occurrence is
-/// rejected while any child series' occurrence for this same cycle is materialized and
-/// incomplete — mirrors `has_incomplete_children`'s item-level rule
-/// (`service::items`/CLAUDE.md's Completion-transition guards section) one level up. A
-/// still-virtual child occurrence never blocks it, the same way a never-materialized
-/// item-level child doesn't (forcing every child to materialize before the parent could
-/// complete would reintroduce exactly the "forced early materialization" problem this
-/// whole plan exists to remove). A no-op for anything but a root series — a child cannot
-/// itself have children (one level of nesting only, see `ItemSeries::parent_series_id`'s
-/// doc comment), so it has nothing to check here.
-async fn require_no_incomplete_materialized_child_occurrence(
-    repo: &Arc<dyn ItemRepo>,
-    series_repo: &Arc<dyn ItemSeriesRepo>,
-    series: &ItemSeries,
-    occurrence_date: DateTime<Utc>,
-) -> Result<(), ItemError> {
-    if series.parent_series_id.is_some() {
-        return Ok(());
-    }
-    let children = series_repo
-        .list_series_for_project(&series.project_id)
-        .await?
-        .into_iter()
-        .filter(|s| s.parent_series_id.as_deref() == Some(series.id.as_str()));
-    for child in children {
-        let Some(child_occurrence) = series_repo
-            .get_occurrence(&child.id, occurrence_date)
-            .await?
-        else {
-            continue;
-        };
-        if child_occurrence.is_exdate {
-            continue;
-        }
-        let Some(item_id) = child_occurrence.item_id else {
-            continue;
-        };
-        let item =
-            project_items::get_project_item_unchecked(repo, &series.project_id, &item_id).await?;
-        if !item.complete {
-            return Err(ItemError::Invalid(format!(
-                "cannot complete this occurrence — sub-item \"{}\" for this cycle is still \
-                 incomplete",
-                child.name
-            )));
-        }
     }
     Ok(())
 }
@@ -509,14 +424,12 @@ pub fn is_completion_basis(series: &ItemSeries) -> bool {
 
 /// Whether `series` materializes each occurrence with the occurrence date written to
 /// the item's `due_date` (and `has_due_time`) instead of `scheduled_date` — see
-/// `get_or_materialize_occurrence`. docs/series-sub-items-plan.md decision 5 retired the
-/// old `basis: "DUE_DATE"` toggle this used to read (`validate_series_basis` now rejects
-/// it outright): a Task series always materializes onto `due_date` now, an Event series
-/// always onto `scheduled_date`, so this is simply `item_type == Task`. Kept as its own
-/// named function (rather than inlined at each call site) since it's also used to decide
-/// a still-*virtual* occurrence's display, not just an actually-materializing one.
+/// `ItemSeries::basis`'s doc comment and `get_or_materialize_occurrence`. Orthogonal to
+/// `is_completion_basis`: this only changes which field a materialized occurrence's date
+/// lands on, not how the cursor advances (a due-date-basis series still advances on the
+/// fixed schedule, same as the default).
 pub fn is_due_date_basis(series: &ItemSeries) -> bool {
-    series.item_type == ItemKind::Task
+    series.basis.as_deref() == Some("DUE_DATE")
 }
 
 /// Stage 2 of docs/assignment-rotation-plan.md: index of `occurrence_date` within
@@ -570,21 +483,10 @@ pub(crate) async fn resolve_occurrence_assignee(
     if rotation.is_empty() {
         return Ok(None);
     }
-    // docs/series-sub-items-plan.md: a rotating child series has no cadence of its own
-    // to index against — its rotation still tracks the parent's cycle (recurrence_source).
-    let target = recurrence_source(series_repo, series).await?;
-    let rule = recurrence::parse(
-        target
-            .recurrence
-            .as_deref()
-            .ok_or_else(|| ItemError::Internal("root series missing recurrence".to_string()))?,
-    )
-    .map_err(ItemError::Invalid)?;
+    let rule = recurrence::parse(&series.recurrence).map_err(ItemError::Invalid)?;
     let index = occurrence_index(
         &rule,
-        target
-            .anchor_date
-            .expect("recurrence_source always returns a root series, which has an anchor_date"),
+        series.anchor_date,
         occurrence_date,
         tz_offset_minutes,
     );
@@ -607,8 +509,8 @@ pub async fn current_series_assignee(
     if series.item_type != ItemKind::Task || series.assigned_to_user_id.is_some() {
         return Ok(series.assigned_to_user_id.clone());
     }
-    let occurrence_date =
-        resolve_current_occurrence_date(series_repo, series, tz_offset_minutes).await?;
+    let rule = recurrence::parse(&series.recurrence).map_err(ItemError::Invalid)?;
+    let occurrence_date = current_occurrence_date(series, &rule, tz_offset_minutes);
     resolve_occurrence_assignee(series_repo, series, occurrence_date, tz_offset_minutes).await
 }
 
@@ -648,9 +550,7 @@ pub async fn record_task_completion(
 ) -> Result<(), ItemError> {
     if let Some(occurrence) = series_repo.find_occurrence_by_item_id(item_id).await? {
         let series = series_repo.get_series(&occurrence.series_id).await?;
-        // docs/series-sub-items-plan.md: a child series has no cursor to advance
-        // (decision 2) — see `require_current_occurrence`'s doc comment.
-        if series.item_type == ItemKind::Task && series.parent_series_id.is_none() {
+        if series.item_type == ItemKind::Task {
             let cursor_value = cursor_value_for_settlement(&series, occurrence.occurrence_date);
             series_repo
                 .advance_cursor(&occurrence.series_id, cursor_value)
@@ -678,18 +578,13 @@ pub async fn record_task_uncompletion(
 ) -> Result<(), ItemError> {
     if let Some(occurrence) = series_repo.find_occurrence_by_item_id(item_id).await? {
         let series = series_repo.get_series(&occurrence.series_id).await?;
-        // docs/series-sub-items-plan.md: a child series has no cursor to restore
-        // (decision 2) — see `require_current_occurrence`'s doc comment.
-        if series.item_type == ItemKind::Task && series.parent_series_id.is_none() {
-            if Some(occurrence.occurrence_date) == series.anchor_date {
+        if series.item_type == ItemKind::Task {
+            if occurrence.occurrence_date == series.anchor_date {
                 series_repo
                     .clear_cursor(&series.id, occurrence.occurrence_date)
                     .await?;
             } else {
-                let rule = recurrence::parse(series.recurrence.as_deref().ok_or_else(|| {
-                    ItemError::Internal("root task series missing recurrence".to_string())
-                })?)
-                .map_err(ItemError::Invalid)?;
+                let rule = recurrence::parse(&series.recurrence).map_err(ItemError::Invalid)?;
                 let previous =
                     recurrence::retreat_once(&rule, occurrence.occurrence_date, tz_offset_minutes);
                 series_repo.retreat_cursor(&series.id, previous).await?;
@@ -719,48 +614,8 @@ pub fn current_occurrence_date(
 ) -> DateTime<Utc> {
     match series.cursor_date {
         Some(cursor) => recurrence::advance_once(rule, cursor, tz_offset_minutes),
-        None => series.anchor_date.expect(
-            "current_occurrence_date is only ever called with a root series, which \
-             validate_series_recurrence_required guarantees has an anchor_date",
-        ),
+        None => series.anchor_date,
     }
-}
-
-/// docs/series-sub-items-plan.md: the series whose recurrence rule/anchor actually
-/// govern cadence — `series` itself for a root series, or its parent for a child
-/// (decision 2: a child has no cadence of its own, see `ItemSeries::recurrence`'s doc
-/// comment). Every caller that needs to parse a series' `recurrence`/read its
-/// `anchor_date` to compute an occurrence date goes through this first, rather than
-/// reading `series.recurrence`/`series.anchor_date` directly, so it works the same way
-/// whether `series` is a root or a child.
-async fn recurrence_source(
-    series_repo: &Arc<dyn ItemSeriesRepo>,
-    series: &ItemSeries,
-) -> Result<ItemSeries, ItemError> {
-    match &series.parent_series_id {
-        Some(parent_id) => Ok(series_repo.get_series(parent_id).await?),
-        None => Ok(series.clone()),
-    }
-}
-
-/// docs/series-sub-items-plan.md: resolves "the current occurrence date" for any
-/// series, root or child. A child delegates entirely to its parent (decision 2) — one
-/// level of recursion, never more (decision 3, so no loop-guard needed beyond what
-/// `validate_series_parent` already enforces at write time).
-pub async fn resolve_current_occurrence_date(
-    series_repo: &Arc<dyn ItemSeriesRepo>,
-    series: &ItemSeries,
-    tz_offset_minutes: i32,
-) -> Result<DateTime<Utc>, ItemError> {
-    let target = recurrence_source(series_repo, series).await?;
-    let rule = recurrence::parse(
-        target
-            .recurrence
-            .as_deref()
-            .ok_or_else(|| ItemError::Internal("root series missing recurrence".to_string()))?,
-    )
-    .map_err(ItemError::Invalid)?;
-    Ok(current_occurrence_date(&target, &rule, tz_offset_minutes))
 }
 
 /// Stage 4a's plain CRUD passthroughs, gated by project *membership* (not admin) —
@@ -773,17 +628,13 @@ pub struct CreateItemSeriesParams {
     pub name: String,
     pub description: Option<String>,
     pub event_type: Option<String>,
-    /// `None` only when `parent_series_id` is set — a child series has no cadence of
-    /// its own, see `ItemSeries::recurrence`'s doc comment. Required (and validated by
-    /// `validate_series_recurrence_required`) for a root series.
-    pub recurrence: Option<String>,
-    /// Same required-only-for-a-root-series convention as `recurrence` above.
-    pub anchor_date: Option<DateTime<Utc>>,
+    pub recurrence: String,
+    pub anchor_date: DateTime<Utc>,
     pub item_type: ItemKind,
     pub basis: Option<String>,
-    /// docs/series-sub-items-plan.md — `Some` only for a `Task`-typed series that is
-    /// itself a child of another root `Task`-typed series in the same project, one
-    /// level of nesting only, validated by `validate_series_parent`.
+    /// docs/series-sub-items-plan.md, stage 1: threaded through but not yet validated —
+    /// `validate_series_parent`/`validate_series_recurrence_required`/
+    /// `validate_series_offset` land in a later stage. Until then this is stored as-is.
     pub parent_series_id: Option<String>,
     pub due_offset_days: Option<i32>,
     pub assigned_to_user_id: Option<String>,
@@ -814,7 +665,7 @@ fn validate_series_item_type(item_type: ItemKind) -> Result<(), ItemError> {
 fn validate_series_basis(
     item_type: ItemKind,
     basis: &Option<String>,
-    recurrence: &Option<String>,
+    recurrence: &str,
 ) -> Result<(), ItemError> {
     match basis.as_deref() {
         Some("COMPLETION") => {
@@ -823,16 +674,6 @@ fn validate_series_basis(
                     "basis: COMPLETION is only valid on a TASK series".to_string(),
                 ));
             }
-            let Some(recurrence) = recurrence else {
-                // docs/series-sub-items-plan.md: a child series has no cadence of its
-                // own (decision 2) — COMPLETION-basis measures the next occurrence from
-                // actual settlement time against that cadence, which a child doesn't have.
-                return Err(ItemError::Invalid(
-                    "basis: COMPLETION requires a root series with its own recurrence — a \
-                     child series has no cadence of its own to measure from"
-                        .to_string(),
-                ));
-            };
             let rule = recurrence::parse(recurrence).map_err(ItemError::Invalid)?;
             if !matches!(
                 rule.unit,
@@ -849,96 +690,16 @@ fn validate_series_basis(
             }
             Ok(())
         }
-        Some("DUE_DATE") => Err(ItemError::Invalid(
-            "basis: DUE_DATE is no longer supported — task series always materialize onto \
-             due_date"
-                .to_string(),
-        )),
+        Some("DUE_DATE") => {
+            if item_type != ItemKind::Task {
+                return Err(ItemError::Invalid(
+                    "basis: DUE_DATE is only valid on a TASK series".to_string(),
+                ));
+            }
+            Ok(())
+        }
         _ => Ok(()),
     }
-}
-
-/// docs/series-sub-items-plan.md, decision 1/3: only a `Task`-typed series may have
-/// `parent_series_id` set (be a child); the candidate parent must exist, live in the
-/// same project, itself be a `Task`-typed series, and itself have no parent of its own
-/// (one level of nesting only). Self-reference (only reachable via `update_series`,
-/// since `own_id` is `None` on create) is rejected too.
-async fn validate_series_parent(
-    series_repo: &Arc<dyn ItemSeriesRepo>,
-    own_id: Option<&str>,
-    project_id: &str,
-    item_type: ItemKind,
-    parent_series_id: &Option<String>,
-) -> Result<(), ItemError> {
-    let Some(parent_id) = parent_series_id else {
-        return Ok(());
-    };
-    if item_type != ItemKind::Task {
-        return Err(ItemError::Invalid(
-            "only a TASK series may have a parentSeriesId".to_string(),
-        ));
-    }
-    if own_id == Some(parent_id.as_str()) {
-        return Err(ItemError::Invalid(
-            "a series cannot be its own parent".to_string(),
-        ));
-    }
-    let parent = series_repo.get_series(parent_id).await?;
-    if parent.project_id != project_id {
-        return Err(ItemError::Invalid(
-            "parentSeriesId must belong to the same project".to_string(),
-        ));
-    }
-    if parent.item_type != ItemKind::Task {
-        return Err(ItemError::Invalid(
-            "parentSeriesId must reference a TASK series".to_string(),
-        ));
-    }
-    if parent.parent_series_id.is_some() {
-        return Err(ItemError::Invalid(
-            "parentSeriesId must reference a root series — nesting is limited to one level"
-                .to_string(),
-        ));
-    }
-    Ok(())
-}
-
-/// docs/series-sub-items-plan.md, decision 2: a root series (no parent) must define its
-/// own cadence; a child series must not — its cycle is entirely inherited from its
-/// parent.
-fn validate_series_recurrence_required(
-    parent_series_id: &Option<String>,
-    recurrence: &Option<String>,
-    anchor_date: &Option<DateTime<Utc>>,
-) -> Result<(), ItemError> {
-    if parent_series_id.is_some() {
-        if recurrence.is_some() || anchor_date.is_some() {
-            return Err(ItemError::Invalid(
-                "a child series (parentSeriesId set) has no recurrence/anchorDate of its \
-                 own — it shares its parent's cycle"
-                    .to_string(),
-            ));
-        }
-    } else if recurrence.is_none() || anchor_date.is_none() {
-        return Err(ItemError::Invalid(
-            "recurrence and anchorDate are required unless parentSeriesId is set".to_string(),
-        ));
-    }
-    Ok(())
-}
-
-/// `due_offset_days` is only meaningful on a child — mirrors `Item::validate`'s own
-/// `due_offset_days`-only-on-a-child rule.
-fn validate_series_offset(
-    parent_series_id: &Option<String>,
-    due_offset_days: Option<i32>,
-) -> Result<(), ItemError> {
-    if due_offset_days.is_some() && parent_series_id.is_none() {
-        return Err(ItemError::Invalid(
-            "dueOffsetDays is only valid on a child series (parentSeriesId set)".to_string(),
-        ));
-    }
-    Ok(())
 }
 
 /// Stage 7c originally let `event_type` through on an `Event`-typed series (rejecting it
@@ -1064,20 +825,6 @@ pub async fn create_series(
     validate_series_item_type(params.item_type)?;
     validate_series_event_type(&params.event_type)?;
     validate_series_basis(params.item_type, &params.basis, &params.recurrence)?;
-    validate_series_parent(
-        series_repo,
-        None,
-        &params.project_id,
-        params.item_type,
-        &params.parent_series_id,
-    )
-    .await?;
-    validate_series_recurrence_required(
-        &params.parent_series_id,
-        &params.recurrence,
-        &params.anchor_date,
-    )?;
-    validate_series_offset(&params.parent_series_id, params.due_offset_days)?;
     let (assigned_to_user_id, rotation_user_ids, points) = resolve_series_assignment(
         projects,
         teams,
@@ -1146,43 +893,15 @@ pub async fn duplicate_series(
             .set_rotation_members(&new_series_id, &rotation)
             .await?;
     }
-    // docs/series-sub-items-plan.md: a child series is structural, not an independent
-    // artifact (see the module-level decision on delete/duplicate cascade) — duplicating
-    // a series duplicates its direct children too (one level, decision 3), re-pointed at
-    // the new parent. A no-op when `series_id` is itself a child (a child cannot itself
-    // have children, so this filter is always empty in that case).
-    let children: Vec<ItemSeries> = item_series
-        .list_series_for_project(&series.project_id)
-        .await?
-        .into_iter()
-        .filter(|s| s.parent_series_id.as_deref() == Some(series_id))
-        .collect();
-    for mut child in children {
-        let child_rotation = item_series.list_rotation_members(&child.id).await?;
-        child.parent_series_id = Some(new_series_id.clone());
-        let new_child_id = item_series.create_series(&child).await?;
-        if !child_rotation.is_empty() {
-            item_series
-                .set_rotation_members(&new_child_id, &child_rotation)
-                .await?;
-        }
-    }
     Ok(())
 }
 
-/// Orphan, not cascade, with respect to *materialized items* — deletes the series and
-/// its own `item_occurrences` rows, never touches `items`. Every already-materialized
-/// occurrence survives as a plain standalone item, matching `unlink_source_event_tasks`'s
-/// precedent for an independent dependent. See item_series.smithy's `DeleteItemSeries`
-/// doc comment. Gated by project membership, same authority level as create/update/list
-/// above (a series is project-scoped content like a template, not a role/points-authority
-/// action).
-///
-/// docs/series-sub-items-plan.md: this *does* cascade to child **series** (not
-/// materialized items) — a child series has no independent meaning without its parent
-/// (the module-level decision on delete/duplicate cascade), unlike a materialized item.
-/// Children are deleted (each un-materializing its own already-materialized occurrences
-/// the same orphan way) before the parent, one level only (decision 3).
+/// Orphan, not cascade — deletes the series and its `item_occurrences` rows only, never
+/// touches `items`. Every already-materialized occurrence survives as a plain standalone
+/// item, matching `unlink_source_event_tasks`'s precedent for an independent dependent.
+/// See item_series.smithy's `DeleteItemSeries` doc comment. Gated by project membership,
+/// same authority level as create/update/list above (a series is project-scoped content
+/// like a template, not a role/points-authority action).
 pub async fn delete_series(
     projects: &Arc<dyn ProjectRepo>,
     teams: &Arc<dyn TeamRepo>,
@@ -1192,15 +911,6 @@ pub async fn delete_series(
 ) -> Result<(), ItemError> {
     let series = series_repo.get_series(series_id).await?;
     require_project_member(projects, teams, &series.project_id, requester_user_id).await?;
-    let children: Vec<ItemSeries> = series_repo
-        .list_series_for_project(&series.project_id)
-        .await?
-        .into_iter()
-        .filter(|s| s.parent_series_id.as_deref() == Some(series_id))
-        .collect();
-    for child in children {
-        series_repo.delete_series(&child.id).await?;
-    }
     series_repo.delete_series(series_id).await?;
     Ok(())
 }
@@ -1210,13 +920,12 @@ pub struct UpdateItemSeriesParams {
     pub name: String,
     pub description: Option<String>,
     pub event_type: Option<String>,
-    /// See `CreateItemSeriesParams::recurrence`'s identical doc.
-    pub recurrence: Option<String>,
-    /// See `CreateItemSeriesParams::anchor_date`'s identical doc.
-    pub anchor_date: Option<DateTime<Utc>>,
+    pub recurrence: String,
+    pub anchor_date: DateTime<Utc>,
     pub item_type: ItemKind,
     pub basis: Option<String>,
-    /// See `CreateItemSeriesParams::parent_series_id`'s identical doc.
+    /// docs/series-sub-items-plan.md, stage 1: see `CreateItemSeriesParams`'s identical
+    /// field doc — threaded through but not yet validated.
     pub parent_series_id: Option<String>,
     pub due_offset_days: Option<i32>,
     pub assigned_to_user_id: Option<String>,
@@ -1239,20 +948,6 @@ pub async fn update_series(
     validate_series_item_type(params.item_type)?;
     validate_series_event_type(&params.event_type)?;
     validate_series_basis(params.item_type, &params.basis, &params.recurrence)?;
-    validate_series_parent(
-        series_repo,
-        Some(series_id),
-        &current.project_id,
-        params.item_type,
-        &params.parent_series_id,
-    )
-    .await?;
-    validate_series_recurrence_required(
-        &params.parent_series_id,
-        &params.recurrence,
-        &params.anchor_date,
-    )?;
-    validate_series_offset(&params.parent_series_id, params.due_offset_days)?;
     let (assigned_to_user_id, rotation_user_ids, points) = resolve_series_assignment(
         projects,
         teams,
@@ -1347,21 +1042,7 @@ pub struct ProjectOccurrence {
     pub series_name: String,
     pub item_type: ItemKind,
     pub event_type: Option<String>,
-    /// The identity/lookup key into `item_occurrences` — for a root series' occurrence
-    /// this is its own calendar date; for a child series' synthesized occurrence
-    /// (docs/series-sub-items-plan.md) this is its *parent's* cycle date, not the
-    /// child's own offset-adjusted date. Not safe to render directly once children
-    /// exist — see `display_date`.
     pub occurrence_date: DateTime<Utc>,
-    /// The date actually shown to the user, and actually written to `due_date`/
-    /// `scheduled_date` on materialization. Equal to `occurrence_date` for a root
-    /// series; for a child series it's `occurrence_date` shifted by `due_offset_days`
-    /// (`item::deadline_from_offset`'s same logic, see `get_or_materialize_occurrence`).
-    /// Every template/handler that renders an occurrence's date should read this, not
-    /// `occurrence_date` — see docs/series-sub-items-plan.md's Rendering section (Web UI
-    /// call sites are switched over in a later stage; the two are equal for a root
-    /// series either way).
-    pub display_date: DateTime<Utc>,
     pub is_current: bool,
     pub assigned_to_user_id: Option<String>,
     pub assigned_to_user_name: Option<String>,
@@ -1448,19 +1129,7 @@ pub async fn list_occurrence_states_for_project(
     let mut result = Vec::new();
     let mut names: HashMap<String, String> = HashMap::new();
     for series in &all_series {
-        // docs/series-sub-items-plan.md: a child series has no cadence of its own to
-        // predict occurrences from — it's handled by the second pass below instead,
-        // which walks the parent occurrences this loop produces.
-        if series.parent_series_id.is_some() {
-            continue;
-        }
-        let Some(recurrence_str) = series.recurrence.as_deref() else {
-            continue;
-        };
-        let Ok(rule) = recurrence::parse(recurrence_str) else {
-            continue;
-        };
-        let Some(anchor_date) = series.anchor_date else {
+        let Ok(rule) = recurrence::parse(&series.recurrence) else {
             continue;
         };
         // Stage 2 of docs/assignment-rotation-plan.md: a rotating series (no fixed
@@ -1483,7 +1152,7 @@ pub async fn list_occurrence_states_for_project(
         let root_date = if series.item_type == ItemKind::Task && is_completion_basis(series) {
             current_date
         } else {
-            anchor_date
+            series.anchor_date
         };
         let mut candidates = recurrence::occurrences_between(
             &rule,
@@ -1542,7 +1211,7 @@ pub async fn list_occurrence_states_for_project(
             let occurrence_assignee = if let Some(user_id) = &series.assigned_to_user_id {
                 Some(user_id.clone())
             } else if !rotation_members.is_empty() {
-                let index = occurrence_index(&rule, anchor_date, date, tz_offset_minutes);
+                let index = occurrence_index(&rule, series.anchor_date, date, tz_offset_minutes);
                 rotation_assignee(&rotation_members, index).cloned()
             } else {
                 None
@@ -1567,92 +1236,11 @@ pub async fn list_occurrence_states_for_project(
                 item_type: series.item_type,
                 event_type: series.event_type.clone(),
                 occurrence_date: date,
-                display_date: date,
                 is_current,
                 assigned_to_user_id: occurrence_assignee,
                 assigned_to_user_name: occurrence_assignee_name,
                 state,
                 is_due_date_basis: is_due_date_basis(series),
-            });
-        }
-    }
-
-    // docs/series-sub-items-plan.md, Rendering: a second pass over every child series,
-    // synthesizing one ProjectOccurrence per parent cycle already produced above —
-    // a child occurrence exists in lockstep with every parent cycle whether or not the
-    // parent itself has settled, so this walks `result` rather than predicting its own
-    // schedule (a child has none, decision 2).
-    for child in all_series.iter().filter(|s| s.parent_series_id.is_some()) {
-        let Some(parent_id) = &child.parent_series_id else {
-            continue;
-        };
-        let parent_cycles: Vec<(DateTime<Utc>, bool)> = result
-            .iter()
-            .filter(|o| &o.series_id == parent_id)
-            .map(|o| (o.occurrence_date, o.is_current))
-            .collect();
-        if parent_cycles.is_empty() {
-            continue;
-        }
-        let query_start = parent_cycles.iter().map(|(d, _)| *d).min().unwrap();
-        let query_end = parent_cycles.iter().map(|(d, _)| *d).max().unwrap();
-        let existing = series_repo
-            .list_occurrences_between(&child.id, query_start, query_end)
-            .await?;
-        let existing_by_ts: HashMap<i64, &ItemOccurrence> = existing
-            .iter()
-            .map(|o| (o.occurrence_date.timestamp(), o))
-            .collect();
-        for (occurrence_date, is_current) in parent_cycles {
-            let existing_occ = existing_by_ts.get(&occurrence_date.timestamp());
-            // Same past-virtual-date clamp the root loop applies — a child series is
-            // always Task-typed (validate_series_parent), so this always applies.
-            if occurrence_date < now && !is_current && existing_occ.is_none() {
-                continue;
-            }
-            let state = match existing_occ {
-                Some(occ) if occ.is_exdate => OccurrenceState::Skipped,
-                Some(occ) => OccurrenceState::Materialized {
-                    item_id: occ.item_id.clone().unwrap_or_default(),
-                },
-                None => OccurrenceState::Virtual,
-            };
-            let display_date = match child.due_offset_days {
-                Some(days) => recurrence::apply_end_of_day(
-                    occurrence_date + chrono::Duration::days(days as i64),
-                    tz_offset_minutes,
-                ),
-                None => occurrence_date,
-            };
-            let occurrence_assignee =
-                resolve_occurrence_assignee(series_repo, child, occurrence_date, tz_offset_minutes)
-                    .await?;
-            let occurrence_assignee_name = match &occurrence_assignee {
-                None => None,
-                Some(user_id) => match names.get(user_id) {
-                    Some(name) => Some(name.clone()),
-                    None => {
-                        let user = users
-                            .get(user_id)
-                            .await
-                            .map_err(|_| ItemError::Internal("error fetching user".to_string()))?;
-                        names.insert(user_id.clone(), user.first_name.clone());
-                        Some(user.first_name)
-                    }
-                },
-            };
-            result.push(ProjectOccurrence {
-                series_id: child.id.clone(),
-                series_name: child.name.clone(),
-                item_type: child.item_type,
-                event_type: child.event_type.clone(),
-                occurrence_date,
-                display_date,
-                is_current,
-                assigned_to_user_id: occurrence_assignee,
-                assigned_to_user_name: occurrence_assignee_name,
-                state,
-                is_due_date_basis: is_due_date_basis(child),
             });
         }
     }
@@ -1673,13 +1261,6 @@ mod tests {
     /// reminders as part of the `project_items::create_project_item`/`delete_project_item`
     /// funnel they delegate into — a harmless no-op stub for tests that don't care about
     /// reminder rows.
-    /// `validate_completable`'s child-completion-guard needs an `ItemRepo` — a harmless
-    /// no-op stub for tests where `list_series_for_project` returns no children, so the
-    /// per-child `get_project_item_unchecked` branch is never actually reached.
-    fn no_op_item_repo() -> Arc<dyn ItemRepo> {
-        Arc::new(MockItemRepo::new())
-    }
-
     fn no_op_reminders() -> Arc<dyn ReminderRepo> {
         let mut mock = MockReminderRepo::new();
         mock.expect_sync_auto_reminders()
@@ -1698,8 +1279,8 @@ mod tests {
             // A genuinely parseable pattern (recurrence::parse has no "every weekday" form —
             // only specific weekday names like "every monday") — most callers of this helper
             // never parse it, but Stage 9's current_occurrence_date tests do.
-            recurrence: Some("every 7 days".to_string()),
-            anchor_date: Some(DateTime::from_timestamp(1_700_000_000, 0).unwrap()),
+            recurrence: "every 7 days".to_string(),
+            anchor_date: DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
             item_type: ItemKind::Event,
             cursor_date: None,
             basis: None,
@@ -2169,7 +1750,7 @@ mod tests {
         // A fresh series' current occurrence is its own anchor_date (cursor_date: None) —
         // set the anchor to the date this test skips, so it's the current occurrence and
         // require_current_occurrence lets it through.
-        task_series.anchor_date = Some(occurrence_date());
+        task_series.anchor_date = occurrence_date();
         let mut series_mock = MockItemSeriesRepo::new();
         series_mock
             .expect_get_series()
@@ -2198,7 +1779,7 @@ mod tests {
         let mut task_series = series("p1");
         task_series.item_type = ItemKind::Task;
         task_series.basis = Some("COMPLETION".to_string());
-        task_series.anchor_date = Some(occurrence_date());
+        task_series.anchor_date = occurrence_date();
         let mut series_mock = MockItemSeriesRepo::new();
         series_mock
             .expect_get_series()
@@ -2443,7 +2024,7 @@ mod tests {
                 is_exdate: true,
             }))
         });
-        let rule = recurrence::parse(series("p1").recurrence.as_deref().unwrap()).unwrap();
+        let rule = recurrence::parse(&series("p1").recurrence).unwrap();
         let expected_previous = recurrence::retreat_once(&rule, occurrence_date(), 0);
         series_mock
             .expect_retreat_cursor()
@@ -2468,7 +2049,7 @@ mod tests {
     async fn unskip_occurrence_clears_cursor_when_unskipping_the_anchor_occurrence() {
         let mut task_series = series("p1");
         task_series.item_type = ItemKind::Task;
-        task_series.anchor_date = Some(occurrence_date());
+        task_series.anchor_date = occurrence_date();
         task_series.cursor_date = Some(occurrence_date());
         let mut series_mock = MockItemSeriesRepo::new();
         series_mock
@@ -2526,8 +2107,7 @@ mod tests {
             .returning(|_, _| Ok(None));
         let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
-        let result =
-            validate_completable(&no_op_item_repo(), &series_repo, "completed-item", 0).await;
+        let result = validate_completable(&series_repo, "completed-item", 0).await;
         assert!(matches!(result, Err(ItemError::Invalid(_))));
     }
 
@@ -2543,7 +2123,7 @@ mod tests {
         // "every 7 days" (series()'s recurrence) — anchor is exdate, one step later
         // (occurrence_date()) is the real, unsettled, completable occurrence.
         let stuck_anchor = occurrence_date() - chrono::Duration::days(7);
-        task_series.anchor_date = Some(stuck_anchor);
+        task_series.anchor_date = stuck_anchor;
         let mut series_mock = MockItemSeriesRepo::new();
         series_mock
             .expect_find_occurrence_by_item_id()
@@ -2575,12 +2155,9 @@ mod tests {
             })
             .times(1)
             .returning(|_, _| Ok(()));
-        series_mock
-            .expect_list_series_for_project()
-            .returning(|_| Ok(Vec::new()));
         let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
-        validate_completable(&no_op_item_repo(), &series_repo, "completed-item", 0)
+        validate_completable(&series_repo, "completed-item", 0)
             .await
             .expect("should self-heal past the exdate anchor and allow the next occurrence");
     }
@@ -2590,7 +2167,7 @@ mod tests {
         let mut task_series = series("p1");
         task_series.item_type = ItemKind::Task;
         // A fresh series' current occurrence is its own anchor_date.
-        task_series.anchor_date = Some(occurrence_date());
+        task_series.anchor_date = occurrence_date();
         let mut series_mock = MockItemSeriesRepo::new();
         series_mock
             .expect_find_occurrence_by_item_id()
@@ -2609,12 +2186,9 @@ mod tests {
         series_mock
             .expect_get_occurrence()
             .returning(|_, _| Ok(None));
-        series_mock
-            .expect_list_series_for_project()
-            .returning(|_| Ok(Vec::new()));
         let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
-        validate_completable(&no_op_item_repo(), &series_repo, "completed-item", 0)
+        validate_completable(&series_repo, "completed-item", 0)
             .await
             .expect("the series' own current occurrence should be completable");
     }
@@ -2637,12 +2211,9 @@ mod tests {
         series_mock
             .expect_get_series()
             .returning(|_| Ok(series("p1")));
-        series_mock
-            .expect_list_series_for_project()
-            .returning(|_| Ok(Vec::new()));
         let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
-        validate_completable(&no_op_item_repo(), &series_repo, "some-item", 0)
+        validate_completable(&series_repo, "some-item", 0)
             .await
             .expect("an Event-typed series has no current-occurrence restriction");
     }
@@ -2656,126 +2227,9 @@ mod tests {
         series_mock.expect_get_series().times(0);
         let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
-        validate_completable(&no_op_item_repo(), &series_repo, "some-task", 0)
+        validate_completable(&series_repo, "some-task", 0)
             .await
             .expect("should no-op for an item with no linked occurrence");
-    }
-
-    /// docs/series-sub-items-plan.md: completing a root series' current occurrence is
-    /// rejected while a child series' occurrence for the same cycle is materialized and
-    /// incomplete.
-    #[tokio::test]
-    async fn validate_completable_rejects_when_a_child_occurrence_is_materialized_and_incomplete() {
-        let mut task_series = series("p1");
-        task_series.item_type = ItemKind::Task;
-        // A fresh series' current occurrence is its own anchor_date.
-        task_series.anchor_date = Some(occurrence_date());
-        let mut child_series = task_series.clone();
-        child_series.id = "child1".to_string();
-        child_series.parent_series_id = Some("s1".to_string());
-        child_series.recurrence = None;
-        child_series.anchor_date = None;
-        child_series.due_offset_days = Some(-2);
-
-        let mut series_mock = MockItemSeriesRepo::new();
-        series_mock
-            .expect_find_occurrence_by_item_id()
-            .returning(|_| {
-                Ok(Some(ItemOccurrence {
-                    series_id: "s1".to_string(),
-                    occurrence_date: occurrence_date(),
-                    item_id: Some("completed-item".to_string()),
-                    is_exdate: false,
-                }))
-            });
-        series_mock
-            .expect_get_series()
-            .withf(|id: &str| id == "s1")
-            .returning(move |_| Ok(task_series.clone()));
-        series_mock
-            .expect_get_occurrence()
-            .withf(|series_id: &str, _| series_id == "s1")
-            .returning(|_, _| Ok(None));
-        series_mock
-            .expect_list_series_for_project()
-            .returning(move |_| Ok(vec![child_series.clone()]));
-        series_mock
-            .expect_get_occurrence()
-            .withf(|series_id: &str, _| series_id == "child1")
-            .returning(|_, date| {
-                Ok(Some(ItemOccurrence {
-                    series_id: "child1".to_string(),
-                    occurrence_date: date,
-                    item_id: Some("child-item".to_string()),
-                    is_exdate: false,
-                }))
-            });
-        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
-
-        let mut repo_mock = MockItemRepo::new();
-        repo_mock
-            .expect_get_by_project()
-            .withf(|_, item_id: &str| item_id == "child-item")
-            .returning(|_, _| {
-                Ok(Item {
-                    id: "child-item".to_string(),
-                    name: "Order supplies".to_string(),
-                    complete: false,
-                    ..Item::default()
-                })
-            });
-        let repo: Arc<dyn ItemRepo> = Arc::new(repo_mock);
-
-        let result = validate_completable(&repo, &series_repo, "completed-item", 0).await;
-        assert!(matches!(result, Err(ItemError::Invalid(_))));
-    }
-
-    /// The counterpart: a still-*virtual* child occurrence never blocks the parent's own
-    /// completion — forcing early materialization is exactly what this plan exists to
-    /// avoid.
-    #[tokio::test]
-    async fn validate_completable_allows_completion_when_child_occurrence_is_still_virtual() {
-        let mut task_series = series("p1");
-        task_series.item_type = ItemKind::Task;
-        task_series.anchor_date = Some(occurrence_date());
-        let mut child_series = task_series.clone();
-        child_series.id = "child1".to_string();
-        child_series.parent_series_id = Some("s1".to_string());
-        child_series.recurrence = None;
-        child_series.anchor_date = None;
-        child_series.due_offset_days = Some(-2);
-
-        let mut series_mock = MockItemSeriesRepo::new();
-        series_mock
-            .expect_find_occurrence_by_item_id()
-            .returning(|_| {
-                Ok(Some(ItemOccurrence {
-                    series_id: "s1".to_string(),
-                    occurrence_date: occurrence_date(),
-                    item_id: Some("completed-item".to_string()),
-                    is_exdate: false,
-                }))
-            });
-        series_mock
-            .expect_get_series()
-            .withf(|id: &str| id == "s1")
-            .returning(move |_| Ok(task_series.clone()));
-        series_mock
-            .expect_get_occurrence()
-            .withf(|series_id: &str, _| series_id == "s1")
-            .returning(|_, _| Ok(None));
-        series_mock
-            .expect_list_series_for_project()
-            .returning(move |_| Ok(vec![child_series.clone()]));
-        series_mock
-            .expect_get_occurrence()
-            .withf(|series_id: &str, _| series_id == "child1")
-            .returning(|_, _| Ok(None));
-        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
-
-        validate_completable(&no_op_item_repo(), &series_repo, "completed-item", 0)
-            .await
-            .expect("a still-virtual child occurrence should never block the parent");
     }
 
     #[tokio::test]
@@ -3007,7 +2461,7 @@ mod tests {
      {
         let mut task_series = series("p1");
         task_series.item_type = ItemKind::Task;
-        let current_date = task_series.anchor_date.unwrap();
+        let current_date = task_series.anchor_date;
         let mut series_mock = MockItemSeriesRepo::new();
         series_mock
             .expect_find_occurrence_by_item_id()
@@ -3144,7 +2598,7 @@ mod tests {
         task_series.item_type = ItemKind::Task;
         // occurrence_date() != task_series.anchor_date, so this isn't the
         // uncomplete-the-anchor case.
-        let rule = recurrence::parse(task_series.recurrence.as_deref().unwrap()).unwrap();
+        let rule = recurrence::parse(&task_series.recurrence).unwrap();
         let expected_previous = recurrence::retreat_once(&rule, occurrence_date(), 0);
         let mut series_mock = MockItemSeriesRepo::new();
         series_mock
@@ -3179,7 +2633,7 @@ mod tests {
     async fn record_task_uncompletion_clears_cursor_when_uncompleting_the_anchor_occurrence() {
         let mut task_series = series("p1");
         task_series.item_type = ItemKind::Task;
-        task_series.anchor_date = Some(occurrence_date());
+        task_series.anchor_date = occurrence_date();
         let mut series_mock = MockItemSeriesRepo::new();
         series_mock
             .expect_find_occurrence_by_item_id()
@@ -3252,23 +2706,23 @@ mod tests {
     #[test]
     fn current_occurrence_date_starts_at_anchor_when_cursor_is_unset() {
         let s = series("p1");
-        let rule = recurrence::parse(s.recurrence.as_deref().unwrap()).unwrap();
+        let rule = recurrence::parse(&s.recurrence).unwrap();
 
         let current = current_occurrence_date(&s, &rule, 0);
 
-        assert_eq!(current, s.anchor_date.unwrap());
+        assert_eq!(current, s.anchor_date);
     }
 
     #[test]
     fn current_occurrence_date_advances_one_step_past_the_cursor() {
         let mut s = series("p1");
-        s.recurrence = Some("every 3 days".to_string());
-        s.cursor_date = s.anchor_date;
-        let rule = recurrence::parse(s.recurrence.as_deref().unwrap()).unwrap();
+        s.recurrence = "every 3 days".to_string();
+        s.cursor_date = Some(s.anchor_date);
+        let rule = recurrence::parse(&s.recurrence).unwrap();
 
         let current = current_occurrence_date(&s, &rule, 0);
 
-        assert_eq!(current, s.anchor_date.unwrap() + chrono::Duration::days(3));
+        assert_eq!(current, s.anchor_date + chrono::Duration::days(3));
     }
 
     #[tokio::test]
@@ -3290,8 +2744,8 @@ mod tests {
             name: "Standup".to_string(),
             description: None,
             event_type: None,
-            recurrence: Some("every weekday".to_string()),
-            anchor_date: Some(occurrence_date()),
+            recurrence: "every weekday".to_string(),
+            anchor_date: occurrence_date(),
             item_type: ItemKind::Event,
             basis: None,
             parent_series_id: None,
@@ -3310,8 +2764,8 @@ mod tests {
             // validate_series_event_type) — this baseline stays valid by default; tests
             // exercising the rejection set it explicitly.
             event_type: None,
-            recurrence: Some("every friday".to_string()),
-            anchor_date: Some(occurrence_date()),
+            recurrence: "every friday".to_string(),
+            anchor_date: occurrence_date(),
             item_type: ItemKind::Event,
             basis: None,
             parent_series_id: None,
@@ -3746,12 +3200,8 @@ mod tests {
         assert!(matches!(result, Err(ItemError::Invalid(_))));
     }
 
-    /// docs/series-sub-items-plan.md decision 5: `basis: "DUE_DATE"` is retired outright,
-    /// on any series regardless of item_type — a Task series always materializes onto
-    /// due_date now (see `is_due_date_basis`/`get_or_materialize_occurrence`), so the
-    /// toggle has nothing left to opt into.
     #[tokio::test]
-    async fn create_series_rejects_due_date_basis_on_a_task_series() {
+    async fn create_series_allows_due_date_basis_on_any_recurrence_pattern_for_a_task_series() {
         let mut projects_mock = MockProjectRepo::new();
         projects_mock
             .expect_get()
@@ -3759,15 +3209,22 @@ mod tests {
         let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
         let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
         let mut series_mock = MockItemSeriesRepo::new();
-        series_mock.expect_create_series().times(0);
+        series_mock
+            .expect_create_series()
+            .withf(|s: &ItemSeries| s.basis.as_deref() == Some("DUE_DATE"))
+            .times(1)
+            .returning(|_| Ok("s1".to_string()));
         let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let mut params = create_params("p1");
         params.item_type = ItemKind::Task;
         params.event_type = None;
+        // create_params()'s default recurrence is "every weekday" — unlike COMPLETION,
+        // DUE_DATE has no "every N units" restriction (it doesn't affect cursor
+        // advancement, only which field materialization writes to).
         params.basis = Some("DUE_DATE".to_string());
         let result = create_series(&projects, &teams, &series_repo, "owner1", params).await;
-        assert!(matches!(result, Err(ItemError::Invalid(_))));
+        assert!(result.is_ok());
     }
 
     #[tokio::test]
@@ -3811,265 +3268,10 @@ mod tests {
         let mut params = create_params("p1");
         params.item_type = ItemKind::Task;
         params.event_type = None;
-        params.recurrence = Some("every 3 days".to_string());
+        params.recurrence = "every 3 days".to_string();
         params.basis = Some("COMPLETION".to_string());
         let result = create_series(&projects, &teams, &series_repo, "owner1", params).await;
         assert!(result.is_ok());
-    }
-
-    // --- docs/series-sub-items-plan.md: child series validation ---
-
-    fn root_task_series(id: &str) -> ItemSeries {
-        let mut s = series("p1");
-        s.id = id.to_string();
-        s.item_type = ItemKind::Task;
-        s
-    }
-
-    /// A valid child: TASK, parent exists, same project, parent is itself a root TASK
-    /// series — no recurrence/anchorDate/dueOffsetDays validation errors.
-    #[tokio::test]
-    async fn create_series_creates_a_valid_child_series() {
-        let mut projects_mock = MockProjectRepo::new();
-        projects_mock
-            .expect_get()
-            .returning(|_| Ok(personal_project()));
-        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
-        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
-        let mut series_mock = MockItemSeriesRepo::new();
-        series_mock
-            .expect_get_series()
-            .withf(|id: &str| id == "parent1")
-            .returning(|_| Ok(root_task_series("parent1")));
-        series_mock
-            .expect_create_series()
-            .withf(|s: &ItemSeries| {
-                s.parent_series_id.as_deref() == Some("parent1")
-                    && s.recurrence.is_none()
-                    && s.anchor_date.is_none()
-                    && s.due_offset_days == Some(-30)
-            })
-            .times(1)
-            .returning(|_| Ok("child1".to_string()));
-        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
-
-        let mut params = create_params("p1");
-        params.item_type = ItemKind::Task;
-        params.event_type = None;
-        params.recurrence = None;
-        params.anchor_date = None;
-        params.parent_series_id = Some("parent1".to_string());
-        params.due_offset_days = Some(-30);
-        let result = create_series(&projects, &teams, &series_repo, "owner1", params).await;
-        assert!(result.is_ok(), "{result:?}");
-    }
-
-    #[tokio::test]
-    async fn create_series_rejects_parent_series_id_on_an_event_series() {
-        let mut projects_mock = MockProjectRepo::new();
-        projects_mock
-            .expect_get()
-            .returning(|_| Ok(personal_project()));
-        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
-        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
-        let mut series_mock = MockItemSeriesRepo::new();
-        series_mock.expect_create_series().times(0);
-        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
-
-        let mut params = create_params("p1");
-        params.item_type = ItemKind::Event;
-        params.parent_series_id = Some("parent1".to_string());
-        let result = create_series(&projects, &teams, &series_repo, "owner1", params).await;
-        assert!(matches!(result, Err(ItemError::Invalid(_))));
-    }
-
-    #[tokio::test]
-    async fn create_series_rejects_a_parent_series_id_that_does_not_exist() {
-        let mut projects_mock = MockProjectRepo::new();
-        projects_mock
-            .expect_get()
-            .returning(|_| Ok(personal_project()));
-        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
-        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
-        let mut series_mock = MockItemSeriesRepo::new();
-        series_mock
-            .expect_get_series()
-            .returning(|_| Err(RepoError::NotFound));
-        series_mock.expect_create_series().times(0);
-        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
-
-        let mut params = create_params("p1");
-        params.item_type = ItemKind::Task;
-        params.event_type = None;
-        params.recurrence = None;
-        params.anchor_date = None;
-        params.parent_series_id = Some("bogus".to_string());
-        let result = create_series(&projects, &teams, &series_repo, "owner1", params).await;
-        assert!(matches!(result, Err(ItemError::NotFound)));
-    }
-
-    #[tokio::test]
-    async fn create_series_rejects_a_parent_series_id_from_another_project() {
-        let mut projects_mock = MockProjectRepo::new();
-        projects_mock
-            .expect_get()
-            .returning(|_| Ok(personal_project()));
-        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
-        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
-        let mut series_mock = MockItemSeriesRepo::new();
-        series_mock
-            .expect_get_series()
-            .returning(|_| Ok(root_task_series("parent1")));
-        series_mock.expect_create_series().times(0);
-        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
-
-        let mut params = create_params("p2");
-        params.item_type = ItemKind::Task;
-        params.event_type = None;
-        params.recurrence = None;
-        params.anchor_date = None;
-        params.parent_series_id = Some("parent1".to_string());
-        let result = create_series(&projects, &teams, &series_repo, "owner1", params).await;
-        assert!(matches!(result, Err(ItemError::Invalid(_))));
-    }
-
-    #[tokio::test]
-    async fn create_series_rejects_an_event_typed_parent_series() {
-        let mut projects_mock = MockProjectRepo::new();
-        projects_mock
-            .expect_get()
-            .returning(|_| Ok(personal_project()));
-        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
-        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
-        let mut series_mock = MockItemSeriesRepo::new();
-        series_mock
-            .expect_get_series()
-            // series("p1") defaults to ItemKind::Event.
-            .returning(|_| Ok(series("p1")));
-        series_mock.expect_create_series().times(0);
-        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
-
-        let mut params = create_params("p1");
-        params.item_type = ItemKind::Task;
-        params.event_type = None;
-        params.recurrence = None;
-        params.anchor_date = None;
-        params.parent_series_id = Some("s1".to_string());
-        let result = create_series(&projects, &teams, &series_repo, "owner1", params).await;
-        assert!(matches!(result, Err(ItemError::Invalid(_))));
-    }
-
-    /// Decision 3: one level of nesting only — a series that itself has a parent can't
-    /// be used as someone else's parent.
-    #[tokio::test]
-    async fn create_series_rejects_a_parent_series_id_that_is_itself_a_child() {
-        let mut projects_mock = MockProjectRepo::new();
-        projects_mock
-            .expect_get()
-            .returning(|_| Ok(personal_project()));
-        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
-        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
-        let mut series_mock = MockItemSeriesRepo::new();
-        series_mock.expect_get_series().returning(|_| {
-            let mut grandparent_child = root_task_series("parent1");
-            grandparent_child.parent_series_id = Some("root1".to_string());
-            Ok(grandparent_child)
-        });
-        series_mock.expect_create_series().times(0);
-        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
-
-        let mut params = create_params("p1");
-        params.item_type = ItemKind::Task;
-        params.event_type = None;
-        params.recurrence = None;
-        params.anchor_date = None;
-        params.parent_series_id = Some("parent1".to_string());
-        let result = create_series(&projects, &teams, &series_repo, "owner1", params).await;
-        assert!(matches!(result, Err(ItemError::Invalid(_))));
-    }
-
-    #[tokio::test]
-    async fn create_series_rejects_a_root_series_missing_recurrence() {
-        let mut projects_mock = MockProjectRepo::new();
-        projects_mock
-            .expect_get()
-            .returning(|_| Ok(personal_project()));
-        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
-        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
-        let mut series_mock = MockItemSeriesRepo::new();
-        series_mock.expect_create_series().times(0);
-        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
-
-        let mut params = create_params("p1");
-        params.recurrence = None;
-        let result = create_series(&projects, &teams, &series_repo, "owner1", params).await;
-        assert!(matches!(result, Err(ItemError::Invalid(_))));
-    }
-
-    #[tokio::test]
-    async fn create_series_rejects_a_child_series_with_its_own_recurrence() {
-        let mut projects_mock = MockProjectRepo::new();
-        projects_mock
-            .expect_get()
-            .returning(|_| Ok(personal_project()));
-        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
-        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
-        let mut series_mock = MockItemSeriesRepo::new();
-        series_mock
-            .expect_get_series()
-            .returning(|_| Ok(root_task_series("parent1")));
-        series_mock.expect_create_series().times(0);
-        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
-
-        let mut params = create_params("p1");
-        params.item_type = ItemKind::Task;
-        params.event_type = None;
-        params.parent_series_id = Some("parent1".to_string());
-        // Deliberately left recurrence/anchor_date at create_params()'s root defaults —
-        // a child must not carry its own.
-        let result = create_series(&projects, &teams, &series_repo, "owner1", params).await;
-        assert!(matches!(result, Err(ItemError::Invalid(_))));
-    }
-
-    #[tokio::test]
-    async fn create_series_rejects_due_offset_days_without_a_parent_series_id() {
-        let mut projects_mock = MockProjectRepo::new();
-        projects_mock
-            .expect_get()
-            .returning(|_| Ok(personal_project()));
-        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
-        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
-        let mut series_mock = MockItemSeriesRepo::new();
-        series_mock.expect_create_series().times(0);
-        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
-
-        let mut params = create_params("p1");
-        params.due_offset_days = Some(-7);
-        let result = create_series(&projects, &teams, &series_repo, "owner1", params).await;
-        assert!(matches!(result, Err(ItemError::Invalid(_))));
-    }
-
-    #[tokio::test]
-    async fn update_series_rejects_a_series_being_its_own_parent() {
-        let mut series_mock = MockItemSeriesRepo::new();
-        series_mock
-            .expect_get_series()
-            .returning(|_| Ok(root_task_series("s1")));
-        series_mock.expect_update_series().times(0);
-        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
-
-        let mut projects_mock = MockProjectRepo::new();
-        projects_mock
-            .expect_get()
-            .returning(|_| Ok(personal_project()));
-        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
-        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
-
-        let mut params = update_params();
-        params.item_type = ItemKind::Task;
-        params.parent_series_id = Some("s1".to_string());
-        let result = update_series(&projects, &teams, &series_repo, "owner1", "s1", params).await;
-        assert!(matches!(result, Err(ItemError::Invalid(_))));
     }
 
     #[tokio::test]
@@ -4184,9 +3386,6 @@ mod tests {
             .expect_get_series()
             .returning(|_| Ok(series("p1")));
         series_mock
-            .expect_list_series_for_project()
-            .returning(|_| Ok(Vec::new()));
-        series_mock
             .expect_delete_series()
             .withf(|series_id: &str| series_id == "s1")
             .times(1)
@@ -4203,46 +3402,6 @@ mod tests {
         delete_series(&projects, &teams, &series_repo, "owner1", "s1")
             .await
             .expect("owner should be able to delete the series");
-    }
-
-    /// docs/series-sub-items-plan.md: a child series is structural, not an independent
-    /// artifact — deleting a root series cascades to delete its direct children too,
-    /// before deleting the parent itself.
-    #[tokio::test]
-    async fn delete_series_cascades_to_child_series() {
-        let mut series_mock = MockItemSeriesRepo::new();
-        series_mock
-            .expect_get_series()
-            .returning(|_| Ok(series("p1")));
-        series_mock.expect_list_series_for_project().returning(|_| {
-            let mut child = series("p1");
-            child.id = "child1".to_string();
-            child.item_type = ItemKind::Task;
-            child.parent_series_id = Some("s1".to_string());
-            Ok(vec![child])
-        });
-        series_mock
-            .expect_delete_series()
-            .withf(|series_id: &str| series_id == "child1")
-            .times(1)
-            .returning(|_| Ok(()));
-        series_mock
-            .expect_delete_series()
-            .withf(|series_id: &str| series_id == "s1")
-            .times(1)
-            .returning(|_| Ok(()));
-        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
-
-        let mut projects_mock = MockProjectRepo::new();
-        projects_mock
-            .expect_get()
-            .returning(|_| Ok(personal_project()));
-        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
-        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
-
-        delete_series(&projects, &teams, &series_repo, "owner1", "s1")
-            .await
-            .expect("should delete the child series before the parent");
     }
 
     #[tokio::test]
@@ -4395,8 +3554,8 @@ mod tests {
             name: name.to_string(),
             description: None,
             event_type: None,
-            recurrence: Some(recurrence.to_string()),
-            anchor_date: Some(anchor),
+            recurrence: recurrence.to_string(),
+            anchor_date: anchor,
             item_type: ItemKind::Event,
             cursor_date: None,
             basis: None,
@@ -4474,66 +3633,6 @@ mod tests {
             anchor() + chrono::Duration::days(14)
         );
         assert_eq!(result[2].state, OccurrenceState::Virtual);
-        assert_eq!(result[2].display_date, result[2].occurrence_date);
-    }
-
-    /// docs/series-sub-items-plan.md, Rendering: a child series' occurrence exists in
-    /// lockstep with every parent cycle produced by the root pass — synthesized with the
-    /// parent's own `occurrence_date` as its lookup identity and its own offset-shifted
-    /// `display_date`.
-    #[tokio::test]
-    async fn list_occurrence_states_synthesizes_a_child_occurrence_per_parent_cycle() {
-        let parent = {
-            let mut s = series_ex("parent1", "p1", "Standup", "every 7 days", anchor());
-            s.item_type = ItemKind::Task;
-            s
-        };
-        let child = {
-            let mut s = series_ex("child1", "p1", "Order supplies", "every 7 days", anchor());
-            s.item_type = ItemKind::Task;
-            s.recurrence = None;
-            s.anchor_date = None;
-            s.parent_series_id = Some("parent1".to_string());
-            s.due_offset_days = Some(-2);
-            s
-        };
-        let mut series_mock = MockItemSeriesRepo::new();
-        series_mock
-            .expect_list_series_for_project()
-            .returning(move |_| Ok(vec![parent.clone(), child.clone()]));
-        series_mock
-            .expect_list_rotation_members()
-            .returning(|_| Ok(Vec::new()));
-        series_mock
-            .expect_list_occurrences_between()
-            .returning(|_, _, _| Ok(Vec::new()));
-        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
-        let users: Arc<dyn UserRepo> = Arc::new(MockUserRepo::new());
-
-        let range_start = anchor() - chrono::Duration::days(1);
-        let range_end = anchor() + chrono::Duration::days(1);
-        let result = list_occurrence_states_for_project(
-            &series_repo,
-            &users,
-            "p1",
-            range_start,
-            range_end,
-            0,
-        )
-        .await
-        .unwrap();
-
-        let child_rows: Vec<_> = result.iter().filter(|o| o.series_id == "child1").collect();
-        assert_eq!(child_rows.len(), 1);
-        // occurrence_date (lookup identity) matches the parent's own cycle date exactly.
-        assert_eq!(child_rows[0].occurrence_date, anchor());
-        // display_date is shifted by due_offset_days (-2 days).
-        assert_eq!(
-            child_rows[0].display_date.date_naive(),
-            (anchor() - chrono::Duration::days(2)).date_naive()
-        );
-        assert_eq!(child_rows[0].state, OccurrenceState::Virtual);
-        assert!(child_rows[0].is_current);
     }
 
     #[tokio::test]
@@ -4633,7 +3732,7 @@ mod tests {
         task_series.item_type = ItemKind::Task;
         // Third occurrence (index 2) after the anchor, on a two-person rotation —
         // 2 % 2 == 0, so it's the first member's ("alice") turn again.
-        let occurrence = task_series.anchor_date.unwrap() + chrono::Duration::days(14);
+        let occurrence = task_series.anchor_date + chrono::Duration::days(14);
         let mut series_mock = MockItemSeriesRepo::new();
         series_mock
             .expect_get_series()

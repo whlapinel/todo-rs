@@ -310,7 +310,7 @@ pub(crate) async fn render_series_occurrence_detail_page(
         Some(team_id) => names_for(teams, team_id, &auth_user.user_id).await?,
         None => HashMap::new(),
     };
-    let is_current = current_occurrence_is(item_series, series, occurrence_date, tz).await?;
+    let is_current = current_occurrence_is(series, occurrence_date, tz)?;
     // Stage 4 of docs/assignment-rotation-plan.md: this occurrence's own resolved
     // assignee (fixed, or this calendar position's rotation member) — not the series'
     // raw `assigned_to_user_id`, which is `None` for a rotating series.
@@ -415,19 +415,14 @@ pub(crate) async fn render_series_occurrence_edit_page(
 /// (rather than exposed from that module) since it's purely a display concern on this page,
 /// not a mutation gate. `Event`-typed series have no cursor/current concept, so always
 /// `false` there — this is only ever called from the Task-flavored render path above anyway.
-async fn current_occurrence_is(
-    series_repo: &Arc<dyn ItemSeriesRepo>,
+fn current_occurrence_is(
     series: &crate::domain::item_series::ItemSeries,
     occurrence_date: DateTime<Utc>,
     tz_offset_minutes: i32,
 ) -> Result<bool, ItemError> {
+    let rule = crate::domain::recurrence::parse(&series.recurrence).map_err(ItemError::Invalid)?;
     Ok(
-        item_series_service::resolve_current_occurrence_date(
-            series_repo,
-            series,
-            tz_offset_minutes,
-        )
-        .await?
+        item_series_service::current_occurrence_date(series, &rule, tz_offset_minutes)
             == occurrence_date,
     )
 }

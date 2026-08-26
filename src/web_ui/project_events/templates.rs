@@ -656,8 +656,8 @@ mod tests {
             name: "Standup".to_string(),
             description: None,
             event_type: None,
-            recurrence: Some("every 7 days".to_string()),
-            anchor_date: Some(chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap()),
+            recurrence: "every 7 days".to_string(),
+            anchor_date: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
             item_type: crate::domain::item::ItemKind::Event,
             cursor_date: None,
             basis: None,
@@ -674,7 +674,7 @@ mod tests {
 
         let view = ProjectEventSeriesOccurrenceView::from_series(
             &series,
-            series.anchor_date.unwrap(),
+            series.anchor_date,
             "p1",
             false,
             0,
