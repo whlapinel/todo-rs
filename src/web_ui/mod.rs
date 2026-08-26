@@ -87,6 +87,38 @@ pub fn to_local(
     dt - chrono::Duration::minutes(tz_offset_minutes as i64)
 }
 
+fn display_date_part(date: chrono::NaiveDate) -> String {
+    use chrono::Datelike;
+    if date.year() == chrono::Utc::now().year() {
+        date.format("%a %-d %b").to_string()
+    } else {
+        date.format("%a %-d %b %Y").to_string()
+    }
+}
+
+/// The app-wide human-readable date display format (docs/issues_and_features.md's "Change ALL
+/// date displays" item): `"Thu 27 Aug"`, or `"Thu 27 Aug 2027"` when `local`'s year isn't the
+/// current one. This is the single place that format lives — every read-only date shown to a
+/// user (row dates, detail views, activity feed, series anchors, sync timestamps, calendar
+/// drawer titles) should go through this or `format_display_naive_date`, never format a date
+/// for display with an ad hoc `.format(...)` call of its own. Editable `<input type="date">`/
+/// `<input type="time">` values are a different concern (those need literal `%Y-%m-%d`/`%H:%M`
+/// for the browser) and must keep formatting those directly, not through this function.
+pub fn format_display_date(local: chrono::DateTime<chrono::Utc>, with_time: bool) -> String {
+    let date_part = display_date_part(local.date_naive());
+    if with_time {
+        format!("{date_part}, {}", local.format("%-I:%M %p"))
+    } else {
+        date_part
+    }
+}
+
+/// `format_display_date`'s counterpart for a bare `NaiveDate` (no time-of-day component at
+/// all) — e.g. the calendar day-drawer title.
+pub fn format_display_naive_date(date: chrono::NaiveDate) -> String {
+    display_date_part(date)
+}
+
 /// Resolves which project an all-projects "+ New" dialog should target — Stage 3 of
 /// `docs/dialog-item-forms-plan.md`. The query-string `project` param if given and it's one of
 /// the requester's own projects, else `users.personal_project_id` (Stage 0) if set and still

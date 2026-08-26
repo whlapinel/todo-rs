@@ -1,5 +1,5 @@
 use crate::domain::item_series::ItemSeries;
-use crate::web_ui::to_local;
+use crate::web_ui::{format_display_date, to_local};
 use askama::Template;
 
 pub struct ProjectItemSeriesRow;
@@ -17,9 +17,7 @@ impl ProjectItemSeriesRow {
             name: s.name.clone(),
             recurrence: s.recurrence.clone(),
             event_type: s.event_type.clone(),
-            anchor_date_label: to_local(s.anchor_date, tz)
-                .format("%Y-%m-%d %H:%M")
-                .to_string(),
+            anchor_date_label: format_display_date(to_local(s.anchor_date, tz), true),
             item_type_label: s.item_type.label(),
             item_type_badge_color: s.item_type.badge_color(),
             template_name,

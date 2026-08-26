@@ -11,7 +11,7 @@ use crate::web_ui::TzOffset;
 use crate::web_ui::nav::{self, ActiveContext, SidebarSection};
 use crate::web_ui::project_events;
 use crate::web_ui::project_events::templates::ProjectEventRow;
-use crate::web_ui::to_local;
+use crate::web_ui::{format_display_date, to_local};
 use askama::Template;
 use axum::extract::{Extension, Query};
 use axum::response::Html;
@@ -60,7 +60,7 @@ impl AllProjectsEventVirtualRow {
             occurrence_ts: occ.occurrence_date.timestamp(),
             project_name: project_name.to_string(),
             name: occ.series_name.clone(),
-            date_label: local.format("%Y-%m-%d %H:%M").to_string(),
+            date_label: format_display_date(local, true),
             materialize_url: occ.materialize_url(project_id),
             skip_url: format!("{}?view=all-events", occ.skip_url(project_id)),
             is_skipped: occ.is_skipped(),

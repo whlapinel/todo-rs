@@ -1,5 +1,5 @@
 use super::nav::{self, ActiveContext, SidebarSection};
-use super::{TzOffset, to_local};
+use super::{TzOffset, format_display_date, to_local};
 use crate::auth::AuthUser;
 use crate::domain::calendar_subscription::CalendarSubscription;
 use crate::service::calendar_subscriptions as calendar_subscriptions_service;
@@ -56,7 +56,7 @@ struct CalendarSubscriptionRow {
 impl CalendarSubscriptionRow {
     fn from_subscription(sub: &CalendarSubscription, is_admin: bool, tz: i32) -> Self {
         let last_synced_label = match sub.last_synced_at {
-            Some(t) => format!("Synced {}", to_local(t, tz).format("%Y-%m-%d %H:%M")),
+            Some(t) => format!("Synced {}", format_display_date(to_local(t, tz), true)),
             None => "Not synced yet".to_string(),
         };
         Self {

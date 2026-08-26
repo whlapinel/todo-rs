@@ -1,5 +1,5 @@
 use super::nav::{self, ActiveContext, SidebarSection};
-use super::to_local;
+use super::{format_display_date, to_local};
 use crate::auth::AuthUser;
 use crate::domain::item::{Item, ItemKind};
 use crate::service::error::ItemError;
@@ -54,7 +54,7 @@ impl AssignedItemRow {
             complete: item.complete,
             due_date: item
                 .due_date()
-                .map(|d| to_local(d, tz).format("%Y-%m-%d %H:%M").to_string()),
+                .map(|d| format_display_date(to_local(d, tz), true)),
             overdue: item.is_overdue(Utc::now()),
             toggle_complete_json: (!item.complete).to_string(),
         })

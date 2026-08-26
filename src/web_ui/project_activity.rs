@@ -1,5 +1,5 @@
 use super::nav::{self, ActiveContext, SidebarSection};
-use super::{TzOffset, to_local};
+use super::{TzOffset, format_display_date, to_local};
 use crate::auth::AuthUser;
 use crate::domain::activity_log::ActivityLogEntry;
 use crate::service::activity_log as activity_log_service;
@@ -71,9 +71,7 @@ impl ProjectActivityRow {
             item_name: entry.item_name.clone(),
             points_delta: entry.points_delta,
             reversed: entry.reversed,
-            created_at: to_local(entry.created_at, tz)
-                .format("%Y-%m-%d %H:%M")
-                .to_string(),
+            created_at: format_display_date(to_local(entry.created_at, tz), true),
             can_undo: !entry.reversed && entry.user_id == viewer_user_id,
         }
     }

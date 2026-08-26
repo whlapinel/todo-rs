@@ -1,7 +1,7 @@
 use super::nav::{self, ActiveContext, SidebarSection};
 use super::project_events::templates::ProjectEventRow;
 use super::project_tasks::templates::ProjectTaskRow;
-use super::{TzOffset, to_local};
+use super::{TzOffset, format_display_date, format_display_naive_date, to_local};
 use crate::auth::AuthUser;
 use crate::domain::item::{Item, ItemKind};
 use crate::service::error::ItemError;
@@ -277,7 +277,7 @@ impl ProjectCalendarVirtualRow {
             series_id: occ.series_id.clone(),
             occurrence_ts: occ.occurrence_date.timestamp(),
             name: occ.series_name.clone(),
-            date_label: local.format("%Y-%m-%d %H:%M").to_string(),
+            date_label: format_display_date(local, true),
             date_kind_label: if occ.item_type == ItemKind::Event {
                 "Scheduled"
             } else {
@@ -513,7 +513,7 @@ fn render_day_drawer(
             date_iso: d.format("%Y-%m-%d").to_string(),
             date_year: d.year(),
             date_month: d.month(),
-            selected_date_label: day_panel_label(d),
+            selected_date_label: format_display_naive_date(d),
             prev_date: prev.format("%Y-%m-%d").to_string(),
             prev_year: prev.year(),
             prev_month: prev.month(),
@@ -661,15 +661,6 @@ pub struct ProjectCalendarQuery {
     r#type: Option<String>,
     /// Stage 3's assigned-to-me toggle — `None`/absent = mine, present = everyone's.
     assigned_to_any: Option<String>,
-}
-
-/// See `main_calendar::day_panel_label`'s identical rationale. Shortened from
-/// `"%A, %B %d, %Y"` (e.g. "Saturday, August 21, 2026") to `"%a, %-d %b"` (e.g. "Sat, 21 Aug")
-/// per docs/issues_and_features.md, so the day-drawer title fits on mobile without wrapping or
-/// forcing the fixed-width title element (see the `#day-drawer-title` class in
-/// calendar_day_panel.html) wider than necessary.
-fn day_panel_label(date: NaiveDate) -> String {
-    date.format("%a, %-d %b").to_string()
 }
 
 pub async fn project_calendar_page(

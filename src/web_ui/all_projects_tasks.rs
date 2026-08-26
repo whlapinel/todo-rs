@@ -14,7 +14,7 @@ use crate::web_ui::list_filters::{ListFilterQuery, ListFilters};
 use crate::web_ui::nav::{self, ActiveContext, SidebarSection};
 use crate::web_ui::project_tasks::names_for;
 use crate::web_ui::project_tasks::templates::ProjectTaskRow;
-use crate::web_ui::to_local;
+use crate::web_ui::{format_display_date, to_local};
 use askama::Template;
 use axum::extract::{Extension, Form, Path, Query};
 use axum::response::Html;
@@ -82,7 +82,7 @@ impl AllProjectsTaskVirtualRow {
             occurrence_ts: occ.occurrence_date.timestamp(),
             project_name: project_name.to_string(),
             name: occ.series_name.clone(),
-            date_label: local.format("%Y-%m-%d %H:%M").to_string(),
+            date_label: format_display_date(local, true),
             is_due_date_basis: occ.is_due_date_basis,
             overdue: occ.is_due_date_basis && occ.occurrence_date < Utc::now(),
             materialize_url: occ.materialize_url(project_id),

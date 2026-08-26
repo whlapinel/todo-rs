@@ -6,7 +6,7 @@ use crate::service::error::ItemError;
 use crate::service::item_series::ProjectOccurrence;
 use crate::storage::sqlite::ItemRepo;
 use crate::web_ui::components::row::Row;
-use crate::web_ui::to_local;
+use crate::web_ui::{format_display_date, to_local};
 use askama::Template;
 use chrono::Utc;
 
@@ -59,30 +59,16 @@ impl ProjectTaskRow {
             item_url: format!("/web/projects/{project_id}/tasks/{}", item.id),
             name: item.name.clone(),
             complete: item.complete,
-            due_date: item.due_date().map(|d| {
-                if item.has_due_time() {
-                    to_local(d, tz).format("%Y-%m-%d %H:%M").to_string()
-                } else {
-                    to_local(d, tz).format("%Y-%m-%d").to_string()
-                }
-            }),
+            due_date: item
+                .due_date()
+                .map(|d| format_display_date(to_local(d, tz), item.has_due_time())),
             overdue: item.is_overdue(Utc::now()),
-            scheduled_date: item.scheduled_date().map(|d| {
-                let local = to_local(d, tz);
-                if item.has_scheduled_time() {
-                    local.format("%Y-%m-%d %H:%M").to_string()
-                } else {
-                    local.format("%Y-%m-%d").to_string()
-                }
-            }),
-            scheduled_end_date: item.scheduled_end_date().map(|d| {
-                let local = to_local(d, tz);
-                if item.has_end_time() {
-                    local.format("%Y-%m-%d %H:%M").to_string()
-                } else {
-                    local.format("%Y-%m-%d").to_string()
-                }
-            }),
+            scheduled_date: item
+                .scheduled_date()
+                .map(|d| format_display_date(to_local(d, tz), item.has_scheduled_time())),
+            scheduled_end_date: item
+                .scheduled_end_date()
+                .map(|d| format_display_date(to_local(d, tz), item.has_end_time())),
             event_type: item.event_type(),
             expanded_row: item.due_date().is_some()
                 || item.scheduled_date().is_some()
@@ -406,7 +392,7 @@ impl ProjectTaskVirtualRow {
             series_id: occ.series_id.clone(),
             occurrence_ts: occ.occurrence_date.timestamp(),
             name: occ.series_name.clone(),
-            date_label: local.format("%Y-%m-%d %H:%M").to_string(),
+            date_label: format_display_date(local, true),
             is_due_date_basis: occ.is_due_date_basis,
             overdue: occ.is_due_date_basis && occ.occurrence_date < Utc::now(),
             materialize_url: occ.materialize_url(project_id),
@@ -580,30 +566,15 @@ impl ProjectTaskDetailView {
         linked_event: Option<(String, String)>,
         series_link: Option<(String, String)>,
     ) -> Self {
-        let due_date = item.due_date().map(|d| {
-            let local = to_local(d, tz);
-            if item.has_due_time() {
-                local.format("%Y-%m-%d %H:%M").to_string()
-            } else {
-                local.format("%Y-%m-%d").to_string()
-            }
-        });
-        let scheduled_date = item.scheduled_date().map(|d| {
-            let local = to_local(d, tz);
-            if item.has_scheduled_time() {
-                local.format("%Y-%m-%d %H:%M").to_string()
-            } else {
-                local.format("%Y-%m-%d").to_string()
-            }
-        });
-        let scheduled_end_date = item.scheduled_end_date().map(|d| {
-            let local = to_local(d, tz);
-            if item.has_end_time() {
-                local.format("%Y-%m-%d %H:%M").to_string()
-            } else {
-                local.format("%Y-%m-%d").to_string()
-            }
-        });
+        let due_date = item
+            .due_date()
+            .map(|d| format_display_date(to_local(d, tz), item.has_due_time()));
+        let scheduled_date = item
+            .scheduled_date()
+            .map(|d| format_display_date(to_local(d, tz), item.has_scheduled_time()));
+        let scheduled_end_date = item
+            .scheduled_end_date()
+            .map(|d| format_display_date(to_local(d, tz), item.has_end_time()));
         Self {
             id: item.id.clone(),
             project_id: project_id.to_string(),
@@ -681,9 +652,8 @@ impl ProjectTaskSeriesOccurrenceView {
         let occurrence_ts = occurrence_date.timestamp();
         let local = to_local(occurrence_date, tz);
         let is_due_date_basis = crate::service::item_series::is_due_date_basis(series);
-        let due_date = is_due_date_basis.then(|| local.format("%Y-%m-%d %H:%M").to_string());
-        let scheduled_date =
-            (!is_due_date_basis).then(|| local.format("%Y-%m-%d %H:%M").to_string());
+        let due_date = is_due_date_basis.then(|| format_display_date(local, true));
+        let scheduled_date = (!is_due_date_basis).then(|| format_display_date(local, true));
         Self {
             series_id: series.id.clone(),
             occurrence_ts,
