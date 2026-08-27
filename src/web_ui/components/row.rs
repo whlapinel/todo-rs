@@ -1,5 +1,29 @@
 use askama::Template;
 
+/// One "depends on" link in the "Blocked by ..." badge (`components/row.html`) — the dependency's
+/// name paired with the URL of its own detail page, so `BlockedByNames` can render it as a real
+/// anchor rather than inert text.
+pub struct BlockedByLink {
+    pub name: String,
+    pub url: String,
+}
+
+/// Renders `links` as a comma-separated run of anchors — split out into its own Askama template
+/// (rather than an inline `{% macro %}` in `row.html`) so the markup is reusable and testable on
+/// its own, and rendered once in Rust into `Row::blocked_by_links_html` rather than invoked twice
+/// from `row.html` itself. `row.html` still needs a *second*, plain-text rendering of the same
+/// names for the badge's `title` attribute (a tooltip can't contain HTML) — that one stays a
+/// plain `Row::blocked_by_label` string, precomputed via `Vec::join` rather than Askama's `join`
+/// filter, whose `Display` impl is one-shot (see git history on this file for the bug that
+/// caused: askama's `JoinFilter` drains an internal `Cell` on first render, so invoking the same
+/// `{{ ...|join(", ") }}` expression twice in one template silently rendered the second
+/// occurrence empty).
+#[derive(Template)]
+#[template(path = "components/blocked_by_names.html")]
+pub struct BlockedByNames {
+    pub links: Vec<BlockedByLink>,
+}
+
 #[derive(Template)]
 #[template(path = "components/row.html")]
 pub struct Row {
@@ -34,13 +58,13 @@ pub struct Row {
     /// other `Row` builder leaves this at its default `Vec::new()`, same convention as
     /// `type_badge`/`parent_name`/`project_name`.
     pub blocked_by_names: Vec<String>,
-    /// `blocked_by_names.join(", ")`, precomputed in Rust rather than done in the template via
-    /// Askama's `join` filter — that filter's `Display` impl is explicitly one-shot (see its
-    /// doc comment in `askama`'s source: "only produces a string once ... because the iterator
-    /// is already consumed"), and `components/row.html` needs the joined text twice (the
-    /// badge's `title` attribute and its `lg:`-visible label) which silently rendered the
-    /// second occurrence as empty until this was split out.
+    /// `blocked_by_names.join(", ")` — plain text for the badge's `title` attribute (a tooltip,
+    /// which can't render HTML). See `BlockedByNames`'s doc comment for why this is a separate
+    /// field from `blocked_by_links_html` rather than one shared expression.
     pub blocked_by_label: String,
+    /// Pre-rendered `BlockedByNames` markup (each dependency's name as an anchor to its own
+    /// detail page) shown in the badge's `lg:`-visible label. See `BlockedByNames`'s doc comment.
+    pub blocked_by_links_html: String,
     /// Display name of this item's assignee, on a team-backed project — `None` on a
     /// personal project (no assignment concept) or an unassigned team item.
     pub assignee_name: Option<String>,

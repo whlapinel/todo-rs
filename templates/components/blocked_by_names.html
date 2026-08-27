@@ -1,0 +1,1 @@
+{% for link in links %}{% if !loop.first %}, {% endif %}<a href="{{ link.url }}" hx-target="#page" hx-select="#page" hx-swap="innerHTML" class="underline hover:no-underline">{{ link.name }}</a>{% endfor %}

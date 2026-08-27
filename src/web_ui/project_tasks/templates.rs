@@ -136,6 +136,7 @@ impl ProjectTaskRow {
             // comment); every other caller of `from_item` leaves this empty.
             blocked_by_names: Vec::new(),
             blocked_by_label: String::new(),
+            blocked_by_links_html: String::new(),
         }
     }
 }

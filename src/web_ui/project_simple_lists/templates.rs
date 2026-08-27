@@ -30,6 +30,7 @@ impl ProjectSimpleItemRow {
             assignee_name: None,
             blocked_by_names: Vec::new(),
             blocked_by_label: String::new(),
+            blocked_by_links_html: String::new(),
             complete_url: None,
             edit_url: Some(format!(
                 "/web/projects/{project_id}/simple-lists/{}/edit",

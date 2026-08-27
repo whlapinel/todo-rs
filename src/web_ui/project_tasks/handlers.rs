@@ -1212,9 +1212,13 @@ pub async fn update_project_task_form(
                     let dep_map = item_dependencies
                         .list_for_items(&[updated.id.clone()])
                         .await?;
-                    row.blocked_by_names =
-                        super::blocked_by_names_for(&updated, &siblings_ref, &dep_map);
-                    row.blocked_by_label = row.blocked_by_names.join(", ");
+                    let (names, label, links_html) = super::render_blocked_by(
+                        &project_id,
+                        super::blocked_by_names_for(&updated, &siblings_ref, &dep_map),
+                    )?;
+                    row.blocked_by_names = names;
+                    row.blocked_by_label = label;
+                    row.blocked_by_links_html = links_html;
                     row.expanded_row = row.expanded_row || !row.blocked_by_names.is_empty();
                     row.render()?
                 }

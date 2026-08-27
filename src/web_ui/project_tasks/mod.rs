@@ -421,25 +421,51 @@ fn indent_class(depth: u8) -> &'static str {
     }
 }
 
-/// Names of `item`'s still-incomplete "depends on" links, for the row's "Blocked by ..." badge
-/// (`components/row.html`) — looks each dependency id up in `siblings` (dependencies are always
-/// same-parent siblings, see `service::item_dependencies`, so every dependency of an item in
-/// `siblings` is itself in `siblings`) and keeps only the ones not yet complete. `dep_map` comes
-/// from a single batched `ItemDependencyRepo::list_for_items` call across the whole sibling
-/// group, so this is just an in-memory lookup — no per-row query.
+/// (id, name) of `item`'s still-incomplete "depends on" links, for the row's "Blocked by ..."
+/// badge (`components/row.html`) — looks each dependency id up in `siblings` (dependencies are
+/// always same-parent siblings, see `service::item_dependencies`, so every dependency of an item
+/// in `siblings` is itself in `siblings`) and keeps only the ones not yet complete. `dep_map`
+/// comes from a single batched `ItemDependencyRepo::list_for_items` call across the whole sibling
+/// group, so this is just an in-memory lookup — no per-row query. Ids are carried alongside names
+/// so `render_blocked_by` can link each name to its own detail page.
 fn blocked_by_names_for(
     item: &Item,
     siblings: &[&Item],
     dep_map: &HashMap<String, Vec<String>>,
-) -> Vec<String> {
+) -> Vec<(String, String)> {
     dep_map
         .get(&item.id)
         .into_iter()
         .flatten()
         .filter_map(|dep_id| siblings.iter().find(|s| &s.id == dep_id))
         .filter(|dep| !dep.complete)
-        .map(|dep| dep.name.clone())
+        .map(|dep| (dep.id.clone(), dep.name.clone()))
         .collect()
+}
+
+/// Builds the three `Row` fields the "Blocked by ..." badge needs from `blocked_by_names_for`'s
+/// (id, name) pairs: the plain-text names (`Row::blocked_by_names`, used for the emptiness check
+/// and, joined, for the `title`-attribute label) and the pre-rendered anchor markup
+/// (`Row::blocked_by_links_html`, each name linking to its own detail page) shown in the badge's
+/// visible `lg:` label — see `components::row::BlockedByNames`'s doc comment for why the anchors
+/// are rendered through a dedicated Askama template rather than inline in `row.html`.
+fn render_blocked_by(
+    project_id: &str,
+    blocked_by: Vec<(String, String)>,
+) -> Result<(Vec<String>, String, String), ItemError> {
+    let names: Vec<String> = blocked_by.iter().map(|(_, name)| name.clone()).collect();
+    let label = names.join(", ");
+    let links_html = crate::web_ui::components::row::BlockedByNames {
+        links: blocked_by
+            .into_iter()
+            .map(|(id, name)| crate::web_ui::components::row::BlockedByLink {
+                name,
+                url: format!("/web/projects/{project_id}/tasks/{id}"),
+            })
+            .collect(),
+    }
+    .render()?;
+    Ok((names, label, links_html))
 }
 
 /// Recursively renders `parent_item_id`'s full descendant subtree as ready-to-insert `<li>`
@@ -496,8 +522,11 @@ pub(crate) async fn render_expandable_children(
             None,
         );
         row.indent_class = indent_class(depth);
-        row.blocked_by_names = blocked_by_names_for(i, &visible, &dep_map);
-        row.blocked_by_label = row.blocked_by_names.join(", ");
+        let (blocked_by_names, blocked_by_label, blocked_by_links_html) =
+            render_blocked_by(project_id, blocked_by_names_for(i, &visible, &dep_map))?;
+        row.blocked_by_names = blocked_by_names;
+        row.blocked_by_label = blocked_by_label;
+        row.blocked_by_links_html = blocked_by_links_html;
         row.expanded_row = row.expanded_row || !row.blocked_by_names.is_empty();
         if i.has_children {
             row.children_html = Some(
@@ -631,8 +660,11 @@ pub(crate) async fn render_rows_with_virtual(
             confirmation,
             dismiss_after_ms,
         );
-        row.blocked_by_names = blocked_by_names_for(i, &visible, &dep_map);
-        row.blocked_by_label = row.blocked_by_names.join(", ");
+        let (blocked_by_names, blocked_by_label, blocked_by_links_html) =
+            render_blocked_by(project_id, blocked_by_names_for(i, &visible, &dep_map))?;
+        row.blocked_by_names = blocked_by_names;
+        row.blocked_by_label = blocked_by_label;
+        row.blocked_by_links_html = blocked_by_links_html;
         row.expanded_row = row.expanded_row || !row.blocked_by_names.is_empty();
         // In-place expansion (see `Row::children_html`'s doc comment) — the flat list is the
         // one screen that opts a `ProjectTaskRow` into this, eagerly inlining the whole
@@ -856,7 +888,10 @@ mod tests {
 
         assert_eq!(
             blocked_by_names_for(&c, &siblings, &dep_map),
-            vec!["Design".to_string(), "Build".to_string()]
+            vec![
+                ("a".to_string(), "Design".to_string()),
+                ("b".to_string(), "Build".to_string())
+            ]
         );
     }
 
