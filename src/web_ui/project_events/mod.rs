@@ -244,6 +244,7 @@ pub(crate) fn update_params_from_form(
         source_event_id: None,
         timezone_offset_minutes: Some(tz),
         points: None,
+        depends_on_item_ids: None,
     }
 }
 

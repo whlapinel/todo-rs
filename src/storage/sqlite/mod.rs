@@ -1,5 +1,6 @@
 pub mod activity_log;
 pub mod calendar_subscriptions;
+pub mod item_dependencies;
 pub mod item_series;
 pub mod items;
 pub mod projects;
@@ -287,6 +288,29 @@ pub trait ReminderRepo: Send + Sync {
     /// Deletes every reminder (auto or custom) for `item_id` — called on item delete.
     async fn delete_for_item(&self, item_id: &str) -> Result<(), RepoError>;
     async fn list_for_item(&self, item_id: &str) -> Result<Vec<Reminder>, RepoError>;
+}
+
+/// "Depends on" (docs/issues_and_features.md) — a many-to-many `item_id -> depends_on_item_id`
+/// relation, kept in its own table rather than a column on `items` since an item can depend on
+/// more than one sibling. See `service::item_dependencies` for the validation this sits behind
+/// (Task-only, same project, sibling-only) — this trait itself enforces nothing.
+#[cfg_attr(test, mockall::automock)]
+#[async_trait]
+pub trait ItemDependencyRepo: Send + Sync {
+    /// Replaces the full set of items `item_id` depends on with `depends_on_item_ids`
+    /// (delete-then-insert, not a diff) — mirrors `ReminderRepo::sync_auto_reminders`'s
+    /// full-replace shape. An empty slice clears every dependency.
+    async fn set_dependencies(
+        &self,
+        item_id: &str,
+        depends_on_item_ids: &[String],
+    ) -> Result<(), RepoError>;
+    /// The ids of every item `item_id` currently depends on.
+    async fn list_for_item(&self, item_id: &str) -> Result<Vec<String>, RepoError>;
+    /// Deletes every dependency row referencing `item_id`, on either side (as the dependent
+    /// item or as the thing depended on) — called on item delete, so neither a deleted item's
+    /// own dependency rows nor another item's now-dangling reference to it survive.
+    async fn delete_for_item(&self, item_id: &str) -> Result<(), RepoError>;
 }
 
 /// Append-mostly completion/points log, kept separate from `ItemRepo`/`TeamRepo`
@@ -909,6 +933,35 @@ pub async fn create_pool(url: &str) -> Result<SqlitePool, sqlx::Error> {
     sqlx::query(
         "CREATE INDEX IF NOT EXISTS idx_reminders_user_remind_at \
          ON reminders (user_id, remind_at)",
+    )
+    .execute(&pool)
+    .await?;
+
+    // "Depends on" (docs/issues_and_features.md) — see `ItemDependencyRepo`. Brand-new
+    // table, same "safe directly in the baseline" precedent as reminders above;
+    // `AddItemDependencies` creates the identical pair for a DB that predates this
+    // migration. Both directions are indexed: `idx_item_dependencies_item_id` for
+    // `list_for_item`/`set_dependencies`'s own delete-then-insert, and
+    // `idx_item_dependencies_depends_on` for `delete_for_item`'s reverse-side cleanup
+    // (a deleted item's dangling references from other items' rows).
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS item_dependencies (
+            item_id TEXT NOT NULL,
+            depends_on_item_id TEXT NOT NULL,
+            PRIMARY KEY (item_id, depends_on_item_id)
+        )",
+    )
+    .execute(&pool)
+    .await?;
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_item_dependencies_item_id \
+         ON item_dependencies (item_id)",
+    )
+    .execute(&pool)
+    .await?;
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_item_dependencies_depends_on \
+         ON item_dependencies (depends_on_item_id)",
     )
     .execute(&pool)
     .await?;

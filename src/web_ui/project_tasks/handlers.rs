@@ -7,7 +7,8 @@ use crate::service::projects::{self as project_service};
 use crate::service::teams as team_service;
 use crate::service::templates::{self as template_service, CreateProjectTemplateParams};
 use crate::storage::sqlite::{
-    ActivityLogRepo, ItemRepo, ItemSeriesRepo, ProjectRepo, ReminderRepo, TeamRepo, UserRepo,
+    ActivityLogRepo, ItemDependencyRepo, ItemRepo, ItemSeriesRepo, ProjectRepo, ReminderRepo,
+    TeamRepo, UserRepo,
 };
 use crate::web_ui::TzOffset;
 use crate::web_ui::list_filters::{ListFilterQuery, ListFilters};
@@ -177,6 +178,7 @@ pub async fn project_task_detail_page(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
+    Extension(item_dependencies): Extension<Arc<dyn ItemDependencyRepo>>,
     TzOffset(tz): TzOffset,
 ) -> Result<Html<String>, ItemError> {
     let project =
@@ -191,6 +193,8 @@ pub async fn project_task_detail_page(
     let parent_link = resolve_parent_link(&repo, &project_id, &item).await?;
     let linked_event = resolve_linked_event(&repo, &project_id, &item).await?;
     let series_link = resolve_series_link(&series, &project_id, &item).await?;
+    let depends_on =
+        resolve_depends_on_links(&repo, &item_dependencies, &project_id, &item).await?;
     let view = ProjectTaskDetailView::from_item(
         &item,
         &project_id,
@@ -200,6 +204,7 @@ pub async fn project_task_detail_page(
         parent_link.clone(),
         linked_event,
         series_link,
+        depends_on,
     )
     .render()?;
     let dialog = ProjectTaskDetailDialog::new(
@@ -245,6 +250,7 @@ pub async fn project_task_edit_page(
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(item_dependencies): Extension<Arc<dyn ItemDependencyRepo>>,
     TzOffset(tz): TzOffset,
     Query(edit_q): Query<EditItemQuery>,
 ) -> Result<Html<String>, ItemError> {
@@ -261,6 +267,8 @@ pub async fn project_task_edit_page(
         ),
         None => (Vec::new(), false),
     };
+    let (depends_on_options, depends_on_item_ids) =
+        depends_on_picker_data(&repo, &item_dependencies, &project_id, &item).await?;
     let fields = ProjectTaskDetailFields::from_item(
         &item,
         &project_id,
@@ -270,6 +278,8 @@ pub async fn project_task_edit_page(
         tz,
         false,
         edit_q.redirect.is_some(),
+        depends_on_options,
+        depends_on_item_ids,
     )
     .render()?;
     let nav_html = nav::build_nav_html(
@@ -444,6 +454,7 @@ pub async fn update_project_task_series_occurrence_form(
     Extension(item_series): Extension<Arc<dyn ItemSeriesRepo>>,
     Extension(activity_log): Extension<Arc<dyn ActivityLogRepo>>,
     Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
+    Extension(item_dependencies): Extension<Arc<dyn ItemDependencyRepo>>,
     TzOffset(tz): TzOffset,
     Form(form): Form<ProjectTaskForm>,
 ) -> Result<Response, ItemError> {
@@ -480,6 +491,7 @@ pub async fn update_project_task_series_occurrence_form(
         &activity_log,
         &item_series,
         &reminders,
+        &item_dependencies,
         &auth_user.user_id,
         params,
     )
@@ -549,6 +561,7 @@ pub async fn complete_project_item_series_occurrence_form(
     Extension(item_series): Extension<Arc<dyn ItemSeriesRepo>>,
     Extension(activity_log): Extension<Arc<dyn ActivityLogRepo>>,
     Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
+    Extension(item_dependencies): Extension<Arc<dyn ItemDependencyRepo>>,
     TzOffset(tz): TzOffset,
     Query(q): Query<OccurrenceRowActionQuery>,
     headers: HeaderMap,
@@ -590,6 +603,7 @@ pub async fn complete_project_item_series_occurrence_form(
         &activity_log,
         &item_series,
         &reminders,
+        &item_dependencies,
         &auth_user.user_id,
         params,
     )
@@ -1010,6 +1024,7 @@ pub async fn update_project_task_form(
     Extension(activity_log): Extension<Arc<dyn ActivityLogRepo>>,
     Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
     Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
+    Extension(item_dependencies): Extension<Arc<dyn ItemDependencyRepo>>,
     TzOffset(tz): TzOffset,
     Query(view_q): Query<super::RowViewQuery>,
     Form(form): Form<ProjectTaskForm>,
@@ -1029,6 +1044,7 @@ pub async fn update_project_task_form(
         &activity_log,
         &series,
         &reminders,
+        &item_dependencies,
         &auth_user.user_id,
         params,
     )
@@ -1043,6 +1059,8 @@ pub async fn update_project_task_form(
             let parent_link = resolve_parent_link(&repo, &project_id, &updated).await?;
             let linked_event = resolve_linked_event(&repo, &project_id, &updated).await?;
             let series_link = resolve_series_link(&series, &project_id, &updated).await?;
+            let depends_on =
+                resolve_depends_on_links(&repo, &item_dependencies, &project_id, &updated).await?;
             let view = ProjectTaskDetailView::from_item(
                 &updated,
                 &project_id,
@@ -1052,6 +1070,7 @@ pub async fn update_project_task_form(
                 parent_link.clone(),
                 linked_event,
                 series_link,
+                depends_on,
             )
             .render()?;
             let dialog = ProjectTaskDetailDialog::new(
@@ -1197,6 +1216,8 @@ pub async fn update_project_task_form(
                 ),
                 None => (Vec::new(), false),
             };
+            let (depends_on_options, depends_on_item_ids) =
+                depends_on_picker_data(&repo, &item_dependencies, &project_id, &updated).await?;
             let fields = ProjectTaskDetailFields::from_item(
                 &updated,
                 &project_id,
@@ -1206,10 +1227,14 @@ pub async fn update_project_task_form(
                 tz,
                 true,
                 false,
+                depends_on_options,
+                depends_on_item_ids,
             )
             .render()?;
             let linked_event = resolve_linked_event(&repo, &project_id, &updated).await?;
             let series_link = resolve_series_link(&series, &project_id, &updated).await?;
+            let depends_on =
+                resolve_depends_on_links(&repo, &item_dependencies, &project_id, &updated).await?;
             let view = ProjectTaskDetailView::from_item(
                 &updated,
                 &project_id,
@@ -1219,6 +1244,7 @@ pub async fn update_project_task_form(
                 parent_link,
                 linked_event,
                 series_link,
+                depends_on,
             )
             .render()?;
             Ok(Html(format!("{row}{fields}{view}")).into_response())
@@ -1256,6 +1282,7 @@ pub async fn delete_project_task_form(
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
     Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
+    Extension(item_dependencies): Extension<Arc<dyn ItemDependencyRepo>>,
     Query(q): Query<DeleteItemQuery>,
 ) -> Result<Response, ItemError> {
     let current = project_item_service::get_project_item(
@@ -1274,6 +1301,7 @@ pub async fn delete_project_task_form(
         &teams,
         &series,
         &reminders,
+        &item_dependencies,
         &auth_user.user_id,
         &project_id,
         &item_id,
@@ -1361,6 +1389,7 @@ fn reparent_params(
         source_event_id: current.source_event_id(),
         timezone_offset_minutes: Some(tz),
         points: current.points(),
+        depends_on_item_ids: None,
     }
 }
 
@@ -1430,6 +1459,7 @@ pub async fn move_project_task_form(
     Extension(activity_log): Extension<Arc<dyn ActivityLogRepo>>,
     Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
     Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
+    Extension(item_dependencies): Extension<Arc<dyn ItemDependencyRepo>>,
     TzOffset(tz): TzOffset,
     Form(form): Form<MoveForm>,
 ) -> Result<Response, ItemError> {
@@ -1480,6 +1510,7 @@ pub async fn move_project_task_form(
         &activity_log,
         &series,
         &reminders,
+        &item_dependencies,
         &auth_user.user_id,
         params,
     )

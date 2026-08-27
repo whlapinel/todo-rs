@@ -37,6 +37,20 @@ resource ProjectItem {
         sourceEventId: String
         googleEventId: String
         calendarSubscriptionId: String
+        // "Depends on" (docs/issues_and_features.md): the set of sibling Task items (same
+        // project, same parentItemId — including both top-level, i.e. no parent) whose
+        // completion gates this item's own completion. Settable only via UpdateProjectItem,
+        // not CreateProjectItem — a freshly created item's siblings already exist, so there's
+        // no ordering reason to force this onto the create path too; see
+        // `service::item_dependencies` for the validation (Task-only, same project,
+        // sibling-only, no self-reference, no cycles) and `StringList`'s own precedent
+        // (item_series.smithy's rotationUserIds) for why a plain `list String` is enough here
+        // — no dedicated shape needed. `None` on Update means "leave dependencies
+        // unchanged" (deliberately not this model's usual direct-overwrite-Option
+        // convention, since this is a side-table relation, not a plain Item column, and
+        // every caller that isn't a dependency editor shouldn't have to round-trip the
+        // current set just to touch an unrelated field) — pass an empty list to clear all.
+        dependsOnItemIds: StringList
     }
     read: GetProjectItem
     list: ListProjectItems
@@ -152,6 +166,8 @@ operation GetProjectItem {
         $googleEventId
 
         $calendarSubscriptionId
+
+        $dependsOnItemIds
     }
 
     errors: [
@@ -204,6 +220,8 @@ operation UpdateProjectItem {
         $points
 
         $sourceEventId
+
+        $dependsOnItemIds
 
         @notProperty
         timezoneOffsetMinutes: Integer

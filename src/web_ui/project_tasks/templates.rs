@@ -447,6 +447,15 @@ pub struct ProjectTaskDetailFields {
     /// Always `false` for the post-save row+fields+view fragment (that branch is only reached
     /// when `redirect` was absent, i.e. the list-row case).
     pub via_full_page: bool,
+    /// "Depends on" (docs/issues_and_features.md) — every sibling Task this item could depend
+    /// on (same project, same `parent_item_id`, excluding itself), for the checkbox picker.
+    /// Empty for a Simple/Event/Template item — `require_task` already keeps this screen
+    /// Task-only, but `depends_on_options` staying empty is also just correct on its own: a
+    /// non-Task item is never a valid dependency target anyway (see
+    /// `service::item_dependencies::set_item_dependencies`).
+    pub depends_on_options: Vec<(String, String)>,
+    /// The ids currently selected among `depends_on_options`, for pre-checking the picker.
+    pub depends_on_item_ids: Vec<String>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -460,6 +469,8 @@ impl ProjectTaskDetailFields {
         tz: i32,
         just_saved: bool,
         via_full_page: bool,
+        depends_on_options: Vec<(String, String)>,
+        depends_on_item_ids: Vec<String>,
     ) -> Self {
         let local_due_date = item.due_date().map(|d| to_local(d, tz));
         let due_date_input = local_due_date
@@ -516,6 +527,8 @@ impl ProjectTaskDetailFields {
             points_input: format_points_input(item.points()),
             just_saved,
             via_full_page,
+            depends_on_options,
+            depends_on_item_ids,
         }
     }
 }
@@ -552,6 +565,10 @@ pub struct ProjectTaskDetailView {
     /// page back to its series"). `None` for every item never materialized from a series — the
     /// overwhelmingly common case.
     pub series_link: Option<(String, String)>,
+    /// "Depends on" (docs/issues_and_features.md) — `(name, url)` per dependency, resolved by
+    /// the caller (`service::item_dependencies::list_item_dependencies`). Empty if this item
+    /// has none.
+    pub depends_on: Vec<(String, String)>,
 }
 
 impl ProjectTaskDetailView {
@@ -565,6 +582,7 @@ impl ProjectTaskDetailView {
         parent_link: Option<(String, String)>,
         linked_event: Option<(String, String)>,
         series_link: Option<(String, String)>,
+        depends_on: Vec<(String, String)>,
     ) -> Self {
         let due_date = item
             .due_date()
@@ -594,6 +612,7 @@ impl ProjectTaskDetailView {
             parent_link,
             linked_event,
             series_link,
+            depends_on,
         }
     }
 }
@@ -905,6 +924,59 @@ pub async fn resolve_series_link(
         series.name,
         format!("/web/projects/{project_id}/series/{series_id}/edit"),
     )))
+}
+
+/// Resolves `item`'s "depends on" set (docs/issues_and_features.md) into `(name, url)` links
+/// for the read-only detail view — each dependency is guaranteed to be a same-project Task
+/// (enforced at write time by `service::item_dependencies::set_item_dependencies`), so the URL
+/// always points at this same screen's own `/tasks/{id}`.
+pub async fn resolve_depends_on_links(
+    repo: &Arc<dyn ItemRepo>,
+    item_dependencies: &Arc<dyn crate::storage::sqlite::ItemDependencyRepo>,
+    project_id: &str,
+    item: &Item,
+) -> Result<Vec<(String, String)>, ItemError> {
+    let deps = crate::service::item_dependencies::list_item_dependencies(
+        item_dependencies,
+        repo,
+        project_id,
+        &item.id,
+    )
+    .await?;
+    Ok(deps
+        .into_iter()
+        .map(|d| {
+            (
+                d.name.clone(),
+                format!("/web/projects/{project_id}/tasks/{}", d.id),
+            )
+        })
+        .collect())
+}
+
+/// The edit form's dependency picker data: every eligible sibling (same project, same
+/// `parent_item_id`, excluding `item` itself and anything not Task-typed — see
+/// `set_item_dependencies`'s scoping) as `(id, name)` options, plus `item`'s currently
+/// selected dependency ids for pre-checking them.
+pub async fn depends_on_picker_data(
+    repo: &Arc<dyn ItemRepo>,
+    item_dependencies: &Arc<dyn crate::storage::sqlite::ItemDependencyRepo>,
+    project_id: &str,
+    item: &Item,
+) -> Result<(Vec<(String, String)>, Vec<String>), ItemError> {
+    let siblings = crate::web_ui::project_tasks::sibling_group(
+        repo,
+        project_id,
+        item.parent_item_id.as_deref(),
+    )
+    .await?;
+    let options = siblings
+        .into_iter()
+        .filter(|s| s.id != item.id && s.kind() == ItemKind::Task)
+        .map(|s| (s.id.clone(), s.name.clone()))
+        .collect();
+    let selected = item_dependencies.list_for_item(&item.id).await?;
+    Ok((options, selected))
 }
 
 #[derive(Template)]

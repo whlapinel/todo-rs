@@ -2,8 +2,6 @@
 
 Open issues and feature requests, merged from the former `docs/issues.md` and `docs/features.md` (2026-08-20) into a single sorted list. Completed or superseded items — including ones from the old files that were already resolved but hadn't been moved out yet — live in `docs/archived/archived_issues_and_features.md`.
 
-- Add "depends on" field in order to make completion of a task conditioned on completion of the dependency task. Currently only way is to make a child of another task, but this would allow more flexibility. Complete action will require checking all sub-items as well as any dependency tasks.
-    - This would allow us more flexibility in terms of displaying items
 - Expand all: expands to show all sub-items
 - When we add a sub-item to a row item in an expanded row state, the entire list is re-rendered and all items are collapsed to hide sub-items. This may be necessary, but I am wondering if we can keep the user on their current view without having to drill down again. Not huge priority.
 - Tasks list: add pagination - show max 25 per page

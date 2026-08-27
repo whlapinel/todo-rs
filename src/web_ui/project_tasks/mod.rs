@@ -70,6 +70,15 @@ pub struct ProjectTaskForm {
     /// See `tasks::TaskForm`'s identical field for the redirect-vs-in-place-fragment
     /// rationale.
     redirect: Option<String>,
+    /// "Depends on" (docs/issues_and_features.md) — a comma-joined string of sibling item
+    /// ids, kept in sync with an unnamed checkbox group by the edit form's own `<script>`,
+    /// same axum-0.6-Form-can't-deserialize-repeated-keys workaround as
+    /// `project_item_series`'s `rotationUserIds` (see that module's doc comment). Only
+    /// rendered on the dedicated edit page's form — every other `ProjectTaskForm` POST
+    /// (reschedule dialog, quick assign, checkbox toggle, series occurrence) simply never
+    /// includes this field, which `update_params_from_form` below treats as "leave
+    /// dependencies unchanged," not "clear them."
+    depends_on_item_ids: Option<String>,
 }
 
 /// Set only when a Reschedule/Assign dialog (or its own save PUT) was reached from a
@@ -348,6 +357,13 @@ pub(crate) fn update_params_from_form(
         // admin gate is what actually decides whether a *changed* value is honored.
         points: overlay_i32(&form.points, current.points()),
         event_type: current.event_type(),
+        depends_on_item_ids: form.depends_on_item_ids.as_deref().map(|s| {
+            s.split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .collect()
+        }),
     }
 }
 

@@ -8,11 +8,12 @@ mod storage;
 mod web_ui;
 
 use crate::storage::sqlite::{
-    ActivityLogRepo, CalendarSubscriptionRepo, ItemRepo, ItemSeriesRepo, ProjectRepo, ReminderRepo,
-    TeamRepo, UserRepo, activity_log::SqliteActivityLogRepo,
+    ActivityLogRepo, CalendarSubscriptionRepo, ItemDependencyRepo, ItemRepo, ItemSeriesRepo,
+    ProjectRepo, ReminderRepo, TeamRepo, UserRepo, activity_log::SqliteActivityLogRepo,
     calendar_subscriptions::SqliteCalendarSubscriptionRepo, create_pool,
-    item_series::SqliteItemSeriesRepo, items::SqliteItemRepo, projects::SqliteProjectRepo,
-    reminders::SqliteReminderRepo, teams::SqliteTeamRepo, users::SqliteUserRepo,
+    item_dependencies::SqliteItemDependencyRepo, item_series::SqliteItemSeriesRepo,
+    items::SqliteItemRepo, projects::SqliteProjectRepo, reminders::SqliteReminderRepo,
+    teams::SqliteTeamRepo, users::SqliteUserRepo,
 };
 use axum::{
     Extension, Router,
@@ -398,6 +399,8 @@ async fn main() {
     let activity_log_repo =
         Arc::new(SqliteActivityLogRepo(pool.clone())) as Arc<dyn ActivityLogRepo>;
     let reminder_repo = Arc::new(SqliteReminderRepo(pool.clone())) as Arc<dyn ReminderRepo>;
+    let item_dependency_repo =
+        Arc::new(SqliteItemDependencyRepo(pool.clone())) as Arc<dyn ItemDependencyRepo>;
     let calendar_repo =
         Arc::new(SqliteCalendarSubscriptionRepo(pool)) as Arc<dyn CalendarSubscriptionRepo>;
 
@@ -482,6 +485,7 @@ async fn main() {
         .layer(Extension(series_repo.clone()))
         .layer(Extension(activity_log_repo.clone()))
         .layer(Extension(reminder_repo.clone()))
+        .layer(Extension(item_dependency_repo.clone()))
         .layer(Extension(calendar_repo.clone()))
         .map_response(|res: http::Response<_>| res.map(boxed))
         .service(smithy);
@@ -517,6 +521,7 @@ async fn main() {
                 .layer(Extension(series_repo.clone()))
                 .layer(Extension(activity_log_repo.clone()))
                 .layer(Extension(reminder_repo.clone()))
+                .layer(Extension(item_dependency_repo.clone()))
                 .layer(Extension(calendar_repo.clone()))
                 .layer(middleware::from_fn(auth::caddy_header_middleware));
             let public_web_router = build_public_web_router();
@@ -586,6 +591,7 @@ async fn main() {
                 .layer(Extension(series_repo))
                 .layer(Extension(activity_log_repo))
                 .layer(Extension(reminder_repo))
+                .layer(Extension(item_dependency_repo))
                 .layer(Extension(calendar_repo))
                 .layer(middleware::from_fn(auth::web_auth_middleware));
             let public_web_router = build_public_web_router();

@@ -81,6 +81,17 @@
         </dd>
       </div>
       {% endif %}
+      {% if !depends_on.is_empty() %}
+      <div class="px-4 py-4 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
+        <dt class="text-sm font-medium text-gray-900 dark:text-gray-100">Depends on</dt>
+        <dd class="mt-1 text-sm sm:col-span-2 sm:mt-0 space-x-2">
+          {% for d in depends_on %}
+          <a href="{{ d.1 }}" hx-target="#page" hx-select="#page" hx-swap="innerHTML"
+             class="text-indigo-600 hover:text-indigo-500 dark:text-indigo-400 dark:hover:text-indigo-300">{{ d.0 }}</a>{% if !loop.last %},{% endif %}
+          {% endfor %}
+        </dd>
+      </div>
+      {% endif %}
     </dl>
   </div>
 </div>

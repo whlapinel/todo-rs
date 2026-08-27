@@ -7,7 +7,7 @@ use crate::service::projects::{
     require_project_admin, require_project_member, resolve_project_assignee,
 };
 use crate::storage::sqlite::{
-    ItemRepo, ItemSeriesRepo, ProjectRepo, ReminderRepo, TeamRepo, UserRepo,
+    ItemDependencyRepo, ItemRepo, ItemSeriesRepo, ProjectRepo, ReminderRepo, TeamRepo, UserRepo,
 };
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
@@ -175,6 +175,7 @@ pub async fn skip_or_delete_series_occurrence(
     teams: &Arc<dyn TeamRepo>,
     series_repo: &Arc<dyn ItemSeriesRepo>,
     reminders: &Arc<dyn ReminderRepo>,
+    item_dependencies: &Arc<dyn ItemDependencyRepo>,
     requester_user_id: &str,
     series_id: &str,
     occurrence_date: DateTime<Utc>,
@@ -192,6 +193,7 @@ pub async fn skip_or_delete_series_occurrence(
             teams,
             series_repo,
             reminders,
+            item_dependencies,
             requester_user_id,
             &series.project_id,
             &item_id,
@@ -1306,8 +1308,8 @@ mod tests {
     use crate::domain::item_series::ItemSeries;
     use crate::domain::project::Project;
     use crate::storage::sqlite::{
-        MockItemRepo, MockItemSeriesRepo, MockProjectRepo, MockReminderRepo, MockTeamRepo,
-        MockUserRepo, RepoError,
+        MockItemDependencyRepo, MockItemRepo, MockItemSeriesRepo, MockProjectRepo,
+        MockReminderRepo, MockTeamRepo, MockUserRepo, RepoError,
     };
 
     /// `get_or_materialize_occurrence`/`skip_or_delete_series_occurrence` both resync/clear
@@ -1318,6 +1320,12 @@ mod tests {
         let mut mock = MockReminderRepo::new();
         mock.expect_sync_auto_reminders()
             .returning(|_, _, _, _| Ok(()));
+        mock.expect_delete_for_item().returning(|_| Ok(()));
+        Arc::new(mock)
+    }
+
+    fn no_op_item_dependencies() -> Arc<dyn ItemDependencyRepo> {
+        let mut mock = MockItemDependencyRepo::new();
         mock.expect_delete_for_item().returning(|_| Ok(()));
         Arc::new(mock)
     }
@@ -2032,6 +2040,7 @@ mod tests {
             &teams,
             &series_repo,
             &no_op_reminders(),
+            &no_op_item_dependencies(),
             "owner1",
             "s1",
             occurrence_date(),
@@ -2069,6 +2078,7 @@ mod tests {
             &teams,
             &series_repo,
             &no_op_reminders(),
+            &no_op_item_dependencies(),
             "owner1",
             "s1",
             occurrence_date(),

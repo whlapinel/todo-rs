@@ -108,6 +108,41 @@
           {% if is_team_project %}
           {% call macros::points_field(is_team_admin, is_top_level, points_input) %}{% endcall %}
           {% endif %}
+          {% if !depends_on_options.is_empty() %}
+          <div>
+            <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Depends on</label>
+            <div class="mt-2 space-y-1">
+              {% for opt in depends_on_options %}
+              <label class="flex items-center gap-1.5 text-sm font-normal text-gray-900 dark:text-white">
+                <!-- No `name` here — axum 0.6's Form extractor can't deserialize repeated
+                     same-named keys into a Vec. The `dependsOnItemIds` hidden input below
+                     carries the actual comma-joined submission instead (same workaround as
+                     project_item_series' rotationUserIds). -->
+                <input type="checkbox" class="depends-on-checkbox size-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-600 dark:border-white/20 dark:bg-white/5" value="{{ opt.0 }}" {% if depends_on_item_ids.contains(opt.0) %}checked{% endif %} /> {{ opt.1 }}
+              </label>
+              {% endfor %}
+            </div>
+            <input type="hidden" name="dependsOnItemIds" value="{{ depends_on_item_ids.join(",") }}" />
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">This task can't be completed until every checked item is done.</p>
+          </div>
+          <script>
+          (function() {
+            var form = document.currentScript.closest("form");
+            if (!form) return;
+            function updateDependsOnHiddenField() {
+              var hidden = form.querySelector('input[name="dependsOnItemIds"]');
+              if (!hidden) return;
+              var ids = Array.prototype.slice
+                .call(form.querySelectorAll(".depends-on-checkbox:checked"))
+                .map(function (cb) { return cb.value; });
+              hidden.value = ids.join(",");
+            }
+            form.querySelectorAll(".depends-on-checkbox").forEach(function (cb) {
+              cb.addEventListener("change", updateDependsOnHiddenField);
+            });
+          })();
+          </script>
+          {% endif %}
           <div class="mt-5 sm:mt-6 sm:grid sm:grid-flow-row-dense sm:grid-cols-2 sm:gap-3">
             <button type="submit"
               class="inline-flex w-full justify-center rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-xs hover:bg-indigo-500 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600 sm:col-start-2 dark:bg-indigo-500 dark:shadow-none dark:hover:bg-indigo-400 dark:focus-visible:outline-indigo-500">Save</button>

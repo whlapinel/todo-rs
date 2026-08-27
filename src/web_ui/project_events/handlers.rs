@@ -292,6 +292,7 @@ pub async fn update_project_event_series_occurrence_form(
     Extension(item_series): Extension<Arc<dyn ItemSeriesRepo>>,
     Extension(activity_log): Extension<Arc<dyn crate::storage::sqlite::ActivityLogRepo>>,
     Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
+    Extension(item_dependencies): Extension<Arc<dyn crate::storage::sqlite::ItemDependencyRepo>>,
     TzOffset(tz): TzOffset,
     Form(form): Form<ProjectEventForm>,
 ) -> Result<Response, ItemError> {
@@ -328,6 +329,7 @@ pub async fn update_project_event_series_occurrence_form(
         &activity_log,
         &item_series,
         &reminders,
+        &item_dependencies,
         &auth_user.user_id,
         params,
     )
@@ -585,6 +587,7 @@ pub async fn update_project_event_form(
     Extension(activity_log): Extension<Arc<dyn crate::storage::sqlite::ActivityLogRepo>>,
     Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
     Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
+    Extension(item_dependencies): Extension<Arc<dyn crate::storage::sqlite::ItemDependencyRepo>>,
     TzOffset(tz): TzOffset,
     Query(view_q): Query<crate::web_ui::project_tasks::RowViewQuery>,
     Form(form): Form<ProjectEventForm>,
@@ -609,6 +612,7 @@ pub async fn update_project_event_form(
         &activity_log,
         &series,
         &reminders,
+        &item_dependencies,
         &auth_user.user_id,
         params,
     )
@@ -753,6 +757,7 @@ pub async fn delete_project_event_form(
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
     Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
+    Extension(item_dependencies): Extension<Arc<dyn crate::storage::sqlite::ItemDependencyRepo>>,
     Query(q): Query<DeleteItemQuery>,
 ) -> Result<Response, ItemError> {
     let current = project_item_service::get_project_item(
@@ -771,6 +776,7 @@ pub async fn delete_project_event_form(
         &teams,
         &series,
         &reminders,
+        &item_dependencies,
         &auth_user.user_id,
         &project_id,
         &item_id,

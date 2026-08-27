@@ -3,6 +3,7 @@ mod activity_log_team_id_nullable;
 mod add_calendar_subscriptions;
 mod add_event_occurrences_item_id_index;
 mod add_event_series;
+mod add_item_dependencies;
 mod add_item_description;
 mod add_item_points;
 mod add_item_series;
@@ -32,6 +33,7 @@ use activity_log_team_id_nullable::ActivityLogTeamIdNullable;
 use add_calendar_subscriptions::AddCalendarSubscriptions;
 use add_event_occurrences_item_id_index::AddEventOccurrencesItemIdIndex;
 use add_event_series::AddEventSeries;
+use add_item_dependencies::AddItemDependencies;
 use add_item_description::AddItemDescription;
 use add_item_points::AddItemPoints;
 use add_item_series::AddItemSeries;
@@ -119,6 +121,7 @@ fn all_migrations() -> Vec<Box<dyn Migration>> {
         Box::new(AddUserTimezone),
         Box::new(AddUserPersonalProjectId),
         Box::new(AddReminders),
+        Box::new(AddItemDependencies),
     ]
 }
 
@@ -545,7 +548,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 28);
+        assert_eq!(applied_count, 29);
     }
 
     #[tokio::test]
@@ -558,7 +561,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 28);
+        assert_eq!(applied_count, 29);
     }
 
     #[tokio::test]
@@ -572,6 +575,6 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 28);
+        assert_eq!(applied_count, 29);
     }
 }

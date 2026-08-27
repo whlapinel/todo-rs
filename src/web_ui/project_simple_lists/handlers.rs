@@ -324,6 +324,7 @@ pub async fn update_project_simple_item_form(
     Extension(activity_log): Extension<Arc<dyn crate::storage::sqlite::ActivityLogRepo>>,
     Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
     Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
+    Extension(item_dependencies): Extension<Arc<dyn crate::storage::sqlite::ItemDependencyRepo>>,
     Form(form): Form<ProjectSimpleItemForm>,
 ) -> Result<Response, ItemError> {
     let current = project_item_service::get_project_item(
@@ -345,6 +346,7 @@ pub async fn update_project_simple_item_form(
         &activity_log,
         &series,
         &reminders,
+        &item_dependencies,
         &auth_user.user_id,
         params,
     )
@@ -419,6 +421,7 @@ pub async fn delete_project_simple_item_form(
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
     Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
+    Extension(item_dependencies): Extension<Arc<dyn crate::storage::sqlite::ItemDependencyRepo>>,
     Query(q): Query<DeleteItemQuery>,
 ) -> Result<Response, ItemError> {
     let current = project_item_service::get_project_item(
@@ -437,6 +440,7 @@ pub async fn delete_project_simple_item_form(
         &teams,
         &series,
         &reminders,
+        &item_dependencies,
         &auth_user.user_id,
         &project_id,
         &item_id,
@@ -532,6 +536,7 @@ pub async fn move_project_simple_item_form(
     Extension(activity_log): Extension<Arc<dyn crate::storage::sqlite::ActivityLogRepo>>,
     Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
     Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
+    Extension(item_dependencies): Extension<Arc<dyn crate::storage::sqlite::ItemDependencyRepo>>,
     Form(form): Form<MoveForm>,
 ) -> Result<Response, ItemError> {
     let (current, new_parent_item_id) = if form.target == MOVE_TARGET_PARENT {
@@ -569,6 +574,7 @@ pub async fn move_project_simple_item_form(
         &activity_log,
         &series,
         &reminders,
+        &item_dependencies,
         &auth_user.user_id,
         params,
     )

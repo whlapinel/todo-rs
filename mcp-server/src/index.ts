@@ -281,6 +281,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: "number",
             description: "Points awarded on completion. Only meaningful on a team-backed project. Project admin only (the server preserves the existing value if the caller isn't an admin).",
           },
+          dependsOnItemIds: {
+            type: "array",
+            items: { type: "string" },
+            description: "\"Depends on\": item ids this Task depends on — completing this item is rejected while any of them is still incomplete. Each id must be a Task in the same project with the same parentItemId as this item (a sibling, including both top-level). Omit to leave the current dependency set unchanged; pass an empty array to clear it.",
+          },
         },
         required: ["projectId", "itemId", "name", "complete"],
       },
@@ -884,6 +889,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           body.timezoneOffsetMinutes = args.timezoneOffsetMinutes;
         if (args.assignedToUserId) body.assignedToUserId = args.assignedToUserId;
         if (args.points !== undefined) body.points = args.points;
+        if (args.dependsOnItemIds !== undefined) body.dependsOnItemIds = args.dependsOnItemIds;
         result = await api("PUT", `/projects/${args.projectId}/items/${args.itemId}`, body);
         break;
       }

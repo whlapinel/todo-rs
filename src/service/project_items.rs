@@ -1,6 +1,7 @@
 use crate::domain::item::{Item, ItemKind};
 use crate::domain::project::Project;
 use crate::service::error::ItemError;
+use crate::service::item_dependencies;
 use crate::service::item_series;
 use crate::service::items::{self, CreateItemParams, UpdateItemParams, item_anchor};
 use crate::service::projects::require_project_member;
@@ -9,7 +10,8 @@ use crate::service::team_items::{
     self, CreateTeamItemParams, UpdateTeamItemContext, UpdateTeamItemParams,
 };
 use crate::storage::sqlite::{
-    ActivityLogRepo, DueItem, ItemRepo, ItemSeriesRepo, ProjectRepo, ReminderRepo, TeamRepo,
+    ActivityLogRepo, DueItem, ItemDependencyRepo, ItemRepo, ItemSeriesRepo, ProjectRepo,
+    ReminderRepo, TeamRepo,
 };
 use async_recursion::async_recursion;
 use chrono::{DateTime, Utc};
@@ -354,6 +356,11 @@ pub struct UpdateProjectItemParams {
     pub source_event_id: Option<String>,
     pub timezone_offset_minutes: Option<i32>,
     pub points: Option<i32>,
+    /// "Depends on" (docs/issues_and_features.md) — `None` means "leave dependencies
+    /// unchanged" (deliberately not this struct's usual direct-overwrite-Option
+    /// convention; see `service::item_dependencies::set_item_dependencies`'s doc comment
+    /// for why). `Some(vec![])` clears every dependency.
+    pub depends_on_item_ids: Option<Vec<String>>,
 }
 
 /// Stage B4's unified update path — same delegation shape as `create_project_item`.
@@ -390,6 +397,7 @@ pub async fn update_project_item(
     activity_log: &Arc<dyn ActivityLogRepo>,
     series: &Arc<dyn ItemSeriesRepo>,
     reminders_repo: &Arc<dyn ReminderRepo>,
+    item_dependencies_repo: &Arc<dyn ItemDependencyRepo>,
     requester_user_id: &str,
     params: UpdateProjectItemParams,
 ) -> Result<(), ItemError> {
@@ -398,6 +406,19 @@ pub async fn update_project_item(
     let complete = params.complete;
     let item_id = params.item_id.clone();
     let project_id = params.project_id.clone();
+    let depends_on_item_ids = params.depends_on_item_ids.clone();
+
+    // `was_complete` is this item's *pre-update* completion state — needed below for three
+    // things: gating the Task-series uncomplete-order check and `record_task_uncompletion`
+    // (unlike `record_task_completion`'s forward-only `advance_cursor`, retreating the cursor
+    // isn't idempotent, so it must only fire on a genuine transition), gating the
+    // incomplete-dependency check to a genuine `false -> true` transition (not a no-op
+    // re-completion), and gating the "depends-on edits are frozen once complete" check below
+    // the same way `is_pure_complete_toggle` gates the analogous Item-field lock (on the
+    // item's state *before* this update, not after). Always fetched now (previously skipped
+    // when `complete == true`, since only the uncomplete-order check needed it) — the depends-on
+    // guards below need it in both directions.
+    let was_complete = repo.get_by_project(&project_id, &item_id).await?.complete;
 
     // Stage 10a: reject an out-of-order Task-series completion before any mutation
     // happens — `record_task_completion` below only ever runs after a successful
@@ -409,29 +430,32 @@ pub async fn update_project_item(
             params.timezone_offset_minutes.unwrap_or(0),
         )
         .await?;
-    }
-
-    // The Uncomplete-side counterpart to the completable check above: reject
-    // out-of-order Task-series uncompletion before any mutation happens, so the
-    // cursor can never get out of sync with what's actually settled. Gated the same
-    // way as the completable check — only fetch the current item (needed to know
-    // whether this request is actually a complete->incomplete transition, not just
-    // any edit of an already-incomplete item) when the request isn't itself a
-    // completion, so a completion or a plain field edit never pays for this read.
-    // `was_complete` also gates `record_task_uncompletion` below — unlike
-    // `record_task_completion`'s forward-only `advance_cursor`, retreating the cursor
-    // is not idempotent against a repeated call, so it must only ever fire on a real
-    // transition, never on every `complete: false` request (which is the overwhelming
-    // majority — most updates aren't touching `complete` at all).
-    let was_complete = if complete {
-        false
-    } else {
-        let item = repo.get_by_project(&params.project_id, &item_id).await?;
-        if item.complete {
-            item_series::validate_uncompletable(series, &item_id).await?;
+        // "Depends on" (docs/issues_and_features.md): reject a fresh incomplete->complete
+        // transition while any dependency is still incomplete — the same shape as
+        // `service::items::has_incomplete_children`'s own gate, just resolved one layer up
+        // here since dependencies aren't threaded through `items::update_item`/
+        // `team_items::update_team_item` at all (see `has_incomplete_dependencies`'s doc
+        // comment). Only checked on a genuine transition, not on a no-op re-completion of an
+        // already-complete item or a plain field edit.
+        if !was_complete
+            && item_dependencies::has_incomplete_dependencies(
+                item_dependencies_repo,
+                repo,
+                &project_id,
+                &item_id,
+            )
+            .await?
+        {
+            return Err(ItemError::Invalid(
+                "cannot complete an item while it has an incomplete dependency".to_string(),
+            ));
         }
-        item.complete
-    };
+    } else if was_complete {
+        // The Uncomplete-side counterpart to the completable check above: reject
+        // out-of-order Task-series uncompletion before any mutation happens, so the
+        // cursor can never get out of sync with what's actually settled.
+        item_series::validate_uncompletable(series, &item_id).await?;
+    }
 
     let result = match project.team_id {
         Some(team_id) => {
@@ -509,6 +533,32 @@ pub async fn update_project_item(
     }
     let item = repo.get_by_project(&project_id, &item_id).await?;
     reminders::sync_item_reminders(reminders_repo, projects, &item).await?;
+    if let Some(ids) = depends_on_item_ids {
+        // Dependencies live in a side table, not on `Item` itself, so `items::update_item`/
+        // `team_items::update_team_item`'s own `is_pure_complete_toggle` field-lock (CLAUDE.md's
+        // Completion-transition guards) can't see or enforce this — a request that pure-toggles
+        // `complete` (or leaves it at `true`) would otherwise sail through here uncontested.
+        // Mirror that lock's own rejection explicitly, gated the same way it is (on the item's
+        // state *before* this update, `was_complete` — not `item.complete`, which is the
+        // post-update state): a fresh incomplete->complete transition may still set
+        // dependencies in the same request (the Item-field lock allows that too, since it never
+        // engages on a first completion), only an item that was *already* complete has its
+        // dependency set frozen, the same as every other field, un-freezable only by
+        // un-completing the item first.
+        if was_complete {
+            return Err(ItemError::Invalid(
+                "cannot edit a completed item; un-complete it first".to_string(),
+            ));
+        }
+        item_dependencies::set_item_dependencies(
+            item_dependencies_repo,
+            repo,
+            &project_id,
+            &item,
+            &ids,
+        )
+        .await?;
+    }
     Ok(())
 }
 
@@ -555,6 +605,7 @@ pub async fn delete_project_item(
     teams: &Arc<dyn TeamRepo>,
     series: &Arc<dyn ItemSeriesRepo>,
     reminders_repo: &Arc<dyn ReminderRepo>,
+    item_dependencies_repo: &Arc<dyn ItemDependencyRepo>,
     requester_user_id: &str,
     project_id: &str,
     item_id: &str,
@@ -567,6 +618,7 @@ pub async fn delete_project_item(
                 repo,
                 series,
                 reminders_repo,
+                item_dependencies_repo,
                 teams,
                 projects,
                 requester_user_id,
@@ -580,6 +632,7 @@ pub async fn delete_project_item(
                 repo,
                 series,
                 reminders_repo,
+                item_dependencies_repo,
                 &project.owner_user_id,
                 item_id,
             )
@@ -588,6 +641,12 @@ pub async fn delete_project_item(
     }
     item_series::unlink_deleted_item_occurrence(series, item_id).await?;
     reminders_repo.delete_for_item(item_id).await?;
+    // "Depends on" cleanup (docs/issues_and_features.md) for the top-level id itself —
+    // `delete_item`/`delete_team_item` above already did this for every recursively-deleted
+    // *child* (mirroring `reminders_repo.delete_for_item`'s identical split). Both directions
+    // matter here: `item_id`'s own dependency rows, and any sibling's now-dangling reference
+    // to `item_id` as *its* dependency.
+    item_dependencies_repo.delete_for_item(item_id).await?;
     Ok(())
 }
 
@@ -597,8 +656,8 @@ mod tests {
     use crate::domain::project::Project;
     use crate::domain::team::TeamRole;
     use crate::storage::sqlite::{
-        MockActivityLogRepo, MockItemRepo, MockItemSeriesRepo, MockProjectRepo, MockReminderRepo,
-        MockTeamRepo,
+        MockActivityLogRepo, MockItemDependencyRepo, MockItemRepo, MockItemSeriesRepo,
+        MockProjectRepo, MockReminderRepo, MockTeamRepo,
     };
 
     /// Every `delete_project_item` test but the dedicated series-unlinking one below just
@@ -618,6 +677,17 @@ mod tests {
         mock.expect_sync_auto_reminders()
             .returning(|_, _, _, _| Ok(()));
         mock.expect_delete_for_item().returning(|_| Ok(()));
+        Arc::new(mock)
+    }
+
+    /// `update_project_item`/`delete_project_item` both touch this on every call (the
+    /// completion-guard read and/or the final cleanup/set step) — a harmless no-op stub for
+    /// tests that don't care about dependency rows at all.
+    fn no_op_item_dependencies_repo() -> Arc<dyn ItemDependencyRepo> {
+        let mut mock = MockItemDependencyRepo::new();
+        mock.expect_list_for_item().returning(|_| Ok(vec![]));
+        mock.expect_delete_for_item().returning(|_| Ok(()));
+        mock.expect_set_dependencies().returning(|_, _| Ok(()));
         Arc::new(mock)
     }
 
@@ -906,6 +976,7 @@ mod tests {
         let activity_log: Arc<dyn ActivityLogRepo> = Arc::new(MockActivityLogRepo::new());
         let series: Arc<dyn ItemSeriesRepo> = Arc::new(MockItemSeriesRepo::new());
         let reminders = no_op_reminders_repo();
+        let item_dependencies = no_op_item_dependencies_repo();
 
         update_project_item(
             &repo,
@@ -914,6 +985,7 @@ mod tests {
             &activity_log,
             &series,
             &reminders,
+            &item_dependencies,
             "owner1",
             UpdateProjectItemParams {
                 project_id: "p1".to_string(),
@@ -925,6 +997,111 @@ mod tests {
         )
         .await
         .expect("should update personal project item");
+    }
+
+    #[tokio::test]
+    async fn update_project_item_rejects_completing_with_an_incomplete_dependency() {
+        let mut projects_mock = MockProjectRepo::new();
+        projects_mock
+            .expect_get()
+            .returning(|_| Ok(personal_project()));
+        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
+
+        // Every `get_by_project` call in this test — the item's own pre-update fetch and
+        // `has_incomplete_dependencies`' lookup of its one dependency — resolves to a plain
+        // incomplete item, so the dependency is what blocks completion here.
+        let mut items_mock = MockItemRepo::new();
+        items_mock
+            .expect_get_by_project()
+            .returning(|_, _| Ok(Item::new_user_item("owner1", "Task")));
+        let repo: Arc<dyn ItemRepo> = Arc::new(items_mock);
+
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+        let activity_log: Arc<dyn ActivityLogRepo> = Arc::new(MockActivityLogRepo::new());
+        let series = no_op_series_repo();
+        let reminders = no_op_reminders_repo();
+        let mut dep_mock = MockItemDependencyRepo::new();
+        dep_mock
+            .expect_list_for_item()
+            .returning(|_| Ok(vec!["dep1".to_string()]));
+        let item_dependencies: Arc<dyn ItemDependencyRepo> = Arc::new(dep_mock);
+
+        let err = update_project_item(
+            &repo,
+            &projects,
+            &teams,
+            &activity_log,
+            &series,
+            &reminders,
+            &item_dependencies,
+            "owner1",
+            UpdateProjectItemParams {
+                project_id: "p1".to_string(),
+                item_id: "i1".to_string(),
+                name: "Task".to_string(),
+                complete: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect_err("should reject completion while a dependency is incomplete");
+        assert!(matches!(err, ItemError::Invalid(_)));
+    }
+
+    #[tokio::test]
+    async fn update_project_item_rejects_editing_dependencies_on_an_already_complete_item() {
+        let mut projects_mock = MockProjectRepo::new();
+        projects_mock
+            .expect_get()
+            .returning(|_| Ok(personal_project()));
+        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
+
+        // `was_complete`'s pre-update fetch — the item is already complete, so a pure
+        // resubmit (`complete: true` again) reaches the dependency-edit branch, which must
+        // reject before ever calling `ItemDependencyRepo::set_dependencies`.
+        let mut items_mock = MockItemRepo::new();
+        items_mock.expect_get_by_project().returning(|_, _| {
+            let mut item = Item::new_user_item("owner1", "Task");
+            item.complete = true;
+            Ok(item)
+        });
+        items_mock.expect_get().returning(|_, _| {
+            let mut item = Item::new_user_item("owner1", "Task");
+            item.complete = true;
+            Ok(item)
+        });
+        items_mock.expect_update().times(1).returning(|_| Ok(()));
+        let repo: Arc<dyn ItemRepo> = Arc::new(items_mock);
+
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+        let activity_log: Arc<dyn ActivityLogRepo> = Arc::new(MockActivityLogRepo::new());
+        let series = no_op_series_repo();
+        let reminders = no_op_reminders_repo();
+        // No expectations set — asserts `set_dependencies` is never reached.
+        let item_dependencies: Arc<dyn ItemDependencyRepo> =
+            Arc::new(MockItemDependencyRepo::new());
+
+        let err = update_project_item(
+            &repo,
+            &projects,
+            &teams,
+            &activity_log,
+            &series,
+            &reminders,
+            &item_dependencies,
+            "owner1",
+            UpdateProjectItemParams {
+                project_id: "p1".to_string(),
+                item_id: "i1".to_string(),
+                name: "Task".to_string(),
+                complete: true,
+                depends_on_item_ids: Some(vec!["dep1".to_string()]),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect_err("should reject editing dependencies on an already-complete item");
+        assert!(matches!(err, ItemError::Invalid(_)));
     }
 
     #[tokio::test]
@@ -977,6 +1154,7 @@ mod tests {
             .returning(|_| Ok(None));
         let series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
         let reminders = no_op_reminders_repo();
+        let item_dependencies = no_op_item_dependencies_repo();
 
         update_project_item(
             &repo,
@@ -985,6 +1163,7 @@ mod tests {
             &activity_log,
             &series,
             &reminders,
+            &item_dependencies,
             "owner1",
             UpdateProjectItemParams {
                 project_id: "p1".to_string(),
@@ -1035,6 +1214,7 @@ mod tests {
             .returning(|_| Ok(None));
         let series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
         let reminders = no_op_reminders_repo();
+        let item_dependencies = no_op_item_dependencies_repo();
 
         update_project_item(
             &repo,
@@ -1043,6 +1223,7 @@ mod tests {
             &activity_log,
             &series,
             &reminders,
+            &item_dependencies,
             "owner1",
             UpdateProjectItemParams {
                 project_id: "p1".to_string(),
@@ -1082,6 +1263,7 @@ mod tests {
         let activity_log: Arc<dyn ActivityLogRepo> = Arc::new(MockActivityLogRepo::new());
         let series: Arc<dyn ItemSeriesRepo> = Arc::new(MockItemSeriesRepo::new());
         let reminders = no_op_reminders_repo();
+        let item_dependencies = no_op_item_dependencies_repo();
 
         update_project_item(
             &repo,
@@ -1090,6 +1272,7 @@ mod tests {
             &activity_log,
             &series,
             &reminders,
+            &item_dependencies,
             "member1",
             UpdateProjectItemParams {
                 project_id: "p1".to_string(),
@@ -1240,6 +1423,7 @@ mod tests {
             .returning(|_, _| Ok(()));
         let series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
         let reminders = no_op_reminders_repo();
+        let item_dependencies = no_op_item_dependencies_repo();
 
         update_project_item(
             &repo,
@@ -1248,6 +1432,7 @@ mod tests {
             &activity_log,
             &series,
             &reminders,
+            &item_dependencies,
             "member1",
             UpdateProjectItemParams {
                 project_id: "p1".to_string(),
@@ -1286,8 +1471,17 @@ mod tests {
         let series = no_op_series_repo();
 
         let reminders = no_op_reminders_repo();
+        let item_dependencies = no_op_item_dependencies_repo();
         delete_project_item(
-            &repo, &projects, &teams, &series, &reminders, "owner1", "p1", "i1",
+            &repo,
+            &projects,
+            &teams,
+            &series,
+            &reminders,
+            &item_dependencies,
+            "owner1",
+            "p1",
+            "i1",
         )
         .await
         .expect("should delete personal project item");
@@ -1319,8 +1513,17 @@ mod tests {
         let series = no_op_series_repo();
 
         let reminders = no_op_reminders_repo();
+        let item_dependencies = no_op_item_dependencies_repo();
         delete_project_item(
-            &repo, &projects, &teams, &series, &reminders, "member1", "p1", "i1",
+            &repo,
+            &projects,
+            &teams,
+            &series,
+            &reminders,
+            &item_dependencies,
+            "member1",
+            "p1",
+            "i1",
         )
         .await
         .expect("should delete team project item");
@@ -1373,6 +1576,7 @@ mod tests {
         let activity_log: Arc<dyn ActivityLogRepo> = Arc::new(MockActivityLogRepo::new());
         let series: Arc<dyn ItemSeriesRepo> = Arc::new(MockItemSeriesRepo::new());
         let reminders = no_op_reminders_repo();
+        let item_dependencies = no_op_item_dependencies_repo();
 
         update_project_item(
             &repo,
@@ -1381,6 +1585,7 @@ mod tests {
             &activity_log,
             &series,
             &reminders,
+            &item_dependencies,
             "member1",
             UpdateProjectItemParams {
                 project_id: "p1".to_string(),
@@ -1433,7 +1638,8 @@ mod tests {
         let series = no_op_series_repo();
 
         let reminders = no_op_reminders_repo();
-        delete_project_item(&repo, &projects, &teams, &series, &reminders, "member1", "p1", "i1")
+        let item_dependencies = no_op_item_dependencies_repo();
+        delete_project_item(&repo, &projects, &teams, &series, &reminders, &item_dependencies, "member1", "p1", "i1")
             .await
             .expect(
                 "delete should succeed even though the project's team changed since the item was created",
@@ -1483,8 +1689,17 @@ mod tests {
         let series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let reminders = no_op_reminders_repo();
+        let item_dependencies = no_op_item_dependencies_repo();
         delete_project_item(
-            &repo, &projects, &teams, &series, &reminders, "owner1", "p1", "i1",
+            &repo,
+            &projects,
+            &teams,
+            &series,
+            &reminders,
+            &item_dependencies,
+            "owner1",
+            "p1",
+            "i1",
         )
         .await
         .expect("should delete the item and un-materialize its occurrence");
@@ -1559,8 +1774,17 @@ mod tests {
         let series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let reminders = no_op_reminders_repo();
+        let item_dependencies = no_op_item_dependencies_repo();
         delete_project_item(
-            &repo, &projects, &teams, &series, &reminders, "owner1", "p1", "i1",
+            &repo,
+            &projects,
+            &teams,
+            &series,
+            &reminders,
+            &item_dependencies,
+            "owner1",
+            "p1",
+            "i1",
         )
         .await
         .expect(

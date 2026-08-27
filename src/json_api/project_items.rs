@@ -5,8 +5,8 @@ use crate::service::project_items::{
     self as project_item_service, CreateProjectItemParams, UpdateProjectItemParams,
 };
 use crate::storage::sqlite::{
-    ActivityLogRepo, ItemRepo, ItemSeriesRepo, ProjectRepo, ReminderRepo, RepoError, TeamRepo,
-    UserRepo,
+    ActivityLogRepo, ItemDependencyRepo, ItemRepo, ItemSeriesRepo, ProjectRepo, ReminderRepo,
+    RepoError, TeamRepo, UserRepo,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -84,6 +84,7 @@ pub async fn get_project_item(
     server::Extension(repo): server::Extension<Arc<dyn ItemRepo>>,
     server::Extension(projects): server::Extension<Arc<dyn ProjectRepo>>,
     server::Extension(teams): server::Extension<Arc<dyn TeamRepo>>,
+    server::Extension(item_dependencies): server::Extension<Arc<dyn ItemDependencyRepo>>,
     server::Extension(auth): server::Extension<AuthUser>,
 ) -> Result<output::GetProjectItemOutput, error::GetProjectItemError> {
     let item = project_item_service::get_project_item(
@@ -101,6 +102,14 @@ pub async fn get_project_item(
             error::GetProjectItemError::from(internal(msg))
         }
     })?;
+    let depends_on_item_ids =
+        item_dependencies
+            .list_for_item(&item.id)
+            .await
+            .map_err(|e| match e {
+                RepoError::NotFound => error::GetProjectItemError::from(not_found()),
+                RepoError::Internal(msg) => error::GetProjectItemError::from(internal(msg)),
+            })?;
     let due_date = item
         .due_date()
         .map(|dt| SmithyDateTime::from_secs(dt.timestamp()));
@@ -130,6 +139,7 @@ pub async fn get_project_item(
         source_event_id: item.source_event_id(),
         google_event_id: item.google_event_id.clone(),
         calendar_subscription_id: item.calendar_subscription_id.clone(),
+        depends_on_item_ids: Some(depends_on_item_ids),
     })
 }
 
@@ -141,6 +151,7 @@ pub async fn update_project_item(
     server::Extension(activity_log): server::Extension<Arc<dyn ActivityLogRepo>>,
     server::Extension(series): server::Extension<Arc<dyn ItemSeriesRepo>>,
     server::Extension(reminders): server::Extension<Arc<dyn ReminderRepo>>,
+    server::Extension(item_dependencies): server::Extension<Arc<dyn ItemDependencyRepo>>,
     server::Extension(auth): server::Extension<AuthUser>,
 ) -> Result<output::UpdateProjectItemOutput, error::UpdateProjectItemError> {
     let due_date = input
@@ -162,6 +173,7 @@ pub async fn update_project_item(
         &activity_log,
         &series,
         &reminders,
+        &item_dependencies,
         &auth.user_id,
         UpdateProjectItemParams {
             project_id: input.project_id,
@@ -183,6 +195,7 @@ pub async fn update_project_item(
             source_event_id: input.source_event_id,
             timezone_offset_minutes: input.timezone_offset_minutes,
             points: input.points,
+            depends_on_item_ids: input.depends_on_item_ids,
         },
     )
     .await
@@ -202,6 +215,7 @@ pub async fn delete_project_item(
     server::Extension(teams): server::Extension<Arc<dyn TeamRepo>>,
     server::Extension(series): server::Extension<Arc<dyn ItemSeriesRepo>>,
     server::Extension(reminders): server::Extension<Arc<dyn ReminderRepo>>,
+    server::Extension(item_dependencies): server::Extension<Arc<dyn ItemDependencyRepo>>,
     server::Extension(auth): server::Extension<AuthUser>,
 ) -> Result<output::DeleteProjectItemOutput, error::DeleteProjectItemError> {
     project_item_service::delete_project_item(
@@ -210,6 +224,7 @@ pub async fn delete_project_item(
         &teams,
         &series,
         &reminders,
+        &item_dependencies,
         &auth.user_id,
         &input.project_id,
         &input.item_id,

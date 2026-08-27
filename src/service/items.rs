@@ -4,7 +4,8 @@ use crate::domain::recurrence;
 use crate::service::activity_log::reverse_entry;
 use crate::service::item_series;
 use crate::storage::sqlite::{
-    ActivityLogRepo, ItemRepo, ItemSeriesRepo, ProjectRepo, ReminderRepo, RepoError,
+    ActivityLogRepo, ItemDependencyRepo, ItemRepo, ItemSeriesRepo, ProjectRepo, ReminderRepo,
+    RepoError,
 };
 use chrono::{DateTime, Utc};
 use std::future::Future;
@@ -379,6 +380,7 @@ pub async fn delete_item(
     repo: &Arc<dyn ItemRepo>,
     series: &Arc<dyn ItemSeriesRepo>,
     reminders: &Arc<dyn ReminderRepo>,
+    item_dependencies: &Arc<dyn ItemDependencyRepo>,
     user_id: &str,
     item_id: &str,
 ) -> Result<(), ItemError> {
@@ -398,6 +400,7 @@ pub async fn delete_item(
             repo.delete(&child.id).await?;
             item_series::unlink_deleted_item_occurrence(series, &child.id).await?;
             reminders.delete_for_item(&child.id).await?;
+            item_dependencies.delete_for_item(&child.id).await?;
         }
     }
     unlink_source_event_tasks(repo, item_id).await?;
@@ -714,7 +717,8 @@ pub(crate) fn copy_children_as_template<'a>(
 mod tests {
     use super::*;
     use crate::storage::sqlite::{
-        MockActivityLogRepo, MockItemRepo, MockItemSeriesRepo, MockProjectRepo, MockReminderRepo,
+        MockActivityLogRepo, MockItemDependencyRepo, MockItemRepo, MockItemSeriesRepo,
+        MockProjectRepo, MockReminderRepo,
     };
 
     /// Harmless stub for `delete_item` tests whose deleted item has no children — `delete_item`
@@ -723,6 +727,12 @@ mod tests {
     /// this mock at all.
     fn no_op_reminders() -> Arc<dyn ReminderRepo> {
         Arc::new(MockReminderRepo::new())
+    }
+
+    /// Same rationale as `no_op_reminders` — `delete_item` only calls
+    /// `ItemDependencyRepo::delete_for_item` per recursively-deleted child.
+    fn no_op_item_dependencies() -> Arc<dyn ItemDependencyRepo> {
+        Arc::new(MockItemDependencyRepo::new())
     }
 
     /// `create_item`'s `find_personal_project` lookup, stubbed to "none found" — none
@@ -1040,9 +1050,16 @@ mod tests {
         let repo: Arc<dyn ItemRepo> = Arc::new(mock);
         let series: Arc<dyn ItemSeriesRepo> = Arc::new(MockItemSeriesRepo::new());
 
-        delete_item(&repo, &series, &no_op_reminders(), "u1", "event1")
-            .await
-            .expect("should delete the event and unlink referencing tasks");
+        delete_item(
+            &repo,
+            &series,
+            &no_op_reminders(),
+            &no_op_item_dependencies(),
+            "u1",
+            "event1",
+        )
+        .await
+        .expect("should delete the event and unlink referencing tasks");
     }
 
     #[tokio::test]
@@ -1166,9 +1183,16 @@ mod tests {
         let repo: Arc<dyn ItemRepo> = Arc::new(mock);
         let series: Arc<dyn ItemSeriesRepo> = Arc::new(MockItemSeriesRepo::new());
 
-        let err = delete_item(&repo, &series, &no_op_reminders(), "u1", "item1")
-            .await
-            .expect_err("should reject deleting an imported item");
+        let err = delete_item(
+            &repo,
+            &series,
+            &no_op_reminders(),
+            &no_op_item_dependencies(),
+            "u1",
+            "item1",
+        )
+        .await
+        .expect_err("should reject deleting an imported item");
 
         assert!(matches!(err, ItemError::Invalid(_)));
     }

@@ -6,7 +6,7 @@ use crate::service::item_series::{
 };
 use crate::service::projects::{self as project_service};
 use crate::storage::sqlite::{
-    ItemRepo, ItemSeriesRepo, ProjectRepo, ReminderRepo, TeamRepo, UserRepo,
+    ItemDependencyRepo, ItemRepo, ItemSeriesRepo, ProjectRepo, ReminderRepo, TeamRepo, UserRepo,
 };
 use crate::web_ui::list_filters::ListFilters;
 use crate::web_ui::nav::{self, ActiveContext, SidebarSection};
@@ -562,6 +562,7 @@ pub async fn skip_project_item_series_occurrence_form(
     Extension(users): Extension<Arc<dyn UserRepo>>,
     Extension(item_series): Extension<Arc<dyn ItemSeriesRepo>>,
     Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
+    Extension(item_dependencies): Extension<Arc<dyn ItemDependencyRepo>>,
     TzOffset(tz): TzOffset,
     Query(q): Query<OccurrenceRowActionQuery>,
     headers: HeaderMap,
@@ -587,6 +588,7 @@ pub async fn skip_project_item_series_occurrence_form(
         &teams,
         &item_series,
         &reminders,
+        &item_dependencies,
         &auth_user.user_id,
         &series_id,
         occurrence_date,

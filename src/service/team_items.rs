@@ -9,7 +9,8 @@ use crate::service::projects::{
     require_project_admin, require_project_member, resolve_project_assignee,
 };
 use crate::storage::sqlite::{
-    ActivityLogRepo, ItemRepo, ItemSeriesRepo, ProjectRepo, ReminderRepo, TeamRepo,
+    ActivityLogRepo, ItemDependencyRepo, ItemRepo, ItemSeriesRepo, ProjectRepo, ReminderRepo,
+    TeamRepo,
 };
 use chrono::{DateTime, Utc};
 use std::sync::Arc;
@@ -281,6 +282,7 @@ pub async fn delete_team_item(
     repo: &Arc<dyn ItemRepo>,
     series: &Arc<dyn ItemSeriesRepo>,
     reminders: &Arc<dyn ReminderRepo>,
+    item_dependencies: &Arc<dyn ItemDependencyRepo>,
     teams: &Arc<dyn TeamRepo>,
     projects: &Arc<dyn ProjectRepo>,
     requester_user_id: &str,
@@ -304,6 +306,7 @@ pub async fn delete_team_item(
             repo.delete(&child.id).await?;
             item_series::unlink_deleted_item_occurrence(series, &child.id).await?;
             reminders.delete_for_item(&child.id).await?;
+            item_dependencies.delete_for_item(&child.id).await?;
         }
     }
     unlink_source_event_tasks(repo, item_id).await?;
@@ -600,8 +603,8 @@ mod tests {
     use crate::domain::activity_log::ActivityLogEntry;
     use crate::domain::team::TeamRole;
     use crate::storage::sqlite::{
-        MockActivityLogRepo, MockItemRepo, MockItemSeriesRepo, MockProjectRepo, MockReminderRepo,
-        MockTeamRepo,
+        MockActivityLogRepo, MockItemDependencyRepo, MockItemRepo, MockItemSeriesRepo,
+        MockProjectRepo, MockReminderRepo, MockTeamRepo,
     };
 
     /// A `ProjectRepo` resolving `project_id` as a team-backed project (`team_id`)
@@ -821,9 +824,19 @@ mod tests {
         let series: Arc<dyn ItemSeriesRepo> = Arc::new(MockItemSeriesRepo::new());
 
         let reminders: Arc<dyn ReminderRepo> = Arc::new(MockReminderRepo::new());
+        let item_dependencies: Arc<dyn ItemDependencyRepo> =
+            Arc::new(MockItemDependencyRepo::new());
 
         let err = delete_team_item(
-            &items, &series, &reminders, &teams, &projects, "member1", "p1", "item1",
+            &items,
+            &series,
+            &reminders,
+            &item_dependencies,
+            &teams,
+            &projects,
+            "member1",
+            "p1",
+            "item1",
         )
         .await
         .expect_err("should reject deleting an imported item");

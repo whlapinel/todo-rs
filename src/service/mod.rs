@@ -3,6 +3,7 @@ pub mod calendar_subscriptions;
 pub mod calendar_sync;
 pub mod error;
 pub mod import;
+pub mod item_dependencies;
 pub mod item_series;
 pub mod items;
 pub mod project_items;

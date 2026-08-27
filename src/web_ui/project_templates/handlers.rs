@@ -10,7 +10,9 @@ use crate::service::projects::{self as project_service};
 use crate::service::templates::{
     self as template_service, CreateProjectTemplateParams, UpdateProjectTemplateParams,
 };
-use crate::storage::sqlite::{ItemRepo, ItemSeriesRepo, ProjectRepo, ReminderRepo, TeamRepo};
+use crate::storage::sqlite::{
+    ItemDependencyRepo, ItemRepo, ItemSeriesRepo, ProjectRepo, ReminderRepo, TeamRepo,
+};
 use crate::web_ui::TzOffset;
 use crate::web_ui::nav::{self, ActiveContext, SidebarSection};
 use crate::web_ui::project_tasks::active_member_options;
@@ -194,6 +196,7 @@ pub async fn delete_project_template_form(
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
     Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
+    Extension(item_dependencies): Extension<Arc<dyn ItemDependencyRepo>>,
 ) -> Result<Html<String>, ItemError> {
     project_item_service::delete_project_item(
         &repo,
@@ -201,6 +204,7 @@ pub async fn delete_project_template_form(
         &teams,
         &series,
         &reminders,
+        &item_dependencies,
         &auth_user.user_id,
         &project_id,
         &template_id,
@@ -468,6 +472,7 @@ pub async fn update_project_template_child_form(
     Extension(activity_log): Extension<Arc<dyn crate::storage::sqlite::ActivityLogRepo>>,
     Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
     Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
+    Extension(item_dependencies): Extension<Arc<dyn ItemDependencyRepo>>,
     Form(form): Form<ProjectTemplateChildForm>,
 ) -> Result<Response, ItemError> {
     let close = form.redirect.is_some();
@@ -504,6 +509,7 @@ pub async fn update_project_template_child_form(
         &activity_log,
         &series,
         &reminders,
+        &item_dependencies,
         &auth_user.user_id,
         params,
     )
@@ -549,6 +555,7 @@ pub async fn delete_project_template_child_form(
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
     Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
+    Extension(item_dependencies): Extension<Arc<dyn ItemDependencyRepo>>,
 ) -> Result<Html<String>, ItemError> {
     project_item_service::delete_project_item(
         &repo,
@@ -556,6 +563,7 @@ pub async fn delete_project_template_child_form(
         &teams,
         &series,
         &reminders,
+        &item_dependencies,
         &auth_user.user_id,
         &project_id,
         &item_id,
