@@ -29,6 +29,7 @@ impl ProjectSimpleItemRow {
             offset_label: None,
             assignee_name: None,
             blocked_by_names: Vec::new(),
+            blocked_by_label: String::new(),
             complete_url: None,
             edit_url: Some(format!(
                 "/web/projects/{project_id}/simple-lists/{}/edit",

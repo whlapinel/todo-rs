@@ -86,9 +86,9 @@
                 d
                 }}</span>{% endif %}
             {% if !blocked_by_names.is_empty() %}
-            <span class="text-amber-600 dark:text-amber-400" title="Blocked by {{ blocked_by_names|join(", ") }}">
+            <span class="text-amber-600 dark:text-amber-400" title="Blocked by {{ blocked_by_label }}">
                 <span class="lg:hidden">&#128274; Blocked</span>
-                <span class="hidden lg:inline">&#128274; Blocked by {{ blocked_by_names|join(", ") }}</span>
+                <span class="hidden lg:inline">&#128274; Blocked by {{ blocked_by_label }}</span>
             </span>
             {% endif %}
         </div>

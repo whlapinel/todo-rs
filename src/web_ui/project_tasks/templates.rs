@@ -135,6 +135,7 @@ impl ProjectTaskRow {
             // in-place-expanded children — see `project_tasks::blocked_by_names_for`'s doc
             // comment); every other caller of `from_item` leaves this empty.
             blocked_by_names: Vec::new(),
+            blocked_by_label: String::new(),
         }
     }
 }

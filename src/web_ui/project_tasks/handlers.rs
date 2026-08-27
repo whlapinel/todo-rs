@@ -1214,6 +1214,7 @@ pub async fn update_project_task_form(
                         .await?;
                     row.blocked_by_names =
                         super::blocked_by_names_for(&updated, &siblings_ref, &dep_map);
+                    row.blocked_by_label = row.blocked_by_names.join(", ");
                     row.expanded_row = row.expanded_row || !row.blocked_by_names.is_empty();
                     row.render()?
                 }

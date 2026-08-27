@@ -497,6 +497,7 @@ pub(crate) async fn render_expandable_children(
         );
         row.indent_class = indent_class(depth);
         row.blocked_by_names = blocked_by_names_for(i, &visible, &dep_map);
+        row.blocked_by_label = row.blocked_by_names.join(", ");
         row.expanded_row = row.expanded_row || !row.blocked_by_names.is_empty();
         if i.has_children {
             row.children_html = Some(
@@ -631,6 +632,7 @@ pub(crate) async fn render_rows_with_virtual(
             dismiss_after_ms,
         );
         row.blocked_by_names = blocked_by_names_for(i, &visible, &dep_map);
+        row.blocked_by_label = row.blocked_by_names.join(", ");
         row.expanded_row = row.expanded_row || !row.blocked_by_names.is_empty();
         // In-place expansion (see `Row::children_html`'s doc comment) — the flat list is the
         // one screen that opts a `ProjectTaskRow` into this, eagerly inlining the whole

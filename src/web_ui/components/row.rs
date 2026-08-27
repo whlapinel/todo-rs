@@ -34,6 +34,13 @@ pub struct Row {
     /// other `Row` builder leaves this at its default `Vec::new()`, same convention as
     /// `type_badge`/`parent_name`/`project_name`.
     pub blocked_by_names: Vec<String>,
+    /// `blocked_by_names.join(", ")`, precomputed in Rust rather than done in the template via
+    /// Askama's `join` filter — that filter's `Display` impl is explicitly one-shot (see its
+    /// doc comment in `askama`'s source: "only produces a string once ... because the iterator
+    /// is already consumed"), and `components/row.html` needs the joined text twice (the
+    /// badge's `title` attribute and its `lg:`-visible label) which silently rendered the
+    /// second occurrence as empty until this was split out.
+    pub blocked_by_label: String,
     /// Display name of this item's assignee, on a team-backed project — `None` on a
     /// personal project (no assignment concept) or an unassigned team item.
     pub assignee_name: Option<String>,
