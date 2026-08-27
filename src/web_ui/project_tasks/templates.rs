@@ -958,6 +958,17 @@ pub async fn resolve_depends_on_links(
 /// `parent_item_id`, excluding `item` itself and anything not Task-typed — see
 /// `set_item_dependencies`'s scoping) as `(id, name)` options, plus `item`'s currently
 /// selected dependency ids for pre-checking them.
+///
+/// Completed siblings and series-occurrence siblings (`series_id.is_some()`) are excluded from
+/// the offered options — depending on an already-done item is a no-op guard, and a series
+/// occurrence's completion state resets on every cycle, which doesn't compose meaningfully with
+/// this feature's one-shot "depends on" semantics. An already-*selected* dependency is always
+/// kept in the options regardless of these two filters, even if it's since become complete or
+/// turned out to be a series occurrence — otherwise it would silently vanish from the hidden
+/// `dependsOnItemIds` field the moment the user toggled any other checkbox (the sync script in
+/// `detail_fields.html` rebuilds that field purely from checkboxes present in the DOM), quietly
+/// dropping a saved dependency the user never touched. This is UI-level only:
+/// `set_item_dependencies` itself still permits either via the API/MCP.
 pub async fn depends_on_picker_data(
     repo: &Arc<dyn ItemRepo>,
     item_dependencies: &Arc<dyn crate::storage::sqlite::ItemDependencyRepo>,
@@ -970,12 +981,16 @@ pub async fn depends_on_picker_data(
         item.parent_item_id.as_deref(),
     )
     .await?;
+    let selected = item_dependencies.list_for_item(&item.id).await?;
     let options = siblings
         .into_iter()
-        .filter(|s| s.id != item.id && s.kind() == ItemKind::Task)
+        .filter(|s| {
+            s.id != item.id
+                && s.kind() == ItemKind::Task
+                && (selected.contains(&s.id) || (!s.complete && s.series_id.is_none()))
+        })
         .map(|s| (s.id.clone(), s.name.clone()))
         .collect();
-    let selected = item_dependencies.list_for_item(&item.id).await?;
     Ok((options, selected))
 }
 
@@ -1114,7 +1129,10 @@ pub struct ProjectTaskEditPageTemplate {
 mod tests {
     use super::*;
     use crate::domain::item::ItemType;
-    use crate::storage::sqlite::{ItemSeriesRepo, MockItemRepo, MockItemSeriesRepo, RepoError};
+    use crate::storage::sqlite::{
+        ItemDependencyRepo, ItemSeriesRepo, MockItemDependencyRepo, MockItemRepo,
+        MockItemSeriesRepo, RepoError,
+    };
 
     #[tokio::test]
     async fn resolve_parent_link_returns_none_when_item_is_top_level() {
@@ -1237,5 +1255,80 @@ mod tests {
                 "/web/projects/p1/series/s1/edit".to_string()
             )
         );
+    }
+
+    fn task(id: &str, name: &str, complete: bool, series_id: Option<&str>) -> Item {
+        Item {
+            id: id.to_string(),
+            name: name.to_string(),
+            project_id: Some("p1".to_string()),
+            complete,
+            series_id: series_id.map(str::to_string),
+            ..Item::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn depends_on_picker_data_excludes_completed_and_series_occurrence_siblings() {
+        let mut items_mock = MockItemRepo::new();
+        items_mock.expect_list_by_project().returning(|_, _| {
+            Ok(vec![
+                task("i1", "Self", false, None),
+                task("i2", "Open sibling", false, None),
+                task("i3", "Done sibling", true, None),
+                task("i4", "Series occurrence", false, Some("series1")),
+            ])
+        });
+        let repo: Arc<dyn ItemRepo> = Arc::new(items_mock);
+        let mut dep_repo_mock = MockItemDependencyRepo::new();
+        dep_repo_mock
+            .expect_list_for_item()
+            .returning(|_| Ok(vec![]));
+        let item_dependencies: Arc<dyn ItemDependencyRepo> = Arc::new(dep_repo_mock);
+        let item = task("i1", "Self", false, None);
+
+        let (options, selected) = depends_on_picker_data(&repo, &item_dependencies, "p1", &item)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            options,
+            vec![("i2".to_string(), "Open sibling".to_string())]
+        );
+        assert!(selected.is_empty());
+    }
+
+    #[tokio::test]
+    async fn depends_on_picker_data_keeps_an_already_selected_sibling_even_if_now_ineligible() {
+        let mut items_mock = MockItemRepo::new();
+        items_mock.expect_list_by_project().returning(|_, _| {
+            Ok(vec![
+                task("i1", "Self", false, None),
+                task("i3", "Done sibling", true, None),
+                task("i4", "Series occurrence", false, Some("series1")),
+            ])
+        });
+        let repo: Arc<dyn ItemRepo> = Arc::new(items_mock);
+        let mut dep_repo_mock = MockItemDependencyRepo::new();
+        dep_repo_mock
+            .expect_list_for_item()
+            .returning(|_| Ok(vec!["i3".to_string(), "i4".to_string()]));
+        let item_dependencies: Arc<dyn ItemDependencyRepo> = Arc::new(dep_repo_mock);
+        let item = task("i1", "Self", false, None);
+
+        let (mut options, selected) =
+            depends_on_picker_data(&repo, &item_dependencies, "p1", &item)
+                .await
+                .unwrap();
+
+        options.sort();
+        assert_eq!(
+            options,
+            vec![
+                ("i3".to_string(), "Done sibling".to_string()),
+                ("i4".to_string(), "Series occurrence".to_string()),
+            ]
+        );
+        assert_eq!(selected, vec!["i3".to_string(), "i4".to_string()]);
     }
 }
