@@ -176,6 +176,31 @@ pub async fn list_item_dependencies(
     Ok(resolved)
 }
 
+/// Rejects moving `item_id` (reparenting it via the Tasks screen's Move dialog) while it
+/// participates in a dependency edge, in either direction. A dependency requires both sides to
+/// be siblings (see `set_item_dependencies`'s doc comment) — a move changes `parent_item_id`,
+/// which would silently strand the edge outside that invariant. Rather than auto-clear the
+/// edge, the move itself is rejected; the user removes the dependency first if they still want
+/// to move the item.
+pub async fn assert_movable(
+    dep_repo: &Arc<dyn ItemDependencyRepo>,
+    item_id: &str,
+) -> Result<(), ItemError> {
+    if !dep_repo.list_for_item(item_id).await?.is_empty() {
+        return Err(ItemError::Invalid(
+            "cannot move an item that depends on another item — remove the dependency first"
+                .to_string(),
+        ));
+    }
+    if !dep_repo.list_dependents(item_id).await?.is_empty() {
+        return Err(ItemError::Invalid(
+            "cannot move an item that another item depends on — remove that dependency first"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -372,5 +397,46 @@ mod tests {
                 .await
                 .unwrap()
         );
+    }
+
+    #[tokio::test]
+    async fn assert_movable_rejects_an_item_with_an_outgoing_dependency() {
+        let mut dep_repo_mock = MockItemDependencyRepo::new();
+        dep_repo_mock
+            .expect_list_for_item()
+            .returning(|_| Ok(vec!["i2".to_string()]));
+        let dep_repo = Arc::new(dep_repo_mock) as Arc<dyn ItemDependencyRepo>;
+
+        let err = assert_movable(&dep_repo, "i1").await.unwrap_err();
+        assert!(matches!(err, ItemError::Invalid(_)));
+    }
+
+    #[tokio::test]
+    async fn assert_movable_rejects_an_item_with_a_dependent() {
+        let mut dep_repo_mock = MockItemDependencyRepo::new();
+        dep_repo_mock
+            .expect_list_for_item()
+            .returning(|_| Ok(vec![]));
+        dep_repo_mock
+            .expect_list_dependents()
+            .returning(|_| Ok(vec!["i3".to_string()]));
+        let dep_repo = Arc::new(dep_repo_mock) as Arc<dyn ItemDependencyRepo>;
+
+        let err = assert_movable(&dep_repo, "i1").await.unwrap_err();
+        assert!(matches!(err, ItemError::Invalid(_)));
+    }
+
+    #[tokio::test]
+    async fn assert_movable_allows_an_item_with_no_dependency_edges() {
+        let mut dep_repo_mock = MockItemDependencyRepo::new();
+        dep_repo_mock
+            .expect_list_for_item()
+            .returning(|_| Ok(vec![]));
+        dep_repo_mock
+            .expect_list_dependents()
+            .returning(|_| Ok(vec![]));
+        let dep_repo = Arc::new(dep_repo_mock) as Arc<dyn ItemDependencyRepo>;
+
+        assert_movable(&dep_repo, "i1").await.unwrap();
     }
 }

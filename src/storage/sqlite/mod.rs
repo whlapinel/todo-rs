@@ -307,6 +307,10 @@ pub trait ItemDependencyRepo: Send + Sync {
     ) -> Result<(), RepoError>;
     /// The ids of every item `item_id` currently depends on.
     async fn list_for_item(&self, item_id: &str) -> Result<Vec<String>, RepoError>;
+    /// The ids of every item that currently depends on `item_id` — the reverse of
+    /// `list_for_item`. Used by `service::item_dependencies::assert_movable` to block moving an
+    /// item other items depend on.
+    async fn list_dependents(&self, item_id: &str) -> Result<Vec<String>, RepoError>;
     /// Deletes every dependency row referencing `item_id`, on either side (as the dependent
     /// item or as the thing depended on) — called on item delete, so neither a deleted item's
     /// own dependency rows nor another item's now-dangling reference to it survive.

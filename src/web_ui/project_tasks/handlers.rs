@@ -1,6 +1,7 @@
 use crate::auth::AuthUser;
 use crate::domain::item::{Item, ItemKind};
 use crate::service::error::ItemError;
+use crate::service::item_dependencies::{self as item_dependencies_service};
 use crate::service::item_series::{self as item_series_service};
 use crate::service::project_items::{self as project_item_service, UpdateProjectItemParams};
 use crate::service::projects::{self as project_service};
@@ -1463,6 +1464,7 @@ pub async fn move_project_task_form(
     TzOffset(tz): TzOffset,
     Form(form): Form<MoveForm>,
 ) -> Result<Response, ItemError> {
+    item_dependencies_service::assert_movable(&item_dependencies, &item_id).await?;
     let (current, new_parent_item_id, offset_anchor) = if form.target == MOVE_TARGET_PARENT {
         let target = project_item_service::resolve_promotion_target(
             &repo,

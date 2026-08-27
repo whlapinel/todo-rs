@@ -41,6 +41,15 @@ impl ItemDependencyRepo for SqliteItemDependencyRepo {
             .map(|rows| rows.iter().map(|r| r.get("depends_on_item_id")).collect())
     }
 
+    async fn list_dependents(&self, item_id: &str) -> Result<Vec<String>, RepoError> {
+        sqlx::query("SELECT item_id FROM item_dependencies WHERE depends_on_item_id = ?")
+            .bind(item_id)
+            .fetch_all(&self.0)
+            .await
+            .map_err(db_err)
+            .map(|rows| rows.iter().map(|r| r.get("item_id")).collect())
+    }
+
     async fn delete_for_item(&self, item_id: &str) -> Result<(), RepoError> {
         sqlx::query("DELETE FROM item_dependencies WHERE item_id = ? OR depends_on_item_id = ?")
             .bind(item_id)
@@ -93,6 +102,24 @@ mod tests {
 
         repo.set_dependencies("i1", &[]).await.unwrap();
         assert!(repo.list_for_item("i1").await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_dependents_returns_items_that_depend_on_the_given_item() {
+        let pool = test_pool().await;
+        let repo = SqliteItemDependencyRepo(pool);
+
+        repo.set_dependencies("i2", &["i1".to_string()])
+            .await
+            .unwrap();
+        repo.set_dependencies("i3", &["i1".to_string()])
+            .await
+            .unwrap();
+
+        let mut dependents = repo.list_dependents("i1").await.unwrap();
+        dependents.sort();
+        assert_eq!(dependents, vec!["i2".to_string(), "i3".to_string()]);
+        assert!(repo.list_dependents("i2").await.unwrap().is_empty());
     }
 
     #[tokio::test]
