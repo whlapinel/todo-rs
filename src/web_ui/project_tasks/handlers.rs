@@ -56,6 +56,7 @@ pub async fn project_tasks_page(
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(users): Extension<Arc<dyn UserRepo>>,
     Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
+    Extension(item_dependencies): Extension<Arc<dyn ItemDependencyRepo>>,
     TzOffset(tz): TzOffset,
     Query(q): Query<ListFilterQuery>,
 ) -> Result<Html<String>, ItemError> {
@@ -92,6 +93,7 @@ pub async fn project_tasks_page(
         &filters,
         tz,
         None,
+        &item_dependencies,
     )
     .await?;
     let (points_label, assignee_options) = match &project.team_id {
@@ -632,6 +634,7 @@ pub async fn complete_project_item_series_occurrence_form(
             &filters,
             tz,
             Some(item.id.as_str()),
+            &item_dependencies,
         )
         .await?;
         return Ok(Html(super::items_list_inner_html(&rows)).into_response());
@@ -790,6 +793,7 @@ pub(crate) async fn render_children_fragment(
                     &HashMap::new(),
                     team_id.is_some(),
                     1,
+                    None,
                 )
                 .await?,
             );
@@ -853,6 +857,7 @@ pub(crate) async fn render_source_event_fragment(
                     &HashMap::new(),
                     team_id.is_some(),
                     1,
+                    None,
                 )
                 .await?,
             );
@@ -1144,6 +1149,7 @@ pub async fn update_project_task_form(
                         &HashMap::new(),
                         project.team_id.is_some(),
                         1,
+                        Some(&item_dependencies),
                     )
                     .await?,
                 )
@@ -1190,19 +1196,27 @@ pub async fn update_project_task_form(
                     dismiss_after_ms,
                     children_html,
                 )?,
-                _ => ProjectTaskRow::from_item(
-                    &updated,
-                    &project_id,
-                    &names,
-                    &siblings_ref,
-                    tz,
-                    skip_url,
-                    project.team_id.is_some(),
-                    show_complete,
-                    confirmation,
-                    dismiss_after_ms,
-                )
-                .render()?,
+                _ => {
+                    let mut row = ProjectTaskRow::from_item(
+                        &updated,
+                        &project_id,
+                        &names,
+                        &siblings_ref,
+                        tz,
+                        skip_url,
+                        project.team_id.is_some(),
+                        show_complete,
+                        confirmation,
+                        dismiss_after_ms,
+                    );
+                    let dep_map = item_dependencies
+                        .list_for_items(&[updated.id.clone()])
+                        .await?;
+                    row.blocked_by_names =
+                        super::blocked_by_names_for(&updated, &siblings_ref, &dep_map);
+                    row.expanded_row = row.expanded_row || !row.blocked_by_names.is_empty();
+                    row.render()?
+                }
             };
             let (assignee_options, is_team_admin) = match &project.team_id {
                 Some(team_id) => (

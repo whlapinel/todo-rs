@@ -85,6 +85,12 @@
             {% if let Some(d) = due_date %}<span class="{% if overdue %}text-red-600 dark:text-red-400{% endif %}">💀 {{
                 d
                 }}</span>{% endif %}
+            {% if !blocked_by_names.is_empty() %}
+            <span class="text-amber-600 dark:text-amber-400" title="Blocked by {{ blocked_by_names|join(", ") }}">
+                <span class="lg:hidden">&#128274; Blocked</span>
+                <span class="hidden lg:inline">&#128274; Blocked by {{ blocked_by_names|join(", ") }}</span>
+            </span>
+            {% endif %}
         </div>
     </div>
     {% endif %}

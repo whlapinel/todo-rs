@@ -41,6 +41,32 @@ impl ItemDependencyRepo for SqliteItemDependencyRepo {
             .map(|rows| rows.iter().map(|r| r.get("depends_on_item_id")).collect())
     }
 
+    async fn list_for_items(
+        &self,
+        item_ids: &[String],
+    ) -> Result<std::collections::HashMap<String, Vec<String>>, RepoError> {
+        let mut result: std::collections::HashMap<String, Vec<String>> =
+            std::collections::HashMap::new();
+        if item_ids.is_empty() {
+            return Ok(result);
+        }
+        let placeholders = item_ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+        let sql = format!(
+            "SELECT item_id, depends_on_item_id FROM item_dependencies WHERE item_id IN ({placeholders})"
+        );
+        let mut query = sqlx::query(&sql);
+        for id in item_ids {
+            query = query.bind(id);
+        }
+        let rows = query.fetch_all(&self.0).await.map_err(db_err)?;
+        for row in rows {
+            let item_id: String = row.get("item_id");
+            let depends_on_item_id: String = row.get("depends_on_item_id");
+            result.entry(item_id).or_default().push(depends_on_item_id);
+        }
+        Ok(result)
+    }
+
     async fn list_dependents(&self, item_id: &str) -> Result<Vec<String>, RepoError> {
         sqlx::query("SELECT item_id FROM item_dependencies WHERE depends_on_item_id = ?")
             .bind(item_id)
@@ -120,6 +146,33 @@ mod tests {
         dependents.sort();
         assert_eq!(dependents, vec!["i2".to_string(), "i3".to_string()]);
         assert!(repo.list_dependents("i2").await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_for_items_batches_across_multiple_items() {
+        let pool = test_pool().await;
+        let repo = SqliteItemDependencyRepo(pool);
+
+        repo.set_dependencies("i1", &["i2".to_string(), "i3".to_string()])
+            .await
+            .unwrap();
+        repo.set_dependencies("i4", &["i2".to_string()])
+            .await
+            .unwrap();
+
+        let mut map = repo
+            .list_for_items(&["i1".to_string(), "i4".to_string(), "i5".to_string()])
+            .await
+            .unwrap();
+        map.get_mut("i1").unwrap().sort();
+        assert_eq!(
+            map.get("i1").unwrap(),
+            &vec!["i2".to_string(), "i3".to_string()]
+        );
+        assert_eq!(map.get("i4").unwrap(), &vec!["i2".to_string()]);
+        assert!(!map.contains_key("i5"));
+
+        assert!(repo.list_for_items(&[]).await.unwrap().is_empty());
     }
 
     #[tokio::test]

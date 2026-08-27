@@ -6,7 +6,7 @@ use crate::service::error::ItemError;
 use crate::service::item_series::{self as item_series_service, ProjectOccurrence};
 use crate::service::project_items::list_project_items_unchecked;
 use crate::service::teams as team_service;
-use crate::storage::sqlite::{ItemRepo, ItemSeriesRepo, TeamRepo, UserRepo};
+use crate::storage::sqlite::{ItemDependencyRepo, ItemRepo, ItemSeriesRepo, TeamRepo, UserRepo};
 use crate::web_ui::list_filters::{ListFilterQuery, ListFilters};
 use crate::web_ui::project_tasks::templates::{
     ProjectTaskRow, ProjectTaskRowsFragmentTemplate, ProjectTaskVirtualRow,
@@ -421,6 +421,27 @@ fn indent_class(depth: u8) -> &'static str {
     }
 }
 
+/// Names of `item`'s still-incomplete "depends on" links, for the row's "Blocked by ..." badge
+/// (`components/row.html`) — looks each dependency id up in `siblings` (dependencies are always
+/// same-parent siblings, see `service::item_dependencies`, so every dependency of an item in
+/// `siblings` is itself in `siblings`) and keeps only the ones not yet complete. `dep_map` comes
+/// from a single batched `ItemDependencyRepo::list_for_items` call across the whole sibling
+/// group, so this is just an in-memory lookup — no per-row query.
+fn blocked_by_names_for(
+    item: &Item,
+    siblings: &[&Item],
+    dep_map: &HashMap<String, Vec<String>>,
+) -> Vec<String> {
+    dep_map
+        .get(&item.id)
+        .into_iter()
+        .flatten()
+        .filter_map(|dep_id| siblings.iter().find(|s| &s.id == dep_id))
+        .filter(|dep| !dep.complete)
+        .map(|dep| dep.name.clone())
+        .collect()
+}
+
 /// Recursively renders `parent_item_id`'s full descendant subtree as ready-to-insert `<li>`
 /// markup, each descendant's own row in turn carrying its own nested `children_html` — the
 /// in-place "expand to view sub-items" feature (see `Row::children_html`'s doc comment).
@@ -430,6 +451,7 @@ fn indent_class(depth: u8) -> &'static str {
 /// module's own flat Tasks list) since the calendar screens (`project_calendar`/`main_calendar`)
 /// reuse it unchanged rather than duplicating it — see their own `calendar_row` doc comments.
 #[async_recursion]
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn render_expandable_children(
     repo: &Arc<dyn ItemRepo>,
     parent_item_id: &str,
@@ -440,6 +462,11 @@ pub(crate) async fn render_expandable_children(
     skip_urls: &HashMap<String, String>,
     is_team_project: bool,
     depth: u8,
+    // `None` on every caller outside `project_tasks` itself (calendar/cross-project screens
+    // reusing this function — see this fn's own doc comment) — the "Blocked by ..." badge is
+    // currently a project_tasks-Tasks-list-only feature, and `None` skips the extra batched
+    // dependency query entirely rather than paying for it just to render nothing.
+    item_dependencies: Option<&Arc<dyn ItemDependencyRepo>>,
 ) -> Result<String, ItemError> {
     let children =
         list_project_items_unchecked(repo, project_id, Some(parent_item_id.to_string())).await?;
@@ -447,6 +474,13 @@ pub(crate) async fn render_expandable_children(
         .iter()
         .filter(|i| show_complete || !i.complete)
         .collect();
+    let dep_map = match item_dependencies {
+        Some(deps) => {
+            deps.list_for_items(&visible.iter().map(|i| i.id.clone()).collect::<Vec<_>>())
+                .await?
+        }
+        None => HashMap::new(),
+    };
     let mut html = String::new();
     for i in &visible {
         let mut row = ProjectTaskRow::from_item(
@@ -462,6 +496,8 @@ pub(crate) async fn render_expandable_children(
             None,
         );
         row.indent_class = indent_class(depth);
+        row.blocked_by_names = blocked_by_names_for(i, &visible, &dep_map);
+        row.expanded_row = row.expanded_row || !row.blocked_by_names.is_empty();
         if i.has_children {
             row.children_html = Some(
                 render_expandable_children(
@@ -474,6 +510,7 @@ pub(crate) async fn render_expandable_children(
                     skip_urls,
                     is_team_project,
                     depth + 1,
+                    item_dependencies,
                 )
                 .await?,
             );
@@ -559,6 +596,7 @@ pub(crate) async fn render_rows_with_virtual(
     team_id: Option<&str>,
     just_completed_item_id: Option<&str>,
     in_list_view: bool,
+    item_dependencies: &Arc<dyn ItemDependencyRepo>,
 ) -> Result<Vec<String>, ItemError> {
     let now = Utc::now();
     let is_team_project = team_id.is_some();
@@ -569,6 +607,12 @@ pub(crate) async fn render_rows_with_virtual(
                 || Some(i.id.as_str()) == just_completed_item_id
         })
         .collect();
+    // Top-level items are always siblings of each other (all share `parent_item_id: None`),
+    // so one batched query covers every row's "Blocked by ..." badge — see
+    // `blocked_by_names_for`'s doc comment.
+    let dep_map = item_dependencies
+        .list_for_items(&visible.iter().map(|i| i.id.clone()).collect::<Vec<_>>())
+        .await?;
     let mut entries: Vec<(i64, String)> = Vec::with_capacity(visible.len());
     for i in &visible {
         let just_completed = Some(i.id.as_str()) == just_completed_item_id;
@@ -586,6 +630,8 @@ pub(crate) async fn render_rows_with_virtual(
             confirmation,
             dismiss_after_ms,
         );
+        row.blocked_by_names = blocked_by_names_for(i, &visible, &dep_map);
+        row.expanded_row = row.expanded_row || !row.blocked_by_names.is_empty();
         // In-place expansion (see `Row::children_html`'s doc comment) — the flat list is the
         // one screen that opts a `ProjectTaskRow` into this, eagerly inlining the whole
         // subtree so the browser's toggle never has to fetch. Leaf items (no children) are
@@ -603,6 +649,7 @@ pub(crate) async fn render_rows_with_virtual(
                     skip_urls,
                     team_id.is_some(),
                     1,
+                    Some(item_dependencies),
                 )
                 .await?,
             );
@@ -646,6 +693,7 @@ pub(crate) async fn list_task_rows_for_project(
     filters: &ListFilters,
     tz: i32,
     just_completed_item_id: Option<&str>,
+    item_dependencies: &Arc<dyn ItemDependencyRepo>,
 ) -> Result<Vec<String>, ItemError> {
     let items = list_project_tasks(repo, project_id).await?;
     let names = match team_id {
@@ -698,6 +746,7 @@ pub(crate) async fn list_task_rows_for_project(
         team_id,
         just_completed_item_id,
         true,
+        item_dependencies,
     )
     .await
 }
@@ -779,4 +828,51 @@ pub(crate) async fn render_scope_fragment(
         rows,
         empty_message: empty_message.to_string(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn task(id: &str, name: &str, complete: bool) -> Item {
+        Item {
+            id: id.to_string(),
+            name: name.to_string(),
+            complete,
+            ..Item::default()
+        }
+    }
+
+    #[test]
+    fn blocked_by_names_for_includes_only_incomplete_dependencies() {
+        let a = task("a", "Design", false);
+        let b = task("b", "Build", false);
+        let c = task("c", "Ship", false);
+        let siblings: Vec<&Item> = vec![&a, &b, &c];
+        let mut dep_map = HashMap::new();
+        dep_map.insert("c".to_string(), vec!["a".to_string(), "b".to_string()]);
+
+        assert_eq!(
+            blocked_by_names_for(&c, &siblings, &dep_map),
+            vec!["Design".to_string(), "Build".to_string()]
+        );
+    }
+
+    #[test]
+    fn blocked_by_names_for_omits_a_completed_dependency() {
+        let a = task("a", "Design", true);
+        let b = task("b", "Ship", false);
+        let siblings: Vec<&Item> = vec![&a, &b];
+        let mut dep_map = HashMap::new();
+        dep_map.insert("b".to_string(), vec!["a".to_string()]);
+
+        assert!(blocked_by_names_for(&b, &siblings, &dep_map).is_empty());
+    }
+
+    #[test]
+    fn blocked_by_names_for_is_empty_with_no_dependency_edges() {
+        let a = task("a", "Solo", false);
+        let siblings: Vec<&Item> = vec![&a];
+        assert!(blocked_by_names_for(&a, &siblings, &HashMap::new()).is_empty());
+    }
 }

@@ -131,6 +131,7 @@ async fn children_html_for(
             &HashMap::new(),
             is_team_project,
             1,
+            None,
         )
         .await?,
     ))

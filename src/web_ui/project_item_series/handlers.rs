@@ -614,6 +614,7 @@ pub async fn skip_project_item_series_occurrence_form(
             &auth_user.user_id,
             &filters,
             tz,
+            &item_dependencies,
         )
         .await?);
     }
@@ -668,6 +669,7 @@ pub async fn unskip_project_item_series_occurrence_form(
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(users): Extension<Arc<dyn UserRepo>>,
     Extension(item_series): Extension<Arc<dyn ItemSeriesRepo>>,
+    Extension(item_dependencies): Extension<Arc<dyn ItemDependencyRepo>>,
     TzOffset(tz): TzOffset,
     Query(q): Query<OccurrenceRowActionQuery>,
     headers: HeaderMap,
@@ -707,6 +709,7 @@ pub async fn unskip_project_item_series_occurrence_form(
             &auth_user.user_id,
             &filters,
             tz,
+            &item_dependencies,
         )
         .await?);
     }
@@ -762,6 +765,7 @@ async fn rebuild_tasks_list_response(
     requester_user_id: &str,
     filters: &ListFilters,
     tz: i32,
+    item_dependencies: &Arc<dyn ItemDependencyRepo>,
 ) -> Result<Response, ItemError> {
     let project =
         project_service::get_project(projects, teams, project_id, requester_user_id).await?;
@@ -776,6 +780,7 @@ async fn rebuild_tasks_list_response(
         filters,
         tz,
         None,
+        item_dependencies,
     )
     .await?;
     Ok(Html(crate::web_ui::project_tasks::items_list_inner_html(&rows)).into_response())

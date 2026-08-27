@@ -131,6 +131,10 @@ impl ProjectTaskRow {
             // these at this default and keeps the plain decorative `has_children` arrow.
             children_html: None,
             indent_class: "",
+            // Set by `blocked_by_names_for`-aware callers only (the flat Tasks list and its
+            // in-place-expanded children — see `project_tasks::blocked_by_names_for`'s doc
+            // comment); every other caller of `from_item` leaves this empty.
+            blocked_by_names: Vec::new(),
         }
     }
 }

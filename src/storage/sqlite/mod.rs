@@ -307,6 +307,13 @@ pub trait ItemDependencyRepo: Send + Sync {
     ) -> Result<(), RepoError>;
     /// The ids of every item `item_id` currently depends on.
     async fn list_for_item(&self, item_id: &str) -> Result<Vec<String>, RepoError>;
+    /// Batched `list_for_item` across many items in one query, keyed by item id — used by the
+    /// Tasks list to build each row's "blocked by" badge without an N+1 query per sibling. An
+    /// item with no dependencies simply has no entry in the returned map.
+    async fn list_for_items(
+        &self,
+        item_ids: &[String],
+    ) -> Result<std::collections::HashMap<String, Vec<String>>, RepoError>;
     /// The ids of every item that currently depends on `item_id` — the reverse of
     /// `list_for_item`. Used by `service::item_dependencies::assert_movable` to block moving an
     /// item other items depend on.

@@ -28,6 +28,7 @@ impl ProjectSimpleItemRow {
             has_children: item.has_children,
             offset_label: None,
             assignee_name: None,
+            blocked_by_names: Vec::new(),
             complete_url: None,
             edit_url: Some(format!(
                 "/web/projects/{project_id}/simple-lists/{}/edit",

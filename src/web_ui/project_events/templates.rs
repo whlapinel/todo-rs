@@ -38,6 +38,7 @@ impl ProjectEventRow {
             has_children: false,
             offset_label: None,
             assignee_name: None,
+            blocked_by_names: Vec::new(),
             complete_url: None,
             edit_url: if item.google_event_id.is_some() {
                 None

@@ -26,6 +26,14 @@ pub struct Row {
     pub event_type: Option<String>,
     pub has_children: bool,
     pub offset_label: Option<String>,
+    /// Names of this row's still-incomplete "depends on" links (Task-kind, same-parent
+    /// siblings only — see `service::item_dependencies`), empty when the item has no
+    /// dependencies or every dependency is already complete. Set by callers that have a
+    /// batched `ItemDependencyRepo::list_for_items` result on hand (currently only the
+    /// project_tasks list-rendering paths — see `project_tasks::blocked_by_names_for`); every
+    /// other `Row` builder leaves this at its default `Vec::new()`, same convention as
+    /// `type_badge`/`parent_name`/`project_name`.
+    pub blocked_by_names: Vec<String>,
     /// Display name of this item's assignee, on a team-backed project — `None` on a
     /// personal project (no assignment concept) or an unassigned team item.
     pub assignee_name: Option<String>,

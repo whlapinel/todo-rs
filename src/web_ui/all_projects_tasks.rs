@@ -299,6 +299,7 @@ pub(crate) async fn list_all_projects_task_rows(
                         &HashMap::new(),
                         is_team_project,
                         1,
+                        None,
                     )
                     .await?,
                 )
@@ -633,6 +634,7 @@ pub async fn toggle_all_projects_task_complete(
                         &HashMap::new(),
                         project.team_id.is_some(),
                         1,
+                        None,
                     )
                     .await?,
                 )
