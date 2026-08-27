@@ -341,7 +341,13 @@ pub async fn update_item(
     }
 
     repo.update(&item).await?;
-    let (old_anchor, new_anchor) = (item_anchor(&current), item_anchor(&item));
+    // Bug fix (docs/issues_and_features.md's "top-level parent id" entry): descendants must
+    // always be measured against the true top-level ancestor's anchor, not `item`'s own anchor
+    // — using `item_anchor(&item)` here silently chained a mid-chain item's own (already
+    // offset-derived) date to its children whenever `item` itself has a `parent_item_id`,
+    // corrupting every deeper descendant's due date.
+    let old_anchor = top_level_anchor(repo, &params.user_id, &current).await?;
+    let new_anchor = top_level_anchor(repo, &params.user_id, &item).await?;
     if let Some(new_anchor) = new_anchor
         && Some(new_anchor) != old_anchor
     {
@@ -1235,6 +1241,81 @@ mod tests {
         )
         .await
         .expect("should update and sync offset children only");
+    }
+
+    #[tokio::test]
+    async fn update_item_plain_edit_syncs_grandchild_against_true_top_level_anchor() {
+        // Regression test for docs/issues_and_features.md's "top-level parent id" bug: a
+        // grandchild's offset must be measured from the true top-level ancestor's anchor, not
+        // from its immediate parent's own (already offset-derived) due date.
+        let mut mock = MockItemRepo::new();
+
+        let old_due = DateTime::parse_from_rfc3339("2026-01-10T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let new_due = DateTime::parse_from_rfc3339("2026-02-10T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        mock.expect_get()
+            .returning(move |_, _| Ok(task_with_due_date("item1", old_due)));
+
+        mock.expect_update()
+            .withf(move |item: &Item| item.id == "item1" && item.due_date() == Some(new_due))
+            .times(1)
+            .returning(|_| Ok(()));
+
+        mock.expect_list_children()
+            .withf(|parent_id: &str| parent_id == "item1")
+            .times(1)
+            .returning(|_| Ok(vec![task_with_due_offset("child-a", "item1", -10)]));
+
+        let expected_child_a_due =
+            recurrence::apply_end_of_day(new_due - chrono::Duration::days(10), 0);
+        mock.expect_update_by_project()
+            .withf(move |item: &Item| {
+                item.id == "child-a" && item.due_date() == Some(expected_child_a_due)
+            })
+            .times(1)
+            .returning(|_| Ok(()));
+
+        mock.expect_list_children()
+            .withf(|parent_id: &str| parent_id == "child-a")
+            .times(1)
+            .returning(|_| Ok(vec![task_with_due_offset("grandchild-b", "child-a", -5)]));
+
+        // The key assertion: grandchild-b's offset is measured from `new_due` (the true
+        // top-level anchor), not from child-a's own new due date (`new_due` - 10 days).
+        let expected_grandchild_b_due =
+            recurrence::apply_end_of_day(new_due - chrono::Duration::days(5), 0);
+        mock.expect_update_by_project()
+            .withf(move |item: &Item| {
+                item.id == "grandchild-b" && item.due_date() == Some(expected_grandchild_b_due)
+            })
+            .times(1)
+            .returning(|_| Ok(()));
+
+        mock.expect_list_children()
+            .withf(|parent_id: &str| parent_id == "grandchild-b")
+            .times(1)
+            .returning(|_| Ok(vec![]));
+
+        let repo: Arc<dyn ItemRepo> = Arc::new(mock);
+
+        update_item(
+            &repo,
+            &no_personal_project(),
+            &no_op_activity_log(),
+            UpdateItemParams {
+                user_id: "u1".to_string(),
+                item_id: "item1".to_string(),
+                name: "Rescheduled".to_string(),
+                due_date: Some(new_due),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("should update and cascade both levels off the same top-level anchor");
     }
 
     #[tokio::test]

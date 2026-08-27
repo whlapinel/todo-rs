@@ -577,7 +577,12 @@ pub async fn update_team_item(
     }
 
     repo.update_by_project(&item).await?;
-    let (old_anchor, new_anchor) = (item_anchor(&current), item_anchor(&item));
+    // Bug fix (docs/issues_and_features.md's "top-level parent id" entry) — see the identical
+    // fix in `items::update_item` for the full explanation: descendants must be measured
+    // against the true top-level ancestor's anchor, not `item`'s own (possibly offset-derived)
+    // anchor.
+    let old_anchor = top_level_anchor_project(repo, &params.project_id, &current).await?;
+    let new_anchor = top_level_anchor_project(repo, &params.project_id, &item).await?;
     if let Some(new_anchor) = new_anchor
         && Some(new_anchor) != old_anchor
     {

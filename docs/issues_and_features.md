@@ -2,6 +2,10 @@
 
 Open issues and feature requests, merged from the former `docs/issues.md` and `docs/features.md` (2026-08-20) into a single sorted list. Completed or superseded items — including ones from the old files that were already resolved but hadn't been moved out yet — live in `docs/archived/archived_issues_and_features.md`.
 
+- Add "depends on" field in order to make completion of a task conditioned on completion of the dependency task. Currently only way is to make a child of another task, but this would allow more flexibility. Complete action will require checking all sub-items as well as any dependency tasks.
+    - This would allow us more flexibility in terms of displaying items
+- Expand all: expands to show all sub-items
+- When we add a sub-item to a row item in an expanded row state, the entire list is re-rendered and all items are collapsed to hide sub-items. This may be necessary, but I am wondering if we can keep the user on their current view without having to drill down again. Not huge priority.
 - Tasks list: add pagination - show max 25 per page
 - Tasks list: add option to show as flattened list
 - Tasks list: add sort option: sort by due date or by scheduled start date
@@ -13,7 +17,6 @@ Open issues and feature requests, merged from the former `docs/issues.md` and `d
         - Set Due date
         - Mark complete
         - Mark incomplete
-
     - The item that follows this one may be completely stale, but including it here because it's relevant. Need to look into it. 
     - Mass rescheduling ("skip current" without completing), across projects. The single-row version already shipped (`bd000b1`, "Finish the quick-reschedule dialog and extend it to Events") — see the archived doc. The mass/bulk version is fully designed in `docs/scheduled-catchup-plan.md` but not yet built: needs a new cross-project screen, a new repo method, and a bulk-action pattern this codebase doesn't have precedent for yet. **Before implementing:** that plan doc predates the item_series redesign and has zero series-awareness in its "overdue" query — add a `series_id IS NULL` guard (or equivalent) before implementing, or it will desync a stale materialized series occurrence from its cursor.
 - Calendar view - filters should be shown on the day drawer instead of the month grid. But they should still survive navigation between days. 
@@ -29,7 +32,7 @@ Open issues and feature requests, merged from the former `docs/issues.md` and `d
         - radio with (default = all comments ) or only tasks I'm assigned, 
         - events (checkbox)
     - Allow user to change their screen name 
-- Add metadata fields to `Item`: `created_at`, `created_by`, `deleted_at`, `deleted_by` (tag for deletion instead of deleting outright, allowing recovery), with a TTL after which the item is actually deleted. Depends on the soft-delete design question mentioned elsewhere. Add completed_by field to activity log.
+- Add metadata fields to `Item`: `created_at`, `created_by`, `deleted_at`, `deleted_by` (tag for deletion instead of deleting outright, allowing recovery), with a TTL after which the item is actually deleted. Depends on the soft-delete design question mentioned below. Add completed_by field to activity log.
     - Open design question: should delete mark a `deleted` column true instead of actually deleting, to allow undo within a timeframe and easy viewing of recently-deleted items? Unsure this is the right pattern — wants a tradeoffs discussion before deciding. If adopted, pairs with the metadata-fields item.
 - All completions should get an undo button in the activity log
 - All skips should get an undo button in the activity log
