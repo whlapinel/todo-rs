@@ -19,8 +19,13 @@ model/build/
 /static/
 
 *.db
+*.db-shm
+*.db-wal
 
 .env
+
+# Playwright MCP session artifacts (snapshots/screenshots from ad-hoc browser testing)
+/.playwright-mcp/
 
 # Tailwind Plus component source, downloaded from the user's Google Drive — see CLAUDE.md's
 # "Tailwind Plus component library" section.

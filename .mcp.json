@@ -6,7 +6,7 @@
     },
     "playwright": {
       "command": "npx",
-      "args": ["-y", "@playwright/mcp@latest", "--headless"]
+      "args": ["-y", "@playwright/mcp@latest", "--headless", "--executable-path", "/home/whlapinel/.cache/ms-playwright/chromium-1234/chrome-linux64/chrome"]
     }
   }
 }
