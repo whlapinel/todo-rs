@@ -2,12 +2,17 @@
 
 Open issues and feature requests, merged from the former `docs/issues.md` and `docs/features.md` (2026-08-20) into a single sorted list. Completed or superseded items — including ones from the old files that were already resolved but hadn't been moved out yet — live in `docs/archived/archived_issues_and_features.md`.
 
+- Turn app into a PWA
+- Add push notifications: need Apple for iOS and Google for Windows Desktop Chrome
+- Task filters should be available on task full page for its sub-items, just the same as they're available for root tasks list.
+- sometimes item rows are given the href to details dialog instead of the toggleChildren(). For example when you edit the item, the row swapped in appears to not have toogleChildren().
+- Batch add should be available from project tasks page
 - Expand all: expands to show all sub-items
 - When we add a sub-item to a row item in an expanded row state, the entire list is re-rendered and all items are collapsed to hide sub-items. This may be necessary, but I am wondering if we can keep the user on their current view without having to drill down again. Not huge priority.
-- Tasks list: add pagination - show max 25 per page
+- Tasks list: add pagination - show max 25 top-level items + all their sub-items per page
 - Tasks list: add option to show as flattened list
 - Tasks list: add sort option: sort by due date or by scheduled start date
-- Multi-select: let's change UI so that checkbox is used to select an item for bulk actions rather than completing it, but stays on far left. Add a nice checkmark button next to the left which performs current function of checkbox, to mark complete.
+- Multi-select: let's change UI so that checkbox is used to select an item for bulk actions rather than completing it, but stays on far left. Add a more stylized checkbox just right of that which performs current function of checkbox, to mark complete.
     - Would like to provide following actions eventually:
         - Set Assignee (for team-items)
         - Set offset (for sub-tasks)
@@ -43,8 +48,6 @@ Open issues and feature requests, merged from the former `docs/issues.md` and `d
 - Consider visibly disabling inputs that will result in error. Specifically, recurring tasks that aren't current should have complete and skip grayed out, and skipped recurring tasks and events that aren't cursor should have unskip grayed out.
 - Add comments for all items. Any team-member can comment on any item. No edit or delete for now.
 - Add notifications for comments -- all team members notified of any comment by default
-- Turn app into a PWA
-- Add push notifications: need Apple for iOS and Google for Windows Desktop Chrome
 - Infrastructure/dev-ops: need to automate deployment better. right now for todo for example, I run task docker-release, then cd ../home-server && task deploy, and I think one barrier to automation is I have a password for the prod server command. Ideally I'd like to set up a pipeline that activates on push, but don't necessarily want to use github actions, and want to consider switching to a local remote repo instead of github, maybe gitea?
 - Big feature addition, needs fleshing out: user should be encouraged, but not necessarily restricted in any way, to give tasks both a due date and a schedule date. So some kind of gentle warning indicator can be clicked to take user to a page that lists all tasks with scheduled date and no due date, and all tasks with due date but no scheduled date. However -- contrary to part of what I just stated, Consider this restriction: requiring due date for all tasks, and making scheduled date optional (but encouraged through this warning). This would be a very big change and would involve a migration to make all tasks scheduled and lacking a due date to have a due date matching the scheduled date.
     - Future vision worth discussing now on this: I'm envisioning a system by which user can specify a due date and scheduling window for recurring tasks, allowing assignee to schedule completion of a task within the allowed window. But this is low-priority and only half-baked currently.
