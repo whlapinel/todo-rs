@@ -39,30 +39,68 @@ impl ReminderRepo for SqliteReminderRepo {
         reminders: &[(ReminderKind, DateTime<Utc>)],
     ) -> Result<(), RepoError> {
         let mut tx = self.0.begin().await.map_err(db_err)?;
-        sqlx::query("DELETE FROM reminders WHERE item_id = ? AND source = 'AUTO'")
-            .bind(item_id)
-            .execute(&mut *tx)
-            .await
-            .map_err(db_err)?;
+
+        let existing: Vec<(String, String, i64)> = sqlx::query(
+            "SELECT id, kind, remind_at FROM reminders WHERE item_id = ? AND source = 'AUTO'",
+        )
+        .bind(item_id)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(db_err)?
+        .iter()
+        .map(|row| (row.get("id"), row.get("kind"), row.get("remind_at")))
+        .collect();
+
         let created_at = Utc::now().timestamp();
+        let mut seen_kinds = std::collections::HashSet::new();
+
         for (kind, remind_at) in reminders {
-            let id = uuid::Uuid::new_v4().to_string();
-            sqlx::query(
-                "INSERT INTO reminders \
-                 (id, item_id, project_id, user_id, kind, source, remind_at, sent_at, created_at) \
-                 VALUES (?, ?, ?, ?, ?, 'AUTO', ?, NULL, ?)",
-            )
-            .bind(&id)
-            .bind(item_id)
-            .bind(project_id)
-            .bind(user_id)
-            .bind(kind.as_str())
-            .bind(remind_at.timestamp())
-            .bind(created_at)
-            .execute(&mut *tx)
-            .await
-            .map_err(db_err)?;
+            seen_kinds.insert(kind.as_str());
+            let remind_at_ts = remind_at.timestamp();
+            match existing.iter().find(|(_, k, _)| k == kind.as_str()) {
+                // Same remind_at: leave the row (and its sent_at) untouched, so an
+                // unrelated edit to the item doesn't silently un-dismiss a reminder.
+                Some((_, _, existing_remind_at)) if *existing_remind_at == remind_at_ts => {}
+                // remind_at moved: it's effectively a new reminder, so clear sent_at.
+                Some((id, _, _)) => {
+                    sqlx::query("UPDATE reminders SET remind_at = ?, sent_at = NULL WHERE id = ?")
+                        .bind(remind_at_ts)
+                        .bind(id)
+                        .execute(&mut *tx)
+                        .await
+                        .map_err(db_err)?;
+                }
+                None => {
+                    let id = uuid::Uuid::new_v4().to_string();
+                    sqlx::query(
+                        "INSERT INTO reminders \
+                         (id, item_id, project_id, user_id, kind, source, remind_at, sent_at, created_at) \
+                         VALUES (?, ?, ?, ?, ?, 'AUTO', ?, NULL, ?)",
+                    )
+                    .bind(&id)
+                    .bind(item_id)
+                    .bind(project_id)
+                    .bind(user_id)
+                    .bind(kind.as_str())
+                    .bind(remind_at_ts)
+                    .bind(created_at)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(db_err)?;
+                }
+            }
         }
+
+        for (id, kind, _) in &existing {
+            if !seen_kinds.contains(kind.as_str()) {
+                sqlx::query("DELETE FROM reminders WHERE id = ?")
+                    .bind(id)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(db_err)?;
+            }
+        }
+
         tx.commit().await.map_err(db_err)?;
         Ok(())
     }
@@ -84,6 +122,35 @@ impl ReminderRepo for SqliteReminderRepo {
             .await
             .map_err(db_err)
             .map(|rows| rows.iter().map(row_to_reminder).collect())
+    }
+
+    async fn list_due_for_user(
+        &self,
+        user_id: &str,
+        now: DateTime<Utc>,
+    ) -> Result<Vec<Reminder>, RepoError> {
+        let q = format!(
+            "{REMINDER_SELECT} WHERE user_id = ? AND remind_at <= ? AND sent_at IS NULL \
+             ORDER BY remind_at ASC"
+        );
+        sqlx::query(&q)
+            .bind(user_id)
+            .bind(now.timestamp())
+            .fetch_all(&self.0)
+            .await
+            .map_err(db_err)
+            .map(|rows| rows.iter().map(row_to_reminder).collect())
+    }
+
+    async fn dismiss(&self, id: &str, user_id: &str) -> Result<(), RepoError> {
+        sqlx::query("UPDATE reminders SET sent_at = ? WHERE id = ? AND user_id = ?")
+            .bind(Utc::now().timestamp())
+            .bind(id)
+            .bind(user_id)
+            .execute(&self.0)
+            .await
+            .map_err(db_err)?;
+        Ok(())
     }
 }
 
@@ -204,6 +271,152 @@ mod tests {
             .unwrap();
 
         assert!(repo.list_for_item("item1").await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn sync_auto_reminders_preserves_sent_at_when_remind_at_unchanged() {
+        let pool = test_pool().await;
+        let repo = SqliteReminderRepo(pool.clone());
+        repo.sync_auto_reminders("item1", "proj1", "user1", &[(ReminderKind::Due, ts(1_000))])
+            .await
+            .unwrap();
+        let row = repo.list_for_item("item1").await.unwrap().remove(0);
+        sqlx::query("UPDATE reminders SET sent_at = ? WHERE id = ?")
+            .bind(5_000_i64)
+            .bind(&row.id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // An unrelated edit that recomputes the same due-based remind_at must not
+        // clobber the dismissal recorded above.
+        repo.sync_auto_reminders("item1", "proj1", "user1", &[(ReminderKind::Due, ts(1_000))])
+            .await
+            .unwrap();
+
+        let rows = repo.list_for_item("item1").await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, row.id);
+        assert_eq!(rows[0].sent_at, Some(ts(5_000)));
+    }
+
+    #[tokio::test]
+    async fn sync_auto_reminders_clears_sent_at_when_remind_at_changes() {
+        let pool = test_pool().await;
+        let repo = SqliteReminderRepo(pool.clone());
+        repo.sync_auto_reminders("item1", "proj1", "user1", &[(ReminderKind::Due, ts(1_000))])
+            .await
+            .unwrap();
+        let row = repo.list_for_item("item1").await.unwrap().remove(0);
+        sqlx::query("UPDATE reminders SET sent_at = ? WHERE id = ?")
+            .bind(5_000_i64)
+            .bind(&row.id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        repo.sync_auto_reminders("item1", "proj1", "user1", &[(ReminderKind::Due, ts(9_999))])
+            .await
+            .unwrap();
+
+        let rows = repo.list_for_item("item1").await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, row.id);
+        assert_eq!(rows[0].remind_at, ts(9_999));
+        assert_eq!(rows[0].sent_at, None);
+    }
+
+    #[tokio::test]
+    async fn sync_auto_reminders_drops_kinds_no_longer_present() {
+        let pool = test_pool().await;
+        let repo = SqliteReminderRepo(pool.clone());
+        repo.sync_auto_reminders(
+            "item1",
+            "proj1",
+            "user1",
+            &[
+                (ReminderKind::Due, ts(1_000)),
+                (ReminderKind::ScheduledStart, ts(2_000)),
+            ],
+        )
+        .await
+        .unwrap();
+        let due_row = repo
+            .list_for_item("item1")
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|r| r.kind == ReminderKind::Due)
+            .unwrap();
+        sqlx::query("UPDATE reminders SET sent_at = ? WHERE id = ?")
+            .bind(5_000_i64)
+            .bind(&due_row.id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // The item no longer has a scheduled start; the Due reminder is unchanged.
+        repo.sync_auto_reminders("item1", "proj1", "user1", &[(ReminderKind::Due, ts(1_000))])
+            .await
+            .unwrap();
+
+        let rows = repo.list_for_item("item1").await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].kind, ReminderKind::Due);
+        assert_eq!(rows[0].sent_at, Some(ts(5_000)));
+    }
+
+    #[tokio::test]
+    async fn list_due_for_user_excludes_future_and_dismissed_and_other_users() {
+        let pool = test_pool().await;
+        let repo = SqliteReminderRepo(pool.clone());
+        repo.sync_auto_reminders("item1", "proj1", "user1", &[(ReminderKind::Due, ts(1_000))])
+            .await
+            .unwrap();
+        repo.sync_auto_reminders("item2", "proj1", "user1", &[(ReminderKind::Due, ts(9_999))])
+            .await
+            .unwrap();
+        repo.sync_auto_reminders("item3", "proj1", "user2", &[(ReminderKind::Due, ts(1_000))])
+            .await
+            .unwrap();
+        let dismissed = repo.list_for_item("item1").await.unwrap().remove(0);
+        repo.dismiss(&dismissed.id, "user1").await.unwrap();
+        repo.sync_auto_reminders(
+            "item4",
+            "proj1",
+            "user1",
+            &[
+                (ReminderKind::Due, ts(1_000)),
+                (ReminderKind::ScheduledStart, ts(500)),
+            ],
+        )
+        .await
+        .unwrap();
+
+        let due = repo.list_due_for_user("user1", ts(2_000)).await.unwrap();
+
+        assert_eq!(due.len(), 2);
+        assert!(due.iter().all(|r| r.item_id == "item4"));
+        assert!(due.iter().any(|r| r.kind == ReminderKind::Due));
+        assert!(due.iter().any(|r| r.kind == ReminderKind::ScheduledStart));
+    }
+
+    #[tokio::test]
+    async fn dismiss_is_scoped_to_the_owning_user() {
+        let pool = test_pool().await;
+        let repo = SqliteReminderRepo(pool.clone());
+        repo.sync_auto_reminders("item1", "proj1", "user1", &[(ReminderKind::Due, ts(1_000))])
+            .await
+            .unwrap();
+        let row = repo.list_for_item("item1").await.unwrap().remove(0);
+
+        repo.dismiss(&row.id, "user2").await.unwrap();
+        let still_due = repo.list_due_for_user("user1", ts(2_000)).await.unwrap();
+        assert_eq!(still_due.len(), 1);
+
+        repo.dismiss(&row.id, "user1").await.unwrap();
+        let now_dismissed = repo.list_due_for_user("user1", ts(2_000)).await.unwrap();
+        assert!(now_dismissed.is_empty());
     }
 
     #[tokio::test]

@@ -266,18 +266,20 @@ pub trait CalendarSubscriptionRepo: Send + Sync {
 }
 
 /// Auto-generated "notify at the instant a date occurs" reminders for Task/Event items —
-/// see `service::reminders::sync_item_reminders`, the sole writer. Stage 1 of the
-/// reminders feature (`docs/issues_and_features.md`): schema + auto-population only, no
-/// mutation UI/API and no delivery mechanism yet, so nothing else reads this table.
+/// see `service::reminders::sync_item_reminders`, the sole writer. Read-only display
+/// (Stage D) and in-app notifications (Stage E) of `docs/reminders-in-app-notifications-plan.md`
+/// are the first readers; there is still no custom-reminder mutation UI/API.
 #[cfg_attr(test, mockall::automock)]
 #[async_trait]
 pub trait ReminderRepo: Send + Sync {
-    /// Replaces every `source = 'AUTO'` reminder for `item_id` with `reminders` in one
-    /// transaction (delete-then-insert, not a diff — nothing sets `sent_at` yet, so
-    /// there's no in-flight state to preserve across an edit). Any `source = 'CUSTOM'`
-    /// row (a future mutation-UI feature) is left untouched. An empty `reminders` slice
-    /// still clears existing auto rows — e.g. a due date getting removed, or an item
-    /// becoming unassigned on a team project.
+    /// Upserts every `source = 'AUTO'` reminder for `item_id` against `reminders`, keyed by
+    /// `kind`: a kind whose `remind_at` is unchanged is left untouched (preserving `sent_at`,
+    /// so an unrelated item edit can't un-dismiss it), a kind whose `remind_at` moved gets
+    /// updated with `sent_at` reset to `NULL` (it's effectively a new reminder), a new kind is
+    /// inserted, and a kind no longer present is deleted. Any `source = 'CUSTOM'` row (a future
+    /// mutation-UI feature) is left untouched. An empty `reminders` slice clears every existing
+    /// auto row — e.g. a due date getting removed, or an item becoming unassigned on a team
+    /// project.
     async fn sync_auto_reminders(
         &self,
         item_id: &str,
@@ -288,6 +290,18 @@ pub trait ReminderRepo: Send + Sync {
     /// Deletes every reminder (auto or custom) for `item_id` — called on item delete.
     async fn delete_for_item(&self, item_id: &str) -> Result<(), RepoError>;
     async fn list_for_item(&self, item_id: &str) -> Result<Vec<Reminder>, RepoError>;
+    /// Reminders due (`remind_at <= now`) and not yet dismissed, for `user_id`, across every
+    /// project — the query the notification badge/list poll against. Does not filter out a
+    /// completed item's stale reminder row itself (see
+    /// `service::reminders::list_due_notifications_for_user`, which does that at read time).
+    async fn list_due_for_user(
+        &self,
+        user_id: &str,
+        now: DateTime<Utc>,
+    ) -> Result<Vec<Reminder>, RepoError>;
+    /// Marks one reminder dismissed (`sent_at = now()`), scoped to `user_id` so one user can't
+    /// dismiss another's reminder by guessing an id.
+    async fn dismiss(&self, id: &str, user_id: &str) -> Result<(), RepoError>;
 }
 
 /// "Depends on" (docs/issues_and_features.md) — a many-to-many `item_id -> depends_on_item_id`

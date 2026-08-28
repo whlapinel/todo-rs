@@ -6,7 +6,7 @@ use crate::service::error::ItemError;
 use crate::service::item_series::ProjectOccurrence;
 use crate::storage::sqlite::ItemRepo;
 use crate::web_ui::components::row::Row;
-use crate::web_ui::{format_display_date, to_local};
+use crate::web_ui::{format_display_date, reminder_labels, to_local};
 use askama::Template;
 use chrono::Utc;
 
@@ -575,6 +575,11 @@ pub struct ProjectTaskDetailView {
     /// the caller (`service::item_dependencies::list_item_dependencies`). Empty if this item
     /// has none.
     pub depends_on: Vec<(String, String)>,
+    /// Read-only reminders view (Stage D of `docs/reminders-in-app-notifications-plan.md`) —
+    /// pre-formatted labels (`reminder_labels`) for this item's `ReminderRepo::list_for_item`
+    /// rows. Empty for an item with no due/scheduled dates, or on a personal project item
+    /// whose caller didn't resolve them. No mutation UI yet — see that plan doc's scope note.
+    pub reminders: Vec<String>,
 }
 
 impl ProjectTaskDetailView {
@@ -589,6 +594,7 @@ impl ProjectTaskDetailView {
         linked_event: Option<(String, String)>,
         series_link: Option<(String, String)>,
         depends_on: Vec<(String, String)>,
+        reminders: Vec<crate::domain::reminder::Reminder>,
     ) -> Self {
         let due_date = item
             .due_date()
@@ -619,6 +625,7 @@ impl ProjectTaskDetailView {
             linked_event,
             series_link,
             depends_on,
+            reminders: reminder_labels(&reminders, tz),
         }
     }
 }

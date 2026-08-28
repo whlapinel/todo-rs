@@ -59,6 +59,7 @@ use web_ui::all_projects_tasks::{
 use web_ui::assigned_items::assigned_items_page;
 use web_ui::login::login_page;
 use web_ui::main_calendar::*;
+use web_ui::notifications::{dismiss_notification_form, notifications_badge, notifications_list};
 use web_ui::project_activity::*;
 use web_ui::project_calendar::*;
 use web_ui::project_calendar_subscriptions::*;
@@ -235,6 +236,12 @@ fn build_web_router() -> Router {
             get(get_move_simple_item_dialog).post(move_project_simple_item_form),
         )
         .route("/assigned-items", get(assigned_items_page))
+        .route("/notifications/badge", get(notifications_badge))
+        .route("/notifications", get(notifications_list))
+        .route(
+            "/notifications/:id/dismiss",
+            post(dismiss_notification_form),
+        )
         .route(
             "/projects/:project_id/templates",
             get(project_templates_page).post(create_project_template_form),

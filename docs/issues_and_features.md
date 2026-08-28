@@ -3,7 +3,10 @@
 Open issues and feature requests, merged from the former `docs/issues.md` and `docs/features.md` (2026-08-20) into a single sorted list. Completed or superseded items — including ones from the old files that were already resolved but hadn't been moved out yet — live in `docs/archived/archived_issues_and_features.md`.
 
 - Turn app into a PWA
+- Add reminder schema and UI to tasks, series, and events. (schema + read-only display done, see `docs/archived/archived_issues_and_features.md`; remaining scope is a custom reminder mutation UI — add/edit/delete a reminder, configurable offsets like "15 min before" — `source = 'CUSTOM'` stays unused until then)
+- Bug: `sync_item_reminders` (`src/service/reminders.rs`) never looks at `item.complete`, so a completed item's already-past reminder row stays in the `reminders` table forever with no way to tell it's stale. `service::reminders::list_due_notifications_for_user` (the in-app notification list, `docs/reminders-in-app-notifications-plan.md`) works around this by filtering out completed items at read time, so the notification UI itself is unaffected — but the underlying table still accumulates stale rows forever, and any other future reader would need the same read-time workaround rather than being able to trust the table. Found 2026-08-28.
 - Add push notifications: need Apple for iOS and Google for Windows Desktop Chrome
+
 - Task filters should be available on task full page for its sub-items, just the same as they're available for root tasks list.
 - sometimes item rows are given the href to details dialog instead of the toggleChildren(). For example when you edit the item, the row swapped in appears to not have toogleChildren().
 - Batch add should be available from project tasks page
@@ -26,9 +29,6 @@ Open issues and feature requests, merged from the former `docs/issues.md` and `d
 - For sub-task scheduling we only allow setting offset but row-actions returns same schedule form as top-level items. Let's just hide that row-action and let the edit form be the only way. But we also should ideally have a client-side helper that shows the conversion from offset to date beside the field as it is changed. 
     - Design discussion on this topic please. It appears we are persisting the due date whenever a due-date-offset is updated. I wonder if this is necessary? This is a computed value based on the top-level parent's due date and changes with it based on the offset. So in theory it could be computed on the fly whenever it's needed. Let's weigh the options here and reevaluate. But, I really want to change it unless there's an obvious benefit in terms of performance gains or reduction of complexity.
 - Let's make the filters part of the URL at all times. 
-- Add reminder schema and UI to tasks, series, and events. (in-progress, possibly complete)
-    - Default value is reminders pushed on the instant they're scheduled for (for tasks and events), and on the instant they're due (for tasks)
-- Add in-app notifications for reminders.
 - Create user settings schema and UI
     - Configure notifications to toggle e-mail on/off (default = on)
     - Comment notifications configurability

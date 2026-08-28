@@ -1,0 +1,10 @@
+<div id="notif-{{ id }}" class="flex items-start gap-x-2 border-b border-gray-100 px-4 py-3 last:border-0 dark:border-white/5">
+  <div class="min-w-0 flex-1">
+    <a href="{{ detail_url }}" hx-target="#page" hx-select="#page" hx-swap="innerHTML"
+       class="block truncate text-sm font-medium text-gray-900 hover:text-indigo-600 dark:text-white dark:hover:text-indigo-400">{{ item_name }}</a>
+    <div class="text-xs text-gray-500 dark:text-gray-400">{{ label }}</div>
+  </div>
+  <button type="button" hx-post="/web/notifications/{{ id }}/dismiss"
+          hx-target="#notif-list" hx-select="#notif-list" hx-swap="outerHTML"
+          class="shrink-0 cursor-pointer text-xs text-indigo-600 hover:text-indigo-500 dark:text-indigo-400">Dismiss</button>
+</div>

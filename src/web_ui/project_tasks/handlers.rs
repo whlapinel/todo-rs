@@ -182,6 +182,7 @@ pub async fn project_task_detail_page(
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
     Extension(item_dependencies): Extension<Arc<dyn ItemDependencyRepo>>,
+    Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
     TzOffset(tz): TzOffset,
 ) -> Result<Html<String>, ItemError> {
     let project =
@@ -198,6 +199,10 @@ pub async fn project_task_detail_page(
     let series_link = resolve_series_link(&series, &project_id, &item).await?;
     let depends_on =
         resolve_depends_on_links(&repo, &item_dependencies, &project_id, &item).await?;
+    let item_reminders = reminders
+        .list_for_item(&item.id)
+        .await
+        .map_err(ItemError::from)?;
     let view = ProjectTaskDetailView::from_item(
         &item,
         &project_id,
@@ -208,6 +213,7 @@ pub async fn project_task_detail_page(
         linked_event,
         series_link,
         depends_on,
+        item_reminders,
     )
     .render()?;
     let dialog = ProjectTaskDetailDialog::new(
@@ -1039,6 +1045,10 @@ pub async fn update_project_task_form(
             let series_link = resolve_series_link(&series, &project_id, &updated).await?;
             let depends_on =
                 resolve_depends_on_links(&repo, &item_dependencies, &project_id, &updated).await?;
+            let item_reminders = reminders
+                .list_for_item(&updated.id)
+                .await
+                .map_err(ItemError::from)?;
             let view = ProjectTaskDetailView::from_item(
                 &updated,
                 &project_id,
@@ -1049,6 +1059,7 @@ pub async fn update_project_task_form(
                 linked_event,
                 series_link,
                 depends_on,
+                item_reminders,
             )
             .render()?;
             let dialog = ProjectTaskDetailDialog::new(
@@ -1227,6 +1238,10 @@ pub async fn update_project_task_form(
             let series_link = resolve_series_link(&series, &project_id, &updated).await?;
             let depends_on =
                 resolve_depends_on_links(&repo, &item_dependencies, &project_id, &updated).await?;
+            let item_reminders = reminders
+                .list_for_item(&updated.id)
+                .await
+                .map_err(ItemError::from)?;
             let view = ProjectTaskDetailView::from_item(
                 &updated,
                 &project_id,
@@ -1237,6 +1252,7 @@ pub async fn update_project_task_form(
                 linked_event,
                 series_link,
                 depends_on,
+                item_reminders,
             )
             .render()?;
             Ok(Html(format!("{row}{fields}{view}")).into_response())

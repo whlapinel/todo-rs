@@ -1,7 +1,8 @@
 use crate::domain::item::{Item, ItemKind};
-use crate::domain::reminder::ReminderKind;
+use crate::domain::reminder::{Reminder, ReminderKind};
 use crate::service::error::ItemError;
-use crate::storage::sqlite::{ProjectRepo, ReminderRepo};
+use crate::storage::sqlite::{ItemRepo, ProjectRepo, ReminderRepo, RepoError};
+use chrono::{DateTime, Utc};
 use std::sync::Arc;
 
 /// Recomputes `item`'s auto-generated reminders from its current state — called after
@@ -64,6 +65,65 @@ pub async fn sync_item_reminders(
         .sync_auto_reminders(&item.id, &project_id, &user_id, &rows)
         .await?;
     Ok(())
+}
+
+/// One due, undismissed reminder ready to show in the notification badge/list — see
+/// `list_due_notifications_for_user` below.
+pub struct DueNotification {
+    pub reminder: Reminder,
+    pub item_name: String,
+    pub detail_url: String,
+}
+
+/// Task/Event only — `sync_item_reminders` never creates rows for Simple/Template, but this
+/// stays defensive rather than assuming that invariant holds forever. Mirrors
+/// `web_ui::assigned_items::detail_url`, duplicated per that file's own "small per-screen
+/// helper" precedent rather than shared.
+fn detail_url(item: &Item, project_id: &str) -> Option<String> {
+    match item.kind() {
+        ItemKind::Task => Some(format!("/web/projects/{project_id}/tasks/{}", item.id)),
+        ItemKind::Event => Some(format!("/web/projects/{project_id}/events/{}", item.id)),
+        ItemKind::Simple | ItemKind::Template => None,
+    }
+}
+
+/// Fetches `user_id`'s due-and-undismissed reminders (`ReminderRepo::list_due_for_user`) and
+/// filters out anything that shouldn't actually show: a completed item (works around
+/// `sync_item_reminders` never clearing a completed item's stale reminder row — see
+/// `docs/reminders-in-app-notifications-plan.md`'s bug 2 — by filtering at read time instead
+/// of teaching the write-side sync about completion) or an item that's been deleted since the
+/// reminder was created (`delete_for_item` should already prevent this in the normal path, but
+/// don't assume).
+pub async fn list_due_notifications_for_user(
+    reminders: &Arc<dyn ReminderRepo>,
+    items: &Arc<dyn ItemRepo>,
+    user_id: &str,
+    now: DateTime<Utc>,
+) -> Result<Vec<DueNotification>, ItemError> {
+    let due = reminders.list_due_for_user(user_id, now).await?;
+    let mut out = Vec::with_capacity(due.len());
+    for reminder in due {
+        let item = match items
+            .get_by_project(&reminder.project_id, &reminder.item_id)
+            .await
+        {
+            Ok(item) => item,
+            Err(RepoError::NotFound) => continue,
+            Err(e) => return Err(e.into()),
+        };
+        if item.complete {
+            continue;
+        }
+        let Some(detail_url) = detail_url(&item, &reminder.project_id) else {
+            continue;
+        };
+        out.push(DueNotification {
+            item_name: item.name.clone(),
+            detail_url,
+            reminder,
+        });
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -272,5 +332,114 @@ mod tests {
         )
         .await
         .unwrap();
+    }
+
+    mod list_due_notifications {
+        use super::*;
+        use crate::storage::sqlite::MockItemRepo;
+
+        fn due_reminder(item_id: &str, kind: ReminderKind) -> Reminder {
+            Reminder {
+                id: format!("reminder-{item_id}"),
+                item_id: item_id.to_string(),
+                project_id: "proj1".to_string(),
+                user_id: "user1".to_string(),
+                kind,
+                source: "AUTO".to_string(),
+                remind_at: ts(1_000),
+                sent_at: None,
+                created_at: ts(0),
+            }
+        }
+
+        #[tokio::test]
+        async fn builds_a_notification_for_an_incomplete_task() {
+            let mut reminder_repo = MockReminderRepo::new();
+            reminder_repo
+                .expect_list_due_for_user()
+                .returning(|_, _| Ok(vec![due_reminder("item1", ReminderKind::Due)]));
+
+            let mut items = MockItemRepo::new();
+            items.expect_get_by_project().returning(|_, _| {
+                Ok(task_item(
+                    "proj1",
+                    Schedule {
+                        due_date: Some(ts(1_000)),
+                        ..Schedule::default()
+                    },
+                    None,
+                ))
+            });
+
+            let out = list_due_notifications_for_user(
+                &(Arc::new(reminder_repo) as Arc<dyn ReminderRepo>),
+                &(Arc::new(items) as Arc<dyn ItemRepo>),
+                "user1",
+                ts(2_000),
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(out.len(), 1);
+            assert_eq!(out[0].detail_url, "/web/projects/proj1/tasks/item1");
+            assert_eq!(out[0].item_name, "Task");
+        }
+
+        #[tokio::test]
+        async fn skips_a_completed_item() {
+            let mut reminder_repo = MockReminderRepo::new();
+            reminder_repo
+                .expect_list_due_for_user()
+                .returning(|_, _| Ok(vec![due_reminder("item1", ReminderKind::Due)]));
+
+            let mut items = MockItemRepo::new();
+            items.expect_get_by_project().returning(|_, _| {
+                let mut item = task_item(
+                    "proj1",
+                    Schedule {
+                        due_date: Some(ts(1_000)),
+                        ..Schedule::default()
+                    },
+                    None,
+                );
+                item.complete = true;
+                Ok(item)
+            });
+
+            let out = list_due_notifications_for_user(
+                &(Arc::new(reminder_repo) as Arc<dyn ReminderRepo>),
+                &(Arc::new(items) as Arc<dyn ItemRepo>),
+                "user1",
+                ts(2_000),
+            )
+            .await
+            .unwrap();
+
+            assert!(out.is_empty());
+        }
+
+        #[tokio::test]
+        async fn skips_an_item_deleted_since_the_reminder_was_created() {
+            let mut reminder_repo = MockReminderRepo::new();
+            reminder_repo
+                .expect_list_due_for_user()
+                .returning(|_, _| Ok(vec![due_reminder("item1", ReminderKind::Due)]));
+
+            let mut items = MockItemRepo::new();
+            items
+                .expect_get_by_project()
+                .returning(|_, _| Err(RepoError::NotFound));
+
+            let out = list_due_notifications_for_user(
+                &(Arc::new(reminder_repo) as Arc<dyn ReminderRepo>),
+                &(Arc::new(items) as Arc<dyn ItemRepo>),
+                "user1",
+                ts(2_000),
+            )
+            .await
+            .unwrap();
+
+            assert!(out.is_empty());
+        }
     }
 }

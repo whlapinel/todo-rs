@@ -1,0 +1,9 @@
+<div id="notif-list" class="max-h-96 overflow-y-auto py-1">
+  {% if rows.is_empty() %}
+  <div class="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">No reminders due.</div>
+  {% else %}
+  {% for row in rows %}
+  {{ row|safe }}
+  {% endfor %}
+  {% endif %}
+</div>

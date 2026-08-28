@@ -140,6 +140,7 @@ pub async fn project_event_detail_page(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
+    Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
     TzOffset(tz): TzOffset,
 ) -> Result<Html<String>, ItemError> {
     let item = project_item_service::get_project_item(
@@ -155,7 +156,12 @@ pub async fn project_event_detail_page(
     let series_link =
         crate::web_ui::project_events::templates::resolve_series_link(&series, &project_id, &item)
             .await?;
-    let view = ProjectEventDetailView::from_item(&item, tz, series_link).render()?;
+    let item_reminders = reminders
+        .list_for_item(&item.id)
+        .await
+        .map_err(ItemError::from)?;
+    let view =
+        ProjectEventDetailView::from_item(&item, tz, series_link, item_reminders).render()?;
     let is_imported = item.google_event_id.is_some();
     let dialog =
         ProjectEventDetailDialog::new(&item.id, &project_id, &item.name, is_imported, view)
@@ -631,7 +637,13 @@ pub async fn update_project_event_form(
     )
     .await?;
     if close {
-        let view = ProjectEventDetailView::from_item(&updated, tz, series_link.clone()).render()?;
+        let item_reminders = reminders
+            .list_for_item(&updated.id)
+            .await
+            .map_err(ItemError::from)?;
+        let view =
+            ProjectEventDetailView::from_item(&updated, tz, series_link.clone(), item_reminders)
+                .render()?;
         let is_imported = updated.google_event_id.is_some();
         let dialog = ProjectEventDetailDialog::new(
             &updated.id,
@@ -739,7 +751,12 @@ pub async fn update_project_event_form(
         ProjectEventRow::from_item(&updated, &project_id, tz, skip_url).render()?
     };
     let fields = ProjectEventDetailFields::from_item(&updated, &project_id, tz, true).render()?;
-    let view = ProjectEventDetailView::from_item(&updated, tz, series_link).render()?;
+    let item_reminders = reminders
+        .list_for_item(&updated.id)
+        .await
+        .map_err(ItemError::from)?;
+    let view =
+        ProjectEventDetailView::from_item(&updated, tz, series_link, item_reminders).render()?;
     Ok(Html(format!("{row}{fields}{view}")).into_response())
 }
 

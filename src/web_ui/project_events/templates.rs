@@ -1,6 +1,6 @@
 use crate::domain::item::Item;
 use crate::web_ui::components::row::Row;
-use crate::web_ui::{format_display_date, to_local};
+use crate::web_ui::{format_display_date, reminder_labels, to_local};
 use askama::Template;
 use chrono::Utc;
 
@@ -257,10 +257,18 @@ pub struct ProjectEventDetailView {
     /// See `project_tasks::templates::ProjectTaskDetailView::series_link`'s identical
     /// rationale.
     pub series_link: Option<(String, String)>,
+    /// See `project_tasks::templates::ProjectTaskDetailView::reminders`'s identical rationale
+    /// (Stage D of `docs/reminders-in-app-notifications-plan.md`).
+    pub reminders: Vec<String>,
 }
 
 impl ProjectEventDetailView {
-    pub fn from_item(item: &Item, tz: i32, series_link: Option<(String, String)>) -> Self {
+    pub fn from_item(
+        item: &Item,
+        tz: i32,
+        series_link: Option<(String, String)>,
+        reminders: Vec<crate::domain::reminder::Reminder>,
+    ) -> Self {
         let scheduled_date = item
             .scheduled_date()
             .map(|d| format_display_date(to_local(d, tz), item.has_scheduled_time()));
@@ -279,6 +287,7 @@ impl ProjectEventDetailView {
             overdue: item.is_overdue(Utc::now()),
             event_type: item.event_type(),
             series_link,
+            reminders: reminder_labels(&reminders, tz),
         }
     }
 }

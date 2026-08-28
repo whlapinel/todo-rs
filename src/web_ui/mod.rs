@@ -7,6 +7,7 @@ pub mod list_filters;
 pub mod login;
 pub mod main_calendar;
 pub mod nav;
+pub mod notifications;
 pub mod project_activity;
 pub mod project_calendar;
 pub mod project_calendar_subscriptions;
@@ -117,6 +118,29 @@ pub fn format_display_date(local: chrono::DateTime<chrono::Utc>, with_time: bool
 /// all) — e.g. the calendar day-drawer title.
 pub fn format_display_naive_date(date: chrono::NaiveDate) -> String {
     display_date_part(date)
+}
+
+/// Human-readable labels for an item's reminder rows (`ReminderRepo::list_for_item`) on a
+/// read-only detail view, e.g. `"Due reminder: Thu 27 Aug, 5:00 PM"`. Shared by
+/// `project_tasks`/`project_events` rather than duplicated per screen — unlike this module's
+/// other small per-screen helpers (e.g. `blocked_by_names_for`), the `ReminderKind` → label
+/// mapping is identical for both and has nothing screen-specific to vary.
+pub fn reminder_labels(reminders: &[crate::domain::reminder::Reminder], tz: i32) -> Vec<String> {
+    use crate::domain::reminder::ReminderKind;
+    reminders
+        .iter()
+        .map(|r| {
+            let prefix = match r.kind {
+                ReminderKind::Due => "Due reminder",
+                ReminderKind::ScheduledStart => "Scheduled start reminder",
+                ReminderKind::ScheduledEnd => "Scheduled end reminder",
+            };
+            format!(
+                "{prefix}: {}",
+                format_display_date(to_local(r.remind_at, tz), true)
+            )
+        })
+        .collect()
 }
 
 /// Resolves which project an all-projects "+ New" dialog should target — Stage 3 of
