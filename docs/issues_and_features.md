@@ -3,9 +3,8 @@
 Open issues and feature requests, merged from the former `docs/issues.md` and `docs/features.md` (2026-08-20) into a single sorted list. Completed or superseded items — including ones from the old files that were already resolved but hadn't been moved out yet — live in `docs/archived/archived_issues_and_features.md`.
 
 - Turn app into a PWA
-- Add reminder schema and UI to tasks, series, and events. (schema + read-only display done, see `docs/archived/archived_issues_and_features.md`; remaining scope is a custom reminder mutation UI — add/edit/delete a reminder, configurable offsets like "15 min before" — `source = 'CUSTOM'` stays unused until then)
-- Bug: `sync_item_reminders` (`src/service/reminders.rs`) never looks at `item.complete`, so a completed item's already-past reminder row stays in the `reminders` table forever with no way to tell it's stale. `service::reminders::list_due_notifications_for_user` (the in-app notification list, `docs/reminders-in-app-notifications-plan.md`) works around this by filtering out completed items at read time, so the notification UI itself is unaffected — but the underlying table still accumulates stale rows forever, and any other future reader would need the same read-time workaround rather than being able to trust the table. Found 2026-08-28.
 - Add push notifications: need Apple for iOS and Google for Windows Desktop Chrome
+- Add reminder schema and UI to tasks, series, and events. (schema + read-only display done, see `docs/archived/archived_issues_and_features.md`; remaining scope is a custom reminder mutation UI — add/edit/delete a reminder, configurable offsets like "15 min before" — `source = 'CUSTOM'` stays unused until then)
 
 - Task filters should be available on task full page for its sub-items, just the same as they're available for root tasks list.
 - sometimes item rows are given the href to details dialog instead of the toggleChildren(). For example when you edit the item, the row swapped in appears to not have toogleChildren().

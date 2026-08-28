@@ -31,6 +31,14 @@ pub async fn sync_item_reminders(
         return Ok(());
     }
 
+    // A completed item has nothing left to remind about — clear any reminder rows
+    // rather than letting them go stale. Un-completing recomputes fresh rows the next
+    // time this function runs (the create/update funnel always calls it).
+    if item.complete {
+        reminders.delete_for_item(&item.id).await?;
+        return Ok(());
+    }
+
     let Some(project_id) = item.project_id.clone() else {
         // Every item reaching this function was created/updated via the project-scoped
         // funnel, so project_id is always set in practice — this branch only guards
@@ -88,12 +96,11 @@ fn detail_url(item: &Item, project_id: &str) -> Option<String> {
 }
 
 /// Fetches `user_id`'s due-and-undismissed reminders (`ReminderRepo::list_due_for_user`) and
-/// filters out anything that shouldn't actually show: a completed item (works around
-/// `sync_item_reminders` never clearing a completed item's stale reminder row — see
-/// `docs/reminders-in-app-notifications-plan.md`'s bug 2 — by filtering at read time instead
-/// of teaching the write-side sync about completion) or an item that's been deleted since the
-/// reminder was created (`delete_for_item` should already prevent this in the normal path, but
-/// don't assume).
+/// filters out anything that shouldn't actually show: a completed item (`sync_item_reminders`
+/// clears a completed item's reminder rows going forward, but this stays as a defensive
+/// read-time filter for any row that predates that fix) or an item that's been deleted since
+/// the reminder was created (`delete_for_item` should already prevent this in the normal path,
+/// but don't assume).
 pub async fn list_due_notifications_for_user(
     reminders: &Arc<dyn ReminderRepo>,
     items: &Arc<dyn ItemRepo>,
@@ -281,6 +288,31 @@ mod tests {
             item_type: ItemType::Simple,
             ..Item::new_project_item("proj1", "Simple")
         };
+
+        let projects = MockProjectRepo::new();
+        let mut reminder_repo = MockReminderRepo::new();
+        reminder_repo
+            .expect_delete_for_item()
+            .withf(|id| id == "item1")
+            .returning(|_| Ok(()));
+
+        sync_item_reminders(
+            &(Arc::new(reminder_repo) as Arc<dyn ReminderRepo>),
+            &(Arc::new(projects) as Arc<dyn ProjectRepo>),
+            &item,
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn completed_task_item_clears_reminders_without_touching_projects() {
+        let schedule = Schedule {
+            due_date: Some(ts(1_000)),
+            ..Schedule::default()
+        };
+        let mut item = task_item("proj1", schedule, None);
+        item.complete = true;
 
         let projects = MockProjectRepo::new();
         let mut reminder_repo = MockReminderRepo::new();
