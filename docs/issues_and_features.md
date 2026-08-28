@@ -2,7 +2,6 @@
 
 Open issues and feature requests, merged from the former `docs/issues.md` and `docs/features.md` (2026-08-20) into a single sorted list. Completed or superseded items — including ones from the old files that were already resolved but hadn't been moved out yet — live in `docs/archived/archived_issues_and_features.md`.
 
-- Turn app into a PWA
 - Add push notifications: need Apple for iOS and Google for Windows Desktop Chrome
 - Add reminder schema and UI to tasks, series, and events. (schema + read-only display done, see `docs/archived/archived_issues_and_features.md`; remaining scope is a custom reminder mutation UI — add/edit/delete a reminder, configurable offsets like "15 min before" — `source = 'CUSTOM'` stays unused until then)
 

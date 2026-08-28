@@ -391,6 +391,30 @@ async fn web_not_found() -> axum::http::StatusCode {
     axum::http::StatusCode::NOT_FOUND
 }
 
+/// Served at `/web/sw.js` rather than relying on the `/web/static` ServeDir mount so it can
+/// carry a `Service-Worker-Allowed: /web/` header — without it, `navigator.serviceWorker
+/// .register('/web/sw.js', { scope: '/web/' })` (see base.html) would be rejected by the
+/// browser, since a script's default scope is limited to its own directory
+/// (`/web/static/`) and only that header can widen it to cover the whole app.
+async fn service_worker() -> axum::response::Response {
+    use axum::response::IntoResponse;
+    match tokio::fs::read("static/sw.js").await {
+        Ok(bytes) => (
+            [
+                (http::header::CONTENT_TYPE, "application/javascript"),
+                (http::header::CACHE_CONTROL, "no-cache"),
+                (
+                    http::header::HeaderName::from_static("service-worker-allowed"),
+                    "/web/",
+                ),
+            ],
+            bytes,
+        )
+            .into_response(),
+        Err(_) => http::StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
@@ -539,6 +563,7 @@ async fn main() {
                 .nest("/auth", auth_router)
                 .nest("/web", web_router.merge(public_web_router))
                 .nest_service("/web/static", web_static)
+                .route("/web/sw.js", get(service_worker))
                 .layer(Extension(user_repo))
                 // Must sit outside (added after) both nested routers' own internal
                 // `.layer(middleware::from_fn(caddy_header_middleware))` calls — axum
@@ -609,6 +634,7 @@ async fn main() {
                 .nest("/api", api_router)
                 .nest("/web", web_router.merge(public_web_router))
                 .nest_service("/web/static", web_static)
+                .route("/web/sw.js", get(service_worker))
                 .layer(Extension(app_state))
                 .layer(CookieManagerLayer::new())
         }

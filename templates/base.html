@@ -6,6 +6,28 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{% block title %}PRL{% endblock %}</title>
   <link rel="stylesheet" href="/web/static/style.css" />
+  <link rel="manifest" href="/web/static/manifest.json" />
+  <link rel="icon" href="/web/static/icons/icon.svg" type="image/svg+xml" />
+  <link rel="icon" href="/web/static/icons/favicon-32.png" sizes="32x32" type="image/png" />
+  <link rel="icon" href="/web/static/icons/favicon-16.png" sizes="16x16" type="image/png" />
+  <link rel="apple-touch-icon" href="/web/static/icons/apple-touch-icon.png" />
+  <meta name="theme-color" content="#4f46e5" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="PRL" />
+  <script>
+    // Registered against /web/sw.js (not the /web/static/sw.js copy the static ServeDir also
+    // happens to serve) because only that route sends the Service-Worker-Allowed: /web/ header
+    // needed to widen the worker's scope past its own directory — see service_worker() in
+    // src/main.rs. Skipped entirely on browsers without support (e.g. older embedded webviews)
+    // rather than letting a rejected register() throw an unhandled promise rejection.
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", function () {
+        navigator.serviceWorker.register("/web/sw.js", { scope: "/web/" });
+      });
+    }
+  </script>
   <script>
     // Read before body paints so the desktop sidebar renders already-collapsed on load
     // when that's the stored preference — applying the class after paint would cause a

@@ -6,7 +6,7 @@ edition = "2024"
 [dependencies]
 todo-server-sdk = { path = "todo-server-sdk" }
 hyper = { version = "0.14", features = ["server", "tcp"] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "fs"] }
 tracing = "0.1"
 tracing-subscriber = "0.3"
 mockall = "0.14.0"

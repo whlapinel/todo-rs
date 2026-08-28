@@ -15,7 +15,7 @@ tasks:
       - todo-typescript-client/
 
   web-styles:
-    desc: Build Tailwind CSS and vendor htmx.min.js for the web_ui templates (outputs to static/)
+    desc: Build Tailwind CSS, vendor htmx.min.js, and copy PWA assets for the web_ui templates (outputs to static/)
     dir: styles
     cmds:
       - npm install
@@ -24,9 +24,12 @@ tasks:
       - input.css
       - package.json
       - ../templates/**/*.html
+      - ../pwa-assets/**
     generates:
       - ../static/style.css
       - ../static/js/htmx.min.js
+      - ../static/manifest.json
+      - ../static/sw.js
 
   build:
     desc: Build everything (codegen + server)

@@ -6,6 +6,7 @@ COPY styles/package.json styles/package-lock.json ./styles/
 RUN cd styles && npm ci
 COPY styles/input.css ./styles/
 COPY templates/ ./templates/
+COPY pwa-assets/ ./pwa-assets/
 RUN cd styles && npm run build
 
 # ── Stage 2: Build the Rust binary (cross-compile to x86_64) ─────────────────

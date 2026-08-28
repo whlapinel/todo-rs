@@ -1,0 +1,15 @@
+{
+  "name": "Peoples Republic of Lists",
+  "short_name": "PRL",
+  "description": "Tasks, events, and lists for you and your teams.",
+  "start_url": "/web/tasks",
+  "scope": "/web/",
+  "display": "standalone",
+  "background_color": "#111827",
+  "theme_color": "#4f46e5",
+  "icons": [
+    { "src": "/web/static/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/web/static/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/web/static/icons/icon-512-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
