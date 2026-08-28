@@ -3,6 +3,7 @@ pub mod calendar_subscription;
 pub mod item;
 pub mod item_series;
 pub mod project;
+pub mod push_subscription;
 pub mod recurrence;
 pub mod reminder;
 pub mod team;

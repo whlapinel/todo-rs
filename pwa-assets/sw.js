@@ -64,3 +64,22 @@ self.addEventListener("fetch", (event) => {
     );
   }
 });
+
+// Push notifications (docs/push-notifications-plan.md) — the push service delivers an
+// already-encrypted message; by the time it reaches here the browser has decrypted it and
+// event.data is the plain JSON payload src/push.rs::send_push built ({title, body, url}).
+self.addEventListener("push", (event) => {
+  const data = event.data ? event.data.json() : {};
+  event.waitUntil(
+    self.registration.showNotification(data.title || "PRL", {
+      body: data.body,
+      icon: "/web/static/icons/icon-192.png",
+      data: { url: data.url || "/web/tasks" },
+    })
+  );
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  event.waitUntil(clients.openWindow(event.notification.data.url));
+});

@@ -380,6 +380,7 @@ mod tests {
                 source: "AUTO".to_string(),
                 remind_at: ts(1_000),
                 sent_at: None,
+                push_sent_at: None,
                 created_at: ts(0),
             }
         }

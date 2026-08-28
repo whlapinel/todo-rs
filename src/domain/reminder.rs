@@ -46,8 +46,12 @@ impl FromStr for ReminderKind {
 /// plain string rather than its own enum (matching `event_type`'s open-string precedent)
 /// — this pass only ever writes `"AUTO"`; a future custom-reminder mutation UI would add
 /// `"CUSTOM"` rows, distinguished by this column, without needing a schema change.
-/// `sent_at` is unused by anything in this pass — it exists now so the future delivery
-/// stage (in-app/email/push notifications) doesn't need its own migration.
+/// `sent_at` is the in-app dismiss marker (`service::reminders`/`web_ui::notifications`).
+/// `push_sent_at` is a second, independent "delivered" marker for the push channel
+/// (`service::push::sweep_due_reminders`, `docs/push-notifications-plan.md`) — kept separate
+/// from `sent_at` so dismissing in-app doesn't retroactively suppress a push that already
+/// fired, and vice versa; the only coupling is that the push sweep also skips anything
+/// already dismissed in-app (see `ReminderRepo::list_due_for_push`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Reminder {
     pub id: String,
@@ -58,5 +62,6 @@ pub struct Reminder {
     pub source: String,
     pub remind_at: DateTime<Utc>,
     pub sent_at: Option<DateTime<Utc>>,
+    pub push_sent_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
 }

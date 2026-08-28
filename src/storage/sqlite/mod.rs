@@ -4,6 +4,7 @@ pub mod item_dependencies;
 pub mod item_series;
 pub mod items;
 pub mod projects;
+pub mod push_subscriptions;
 pub mod reminders;
 pub mod teams;
 pub mod users;
@@ -13,6 +14,7 @@ use crate::domain::{
     item::{Item, ItemKind, ItemType, Recurrence, Schedule, TeamAssignment},
     item_series::{ItemOccurrence, ItemSeries},
     project::Project,
+    push_subscription::PushSubscription,
     reminder::{Reminder, ReminderKind},
     team::{Team, TeamRole},
     user::User,
@@ -304,6 +306,36 @@ pub trait ReminderRepo: Send + Sync {
     /// Marks one reminder dismissed (`sent_at = now()`), scoped to `user_id` so one user can't
     /// dismiss another's reminder by guessing an id.
     async fn dismiss(&self, id: &str, user_id: &str) -> Result<(), RepoError>;
+    /// Reminders due (`remind_at <= now`), not yet dismissed in-app (`sent_at IS NULL`), and
+    /// not yet pushed (`push_sent_at IS NULL`) — across every user. The global query the push
+    /// sweep (`service::push::sweep_due_reminders`) polls against, see
+    /// `docs/push-notifications-plan.md`. Deliberately not scoped to one user, unlike
+    /// `list_due_for_user` — the sweep processes everyone in one pass.
+    async fn list_due_for_push(&self, now: DateTime<Utc>) -> Result<Vec<Reminder>, RepoError>;
+    /// Marks one reminder pushed (`push_sent_at = now()`) — no `user_id` scoping needed, this
+    /// is sweep-internal, never user-facing like `dismiss` is.
+    async fn mark_pushed(&self, id: &str) -> Result<(), RepoError>;
+}
+
+/// Browser push subscriptions (one row per device/browser a user has enabled push on) — see
+/// `docs/push-notifications-plan.md`. Distinct from `PushConfig`'s VAPID keypair (`src/push.rs`),
+/// which is this server's own identity to the push service, not a per-subscriber key.
+#[cfg_attr(test, mockall::automock)]
+#[async_trait]
+pub trait PushSubscriptionRepo: Send + Sync {
+    /// Upserts on `endpoint` conflict — re-subscribing the same browser (e.g. after a key
+    /// rotation the browser initiates) replaces the stored keys rather than erroring.
+    async fn create_or_update(
+        &self,
+        user_id: &str,
+        endpoint: &str,
+        p256dh_key: &str,
+        auth_key: &str,
+    ) -> Result<(), RepoError>;
+    /// Called both on explicit unsubscribe and when the push sweep learns a subscription is
+    /// gone (404/410 from the push service).
+    async fn delete_by_endpoint(&self, endpoint: &str) -> Result<(), RepoError>;
+    async fn list_for_user(&self, user_id: &str) -> Result<Vec<PushSubscription>, RepoError>;
 }
 
 /// "Depends on" (docs/issues_and_features.md) — a many-to-many `item_id -> depends_on_item_id`
@@ -953,6 +985,7 @@ pub async fn create_pool(url: &str) -> Result<SqlitePool, sqlx::Error> {
             source TEXT NOT NULL DEFAULT 'AUTO',
             remind_at INTEGER NOT NULL,
             sent_at INTEGER,
+            push_sent_at INTEGER,
             created_at INTEGER NOT NULL
         )",
     )
@@ -993,6 +1026,30 @@ pub async fn create_pool(url: &str) -> Result<SqlitePool, sqlx::Error> {
     sqlx::query(
         "CREATE INDEX IF NOT EXISTS idx_item_dependencies_depends_on \
          ON item_dependencies (depends_on_item_id)",
+    )
+    .execute(&pool)
+    .await?;
+
+    // Push notification subscriptions (docs/push-notifications-plan.md) — see
+    // `PushSubscriptionRepo`. Brand-new table, same "safe directly in the baseline"
+    // precedent as reminders/item_dependencies above; `AddPushSubscriptions` creates the
+    // identical table (plus reminders.push_sent_at, already in the baseline column list
+    // above) for a DB that predates this migration.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS push_subscriptions (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            endpoint TEXT NOT NULL UNIQUE,
+            p256dh_key TEXT NOT NULL,
+            auth_key TEXT NOT NULL,
+            created_at INTEGER NOT NULL
+        )",
+    )
+    .execute(&pool)
+    .await?;
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user_id \
+         ON push_subscriptions (user_id)",
     )
     .execute(&pool)
     .await?;

@@ -9,12 +9,13 @@ use crate::storage::sqlite::{ReminderRepo, RepoError, db_err};
 pub struct SqliteReminderRepo(pub SqlitePool);
 
 const REMINDER_SELECT: &str = "SELECT id, item_id, project_id, user_id, kind, source, \
-     remind_at, sent_at, created_at FROM reminders";
+     remind_at, sent_at, push_sent_at, created_at FROM reminders";
 
 fn row_to_reminder(row: &sqlx::sqlite::SqliteRow) -> Reminder {
     let kind: String = row.get("kind");
     let remind_at: i64 = row.get("remind_at");
     let sent_at: Option<i64> = row.get("sent_at");
+    let push_sent_at: Option<i64> = row.get("push_sent_at");
     let created_at: i64 = row.get("created_at");
     Reminder {
         id: row.get("id"),
@@ -25,6 +26,7 @@ fn row_to_reminder(row: &sqlx::sqlite::SqliteRow) -> Reminder {
         source: row.get("source"),
         remind_at: DateTime::from_timestamp(remind_at, 0).unwrap_or_default(),
         sent_at: sent_at.and_then(|ts| DateTime::from_timestamp(ts, 0)),
+        push_sent_at: push_sent_at.and_then(|ts| DateTime::from_timestamp(ts, 0)),
         created_at: DateTime::from_timestamp(created_at, 0).unwrap_or_default(),
     }
 }
@@ -152,6 +154,29 @@ impl ReminderRepo for SqliteReminderRepo {
             .map_err(db_err)?;
         Ok(())
     }
+
+    async fn list_due_for_push(&self, now: DateTime<Utc>) -> Result<Vec<Reminder>, RepoError> {
+        let q = format!(
+            "{REMINDER_SELECT} WHERE remind_at <= ? AND sent_at IS NULL \
+             AND push_sent_at IS NULL ORDER BY remind_at ASC"
+        );
+        sqlx::query(&q)
+            .bind(now.timestamp())
+            .fetch_all(&self.0)
+            .await
+            .map_err(db_err)
+            .map(|rows| rows.iter().map(row_to_reminder).collect())
+    }
+
+    async fn mark_pushed(&self, id: &str) -> Result<(), RepoError> {
+        sqlx::query("UPDATE reminders SET push_sent_at = ? WHERE id = ?")
+            .bind(Utc::now().timestamp())
+            .bind(id)
+            .execute(&self.0)
+            .await
+            .map_err(db_err)?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -174,6 +199,7 @@ mod tests {
                 source TEXT NOT NULL DEFAULT 'AUTO',
                 remind_at INTEGER NOT NULL,
                 sent_at INTEGER,
+                push_sent_at INTEGER,
                 created_at INTEGER NOT NULL
             )",
         )
@@ -438,5 +464,43 @@ mod tests {
         repo.delete_for_item("item1").await.unwrap();
 
         assert!(repo.list_for_item("item1").await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_due_for_push_excludes_dismissed_and_already_pushed() {
+        let pool = test_pool().await;
+        let repo = SqliteReminderRepo(pool.clone());
+        repo.sync_auto_reminders("item1", "proj1", "user1", &[(ReminderKind::Due, ts(1_000))])
+            .await
+            .unwrap();
+        repo.sync_auto_reminders("item2", "proj1", "user2", &[(ReminderKind::Due, ts(1_000))])
+            .await
+            .unwrap();
+        repo.sync_auto_reminders("item3", "proj1", "user1", &[(ReminderKind::Due, ts(1_000))])
+            .await
+            .unwrap();
+
+        let dismissed = repo.list_for_item("item2").await.unwrap().remove(0);
+        repo.dismiss(&dismissed.id, "user2").await.unwrap();
+        let already_pushed = repo.list_for_item("item3").await.unwrap().remove(0);
+        repo.mark_pushed(&already_pushed.id).await.unwrap();
+
+        let due = repo.list_due_for_push(ts(2_000)).await.unwrap();
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].item_id, "item1");
+    }
+
+    #[tokio::test]
+    async fn mark_pushed_removes_it_from_the_next_sweep() {
+        let pool = test_pool().await;
+        let repo = SqliteReminderRepo(pool);
+        repo.sync_auto_reminders("item1", "proj1", "user1", &[(ReminderKind::Due, ts(1_000))])
+            .await
+            .unwrap();
+        let row = repo.list_for_item("item1").await.unwrap().remove(0);
+
+        assert_eq!(repo.list_due_for_push(ts(2_000)).await.unwrap().len(), 1);
+        repo.mark_pushed(&row.id).await.unwrap();
+        assert!(repo.list_due_for_push(ts(2_000)).await.unwrap().is_empty());
     }
 }

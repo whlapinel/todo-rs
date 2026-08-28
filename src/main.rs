@@ -3,16 +3,18 @@ mod auth;
 mod domain;
 mod email;
 mod json_api;
+mod push;
 mod service;
 mod storage;
 mod web_ui;
 
 use crate::storage::sqlite::{
     ActivityLogRepo, CalendarSubscriptionRepo, ItemDependencyRepo, ItemRepo, ItemSeriesRepo,
-    ProjectRepo, ReminderRepo, TeamRepo, UserRepo, activity_log::SqliteActivityLogRepo,
-    calendar_subscriptions::SqliteCalendarSubscriptionRepo, create_pool,
-    item_dependencies::SqliteItemDependencyRepo, item_series::SqliteItemSeriesRepo,
-    items::SqliteItemRepo, projects::SqliteProjectRepo, reminders::SqliteReminderRepo,
+    ProjectRepo, PushSubscriptionRepo, ReminderRepo, TeamRepo, UserRepo,
+    activity_log::SqliteActivityLogRepo, calendar_subscriptions::SqliteCalendarSubscriptionRepo,
+    create_pool, item_dependencies::SqliteItemDependencyRepo, item_series::SqliteItemSeriesRepo,
+    items::SqliteItemRepo, projects::SqliteProjectRepo,
+    push_subscriptions::SqlitePushSubscriptionRepo, reminders::SqliteReminderRepo,
     teams::SqliteTeamRepo, users::SqliteUserRepo,
 };
 use axum::{
@@ -71,6 +73,7 @@ use web_ui::project_templates::handlers::*;
 use web_ui::projects::{
     create_project_form, delete_project_dialog, delete_project_form, projects_page,
 };
+use web_ui::push::{push_public_key, push_subscribe, push_unsubscribe};
 use web_ui::teams::*;
 
 fn build_web_router() -> Router {
@@ -242,6 +245,9 @@ fn build_web_router() -> Router {
             "/notifications/:id/dismiss",
             post(dismiss_notification_form),
         )
+        .route("/push/public-key", get(push_public_key))
+        .route("/push/subscribe", post(push_subscribe))
+        .route("/push/unsubscribe", post(push_unsubscribe))
         .route(
             "/projects/:project_id/templates",
             get(project_templates_page).post(create_project_template_form),
@@ -432,6 +438,8 @@ async fn main() {
     let reminder_repo = Arc::new(SqliteReminderRepo(pool.clone())) as Arc<dyn ReminderRepo>;
     let item_dependency_repo =
         Arc::new(SqliteItemDependencyRepo(pool.clone())) as Arc<dyn ItemDependencyRepo>;
+    let push_subscription_repo =
+        Arc::new(SqlitePushSubscriptionRepo(pool.clone())) as Arc<dyn PushSubscriptionRepo>;
     let calendar_repo =
         Arc::new(SqliteCalendarSubscriptionRepo(pool)) as Arc<dyn CalendarSubscriptionRepo>;
 
@@ -457,6 +465,38 @@ async fn main() {
                 .await;
             }
         });
+    }
+
+    // Background push-reminder sweep — see docs/push-notifications-plan.md. Same shape as
+    // the calendar sync sweep above, but a shorter interval (reminders are minute-precision,
+    // unlike calendar sync's 15-minute cadence) and gated on `PushConfig::from_env()`: if
+    // push isn't configured on this server (no `TODO_VAPID_PRIVATE_KEY`/`TODO_VAPID_SUBJECT`),
+    // no loop is spawned at all, mirroring `EmailConfig`'s "optional feature, absent if
+    // unconfigured" pattern rather than spawning a loop that immediately no-ops every tick.
+    if let Some(push_config) = push::PushConfig::from_env() {
+        let reminder_repo = reminder_repo.clone();
+        let item_repo = item_repo.clone();
+        let user_repo = user_repo.clone();
+        let push_subscription_repo = push_subscription_repo.clone();
+        let http_client = reqwest::Client::new();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                service::push::sweep_due_reminders(
+                    &reminder_repo,
+                    &item_repo,
+                    &user_repo,
+                    &push_subscription_repo,
+                    &http_client,
+                    &push_config,
+                )
+                .await;
+            }
+        });
+    } else {
+        tracing::info!(
+            "push notifications disabled: set TODO_VAPID_PRIVATE_KEY and TODO_VAPID_SUBJECT to enable"
+        );
     }
 
     let config = PeoplesRepublicOfListsConfig::builder().build();
@@ -554,6 +594,7 @@ async fn main() {
                 .layer(Extension(reminder_repo.clone()))
                 .layer(Extension(item_dependency_repo.clone()))
                 .layer(Extension(calendar_repo.clone()))
+                .layer(Extension(push_subscription_repo.clone()))
                 .layer(middleware::from_fn(auth::caddy_header_middleware));
             let public_web_router = build_public_web_router();
 
@@ -625,6 +666,7 @@ async fn main() {
                 .layer(Extension(reminder_repo))
                 .layer(Extension(item_dependency_repo))
                 .layer(Extension(calendar_repo))
+                .layer(Extension(push_subscription_repo))
                 .layer(middleware::from_fn(auth::web_auth_middleware));
             let public_web_router = build_public_web_router();
 

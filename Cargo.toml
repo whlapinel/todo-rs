@@ -33,4 +33,11 @@ rrule = "0.14.0"
 async-recursion = "1.1.1"
 ical = "0.10"
 chrono-tz = "0.10"
+web-push-native = "0.5.0"
+base64ct = { version = "1.8.3", features = ["alloc", "std"] }
+# Renamed to avoid colliding with the crate-wide `http = "0.2"` dependency above (axum 0.6's
+# version) — web-push-native's WebPushBuilder produces an `http` 1.x Request, a different,
+# incompatible type from the same-named 0.2 one used everywhere else in this codebase. See
+# src/push.rs's doc comment and docs/push-notifications-plan.md.
+http1 = { package = "http", version = "1" }
 

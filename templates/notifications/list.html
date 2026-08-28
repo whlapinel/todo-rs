@@ -1,3 +1,11 @@
+<div class="flex items-center justify-between border-b border-gray-100 px-4 py-2 dark:border-white/5">
+  <label for="push-notif-toggle" class="text-xs font-medium text-gray-500 dark:text-gray-400">Push notifications</label>
+  <input type="checkbox" id="push-notif-toggle" hidden
+         class="h-4 w-8 shrink-0 cursor-pointer appearance-none rounded-full bg-gray-200 transition-colors checked:bg-indigo-600 dark:bg-gray-700" />
+</div>
+<div id="push-notif-ios-hint" hidden class="border-b border-gray-100 px-4 py-2 text-xs text-gray-500 dark:border-white/5 dark:text-gray-400">
+  Add PRL to your Home Screen to enable push notifications on iOS.
+</div>
 <div id="notif-list" class="max-h-96 overflow-y-auto py-1">
   {% if rows.is_empty() %}
   <div class="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">No reminders due.</div>
