@@ -488,10 +488,12 @@ pub(crate) async fn render_expandable_children(
     skip_urls: &HashMap<String, String>,
     is_team_project: bool,
     depth: u8,
-    // `None` on every caller outside `project_tasks` itself (calendar/cross-project screens
-    // reusing this function — see this fn's own doc comment) — the "Blocked by ..." badge is
-    // currently a project_tasks-Tasks-list-only feature, and `None` skips the extra batched
-    // dependency query entirely rather than paying for it just to render nothing.
+    // `None` only for the calendar/cross-project screens reusing this function (see this fn's
+    // own doc comment) — the "Blocked by ..." badge is still project_tasks-only, and `None`
+    // skips the extra batched dependency query entirely rather than paying for it just to
+    // render nothing. Every project_tasks-owned caller (the flat list, and — via
+    // `render_sibling_rows` below — the item detail page's Sub-items/Linked-tasks panels)
+    // always passes `Some`.
     item_dependencies: Option<&Arc<dyn ItemDependencyRepo>>,
 ) -> Result<String, ItemError> {
     let children =
@@ -548,6 +550,71 @@ pub(crate) async fn render_expandable_children(
         html.push_str(&row.render()?);
     }
     Ok(html)
+}
+
+/// Builds pre-rendered `Row` markup for a flat, non-recursive sibling group with no virtual
+/// occurrences involved — the shape shared by the item detail page's Sub-items panel
+/// (`handlers::render_children_fragment`, both its initial load and its "New sub-item"
+/// create-refresh via `render_scope_fragment` below) and Events' Linked-tasks panel
+/// (`handlers::render_source_event_fragment`). Introduced so those three call sites compute the
+/// "Blocked by ..." badge (one batched `ItemDependencyRepo::list_for_items` query across
+/// `visible`) and eagerly inline `children_html` for any row that itself `has_children` through
+/// one shared implementation, rather than each hand-rolling its own copy of
+/// `render_expandable_children`'s per-row body and risking exactly the kind of silent omission
+/// that left them without the badge in the first place.
+pub(crate) async fn render_sibling_rows(
+    repo: &Arc<dyn ItemRepo>,
+    visible: &[&Item],
+    project_id: &str,
+    names: &HashMap<String, String>,
+    tz: i32,
+    is_team_project: bool,
+    show_complete: bool,
+    item_dependencies: &Arc<dyn ItemDependencyRepo>,
+) -> Result<Vec<String>, ItemError> {
+    let dep_map = item_dependencies
+        .list_for_items(&visible.iter().map(|i| i.id.clone()).collect::<Vec<_>>())
+        .await?;
+    let mut rows = Vec::with_capacity(visible.len());
+    for i in visible {
+        let mut row = ProjectTaskRow::from_item(
+            i,
+            project_id,
+            names,
+            visible,
+            tz,
+            None,
+            is_team_project,
+            show_complete,
+            None,
+            None,
+        );
+        let (blocked_by_names, blocked_by_label, blocked_by_links_html) =
+            render_blocked_by(project_id, blocked_by_names_for(i, visible, &dep_map))?;
+        row.blocked_by_names = blocked_by_names;
+        row.blocked_by_label = blocked_by_label;
+        row.blocked_by_links_html = blocked_by_links_html;
+        row.expanded_row = row.expanded_row || !row.blocked_by_names.is_empty();
+        if i.has_children {
+            row.children_html = Some(
+                render_expandable_children(
+                    repo,
+                    &i.id,
+                    project_id,
+                    names,
+                    show_complete,
+                    tz,
+                    &HashMap::new(),
+                    is_team_project,
+                    1,
+                    Some(item_dependencies),
+                )
+                .await?,
+            );
+        }
+        rows.push(row.render()?);
+    }
+    Ok(rows)
 }
 
 pub(crate) fn render_rows(
@@ -836,28 +903,51 @@ pub(crate) async fn render_scope_fragment(
     parent_item_id: Option<&str>,
     show_complete: bool,
     tz: i32,
+    item_dependencies: &Arc<dyn ItemDependencyRepo>,
 ) -> Result<Html<String>, ItemError> {
-    let (items, empty_message) = if let Some(parent_id) = parent_item_id {
-        (
-            list_project_items_unchecked(repo, project_id, Some(parent_id.to_string())).await?,
-            "No sub-items yet.",
-        )
-    } else {
-        (list_project_tasks(repo, project_id).await?, "No tasks yet.")
-    };
     let names = match team_id {
         Some(team_id) => names_for(teams, team_id, requester_user_id).await?,
         None => HashMap::new(),
     };
-    let rows = render_rows(
-        &items,
-        project_id,
-        &names,
-        parent_item_id.is_some() || show_complete,
-        tz,
-        &HashMap::new(),
-        team_id,
-    )?;
+    // The `Some(parent_id)` branch is this same Sub-items panel's own create-refresh (the
+    // detail page's "New sub-item"/"Add multiple at once" forms both target `#children-list`
+    // via this function) — it needs `render_sibling_rows`' badge/children_html treatment for
+    // the exact reason `render_children_fragment`'s initial load does, or the badge would
+    // flicker away the moment a sub-item is added. The `None` (flat top-level list) branch is a
+    // different screen's own create-refresh and keeps its existing `render_rows` behavior.
+    let (rows, empty_message) = if let Some(parent_id) = parent_item_id {
+        let items =
+            list_project_items_unchecked(repo, project_id, Some(parent_id.to_string())).await?;
+        let visible: Vec<&Item> = items.iter().collect();
+        (
+            render_sibling_rows(
+                repo,
+                &visible,
+                project_id,
+                &names,
+                tz,
+                team_id.is_some(),
+                true,
+                item_dependencies,
+            )
+            .await?,
+            "No sub-items yet.",
+        )
+    } else {
+        let items = list_project_tasks(repo, project_id).await?;
+        (
+            render_rows(
+                &items,
+                project_id,
+                &names,
+                show_complete,
+                tz,
+                &HashMap::new(),
+                team_id,
+            )?,
+            "No tasks yet.",
+        )
+    };
     render(ProjectTaskRowsFragmentTemplate {
         rows,
         empty_message: empty_message.to_string(),

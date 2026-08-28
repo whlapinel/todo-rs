@@ -742,11 +742,12 @@ pub async fn create_project_task_series_occurrence_child_form(
 /// identical rationale, project-scoped. Callers are responsible for their own membership gate
 /// before calling this (see `project_task_children_fragment`).
 ///
-/// Each child that itself `has_children` gets its own descendant subtree eagerly inlined via
-/// `super::render_expandable_children`, the same in-place-expand treatment the flat Tasks list
-/// gives its own top-level rows (see `Row::children_html`'s doc comment) — otherwise a
-/// grandchild-bearing sub-item's name-click would fall through to `detail_via_dialog` instead
-/// of toggling, diverging from how the same item behaves when its row is rendered elsewhere.
+/// Delegates the per-row "Blocked by ..." badge and `children_html` in-place-expand treatment
+/// (see `Row::children_html`'s doc comment — otherwise a grandchild-bearing sub-item's
+/// name-click would fall through to `detail_via_dialog` instead of toggling, diverging from how
+/// the same item behaves when its row is rendered elsewhere) to `super::render_sibling_rows`,
+/// shared with `render_source_event_fragment` below and with this same panel's own
+/// create-refresh (`super::render_scope_fragment`) so the three can't drift out of sync again.
 pub(crate) async fn render_children_fragment(
     repo: &Arc<dyn ItemRepo>,
     teams: &Arc<dyn TeamRepo>,
@@ -755,6 +756,7 @@ pub(crate) async fn render_children_fragment(
     parent_item_id: &str,
     requester_user_id: &str,
     tz: i32,
+    item_dependencies: &Arc<dyn ItemDependencyRepo>,
 ) -> Result<Html<String>, ItemError> {
     let children = project_item_service::list_project_items_unchecked(
         repo,
@@ -767,39 +769,17 @@ pub(crate) async fn render_children_fragment(
         None => HashMap::new(),
     };
     let visible: Vec<&Item> = children.iter().collect();
-    let mut rows = Vec::with_capacity(visible.len());
-    for i in &visible {
-        let mut row = ProjectTaskRow::from_item(
-            i,
-            project_id,
-            &names,
-            &visible,
-            tz,
-            None,
-            team_id.is_some(),
-            true,
-            None,
-            None,
-        );
-        if i.has_children {
-            row.children_html = Some(
-                super::render_expandable_children(
-                    repo,
-                    &i.id,
-                    project_id,
-                    &names,
-                    true,
-                    tz,
-                    &HashMap::new(),
-                    team_id.is_some(),
-                    1,
-                    None,
-                )
-                .await?,
-            );
-        }
-        rows.push(row.render()?);
-    }
+    let rows = super::render_sibling_rows(
+        repo,
+        &visible,
+        project_id,
+        &names,
+        tz,
+        team_id.is_some(),
+        true,
+        item_dependencies,
+    )
+    .await?;
     render(ProjectTaskRowsFragmentTemplate {
         rows,
         empty_message: "No sub-items yet.".to_string(),
@@ -811,6 +791,16 @@ pub(crate) async fn render_children_fragment(
 /// `team_tasks::render_source_event_fragment`, called by `project_events`'s "Linked tasks"
 /// section (Events have no children of their own — see `project_events::require_event`'s
 /// doc comment — so there's no `project_events`-owned Task-row renderer to put this in).
+///
+/// Same `super::render_sibling_rows` delegation as `render_children_fragment` above — a linked
+/// task can still have its own sub-items (`add_child_url` doesn't require `source_event_id` to
+/// be unset), so its row needs the same `children_html` inlining to toggle rather than dialog.
+/// A linked task can also depend on another linked task under the same event, since
+/// `service::item_dependencies` scopes "sibling" to same `parent_item_id` and every top-level
+/// linked task here shares `None` — though a dependency pointing at a top-level task that isn't
+/// itself linked to this event won't resolve to a name here, `visible` being only this event's
+/// own linked-tasks subset rather than the full top-level sibling group; same limitation the
+/// flat Tasks list already has for any dependency a `ListFilters` hides from its own `visible`.
 pub(crate) async fn render_source_event_fragment(
     repo: &Arc<dyn ItemRepo>,
     teams: &Arc<dyn TeamRepo>,
@@ -819,6 +809,7 @@ pub(crate) async fn render_source_event_fragment(
     event_id: &str,
     requester_user_id: &str,
     tz: i32,
+    item_dependencies: &Arc<dyn ItemDependencyRepo>,
 ) -> Result<Html<String>, ItemError> {
     let tasks =
         project_item_service::list_project_event_children_unchecked(repo, project_id, event_id)
@@ -827,43 +818,18 @@ pub(crate) async fn render_source_event_fragment(
         Some(team_id) => names_for(teams, team_id, requester_user_id).await?,
         None => HashMap::new(),
     };
-    // Same in-place-expand treatment as `render_children_fragment` above — a linked task can
-    // still have its own sub-items (`add_child_url` doesn't require `source_event_id` to be
-    // unset), so its row needs the same `children_html` inlining to toggle rather than dialog.
     let visible: Vec<&Item> = tasks.iter().collect();
-    let mut rows = Vec::with_capacity(visible.len());
-    for i in &visible {
-        let mut row = ProjectTaskRow::from_item(
-            i,
-            project_id,
-            &names,
-            &visible,
-            tz,
-            None,
-            team_id.is_some(),
-            true,
-            None,
-            None,
-        );
-        if i.has_children {
-            row.children_html = Some(
-                super::render_expandable_children(
-                    repo,
-                    &i.id,
-                    project_id,
-                    &names,
-                    true,
-                    tz,
-                    &HashMap::new(),
-                    team_id.is_some(),
-                    1,
-                    None,
-                )
-                .await?,
-            );
-        }
-        rows.push(row.render()?);
-    }
+    let rows = super::render_sibling_rows(
+        repo,
+        &visible,
+        project_id,
+        &names,
+        tz,
+        team_id.is_some(),
+        true,
+        item_dependencies,
+    )
+    .await?;
     render(ProjectTaskRowsFragmentTemplate {
         rows,
         empty_message: "No linked tasks yet.".to_string(),
@@ -876,6 +842,7 @@ pub async fn project_task_children_fragment(
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(item_dependencies): Extension<Arc<dyn ItemDependencyRepo>>,
     TzOffset(tz): TzOffset,
 ) -> Result<Html<String>, ItemError> {
     let project =
@@ -891,6 +858,7 @@ pub async fn project_task_children_fragment(
         &item_id,
         &auth_user.user_id,
         tz,
+        &item_dependencies,
     )
     .await
 }
@@ -917,6 +885,7 @@ pub async fn create_project_task_form(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
+    Extension(item_dependencies): Extension<Arc<dyn ItemDependencyRepo>>,
     TzOffset(tz): TzOffset,
     Form(form): Form<ProjectTaskForm>,
 ) -> Result<Response, ItemError> {
@@ -948,6 +917,7 @@ pub async fn create_project_task_form(
         parent_item_id.as_deref(),
         show_complete,
         tz,
+        &item_dependencies,
     )
     .await?
     .into_response())
@@ -972,6 +942,7 @@ pub async fn create_project_tasks_batch(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
+    Extension(item_dependencies): Extension<Arc<dyn ItemDependencyRepo>>,
     TzOffset(tz): TzOffset,
     Form(form): Form<BatchForm>,
 ) -> Result<Response, ItemError> {
@@ -1016,6 +987,7 @@ pub async fn create_project_tasks_batch(
         parent_item_id.as_deref(),
         form.show_complete.is_some(),
         tz,
+        &item_dependencies,
     )
     .await?
     .into_response())

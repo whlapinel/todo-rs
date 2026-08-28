@@ -6,7 +6,7 @@ use crate::service::project_items::{self as project_item_service};
 use crate::service::projects::{self as project_service};
 use crate::service::templates::{self as template_service, CreateProjectTemplateParams};
 use crate::storage::sqlite::{
-    ItemRepo, ItemSeriesRepo, ProjectRepo, ReminderRepo, TeamRepo, UserRepo,
+    ItemDependencyRepo, ItemRepo, ItemSeriesRepo, ProjectRepo, ReminderRepo, TeamRepo, UserRepo,
 };
 use crate::web_ui::TzOffset;
 use crate::web_ui::nav::{self, ActiveContext, SidebarSection};
@@ -421,6 +421,7 @@ pub async fn project_event_children_fragment(
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(item_dependencies): Extension<Arc<dyn ItemDependencyRepo>>,
     TzOffset(tz): TzOffset,
 ) -> Result<Html<String>, ItemError> {
     let project =
@@ -435,6 +436,7 @@ pub async fn project_event_children_fragment(
         &item_id,
         &auth_user.user_id,
         tz,
+        &item_dependencies,
     )
     .await
 }
@@ -486,6 +488,7 @@ pub async fn create_project_event_child_form(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
+    Extension(item_dependencies): Extension<Arc<dyn ItemDependencyRepo>>,
     TzOffset(tz): TzOffset,
     Form(form): Form<ProjectEventChildForm>,
 ) -> Result<Response, ItemError> {
@@ -526,6 +529,7 @@ pub async fn create_project_event_child_form(
         &item_id,
         &auth_user.user_id,
         tz,
+        &item_dependencies,
     )
     .await?
     .into_response())
