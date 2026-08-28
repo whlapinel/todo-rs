@@ -19,7 +19,9 @@ use crate::domain::{
 };
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 use sqlx::{Row, SqlitePool};
+use std::time::Duration;
 
 pub struct DueItem {
     pub item: Item,
@@ -667,7 +669,11 @@ fn row_to_calendar_subscription(row: &sqlx::sqlite::SqliteRow) -> CalendarSubscr
 }
 
 pub async fn create_pool(url: &str) -> Result<SqlitePool, sqlx::Error> {
-    let pool = SqlitePool::connect(url).await?;
+    let options: SqliteConnectOptions = url
+        .parse::<SqliteConnectOptions>()?
+        .journal_mode(SqliteJournalMode::Wal)
+        .busy_timeout(Duration::from_secs(5));
+    let pool = SqlitePoolOptions::new().connect_with(options).await?;
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS users (
             id TEXT PRIMARY KEY,
