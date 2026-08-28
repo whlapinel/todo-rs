@@ -156,12 +156,16 @@ async fn resolve_tz_offset_minutes(users: &Arc<dyn UserRepo>, user_id: &str) -> 
     let Ok(tz) = Tz::from_str(&tz_name) else {
         return 0;
     };
-    Utc::now()
+    // `to_local`/`reminder_labels` (`src/web_ui/mod.rs`) use the JS `Date.getTimezoneOffset()`
+    // convention (positive when local is *behind* UTC), matching the `X-Tz-Offset-Minutes`
+    // header a live request carries. `local_minus_utc()` is chrono's opposite-signed native
+    // convention, so it's negated here to match.
+    -(Utc::now()
         .with_timezone(&tz)
         .offset()
         .fix()
         .local_minus_utc()
-        / 60
+        / 60)
 }
 
 #[cfg(test)]
@@ -239,6 +243,33 @@ mod tests {
             &test_push_config(),
         )
         .await;
+    }
+
+    #[tokio::test]
+    async fn resolve_tz_offset_minutes_matches_js_get_timezone_offset_sign() {
+        let mut users = MockUserRepo::new();
+        users.expect_get().returning(|_| {
+            Ok(crate::domain::user::User {
+                id: "user1".to_string(),
+                first_name: "Test".to_string(),
+                last_name: "User".to_string(),
+                email: None,
+                google_id: None,
+                timezone: Some("America/New_York".to_string()),
+                personal_project_id: None,
+            })
+        });
+        let users: Arc<dyn UserRepo> = Arc::new(users);
+
+        let offset = resolve_tz_offset_minutes(&users, "user1").await;
+
+        // `America/New_York` is always behind UTC (EST -300 / EDT -240), so under the
+        // `Date.getTimezoneOffset()`/`to_local` convention this app uses everywhere else
+        // (positive when local is behind UTC), the resolved offset must be positive.
+        assert!(
+            offset > 0,
+            "expected a positive (behind-UTC) offset for America/New_York, got {offset}"
+        );
     }
 
     #[tokio::test]
