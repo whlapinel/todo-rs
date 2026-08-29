@@ -1,4 +1,4 @@
-use crate::helpers::{fmt_date_opt, parse_date, require_user, unwrap_or_exit};
+use crate::helpers::{fmt_date, fmt_date_opt, parse_date, require_user, unwrap_or_exit};
 use clap::Subcommand;
 use std::path::PathBuf;
 use todo_client::types::ItemType;
@@ -94,6 +94,19 @@ pub enum ItemsCommand {
     /// Show item details
     Get {
         item_id: String,
+        #[arg(long, help = "Project ID the item belongs to")]
+        project: Option<String>,
+    },
+    /// List comments on a task
+    Comments {
+        item_id: String,
+        #[arg(long, help = "Project ID the item belongs to")]
+        project: Option<String>,
+    },
+    /// Add a comment to a task
+    Comment {
+        item_id: String,
+        body: String,
         #[arg(long, help = "Project ID the item belongs to")]
         project: Option<String>,
     },
@@ -439,6 +452,58 @@ pub async fn cmd_items(client: &Client, cmd: ItemsCommand, user_id: Option<Strin
             println!("event type: {}", item.event_type().unwrap_or("-"));
             println!("src event:  {}", item.source_event_id().unwrap_or("-"));
             println!("gcal event: {}", item.google_event_id().unwrap_or("-"));
+        }
+        ItemsCommand::Comments { item_id, project } => {
+            let Some(project_id) = project else {
+                eprintln!(
+                    "error: --project is required — the legacy personal Item API has been retired"
+                );
+                std::process::exit(1);
+            };
+            let out = unwrap_or_exit(
+                client
+                    .list_item_comments()
+                    .project_id(project_id)
+                    .item_id(&item_id)
+                    .send()
+                    .await,
+                "list item comments",
+            );
+            if out.comments().is_empty() {
+                println!("(no comments)");
+                return;
+            }
+            for c in out.comments() {
+                println!(
+                    "[{}] {}: {}",
+                    fmt_date(c.created_at()),
+                    c.author_user_id(),
+                    c.body()
+                );
+            }
+        }
+        ItemsCommand::Comment {
+            item_id,
+            body,
+            project,
+        } => {
+            let Some(project_id) = project else {
+                eprintln!(
+                    "error: --project is required — the legacy personal Item API has been retired"
+                );
+                std::process::exit(1);
+            };
+            let out = unwrap_or_exit(
+                client
+                    .create_item_comment()
+                    .project_id(project_id)
+                    .item_id(&item_id)
+                    .body(body)
+                    .send()
+                    .await,
+                "create item comment",
+            );
+            println!("commented {}", out.comment_id());
         }
         ItemsCommand::Due { after, before } => {
             let uid = require_user(user_id);

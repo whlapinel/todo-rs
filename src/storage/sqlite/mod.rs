@@ -1,5 +1,6 @@
 pub mod activity_log;
 pub mod calendar_subscriptions;
+pub mod comments;
 pub mod item_dependencies;
 pub mod item_series;
 pub mod items;
@@ -11,6 +12,7 @@ pub mod users;
 use crate::domain::{
     activity_log::ActivityLogEntry,
     calendar_subscription::CalendarSubscription,
+    comment::Comment,
     item::{Item, ItemKind, ItemType, Recurrence, Schedule, TeamAssignment},
     item_series::{ItemOccurrence, ItemSeries},
     project::Project,
@@ -315,6 +317,16 @@ pub trait ReminderRepo: Send + Sync {
     /// Marks one reminder pushed (`push_sent_at = now()`) — no `user_id` scoping needed, this
     /// is sweep-internal, never user-facing like `dismiss` is.
     async fn mark_pushed(&self, id: &str) -> Result<(), RepoError>;
+}
+
+/// "Add comments for tasks" (docs/issues_and_features.md) — list + create only, no
+/// edit/delete. See `service::comments`, the sole caller.
+#[cfg_attr(test, mockall::automock)]
+#[async_trait]
+pub trait CommentRepo: Send + Sync {
+    async fn create(&self, comment: &Comment) -> Result<(), RepoError>;
+    /// Oldest first — reads like a conversation thread.
+    async fn list_for_item(&self, item_id: &str) -> Result<Vec<Comment>, RepoError>;
 }
 
 /// Browser push subscriptions (one row per device/browser a user has enabled push on) — see
@@ -1057,6 +1069,26 @@ pub async fn create_pool(url: &str) -> Result<SqlitePool, sqlx::Error> {
     )
     .execute(&pool)
     .await?;
+
+    // "Add comments for tasks" (docs/issues_and_features.md) — see `CommentRepo`.
+    // Brand-new table, same "safe directly in the baseline" precedent as
+    // reminders/item_dependencies/push_subscriptions above; `AddComments` creates the
+    // identical pair for a DB that predates this migration.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS comments (
+            id TEXT PRIMARY KEY,
+            item_id TEXT NOT NULL,
+            project_id TEXT NOT NULL,
+            author_user_id TEXT NOT NULL,
+            body TEXT NOT NULL,
+            created_at INTEGER NOT NULL
+        )",
+    )
+    .execute(&pool)
+    .await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_comments_item_id ON comments (item_id)")
+        .execute(&pool)
+        .await?;
 
     // idx_items_calendar_subscription_id / idx_items_calsub_google_event_id are
     // deliberately NOT created here — same index-ordering reason as idx_items_project_id

@@ -2,7 +2,7 @@
 
 Open issues and feature requests, merged from the former `docs/issues.md` and `docs/features.md` (2026-08-20) into a single sorted list. Completed or superseded items — including ones from the old files that were already resolved but hadn't been moved out yet — live in `docs/archived/archived_issues_and_features.md`.
 
-- Add comments for all items. Any team-member can comment on any item. No edit or delete for now.
+- Add comments for tasks. Any team-member can comment on any task. No edit or delete for now. Commenting on virtual occurrences is not allowed for now.
 - Add notifications for comments -- all team members notified of any comment by default
 - Allow adding tags to items. Tags are scoped per-project like everything else
 - Multi-select: let's change UI so that checkbox is used to select an item for bulk actions rather than completing it, but stays on far left. Add a differently stylized checkbox just right of that which performs current function of checkbox, to mark complete. The batch-action menu should be fetched from server including which items are selected so that the menu can actually show the available actions for those tasks. For example we should not show "set offset" unless all the tasks are sub-items of the same top-level parent, and we should not show schedule or due date unless all the tasks are top-level tasks.

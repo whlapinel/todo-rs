@@ -1,6 +1,7 @@
 pub mod activity_log;
 pub mod calendar_subscriptions;
 pub mod calendar_sync;
+pub mod comments;
 pub mod error;
 pub mod import;
 pub mod item_dependencies;

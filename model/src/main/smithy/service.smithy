@@ -35,5 +35,7 @@ service PeoplesRepublicOfLists {
         ListProjectItems
         ImportProjectItems
         GetItemImportTemplate
+        CreateItemComment
+        ListItemComments
     ]
 }

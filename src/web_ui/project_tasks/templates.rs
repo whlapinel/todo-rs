@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::domain::comment::Comment;
 use crate::domain::item::{Item, ItemKind};
 use crate::service::error::ItemError;
 use crate::service::item_series::ProjectOccurrence;
@@ -611,6 +612,37 @@ impl ProjectTaskDetailFields {
     }
 }
 
+/// One rendered comment row on a task's read-only detail view — "Add comments for tasks"
+/// (docs/issues_and_features.md). `author_name` is resolved by the caller (the same `names`
+/// map `assignee_name` already uses for a team project; a personal project has only its one
+/// owner, so the caller resolves that single name via `UserRepo` instead) rather than carried
+/// on the wire, mirroring how `assignedToUserId` is resolved to a display name here already.
+pub struct CommentLine {
+    pub author_name: String,
+    pub created_at: String,
+    pub body: String,
+}
+
+/// Builds display rows for a task's comments, oldest first (matches `CommentRepo::list_for_item`'s
+/// own order) — see `CommentLine`.
+pub fn comment_lines(
+    comments: &[Comment],
+    names: &HashMap<String, String>,
+    tz: i32,
+) -> Vec<CommentLine> {
+    comments
+        .iter()
+        .map(|c| CommentLine {
+            author_name: names
+                .get(&c.author_user_id)
+                .cloned()
+                .unwrap_or_else(|| c.author_user_id.clone()),
+            created_at: format_display_date(to_local(c.created_at, tz), true),
+            body: c.body.clone(),
+        })
+        .collect()
+}
+
 /// Read-only counterpart to `ProjectTaskDetailFields` — see `items.rs`'s `DetailView` for the
 /// row-editing convention this mirrors (complete-toggle lives here too).
 #[derive(Template)]
@@ -652,6 +684,10 @@ pub struct ProjectTaskDetailView {
     /// rows. Empty for an item with no due/scheduled dates, or on a personal project item
     /// whose caller didn't resolve them. No mutation UI yet — see that plan doc's scope note.
     pub reminders: Vec<String>,
+    /// "Add comments for tasks" (docs/issues_and_features.md) — oldest first, see
+    /// `comment_lines`. Task-only: this view struct is never built for an Event/SimpleList/
+    /// Template item (`require_task` already guards every caller of `from_item`).
+    pub comments: Vec<CommentLine>,
 }
 
 impl ProjectTaskDetailView {
@@ -667,6 +703,7 @@ impl ProjectTaskDetailView {
         series_link: Option<(String, String)>,
         depends_on: Vec<(String, String)>,
         reminders: Vec<crate::domain::reminder::Reminder>,
+        comments: Vec<Comment>,
     ) -> Self {
         let due_date = item
             .due_date()
@@ -698,6 +735,7 @@ impl ProjectTaskDetailView {
             series_link,
             depends_on,
             reminders: reminder_labels(&reminders, tz),
+            comments: comment_lines(&comments, names, tz),
         }
     }
 }

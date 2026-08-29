@@ -1,5 +1,6 @@
 use crate::auth::AuthUser;
 use crate::domain::item::{Item, ItemKind};
+use crate::service::comments as comments_service;
 use crate::service::error::ItemError;
 use crate::service::item_dependencies::{self as item_dependencies_service};
 use crate::service::item_series::{self as item_series_service};
@@ -8,8 +9,8 @@ use crate::service::projects::{self as project_service};
 use crate::service::teams as team_service;
 use crate::service::templates::{self as template_service, CreateProjectTemplateParams};
 use crate::storage::sqlite::{
-    ActivityLogRepo, ItemDependencyRepo, ItemRepo, ItemSeriesRepo, ProjectRepo, ReminderRepo,
-    TeamRepo, UserRepo,
+    ActivityLogRepo, CommentRepo, ItemDependencyRepo, ItemRepo, ItemSeriesRepo, ProjectRepo,
+    ReminderRepo, TeamRepo, UserRepo,
 };
 use crate::web_ui::TzOffset;
 use crate::web_ui::list_filters::{ListFilterQuery, ListFilters};
@@ -184,6 +185,7 @@ pub async fn project_task_detail_page(
     Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
     Extension(item_dependencies): Extension<Arc<dyn ItemDependencyRepo>>,
     Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
+    Extension(comments): Extension<Arc<dyn CommentRepo>>,
     TzOffset(tz): TzOffset,
 ) -> Result<Html<String>, ItemError> {
     let project =
@@ -193,7 +195,7 @@ pub async fn project_task_detail_page(
     let item = require_task(item)?;
     let names = match &project.team_id {
         Some(team_id) => names_for(&teams, team_id, &auth_user.user_id).await?,
-        None => HashMap::new(),
+        None => HashMap::from([(auth_user.user_id.clone(), "You".to_string())]),
     };
     let parent_link = resolve_parent_link(&repo, &project_id, &item).await?;
     let linked_event = resolve_linked_event(&repo, &project_id, &item).await?;
@@ -201,6 +203,10 @@ pub async fn project_task_detail_page(
     let depends_on =
         resolve_depends_on_links(&repo, &item_dependencies, &project_id, &item).await?;
     let item_reminders = reminders
+        .list_for_item(&item.id)
+        .await
+        .map_err(ItemError::from)?;
+    let item_comments = comments
         .list_for_item(&item.id)
         .await
         .map_err(ItemError::from)?;
@@ -215,6 +221,7 @@ pub async fn project_task_detail_page(
         series_link,
         depends_on,
         item_reminders,
+        item_comments,
     )
     .render()?;
     let dialog = ProjectTaskDetailDialog::new(
@@ -242,6 +249,77 @@ pub async fn project_task_detail_page(
         nav_html,
         parent_link,
     })
+}
+
+#[derive(serde::Deserialize)]
+pub struct NewCommentForm {
+    pub body: String,
+}
+
+/// "Add comments for tasks" (docs/issues_and_features.md) — posts a new comment, then
+/// re-renders the whole read-only detail card (`#item-{id}-view`), the same
+/// target/swap the card's own complete-toggle checkbox already uses (`detail_view.html`),
+/// rather than inventing a narrower comments-only fragment.
+pub async fn create_project_task_comment_form(
+    Path((project_id, item_id)): Path<(String, String)>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
+    Extension(item_dependencies): Extension<Arc<dyn ItemDependencyRepo>>,
+    Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
+    Extension(comments): Extension<Arc<dyn CommentRepo>>,
+    TzOffset(tz): TzOffset,
+    Form(form): Form<NewCommentForm>,
+) -> Result<Html<String>, ItemError> {
+    comments_service::create_comment(
+        &comments,
+        &repo,
+        &projects,
+        &teams,
+        &project_id,
+        &item_id,
+        &auth_user.user_id,
+        &form.body,
+    )
+    .await?;
+
+    let project =
+        project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
+    let item =
+        project_item_service::get_project_item_unchecked(&repo, &project_id, &item_id).await?;
+    let item = require_task(item)?;
+    let names = match &project.team_id {
+        Some(team_id) => names_for(&teams, team_id, &auth_user.user_id).await?,
+        None => HashMap::from([(auth_user.user_id.clone(), "You".to_string())]),
+    };
+    let parent_link = resolve_parent_link(&repo, &project_id, &item).await?;
+    let linked_event = resolve_linked_event(&repo, &project_id, &item).await?;
+    let series_link = resolve_series_link(&series, &project_id, &item).await?;
+    let depends_on =
+        resolve_depends_on_links(&repo, &item_dependencies, &project_id, &item).await?;
+    let item_reminders = reminders
+        .list_for_item(&item.id)
+        .await
+        .map_err(ItemError::from)?;
+    let item_comments = comments
+        .list_for_item(&item.id)
+        .await
+        .map_err(ItemError::from)?;
+    render(ProjectTaskDetailView::from_item(
+        &item,
+        &project_id,
+        project.team_id.is_some(),
+        &names,
+        tz,
+        parent_link,
+        linked_event,
+        series_link,
+        depends_on,
+        item_reminders,
+        item_comments,
+    ))
 }
 
 #[derive(serde::Deserialize, Default)]
@@ -1013,6 +1091,7 @@ pub async fn update_project_task_form(
     Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
     Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
     Extension(item_dependencies): Extension<Arc<dyn ItemDependencyRepo>>,
+    Extension(comments): Extension<Arc<dyn CommentRepo>>,
     TzOffset(tz): TzOffset,
     Query(view_q): Query<super::RowViewQuery>,
     Form(form): Form<ProjectTaskForm>,
@@ -1042,7 +1121,7 @@ pub async fn update_project_task_form(
         Ok(updated) if close => {
             let names = match &project.team_id {
                 Some(team_id) => names_for(&teams, team_id, &auth_user.user_id).await?,
-                None => HashMap::new(),
+                None => HashMap::from([(auth_user.user_id.clone(), "You".to_string())]),
             };
             let parent_link = resolve_parent_link(&repo, &project_id, &updated).await?;
             let linked_event = resolve_linked_event(&repo, &project_id, &updated).await?;
@@ -1050,6 +1129,10 @@ pub async fn update_project_task_form(
             let depends_on =
                 resolve_depends_on_links(&repo, &item_dependencies, &project_id, &updated).await?;
             let item_reminders = reminders
+                .list_for_item(&updated.id)
+                .await
+                .map_err(ItemError::from)?;
+            let item_comments = comments
                 .list_for_item(&updated.id)
                 .await
                 .map_err(ItemError::from)?;
@@ -1064,6 +1147,7 @@ pub async fn update_project_task_form(
                 series_link,
                 depends_on,
                 item_reminders,
+                item_comments,
             )
             .render()?;
             let dialog = ProjectTaskDetailDialog::new(
@@ -1096,7 +1180,7 @@ pub async fn update_project_task_form(
         Ok(updated) => {
             let names = match &project.team_id {
                 Some(team_id) => names_for(&teams, team_id, &auth_user.user_id).await?,
-                None => HashMap::new(),
+                None => HashMap::from([(auth_user.user_id.clone(), "You".to_string())]),
             };
             let siblings =
                 sibling_group(&repo, &project_id, updated.parent_item_id.as_deref()).await?;
@@ -1254,6 +1338,10 @@ pub async fn update_project_task_form(
                 .list_for_item(&updated.id)
                 .await
                 .map_err(ItemError::from)?;
+            let item_comments = comments
+                .list_for_item(&updated.id)
+                .await
+                .map_err(ItemError::from)?;
             let view = ProjectTaskDetailView::from_item(
                 &updated,
                 &project_id,
@@ -1265,6 +1353,7 @@ pub async fn update_project_task_form(
                 series_link,
                 depends_on,
                 item_reminders,
+                item_comments,
             )
             .render()?;
             Ok(Html(format!("{row}{fields}{view}")).into_response())

@@ -9,11 +9,11 @@ mod storage;
 mod web_ui;
 
 use crate::storage::sqlite::{
-    ActivityLogRepo, CalendarSubscriptionRepo, ItemDependencyRepo, ItemRepo, ItemSeriesRepo,
-    ProjectRepo, PushSubscriptionRepo, ReminderRepo, TeamRepo, UserRepo,
+    ActivityLogRepo, CalendarSubscriptionRepo, CommentRepo, ItemDependencyRepo, ItemRepo,
+    ItemSeriesRepo, ProjectRepo, PushSubscriptionRepo, ReminderRepo, TeamRepo, UserRepo,
     activity_log::SqliteActivityLogRepo, calendar_subscriptions::SqliteCalendarSubscriptionRepo,
-    create_pool, item_dependencies::SqliteItemDependencyRepo, item_series::SqliteItemSeriesRepo,
-    items::SqliteItemRepo, projects::SqliteProjectRepo,
+    comments::SqliteCommentRepo, create_pool, item_dependencies::SqliteItemDependencyRepo,
+    item_series::SqliteItemSeriesRepo, items::SqliteItemRepo, projects::SqliteProjectRepo,
     push_subscriptions::SqlitePushSubscriptionRepo, reminders::SqliteReminderRepo,
     teams::SqliteTeamRepo, users::SqliteUserRepo,
 };
@@ -28,6 +28,7 @@ use json_api::activity_log::{list_team_activity_log, undo_activity_log_entry};
 use json_api::calendar_subscriptions::{
     create_calendar_subscription, delete_calendar_subscription, list_calendar_subscriptions,
 };
+use json_api::comments::{create_item_comment, list_item_comments};
 use json_api::invites::send_app_invite;
 use json_api::item_import::{get_item_import_template, import_project_items};
 use json_api::item_series::{
@@ -136,6 +137,10 @@ fn build_web_router() -> Router {
         .route(
             "/projects/:project_id/tasks/:item_id/edit",
             get(project_task_edit_page),
+        )
+        .route(
+            "/projects/:project_id/tasks/:item_id/comments",
+            post(create_project_task_comment_form),
         )
         .route(
             "/projects/:project_id/tasks/:item_id/children",
@@ -440,6 +445,7 @@ async fn main() {
         Arc::new(SqliteItemDependencyRepo(pool.clone())) as Arc<dyn ItemDependencyRepo>;
     let push_subscription_repo =
         Arc::new(SqlitePushSubscriptionRepo(pool.clone())) as Arc<dyn PushSubscriptionRepo>;
+    let comment_repo = Arc::new(SqliteCommentRepo(pool.clone())) as Arc<dyn CommentRepo>;
     let calendar_repo =
         Arc::new(SqliteCalendarSubscriptionRepo(pool)) as Arc<dyn CalendarSubscriptionRepo>;
 
@@ -557,6 +563,8 @@ async fn main() {
         .create_calendar_subscription(create_calendar_subscription)
         .list_calendar_subscriptions(list_calendar_subscriptions)
         .delete_calendar_subscription(delete_calendar_subscription)
+        .create_item_comment(create_item_comment)
+        .list_item_comments(list_item_comments)
         .build_unchecked();
 
     let api = ServiceBuilder::new()
@@ -569,6 +577,7 @@ async fn main() {
         .layer(Extension(reminder_repo.clone()))
         .layer(Extension(item_dependency_repo.clone()))
         .layer(Extension(calendar_repo.clone()))
+        .layer(Extension(comment_repo.clone()))
         .map_response(|res: http::Response<_>| res.map(boxed))
         .service(smithy);
 
@@ -606,6 +615,7 @@ async fn main() {
                 .layer(Extension(item_dependency_repo.clone()))
                 .layer(Extension(calendar_repo.clone()))
                 .layer(Extension(push_subscription_repo.clone()))
+                .layer(Extension(comment_repo.clone()))
                 .layer(middleware::from_fn(auth::caddy_header_middleware));
             let public_web_router = build_public_web_router();
 
@@ -678,6 +688,7 @@ async fn main() {
                 .layer(Extension(item_dependency_repo))
                 .layer(Extension(calendar_repo))
                 .layer(Extension(push_subscription_repo))
+                .layer(Extension(comment_repo))
                 .layer(middleware::from_fn(auth::web_auth_middleware));
             let public_web_router = build_public_web_router();
 

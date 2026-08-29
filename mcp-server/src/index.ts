@@ -327,6 +327,33 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: "list_item_comments",
+      description:
+        "List comments on a Task item, oldest first. Comments are Task-only; the caller must be a project member.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          projectId: { type: "string" },
+          itemId: { type: "string" },
+        },
+        required: ["projectId", "itemId"],
+      },
+    },
+    {
+      name: "create_item_comment",
+      description:
+        "Add a comment to a Task item. Any project member may comment on any Task item in that project — no edit or delete. Rejected if the item isn't a Task.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          projectId: { type: "string" },
+          itemId: { type: "string" },
+          body: { type: "string" },
+        },
+        required: ["projectId", "itemId", "body"],
+      },
+    },
+    {
       name: "list_items_due",
       description:
         "List items due within a date range. Useful for showing today's tasks or upcoming deadlines.",
@@ -931,6 +958,21 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           );
         }
         result = await api("DELETE", `/projects/${args.projectId}/items/${args.itemId}`);
+        break;
+
+      case "list_item_comments":
+        result = await api(
+          "GET",
+          `/projects/${args.projectId}/items/${args.itemId}/comments`
+        );
+        break;
+
+      case "create_item_comment":
+        result = await api(
+          "POST",
+          `/projects/${args.projectId}/items/${args.itemId}/comments`,
+          { body: args.body }
+        );
         break;
 
       case "list_items_due": {

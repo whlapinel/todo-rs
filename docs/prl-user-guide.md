@@ -233,6 +233,17 @@ prl items delete <item-id> --project <project-id>
 
 Deletes the item and all its descendants.
 
+### Comment on a task
+
+```sh
+prl items comments <item-id> --project <project-id>
+prl items comment <item-id> "Looks good, shipping this" --project <project-id>
+```
+
+Comments are Task-only — any project member can comment on any task in that
+project. No edit or delete once posted. Commenting on a virtual (not-yet-materialized)
+series occurrence isn't possible — materialize it first.
+
 ### List items due in a window
 
 ```sh

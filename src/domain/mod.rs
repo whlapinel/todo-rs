@@ -1,5 +1,6 @@
 pub mod activity_log;
 pub mod calendar_subscription;
+pub mod comment;
 pub mod item;
 pub mod item_series;
 pub mod project;
