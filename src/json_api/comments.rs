@@ -50,6 +50,49 @@ pub async fn create_item_comment(
     })
 }
 
+pub async fn update_item_comment(
+    input: input::UpdateItemCommentInput,
+    server::Extension(comments): server::Extension<Arc<dyn CommentRepo>>,
+    server::Extension(projects): server::Extension<Arc<dyn ProjectRepo>>,
+    server::Extension(teams): server::Extension<Arc<dyn TeamRepo>>,
+    server::Extension(auth): server::Extension<AuthUser>,
+) -> Result<output::UpdateItemCommentOutput, error::UpdateItemCommentError> {
+    comments_service::update_comment(
+        &comments,
+        &projects,
+        &teams,
+        &input.project_id,
+        &input.item_id,
+        &input.comment_id,
+        &auth.user_id,
+        &input.body,
+    )
+    .await
+    .map_err(|e| error::UpdateItemCommentError::from(to_msg(e)))?;
+    Ok(output::UpdateItemCommentOutput {})
+}
+
+pub async fn delete_item_comment(
+    input: input::DeleteItemCommentInput,
+    server::Extension(comments): server::Extension<Arc<dyn CommentRepo>>,
+    server::Extension(projects): server::Extension<Arc<dyn ProjectRepo>>,
+    server::Extension(teams): server::Extension<Arc<dyn TeamRepo>>,
+    server::Extension(auth): server::Extension<AuthUser>,
+) -> Result<output::DeleteItemCommentOutput, error::DeleteItemCommentError> {
+    comments_service::delete_comment(
+        &comments,
+        &projects,
+        &teams,
+        &input.project_id,
+        &input.item_id,
+        &input.comment_id,
+        &auth.user_id,
+    )
+    .await
+    .map_err(|e| error::DeleteItemCommentError::from(to_msg(e)))?;
+    Ok(output::DeleteItemCommentOutput {})
+}
+
 pub async fn list_item_comments(
     input: input::ListItemCommentsInput,
     server::Extension(comments): server::Extension<Arc<dyn CommentRepo>>,

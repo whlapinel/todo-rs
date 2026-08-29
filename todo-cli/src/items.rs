@@ -110,6 +110,21 @@ pub enum ItemsCommand {
         #[arg(long, help = "Project ID the item belongs to")]
         project: Option<String>,
     },
+    /// Edit your own comment on a task
+    CommentEdit {
+        item_id: String,
+        comment_id: String,
+        body: String,
+        #[arg(long, help = "Project ID the item belongs to")]
+        project: Option<String>,
+    },
+    /// Delete your own comment on a task
+    CommentDelete {
+        item_id: String,
+        comment_id: String,
+        #[arg(long, help = "Project ID the item belongs to")]
+        project: Option<String>,
+    },
     /// List items due in a time window
     Due {
         #[arg(long, help = "Only items due after this date (YYYY-MM-DD)")]
@@ -475,7 +490,8 @@ pub async fn cmd_items(client: &Client, cmd: ItemsCommand, user_id: Option<Strin
             }
             for c in out.comments() {
                 println!(
-                    "[{}] {}: {}",
+                    "[{}] [{}] {}: {}",
+                    c.comment_id(),
                     fmt_date(c.created_at()),
                     c.author_user_id(),
                     c.body()
@@ -504,6 +520,54 @@ pub async fn cmd_items(client: &Client, cmd: ItemsCommand, user_id: Option<Strin
                 "create item comment",
             );
             println!("commented {}", out.comment_id());
+        }
+        ItemsCommand::CommentEdit {
+            item_id,
+            comment_id,
+            body,
+            project,
+        } => {
+            let Some(project_id) = project else {
+                eprintln!(
+                    "error: --project is required — the legacy personal Item API has been retired"
+                );
+                std::process::exit(1);
+            };
+            unwrap_or_exit(
+                client
+                    .update_item_comment()
+                    .project_id(project_id)
+                    .item_id(&item_id)
+                    .comment_id(&comment_id)
+                    .body(body)
+                    .send()
+                    .await,
+                "update item comment",
+            );
+            println!("updated comment {comment_id}");
+        }
+        ItemsCommand::CommentDelete {
+            item_id,
+            comment_id,
+            project,
+        } => {
+            let Some(project_id) = project else {
+                eprintln!(
+                    "error: --project is required — the legacy personal Item API has been retired"
+                );
+                std::process::exit(1);
+            };
+            unwrap_or_exit(
+                client
+                    .delete_item_comment()
+                    .project_id(project_id)
+                    .item_id(&item_id)
+                    .comment_id(&comment_id)
+                    .send()
+                    .await,
+                "delete item comment",
+            );
+            println!("deleted comment {comment_id}");
         }
         ItemsCommand::Due { after, before } => {
             let uid = require_user(user_id);

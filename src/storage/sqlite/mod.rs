@@ -321,14 +321,17 @@ pub trait ReminderRepo: Send + Sync {
     async fn mark_pushed(&self, id: &str) -> Result<(), RepoError>;
 }
 
-/// "Add comments for tasks" (docs/issues_and_features.md) — list + create only, no
-/// edit/delete. See `service::comments`, the sole caller.
+/// "Add comments for tasks" (docs/issues_and_features.md). See `service::comments`, the
+/// sole caller — `get`/`update`/`delete` back the author-only edit/delete paths.
 #[cfg_attr(test, mockall::automock)]
 #[async_trait]
 pub trait CommentRepo: Send + Sync {
     async fn create(&self, comment: &Comment) -> Result<(), RepoError>;
     /// Oldest first — reads like a conversation thread.
     async fn list_for_item(&self, item_id: &str) -> Result<Vec<Comment>, RepoError>;
+    async fn get(&self, id: &str) -> Result<Comment, RepoError>;
+    async fn update(&self, id: &str, body: &str) -> Result<(), RepoError>;
+    async fn delete(&self, id: &str) -> Result<(), RepoError>;
 }
 
 /// Metadata only — see `storage::attachment_store::AttachmentStore` for where the actual

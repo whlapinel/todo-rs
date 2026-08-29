@@ -342,7 +342,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "create_item_comment",
       description:
-        "Add a comment to a Task item. Any project member may comment on any Task item in that project — no edit or delete. Rejected if the item isn't a Task.",
+        "Add a comment to a Task item. Any project member may comment on any Task item in that project. Rejected if the item isn't a Task.",
       inputSchema: {
         type: "object",
         properties: {
@@ -351,6 +351,35 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           body: { type: "string" },
         },
         required: ["projectId", "itemId", "body"],
+      },
+    },
+    {
+      name: "update_item_comment",
+      description:
+        "Edit an existing comment on a Task item. Author-only — rejected if the caller didn't post the comment.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          projectId: { type: "string" },
+          itemId: { type: "string" },
+          commentId: { type: "string" },
+          body: { type: "string" },
+        },
+        required: ["projectId", "itemId", "commentId", "body"],
+      },
+    },
+    {
+      name: "delete_item_comment",
+      description:
+        "Delete an existing comment on a Task item. Author-only — rejected if the caller didn't post the comment.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          projectId: { type: "string" },
+          itemId: { type: "string" },
+          commentId: { type: "string" },
+        },
+        required: ["projectId", "itemId", "commentId"],
       },
     },
     {
@@ -972,6 +1001,21 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           "POST",
           `/projects/${args.projectId}/items/${args.itemId}/comments`,
           { body: args.body }
+        );
+        break;
+
+      case "update_item_comment":
+        result = await api(
+          "PUT",
+          `/projects/${args.projectId}/items/${args.itemId}/comments/${args.commentId}`,
+          { body: args.body }
+        );
+        break;
+
+      case "delete_item_comment":
+        result = await api(
+          "DELETE",
+          `/projects/${args.projectId}/items/${args.itemId}/comments/${args.commentId}`
         );
         break;
 

@@ -289,6 +289,8 @@ pub async fn project_task_detail_page(
         item_reminders,
         item_comments,
         item_attachments,
+        &auth_user.user_id,
+        None,
     )
     .render()?;
     let dialog = ProjectTaskDetailDialog::new(
@@ -432,7 +434,213 @@ pub async fn create_project_task_comment_form(
         item_reminders,
         item_comments,
         item_attachments,
+        &auth_user.user_id,
+        None,
     ))
+}
+
+/// Shared tail for the three comment-editing routes below (edit-toggle/save/delete) —
+/// re-fetches everything `ProjectTaskDetailView::from_item` needs and renders it, exactly
+/// like `create_project_task_comment_form`'s own tail, just factored out so those three
+/// don't each duplicate ~30 lines of it. `editing_comment_id` is `Some` only for the
+/// edit-toggle GET; the save/delete routes always pass `None`, returning to plain view
+/// mode.
+#[allow(clippy::too_many_arguments)]
+async fn render_project_task_comments_view(
+    project_id: &str,
+    item_id: &str,
+    auth_user: &AuthUser,
+    repo: &Arc<dyn ItemRepo>,
+    projects: &Arc<dyn ProjectRepo>,
+    teams: &Arc<dyn TeamRepo>,
+    series: &Arc<dyn ItemSeriesRepo>,
+    item_dependencies: &Arc<dyn ItemDependencyRepo>,
+    reminders: &Arc<dyn ReminderRepo>,
+    comments: &Arc<dyn CommentRepo>,
+    attachments: &Arc<dyn AttachmentRepo>,
+    tz: i32,
+    editing_comment_id: Option<&str>,
+) -> Result<Html<String>, ItemError> {
+    let project =
+        project_service::get_project(projects, teams, project_id, &auth_user.user_id).await?;
+    let item = project_item_service::get_project_item_unchecked(repo, project_id, item_id).await?;
+    let item = require_task(item)?;
+    let names = match &project.team_id {
+        Some(team_id) => names_for(teams, team_id, &auth_user.user_id).await?,
+        None => HashMap::from([(auth_user.user_id.clone(), "You".to_string())]),
+    };
+    let parent_link = resolve_parent_link(repo, project_id, &item).await?;
+    let linked_event = resolve_linked_event(repo, project_id, &item).await?;
+    let series_link = resolve_series_link(series, project_id, &item).await?;
+    let depends_on = resolve_depends_on_links(repo, item_dependencies, project_id, &item).await?;
+    let item_reminders = reminders
+        .list_for_item(&item.id)
+        .await
+        .map_err(ItemError::from)?;
+    let item_comments = comments
+        .list_for_item(&item.id)
+        .await
+        .map_err(ItemError::from)?;
+    let item_attachments = attachments
+        .list_for_item(&item.id)
+        .await
+        .map_err(ItemError::from)?;
+    render(ProjectTaskDetailView::from_item(
+        &item,
+        project_id,
+        project.team_id.is_some(),
+        &names,
+        tz,
+        parent_link,
+        linked_event,
+        series_link,
+        depends_on,
+        item_reminders,
+        item_comments,
+        item_attachments,
+        &auth_user.user_id,
+        editing_comment_id,
+    ))
+}
+
+/// `GET .../comments/{comment_id}/edit` — toggles one comment into edit mode within the
+/// comments block (`detail_view.html`'s `c.editing` branch). Author-only
+/// (`comments_service::require_comment_author`); a non-author hitting this URL directly
+/// gets rejected before anything renders, even though the UI never shows the Edit link to
+/// them in the first place (`CommentLine::is_own`).
+pub async fn edit_project_task_comment_form(
+    Path((project_id, item_id, comment_id)): Path<(String, String, String)>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
+    Extension(item_dependencies): Extension<Arc<dyn ItemDependencyRepo>>,
+    Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
+    Extension(comments): Extension<Arc<dyn CommentRepo>>,
+    Extension(attachments): Extension<Arc<dyn AttachmentRepo>>,
+    TzOffset(tz): TzOffset,
+) -> Result<Html<String>, ItemError> {
+    comments_service::require_comment_author(
+        &comments,
+        &projects,
+        &teams,
+        &project_id,
+        &item_id,
+        &comment_id,
+        &auth_user.user_id,
+    )
+    .await?;
+    render_project_task_comments_view(
+        &project_id,
+        &item_id,
+        &auth_user,
+        &repo,
+        &projects,
+        &teams,
+        &series,
+        &item_dependencies,
+        &reminders,
+        &comments,
+        &attachments,
+        tz,
+        Some(&comment_id),
+    )
+    .await
+}
+
+#[derive(serde::Deserialize)]
+pub struct UpdateCommentForm {
+    pub body: String,
+}
+
+/// `PUT .../comments/{comment_id}` — saves an edit (author-only,
+/// `comments_service::update_comment`), then re-renders the comments block back in plain
+/// view mode.
+pub async fn update_project_task_comment_form(
+    Path((project_id, item_id, comment_id)): Path<(String, String, String)>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
+    Extension(item_dependencies): Extension<Arc<dyn ItemDependencyRepo>>,
+    Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
+    Extension(comments): Extension<Arc<dyn CommentRepo>>,
+    Extension(attachments): Extension<Arc<dyn AttachmentRepo>>,
+    TzOffset(tz): TzOffset,
+    Form(form): Form<UpdateCommentForm>,
+) -> Result<Html<String>, ItemError> {
+    comments_service::update_comment(
+        &comments,
+        &projects,
+        &teams,
+        &project_id,
+        &item_id,
+        &comment_id,
+        &auth_user.user_id,
+        &form.body,
+    )
+    .await?;
+    render_project_task_comments_view(
+        &project_id,
+        &item_id,
+        &auth_user,
+        &repo,
+        &projects,
+        &teams,
+        &series,
+        &item_dependencies,
+        &reminders,
+        &comments,
+        &attachments,
+        tz,
+        None,
+    )
+    .await
+}
+
+/// `DELETE .../comments/{comment_id}` — author-only (`comments_service::delete_comment`),
+/// then re-renders the comments block, same tail as the save route above.
+pub async fn delete_project_task_comment_form(
+    Path((project_id, item_id, comment_id)): Path<(String, String, String)>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
+    Extension(item_dependencies): Extension<Arc<dyn ItemDependencyRepo>>,
+    Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
+    Extension(comments): Extension<Arc<dyn CommentRepo>>,
+    Extension(attachments): Extension<Arc<dyn AttachmentRepo>>,
+    TzOffset(tz): TzOffset,
+) -> Result<Html<String>, ItemError> {
+    comments_service::delete_comment(
+        &comments,
+        &projects,
+        &teams,
+        &project_id,
+        &item_id,
+        &comment_id,
+        &auth_user.user_id,
+    )
+    .await?;
+    render_project_task_comments_view(
+        &project_id,
+        &item_id,
+        &auth_user,
+        &repo,
+        &projects,
+        &teams,
+        &series,
+        &item_dependencies,
+        &reminders,
+        &comments,
+        &attachments,
+        tz,
+        None,
+    )
+    .await
 }
 
 /// Streams an attachment's raw bytes back. An image gets `Content-Disposition: inline`
@@ -544,6 +752,8 @@ pub async fn delete_project_task_attachment_form(
         item_reminders,
         item_comments,
         item_attachments,
+        &auth_user.user_id,
+        None,
     ))
 }
 
@@ -1763,6 +1973,8 @@ pub async fn update_project_task_form(
                 item_reminders,
                 item_comments,
                 item_attachments,
+                &auth_user.user_id,
+                None,
             )
             .render()?;
             let dialog = ProjectTaskDetailDialog::new(
@@ -1974,6 +2186,8 @@ pub async fn update_project_task_form(
                 item_reminders,
                 item_comments,
                 item_attachments,
+                &auth_user.user_id,
+                None,
             )
             .render()?;
             Ok(Html(format!("{row}{fields}{view}")).into_response())

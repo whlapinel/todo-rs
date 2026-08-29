@@ -50,6 +50,42 @@ impl CommentRepo for SqliteCommentRepo {
             .map_err(db_err)
             .map(|rows| rows.iter().map(row_to_comment).collect())
     }
+
+    async fn get(&self, id: &str) -> Result<Comment, RepoError> {
+        let q = format!("{COMMENT_SELECT} WHERE id = ?");
+        let row = sqlx::query(&q)
+            .bind(id)
+            .fetch_optional(&self.0)
+            .await
+            .map_err(db_err)?
+            .ok_or(RepoError::NotFound)?;
+        Ok(row_to_comment(&row))
+    }
+
+    async fn update(&self, id: &str, body: &str) -> Result<(), RepoError> {
+        let result = sqlx::query("UPDATE comments SET body = ? WHERE id = ?")
+            .bind(body)
+            .bind(id)
+            .execute(&self.0)
+            .await
+            .map_err(db_err)?;
+        if result.rows_affected() == 0 {
+            return Err(RepoError::NotFound);
+        }
+        Ok(())
+    }
+
+    async fn delete(&self, id: &str) -> Result<(), RepoError> {
+        let result = sqlx::query("DELETE FROM comments WHERE id = ?")
+            .bind(id)
+            .execute(&self.0)
+            .await
+            .map_err(db_err)?;
+        if result.rows_affected() == 0 {
+            return Err(RepoError::NotFound);
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -120,5 +156,67 @@ mod tests {
             rows.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(),
             vec!["c1", "c2"]
         );
+    }
+
+    #[tokio::test]
+    async fn get_returns_the_stored_comment() {
+        let pool = test_pool().await;
+        let repo = SqliteCommentRepo(pool);
+
+        repo.create(&comment("c1", "i1", 1_000)).await.unwrap();
+
+        let row = repo.get("c1").await.unwrap();
+        assert_eq!(row.body, "hello");
+    }
+
+    #[tokio::test]
+    async fn get_missing_comment_returns_not_found() {
+        let pool = test_pool().await;
+        let repo = SqliteCommentRepo(pool);
+
+        let err = repo.get("missing").await.unwrap_err();
+        assert!(matches!(err, RepoError::NotFound));
+    }
+
+    #[tokio::test]
+    async fn update_changes_the_body() {
+        let pool = test_pool().await;
+        let repo = SqliteCommentRepo(pool);
+
+        repo.create(&comment("c1", "i1", 1_000)).await.unwrap();
+        repo.update("c1", "edited").await.unwrap();
+
+        let row = repo.get("c1").await.unwrap();
+        assert_eq!(row.body, "edited");
+    }
+
+    #[tokio::test]
+    async fn update_missing_comment_returns_not_found() {
+        let pool = test_pool().await;
+        let repo = SqliteCommentRepo(pool);
+
+        let err = repo.update("missing", "edited").await.unwrap_err();
+        assert!(matches!(err, RepoError::NotFound));
+    }
+
+    #[tokio::test]
+    async fn delete_removes_the_comment() {
+        let pool = test_pool().await;
+        let repo = SqliteCommentRepo(pool);
+
+        repo.create(&comment("c1", "i1", 1_000)).await.unwrap();
+        repo.delete("c1").await.unwrap();
+
+        let err = repo.get("c1").await.unwrap_err();
+        assert!(matches!(err, RepoError::NotFound));
+    }
+
+    #[tokio::test]
+    async fn delete_missing_comment_returns_not_found() {
+        let pool = test_pool().await;
+        let repo = SqliteCommentRepo(pool);
+
+        let err = repo.delete("missing").await.unwrap_err();
+        assert!(matches!(err, RepoError::NotFound));
     }
 }

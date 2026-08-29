@@ -660,16 +660,27 @@ impl ProjectTaskDetailFields {
 /// file *is* the content; text becomes an optional caption) — see
 /// `service::comments::create_comment_with_attachment`.
 pub struct CommentLine {
+    pub id: String,
     pub author_name: String,
     pub created_at: String,
     pub body: String,
     pub attachments: Vec<AttachmentLine>,
+    /// Author-only edit/delete affordances (`service::comments::update_comment`/
+    /// `delete_comment`) are only ever shown to the comment's own author.
+    pub is_own: bool,
+    /// Set when this is the one comment `edit_project_task_comment_form` (the GET
+    /// `.../comments/{comment_id}/edit` route) is rendering in edit mode — see
+    /// `detail_view.html`'s branch on this field. `false` for every other comment on the
+    /// same detail view, and for a plain (non-editing) render of this one too.
+    pub editing: bool,
 }
 
 /// Builds display rows for a task's comments, oldest first (matches `CommentRepo::list_for_item`'s
 /// own order) — see `CommentLine`. `attachments` is every attachment on the item (not
 /// pre-grouped — a single `AttachmentRepo::list_for_item` query, same as `comments` itself),
-/// grouped here by `comment_id` so each comment only renders its own.
+/// grouped here by `comment_id` so each comment only renders its own. `requester_user_id`
+/// drives `CommentLine::is_own`; `editing_comment_id` (from the edit-toggle route) marks at
+/// most one comment as `editing`.
 pub fn comment_lines(
     comments: &[Comment],
     attachments: &[Attachment],
@@ -677,6 +688,8 @@ pub fn comment_lines(
     project_id: &str,
     item_id: &str,
     tz: i32,
+    requester_user_id: &str,
+    editing_comment_id: Option<&str>,
 ) -> Vec<CommentLine> {
     let mut by_comment: HashMap<&str, Vec<&Attachment>> = HashMap::new();
     for a in attachments {
@@ -692,6 +705,7 @@ pub fn comment_lines(
                 .map(|a| (*a).clone())
                 .collect();
             CommentLine {
+                id: c.id.clone(),
                 author_name: names
                     .get(&c.author_user_id)
                     .cloned()
@@ -699,6 +713,8 @@ pub fn comment_lines(
                 created_at: format_display_date(to_local(c.created_at, tz), true),
                 body: c.body.clone(),
                 attachments: attachment_lines(&own_attachments, project_id, item_id),
+                is_own: c.author_user_id == requester_user_id,
+                editing: editing_comment_id == Some(c.id.as_str()),
             }
         })
         .collect()
@@ -825,6 +841,8 @@ impl ProjectTaskDetailView {
         reminders: Vec<crate::domain::reminder::Reminder>,
         comments: Vec<Comment>,
         attachments: Vec<Attachment>,
+        requester_user_id: &str,
+        editing_comment_id: Option<&str>,
     ) -> Self {
         let due_date = item
             .due_date()
@@ -860,7 +878,16 @@ impl ProjectTaskDetailView {
             // `attachments` is every attachment on the item, ungrouped — `comment_lines`
             // groups them by `comment_id` per comment (a file always belongs to a
             // comment now, see root CLAUDE.md's Attachments section).
-            comments: comment_lines(&comments, &attachments, names, project_id, &item.id, tz),
+            comments: comment_lines(
+                &comments,
+                &attachments,
+                names,
+                project_id,
+                &item.id,
+                tz,
+                requester_user_id,
+                editing_comment_id,
+            ),
         }
     }
 }

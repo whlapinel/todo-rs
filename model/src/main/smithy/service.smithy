@@ -37,5 +37,7 @@ service PeoplesRepublicOfLists {
         GetItemImportTemplate
         CreateItemComment
         ListItemComments
+        UpdateItemComment
+        DeleteItemComment
     ]
 }

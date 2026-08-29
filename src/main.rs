@@ -30,7 +30,9 @@ use json_api::activity_log::{list_team_activity_log, undo_activity_log_entry};
 use json_api::calendar_subscriptions::{
     create_calendar_subscription, delete_calendar_subscription, list_calendar_subscriptions,
 };
-use json_api::comments::{create_item_comment, list_item_comments};
+use json_api::comments::{
+    create_item_comment, delete_item_comment, list_item_comments, update_item_comment,
+};
 use json_api::invites::send_app_invite;
 use json_api::item_import::{get_item_import_template, import_project_items};
 use json_api::item_series::{
@@ -159,6 +161,14 @@ fn build_web_router() -> Router {
         .route(
             "/projects/:project_id/tasks/:item_id/comments",
             post(create_project_task_comment_form),
+        )
+        .route(
+            "/projects/:project_id/tasks/:item_id/comments/:comment_id",
+            put(update_project_task_comment_form).delete(delete_project_task_comment_form),
+        )
+        .route(
+            "/projects/:project_id/tasks/:item_id/comments/:comment_id/edit",
+            get(edit_project_task_comment_form),
         )
         .route(
             "/projects/:project_id/tasks/:item_id/attachments/:attachment_id",
@@ -604,6 +614,8 @@ async fn main() {
         .delete_calendar_subscription(delete_calendar_subscription)
         .create_item_comment(create_item_comment)
         .list_item_comments(list_item_comments)
+        .update_item_comment(update_item_comment)
+        .delete_item_comment(delete_item_comment)
         .build_unchecked();
 
     let api = ServiceBuilder::new()

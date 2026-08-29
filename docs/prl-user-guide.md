@@ -238,11 +238,15 @@ Deletes the item and all its descendants.
 ```sh
 prl items comments <item-id> --project <project-id>
 prl items comment <item-id> "Looks good, shipping this" --project <project-id>
+prl items comment-edit <item-id> <comment-id> "Updated text" --project <project-id>
+prl items comment-delete <item-id> <comment-id> --project <project-id>
 ```
 
 Comments are Task-only — any project member can comment on any task in that
-project. No edit or delete once posted. Commenting on a virtual (not-yet-materialized)
-series occurrence isn't possible — materialize it first.
+project. Editing/deleting an existing comment is author-only — you can only
+edit or delete comments you posted yourself; `prl items comments`' output
+includes each comment's id for this. Commenting on a virtual
+(not-yet-materialized) series occurrence isn't possible — materialize it first.
 
 ### List items due in a window
 
