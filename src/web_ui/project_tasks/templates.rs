@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::domain::attachment::Attachment;
 use crate::domain::comment::Comment;
 use crate::domain::item::{Item, ItemKind};
 use crate::service::error::ItemError;
@@ -654,28 +655,108 @@ impl ProjectTaskDetailFields {
 /// map `assignee_name` already uses for a team project; a personal project has only its one
 /// owner, so the caller resolves that single name via `UserRepo` instead) rather than carried
 /// on the wire, mirroring how `assignedToUserId` is resolved to a display name here already.
+/// `attachments` (root CLAUDE.md's Attachments section) is this comment's own files — a file
+/// always belongs to a comment now, so `body` may be empty when `attachments` isn't (the
+/// file *is* the content; text becomes an optional caption) — see
+/// `service::comments::create_comment_with_attachment`.
 pub struct CommentLine {
     pub author_name: String,
     pub created_at: String,
     pub body: String,
+    pub attachments: Vec<AttachmentLine>,
 }
 
 /// Builds display rows for a task's comments, oldest first (matches `CommentRepo::list_for_item`'s
-/// own order) — see `CommentLine`.
+/// own order) — see `CommentLine`. `attachments` is every attachment on the item (not
+/// pre-grouped — a single `AttachmentRepo::list_for_item` query, same as `comments` itself),
+/// grouped here by `comment_id` so each comment only renders its own.
 pub fn comment_lines(
     comments: &[Comment],
+    attachments: &[Attachment],
     names: &HashMap<String, String>,
+    project_id: &str,
+    item_id: &str,
     tz: i32,
 ) -> Vec<CommentLine> {
+    let mut by_comment: HashMap<&str, Vec<&Attachment>> = HashMap::new();
+    for a in attachments {
+        by_comment.entry(a.comment_id.as_str()).or_default().push(a);
+    }
     comments
         .iter()
-        .map(|c| CommentLine {
-            author_name: names
-                .get(&c.author_user_id)
-                .cloned()
-                .unwrap_or_else(|| c.author_user_id.clone()),
-            created_at: format_display_date(to_local(c.created_at, tz), true),
-            body: c.body.clone(),
+        .map(|c| {
+            let own_attachments: Vec<Attachment> = by_comment
+                .get(c.id.as_str())
+                .into_iter()
+                .flatten()
+                .map(|a| (*a).clone())
+                .collect();
+            CommentLine {
+                author_name: names
+                    .get(&c.author_user_id)
+                    .cloned()
+                    .unwrap_or_else(|| c.author_user_id.clone()),
+                created_at: format_display_date(to_local(c.created_at, tz), true),
+                body: c.body.clone(),
+                attachments: attachment_lines(&own_attachments, project_id, item_id),
+            }
+        })
+        .collect()
+}
+
+/// One rendered attachment row on a task's read-only detail view — root CLAUDE.md's
+/// Attachments section. No author/timestamp fields here — the enclosing `CommentLine`
+/// already shows both for the whole comment, and every attachment on this codebase's
+/// model belongs to exactly one comment (see `Attachment::comment_id`), so repeating them
+/// per-file would be redundant. `download_url` points at the raw-bytes download route,
+/// which the template must render with `hx-boost="false"` so htmx doesn't intercept it
+/// as a boosted navigation (that would try to swap the file's bytes into `#page`).
+/// `is_image` (a plain `content_type` prefix check) is what lets the template render an
+/// inline `<img>` thumbnail instead of a bare download link — the download route itself
+/// serves an image with `Content-Disposition: inline` for exactly the same reason (see
+/// `download_project_task_attachment`), so the `<img src>` actually renders instead of
+/// triggering a save-file prompt.
+pub struct AttachmentLine {
+    pub filename: String,
+    pub size_display: String,
+    pub download_url: String,
+    pub is_image: bool,
+}
+
+/// "128 B" / "4.3 KB" / "2.1 MB" — binary (1024-based) units, one decimal place above
+/// the smallest unit. Good enough for a byte count nobody needs precise to the byte.
+fn format_size_bytes(bytes: i64) -> String {
+    const UNITS: [&str; 4] = ["B", "KB", "MB", "GB"];
+    let mut size = bytes as f64;
+    let mut unit = 0;
+    while size >= 1024.0 && unit < UNITS.len() - 1 {
+        size /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bytes} {}", UNITS[unit])
+    } else {
+        format!("{size:.1} {}", UNITS[unit])
+    }
+}
+
+/// Builds display rows for a task's attachments, newest first (matches
+/// `AttachmentRepo::list_for_item`'s own order) — see `AttachmentLine`.
+pub fn attachment_lines(
+    attachments: &[Attachment],
+    project_id: &str,
+    item_id: &str,
+) -> Vec<AttachmentLine> {
+    attachments
+        .iter()
+        .map(|a| AttachmentLine {
+            filename: a.filename.clone(),
+            size_display: format_size_bytes(a.size_bytes),
+            is_image: a.content_type.starts_with("image/"),
+            download_url: format!(
+                "/web/projects/{project_id}/tasks/{item_id}/attachments/{}",
+                a.id
+            ),
         })
         .collect()
 }
@@ -743,6 +824,7 @@ impl ProjectTaskDetailView {
         depends_on: Vec<(String, String)>,
         reminders: Vec<crate::domain::reminder::Reminder>,
         comments: Vec<Comment>,
+        attachments: Vec<Attachment>,
     ) -> Self {
         let due_date = item
             .due_date()
@@ -775,7 +857,10 @@ impl ProjectTaskDetailView {
             series_link,
             depends_on,
             reminders: reminder_labels(&reminders, tz),
-            comments: comment_lines(&comments, names, tz),
+            // `attachments` is every attachment on the item, ungrouped — `comment_lines`
+            // groups them by `comment_id` per comment (a file always belongs to a
+            // comment now, see root CLAUDE.md's Attachments section).
+            comments: comment_lines(&comments, &attachments, names, project_id, &item.id, tz),
         }
     }
 }

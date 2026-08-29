@@ -1,5 +1,6 @@
 mod activity_log;
 mod activity_log_team_id_nullable;
+mod add_attachments;
 mod add_calendar_subscriptions;
 mod add_comments;
 mod add_event_occurrences_item_id_index;
@@ -33,6 +34,7 @@ mod team_member_points;
 
 use activity_log::ActivityLog;
 use activity_log_team_id_nullable::ActivityLogTeamIdNullable;
+use add_attachments::AddAttachments;
 use add_calendar_subscriptions::AddCalendarSubscriptions;
 use add_comments::AddComments;
 use add_event_occurrences_item_id_index::AddEventOccurrencesItemIdIndex;
@@ -131,6 +133,7 @@ fn all_migrations() -> Vec<Box<dyn Migration>> {
         Box::new(AddPushSubscriptions),
         Box::new(AddItemPriority),
         Box::new(AddComments),
+        Box::new(AddAttachments),
     ]
 }
 
@@ -557,7 +560,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 32);
+        assert_eq!(applied_count, 33);
     }
 
     #[tokio::test]
@@ -570,7 +573,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 32);
+        assert_eq!(applied_count, 33);
     }
 
     #[tokio::test]
@@ -584,6 +587,6 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 32);
+        assert_eq!(applied_count, 33);
     }
 }

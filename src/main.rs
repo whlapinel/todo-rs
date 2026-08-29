@@ -8,12 +8,14 @@ mod service;
 mod storage;
 mod web_ui;
 
+use crate::storage::attachment_store::{AttachmentStore, LocalFsAttachmentStore};
 use crate::storage::sqlite::{
-    ActivityLogRepo, CalendarSubscriptionRepo, CommentRepo, ItemDependencyRepo, ItemRepo,
-    ItemSeriesRepo, ProjectRepo, PushSubscriptionRepo, ReminderRepo, TeamRepo, UserRepo,
-    activity_log::SqliteActivityLogRepo, calendar_subscriptions::SqliteCalendarSubscriptionRepo,
-    comments::SqliteCommentRepo, create_pool, item_dependencies::SqliteItemDependencyRepo,
-    item_series::SqliteItemSeriesRepo, items::SqliteItemRepo, projects::SqliteProjectRepo,
+    ActivityLogRepo, AttachmentRepo, CalendarSubscriptionRepo, CommentRepo, ItemDependencyRepo,
+    ItemRepo, ItemSeriesRepo, ProjectRepo, PushSubscriptionRepo, ReminderRepo, TeamRepo, UserRepo,
+    activity_log::SqliteActivityLogRepo, attachments::SqliteAttachmentRepo,
+    calendar_subscriptions::SqliteCalendarSubscriptionRepo, comments::SqliteCommentRepo,
+    create_pool, item_dependencies::SqliteItemDependencyRepo, item_series::SqliteItemSeriesRepo,
+    items::SqliteItemRepo, projects::SqliteProjectRepo,
     push_subscriptions::SqlitePushSubscriptionRepo, reminders::SqliteReminderRepo,
     teams::SqliteTeamRepo, users::SqliteUserRepo,
 };
@@ -157,6 +159,10 @@ fn build_web_router() -> Router {
         .route(
             "/projects/:project_id/tasks/:item_id/comments",
             post(create_project_task_comment_form),
+        )
+        .route(
+            "/projects/:project_id/tasks/:item_id/attachments/:attachment_id",
+            get(download_project_task_attachment).delete(delete_project_task_attachment_form),
         )
         .route(
             "/projects/:project_id/tasks/:item_id/children",
@@ -406,6 +412,15 @@ fn build_web_router() -> Router {
         // boosted link's inherited hx-select="#page" finds nothing to swap in. A real 404
         // here fails loudly instead, for any not-yet-built /web/* route or plain typo.
         .fallback(web_not_found)
+        // axum's own default (2MB, applied automatically to any body-consuming
+        // extractor including `Multipart`) is well under a typical photo — raised here,
+        // for every /web/* route, to `service::attachments::MAX_ATTACHMENT_SIZE_BYTES`
+        // plus headroom for multipart boundary/header overhead, so a large-but-valid
+        // attachment upload doesn't get rejected by this layer before ever reaching
+        // that service-level check.
+        .layer(axum::extract::DefaultBodyLimit::max(
+            service::attachments::MAX_ATTACHMENT_SIZE_BYTES + 1024 * 1024,
+        ))
 }
 
 /// Routes that must stay reachable without a session — kept out of `build_web_router()` so
@@ -462,8 +477,16 @@ async fn main() {
     let push_subscription_repo =
         Arc::new(SqlitePushSubscriptionRepo(pool.clone())) as Arc<dyn PushSubscriptionRepo>;
     let comment_repo = Arc::new(SqliteCommentRepo(pool.clone())) as Arc<dyn CommentRepo>;
+    let attachment_repo = Arc::new(SqliteAttachmentRepo(pool.clone())) as Arc<dyn AttachmentRepo>;
     let calendar_repo =
         Arc::new(SqliteCalendarSubscriptionRepo(pool)) as Arc<dyn CalendarSubscriptionRepo>;
+
+    // Where attachment bytes live — see root CLAUDE.md's Attachments section. Defaults to
+    // a plain local directory; point it at a mounted network share (Synology SMB/NFS
+    // mount, etc.) to keep attachments off this server's own disk.
+    let attachment_store = Arc::new(LocalFsAttachmentStore::new(
+        std::env::var("TODO_ATTACHMENTS_DIR").unwrap_or_else(|_| "./attachments".to_string()),
+    )) as Arc<dyn AttachmentStore>;
 
     // Background calendar sync sweep — see docs/google-calendar-import-plan.md's Stage 5.
     // This is the first tokio::spawn-based background loop in this codebase: every other
@@ -632,6 +655,8 @@ async fn main() {
                 .layer(Extension(calendar_repo.clone()))
                 .layer(Extension(push_subscription_repo.clone()))
                 .layer(Extension(comment_repo.clone()))
+                .layer(Extension(attachment_repo.clone()))
+                .layer(Extension(attachment_store.clone()))
                 .layer(middleware::from_fn(auth::caddy_header_middleware));
             let public_web_router = build_public_web_router();
 
@@ -705,6 +730,8 @@ async fn main() {
                 .layer(Extension(calendar_repo))
                 .layer(Extension(push_subscription_repo))
                 .layer(Extension(comment_repo))
+                .layer(Extension(attachment_repo))
+                .layer(Extension(attachment_store))
                 .layer(middleware::from_fn(auth::web_auth_middleware));
             let public_web_router = build_public_web_router();
 

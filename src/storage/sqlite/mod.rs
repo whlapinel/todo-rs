@@ -1,4 +1,5 @@
 pub mod activity_log;
+pub mod attachments;
 pub mod calendar_subscriptions;
 pub mod comments;
 pub mod item_dependencies;
@@ -11,6 +12,7 @@ pub mod teams;
 pub mod users;
 use crate::domain::{
     activity_log::ActivityLogEntry,
+    attachment::Attachment,
     calendar_subscription::CalendarSubscription,
     comment::Comment,
     item::{Item, ItemKind, ItemType, Recurrence, Schedule, TeamAssignment},
@@ -327,6 +329,20 @@ pub trait CommentRepo: Send + Sync {
     async fn create(&self, comment: &Comment) -> Result<(), RepoError>;
     /// Oldest first — reads like a conversation thread.
     async fn list_for_item(&self, item_id: &str) -> Result<Vec<Comment>, RepoError>;
+}
+
+/// Metadata only — see `storage::attachment_store::AttachmentStore` for where the actual
+/// bytes live. Task-only, any project member (`service::attachments`), mirroring
+/// `CommentRepo`'s shape closely except attachments can also be deleted.
+#[cfg_attr(test, mockall::automock)]
+#[async_trait]
+pub trait AttachmentRepo: Send + Sync {
+    async fn create(&self, attachment: &Attachment) -> Result<(), RepoError>;
+    async fn get(&self, id: &str) -> Result<Attachment, RepoError>;
+    /// Newest first — matches how attachments read best in a detail view (most recently
+    /// added photo/file on top), the opposite order from `CommentRepo::list_for_item`.
+    async fn list_for_item(&self, item_id: &str) -> Result<Vec<Attachment>, RepoError>;
+    async fn delete(&self, id: &str) -> Result<(), RepoError>;
 }
 
 /// Browser push subscriptions (one row per device/browser a user has enabled push on) — see
@@ -1089,6 +1105,35 @@ pub async fn create_pool(url: &str) -> Result<SqlitePool, sqlx::Error> {
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_comments_item_id ON comments (item_id)")
         .execute(&pool)
         .await?;
+
+    // Attachments (root CLAUDE.md's Attachments section) — see `AttachmentRepo`. Brand-new
+    // table, same "safe directly in the baseline" precedent as comments/reminders/
+    // item_dependencies above; `AddAttachments` creates the identical pair for a DB that
+    // predates this migration.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS attachments (
+            id TEXT PRIMARY KEY,
+            comment_id TEXT NOT NULL,
+            item_id TEXT NOT NULL,
+            project_id TEXT NOT NULL,
+            uploaded_by_user_id TEXT NOT NULL,
+            filename TEXT NOT NULL,
+            content_type TEXT NOT NULL,
+            size_bytes INTEGER NOT NULL,
+            storage_key TEXT NOT NULL,
+            created_at INTEGER NOT NULL
+        )",
+    )
+    .execute(&pool)
+    .await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_attachments_item_id ON attachments (item_id)")
+        .execute(&pool)
+        .await?;
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_attachments_comment_id ON attachments (comment_id)",
+    )
+    .execute(&pool)
+    .await?;
 
     // idx_items_calendar_subscription_id / idx_items_calsub_google_event_id are
     // deliberately NOT created here — same index-ordering reason as idx_items_project_id

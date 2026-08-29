@@ -1,6 +1,7 @@
 use crate::auth::AuthUser;
 use crate::domain::item::{Item, ItemKind};
 use crate::domain::project::Project;
+use crate::service::attachments as attachments_service;
 use crate::service::comments as comments_service;
 use crate::service::error::ItemError;
 use crate::service::item_dependencies::{self as item_dependencies_service};
@@ -9,9 +10,10 @@ use crate::service::project_items::{self as project_item_service, UpdateProjectI
 use crate::service::projects::{self as project_service};
 use crate::service::teams as team_service;
 use crate::service::templates::{self as template_service, CreateProjectTemplateParams};
+use crate::storage::attachment_store::AttachmentStore;
 use crate::storage::sqlite::{
-    ActivityLogRepo, CommentRepo, ItemDependencyRepo, ItemRepo, ItemSeriesRepo, ProjectRepo,
-    ReminderRepo, TeamRepo, UserRepo,
+    ActivityLogRepo, AttachmentRepo, CommentRepo, ItemDependencyRepo, ItemRepo, ItemSeriesRepo,
+    ProjectRepo, ReminderRepo, TeamRepo, UserRepo,
 };
 use crate::web_ui::TzOffset;
 use crate::web_ui::list_filters::{ListFilterQuery, ListFilters};
@@ -24,7 +26,7 @@ use crate::web_ui::project_tasks::{
     sibling_group, update_params_from_form,
 };
 use askama::Template;
-use axum::extract::{Extension, Form, Path, Query};
+use axum::extract::{Extension, Form, Multipart, Path, Query};
 use axum::http::HeaderMap;
 use axum::response::{Html, IntoResponse, Response};
 use chrono::{DateTime, Utc};
@@ -245,6 +247,7 @@ pub async fn project_task_detail_page(
     Extension(item_dependencies): Extension<Arc<dyn ItemDependencyRepo>>,
     Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
     Extension(comments): Extension<Arc<dyn CommentRepo>>,
+    Extension(attachments): Extension<Arc<dyn AttachmentRepo>>,
     TzOffset(tz): TzOffset,
 ) -> Result<Html<String>, ItemError> {
     let project =
@@ -269,6 +272,10 @@ pub async fn project_task_detail_page(
         .list_for_item(&item.id)
         .await
         .map_err(ItemError::from)?;
+    let item_attachments = attachments
+        .list_for_item(&item.id)
+        .await
+        .map_err(ItemError::from)?;
     let view = ProjectTaskDetailView::from_item(
         &item,
         &project_id,
@@ -281,6 +288,7 @@ pub async fn project_task_detail_page(
         depends_on,
         item_reminders,
         item_comments,
+        item_attachments,
     )
     .render()?;
     let dialog = ProjectTaskDetailDialog::new(
@@ -310,15 +318,13 @@ pub async fn project_task_detail_page(
     })
 }
 
-#[derive(serde::Deserialize)]
-pub struct NewCommentForm {
-    pub body: String,
-}
-
-/// "Add comments for tasks" (docs/issues_and_features.md) — posts a new comment, then
-/// re-renders the whole read-only detail card (`#item-{id}-view`), the same
-/// target/swap the card's own complete-toggle checkbox already uses (`detail_view.html`),
-/// rather than inventing a narrower comments-only fragment.
+/// Posts a new comment, optionally with a single attached file — root CLAUDE.md's
+/// Attachments section: a file always belongs to a comment, so this one multipart form
+/// (`body` text field + optional `file` field) is the only way the web UI creates either.
+/// `Multipart` must be the last extractor argument (it consumes the request body
+/// directly). Re-renders the whole read-only detail card (`#item-{id}-view`)'s comments
+/// section, the same target/swap the card's own complete-toggle checkbox already uses
+/// (`detail_view.html`), rather than inventing a narrower fragment.
 pub async fn create_project_task_comment_form(
     Path((project_id, item_id)): Path<(String, String)>,
     Extension(auth_user): Extension<AuthUser>,
@@ -329,18 +335,61 @@ pub async fn create_project_task_comment_form(
     Extension(item_dependencies): Extension<Arc<dyn ItemDependencyRepo>>,
     Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
     Extension(comments): Extension<Arc<dyn CommentRepo>>,
+    Extension(attachments): Extension<Arc<dyn AttachmentRepo>>,
+    Extension(attachment_store): Extension<Arc<dyn AttachmentStore>>,
     TzOffset(tz): TzOffset,
-    Form(form): Form<NewCommentForm>,
+    mut multipart: Multipart,
 ) -> Result<Html<String>, ItemError> {
-    comments_service::create_comment(
+    let mut body = String::new();
+    let mut file = None;
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| ItemError::Invalid(format!("invalid upload: {e}")))?
+    {
+        match field.name() {
+            Some("body") => {
+                body = field
+                    .text()
+                    .await
+                    .map_err(|e| ItemError::Invalid(format!("invalid upload: {e}")))?;
+            }
+            Some("file") => {
+                // An empty/unselected `<input type="file">` still submits a field with
+                // no filename — treat that the same as "no file", not an empty upload.
+                if let Some(filename) = field.file_name().map(str::to_string) {
+                    if !filename.is_empty() {
+                        let content_type = field
+                            .content_type()
+                            .map(str::to_string)
+                            .unwrap_or_else(|| "application/octet-stream".to_string());
+                        let bytes = field
+                            .bytes()
+                            .await
+                            .map_err(|e| ItemError::Invalid(format!("invalid upload: {e}")))?
+                            .to_vec();
+                        if !bytes.is_empty() {
+                            file = Some((filename, content_type, bytes));
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    comments_service::create_comment_with_attachment(
         &comments,
+        &attachments,
+        &attachment_store,
         &repo,
         &projects,
         &teams,
         &project_id,
         &item_id,
         &auth_user.user_id,
-        &form.body,
+        &body,
+        file,
     )
     .await?;
 
@@ -366,6 +415,10 @@ pub async fn create_project_task_comment_form(
         .list_for_item(&item.id)
         .await
         .map_err(ItemError::from)?;
+    let item_attachments = attachments
+        .list_for_item(&item.id)
+        .await
+        .map_err(ItemError::from)?;
     render(ProjectTaskDetailView::from_item(
         &item,
         &project_id,
@@ -378,6 +431,119 @@ pub async fn create_project_task_comment_form(
         depends_on,
         item_reminders,
         item_comments,
+        item_attachments,
+    ))
+}
+
+/// Streams an attachment's raw bytes back. An image gets `Content-Disposition: inline`
+/// so the read-only view's `<img src>` can render it directly (root CLAUDE.md's
+/// Attachments section — "show images in the UI"); anything else gets `attachment`, so
+/// the browser downloads/saves it instead of trying to display or navigate to it. Either
+/// way the view's link to this route carries `hx-boost="false"` so htmx never intercepts
+/// it as a boosted page navigation and tries to swap the bytes into `#page`.
+pub async fn download_project_task_attachment(
+    Path((project_id, item_id, attachment_id)): Path<(String, String, String)>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(attachments): Extension<Arc<dyn AttachmentRepo>>,
+    Extension(attachment_store): Extension<Arc<dyn AttachmentStore>>,
+) -> Result<Response, ItemError> {
+    let (attachment, bytes) = attachments_service::download_attachment(
+        &attachments,
+        &attachment_store,
+        &projects,
+        &teams,
+        &project_id,
+        &item_id,
+        &attachment_id,
+        &auth_user.user_id,
+    )
+    .await?;
+
+    let disposition = if attachment.content_type.starts_with("image/") {
+        format!("inline; filename=\"{}\"", attachment.filename)
+    } else {
+        format!("attachment; filename=\"{}\"", attachment.filename)
+    };
+    Ok((
+        [
+            (http::header::CONTENT_TYPE, attachment.content_type),
+            (http::header::CONTENT_DISPOSITION, disposition),
+        ],
+        bytes,
+    )
+        .into_response())
+}
+
+/// Mirrors `create_project_task_attachment_form`'s tail exactly (same full-view
+/// re-render, same `hx-select="#item-{id}-attachments"` client-side extraction) after
+/// deleting instead of uploading.
+pub async fn delete_project_task_attachment_form(
+    Path((project_id, item_id, attachment_id)): Path<(String, String, String)>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
+    Extension(item_dependencies): Extension<Arc<dyn ItemDependencyRepo>>,
+    Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
+    Extension(comments): Extension<Arc<dyn CommentRepo>>,
+    Extension(attachments): Extension<Arc<dyn AttachmentRepo>>,
+    Extension(attachment_store): Extension<Arc<dyn AttachmentStore>>,
+    TzOffset(tz): TzOffset,
+) -> Result<Html<String>, ItemError> {
+    attachments_service::delete_attachment(
+        &attachments,
+        &attachment_store,
+        &projects,
+        &teams,
+        &project_id,
+        &item_id,
+        &attachment_id,
+        &auth_user.user_id,
+    )
+    .await?;
+
+    let project =
+        project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
+    let item =
+        project_item_service::get_project_item_unchecked(&repo, &project_id, &item_id).await?;
+    let item = require_task(item)?;
+    let names = match &project.team_id {
+        Some(team_id) => names_for(&teams, team_id, &auth_user.user_id).await?,
+        None => HashMap::from([(auth_user.user_id.clone(), "You".to_string())]),
+    };
+    let parent_link = resolve_parent_link(&repo, &project_id, &item).await?;
+    let linked_event = resolve_linked_event(&repo, &project_id, &item).await?;
+    let series_link = resolve_series_link(&series, &project_id, &item).await?;
+    let depends_on =
+        resolve_depends_on_links(&repo, &item_dependencies, &project_id, &item).await?;
+    let item_reminders = reminders
+        .list_for_item(&item.id)
+        .await
+        .map_err(ItemError::from)?;
+    let item_comments = comments
+        .list_for_item(&item.id)
+        .await
+        .map_err(ItemError::from)?;
+    let item_attachments = attachments
+        .list_for_item(&item.id)
+        .await
+        .map_err(ItemError::from)?;
+    render(ProjectTaskDetailView::from_item(
+        &item,
+        &project_id,
+        project.team_id.is_some(),
+        &names,
+        tz,
+        parent_link,
+        linked_event,
+        series_link,
+        depends_on,
+        item_reminders,
+        item_comments,
+        item_attachments,
     ))
 }
 
@@ -1535,6 +1701,7 @@ pub async fn update_project_task_form(
     Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
     Extension(item_dependencies): Extension<Arc<dyn ItemDependencyRepo>>,
     Extension(comments): Extension<Arc<dyn CommentRepo>>,
+    Extension(attachments): Extension<Arc<dyn AttachmentRepo>>,
     TzOffset(tz): TzOffset,
     Query(view_q): Query<super::RowViewQuery>,
     Form(form): Form<ProjectTaskForm>,
@@ -1579,6 +1746,10 @@ pub async fn update_project_task_form(
                 .list_for_item(&updated.id)
                 .await
                 .map_err(ItemError::from)?;
+            let item_attachments = attachments
+                .list_for_item(&updated.id)
+                .await
+                .map_err(ItemError::from)?;
             let view = ProjectTaskDetailView::from_item(
                 &updated,
                 &project_id,
@@ -1591,6 +1762,7 @@ pub async fn update_project_task_form(
                 depends_on,
                 item_reminders,
                 item_comments,
+                item_attachments,
             )
             .render()?;
             let dialog = ProjectTaskDetailDialog::new(
@@ -1785,6 +1957,10 @@ pub async fn update_project_task_form(
                 .list_for_item(&updated.id)
                 .await
                 .map_err(ItemError::from)?;
+            let item_attachments = attachments
+                .list_for_item(&updated.id)
+                .await
+                .map_err(ItemError::from)?;
             let view = ProjectTaskDetailView::from_item(
                 &updated,
                 &project_id,
@@ -1797,6 +1973,7 @@ pub async fn update_project_task_form(
                 depends_on,
                 item_reminders,
                 item_comments,
+                item_attachments,
             )
             .render()?;
             Ok(Html(format!("{row}{fields}{view}")).into_response())

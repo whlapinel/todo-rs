@@ -1,4 +1,5 @@
 pub mod activity_log;
+pub mod attachments;
 pub mod calendar_subscriptions;
 pub mod calendar_sync;
 pub mod comments;
