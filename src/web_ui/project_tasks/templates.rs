@@ -1191,6 +1191,8 @@ pub struct ProjectTasksListPageTemplate {
     pub schedule: String,
     /// `true` = show recurring items (the default).
     pub recurring: bool,
+    /// `PriorityFilter::as_value`: `""` (any priority) | `"1"`-`"4"`.
+    pub priority: String,
     /// Pre-encoded `ListFilters::query_string()` (empty at all-default filters) — used to build
     /// the "New task" button's URL so the filters carry into `new_project_task_page` (which
     /// re-embeds them as `NewProjectTaskPageTemplate::filters_query` for the batch form's own

@@ -180,6 +180,7 @@ pub async fn project_tasks_page(
         due_date: filters.due_date.as_value().to_string(),
         schedule: filters.schedule.as_value().to_string(),
         recurring: filters.recurring,
+        priority: filters.priority.as_value(),
         filters_query: filters.query_string(),
         points_label,
         select_mode,
@@ -675,6 +676,7 @@ pub struct OccurrenceRowActionQuery {
     due_date: Option<String>,
     schedule: Option<String>,
     recurring: Option<String>,
+    priority: Option<String>,
     /// Only meaningful alongside `view=all-tasks` — the cross-project-only `project` filter
     /// dimension `all_projects_tasks::AllProjectsTasksQuery` carries, absent from `ListFilters`
     /// itself (see that type's own doc comment). Ignored by every other `view`.
@@ -767,6 +769,7 @@ pub async fn complete_project_item_series_occurrence_form(
             &q.due_date,
             &q.schedule,
             &q.recurring,
+            &q.priority,
         );
         let rows = super::list_task_rows_for_project(
             &repo,
@@ -791,6 +794,7 @@ pub async fn complete_project_item_series_occurrence_form(
             &q.due_date,
             &q.schedule,
             &q.recurring,
+            &q.priority,
         );
         let rows = crate::web_ui::all_projects_tasks::list_all_projects_task_rows(
             &repo,

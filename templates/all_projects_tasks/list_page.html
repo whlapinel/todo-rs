@@ -84,6 +84,14 @@
               <option value="" {% if recurring %}selected{% endif %}>Show recurring</option>
               <option value="no" {% if !recurring %}selected{% endif %}>Hide recurring</option>
             </select>
+            <select name="priority"
+              class="rounded-md bg-white py-1.5 pr-8 pl-3 text-sm text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:*:bg-gray-800 dark:focus:outline-indigo-500">
+              <option value="" {% if priority=="" %}selected{% endif %}>Any priority</option>
+              <option value="1" {% if priority=="1" %}selected{% endif %}>P1</option>
+              <option value="2" {% if priority=="2" %}selected{% endif %}>P2</option>
+              <option value="3" {% if priority=="3" %}selected{% endif %}>P3</option>
+              <option value="4" {% if priority=="4" %}selected{% endif %}>P4</option>
+            </select>
           </div>
           <div class="mt-5 sm:mt-6 sm:grid sm:grid-flow-row-dense sm:grid-cols-2 sm:gap-3">
             <button type="submit"

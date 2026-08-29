@@ -30,7 +30,7 @@ impl ItemRepo for SqliteItemRepo {
     async fn list(&self, user_id: &str) -> Result<Vec<Item>, RepoError> {
         let q = format!(
             "{ITEM_SELECT} FROM items WHERE user_id = ? AND parent_item_id IS NULL AND item_type != 'TEMPLATE' \
-             ORDER BY COALESCE(priority, 5) ASC, COALESCE(due_date, 9999999999999) ASC"
+             ORDER BY COALESCE(due_date, 9999999999999) ASC"
         );
         sqlx::query(&q)
             .bind(user_id)
@@ -43,7 +43,7 @@ impl ItemRepo for SqliteItemRepo {
     async fn list_children(&self, parent_item_id: &str) -> Result<Vec<Item>, RepoError> {
         let q = format!(
             "{ITEM_SELECT} FROM items WHERE parent_item_id = ? \
-             ORDER BY COALESCE(priority, 5) ASC, COALESCE(due_date, 9999999999999) ASC"
+             ORDER BY COALESCE(due_date, 9999999999999) ASC"
         );
         sqlx::query(&q)
             .bind(parent_item_id)
@@ -56,7 +56,7 @@ impl ItemRepo for SqliteItemRepo {
     async fn list_by_source_event(&self, source_event_id: &str) -> Result<Vec<Item>, RepoError> {
         let q = format!(
             "{ITEM_SELECT} FROM items WHERE source_event_id = ? \
-             ORDER BY COALESCE(priority, 5) ASC, COALESCE(due_date, 9999999999999) ASC"
+             ORDER BY COALESCE(due_date, 9999999999999) ASC"
         );
         sqlx::query(&q)
             .bind(source_event_id)
@@ -72,7 +72,7 @@ impl ItemRepo for SqliteItemRepo {
     ) -> Result<Vec<Item>, RepoError> {
         let q = format!(
             "{ITEM_SELECT} FROM items WHERE calendar_subscription_id = ? \
-             ORDER BY COALESCE(priority, 5) ASC, COALESCE(due_date, 9999999999999) ASC"
+             ORDER BY COALESCE(due_date, 9999999999999) ASC"
         );
         sqlx::query(&q)
             .bind(calendar_subscription_id)
@@ -102,12 +102,12 @@ impl ItemRepo for SqliteItemRepo {
         let q = if parent_item_id.is_some() {
             format!(
                 "{ITEM_SELECT} FROM items WHERE project_id = ? AND parent_item_id = ? \
-                 ORDER BY COALESCE(priority, 5) ASC, COALESCE(due_date, 9999999999999) ASC"
+                 ORDER BY COALESCE(due_date, 9999999999999) ASC"
             )
         } else {
             format!(
                 "{ITEM_SELECT} FROM items WHERE project_id = ? AND parent_item_id IS NULL \
-                 ORDER BY COALESCE(priority, 5) ASC, COALESCE(due_date, 9999999999999) ASC"
+                 ORDER BY COALESCE(due_date, 9999999999999) ASC"
             )
         };
         let query = sqlx::query(&q).bind(project_id);
@@ -374,7 +374,7 @@ impl ItemRepo for SqliteItemRepo {
     async fn list_assigned(&self, user_id: &str) -> Result<Vec<Item>, RepoError> {
         let q = format!(
             "{ITEM_SELECT} FROM items WHERE assigned_to_user_id = ? \
-             ORDER BY COALESCE(priority, 5) ASC, COALESCE(due_date, 9999999999999) ASC"
+             ORDER BY COALESCE(due_date, 9999999999999) ASC"
         );
         sqlx::query(&q)
             .bind(user_id)

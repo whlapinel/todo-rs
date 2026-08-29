@@ -25,6 +25,9 @@ pub struct ListFilterQuery {
     pub schedule: Option<String>,
     /// `"no"` | absent (defaults to showing recurring items).
     pub recurring: Option<String>,
+    /// `"1"`-`"4"` | absent (defaults to showing every priority, including unset). Any other
+    /// value falls back to the default, same convention as `due_date`/`schedule`.
+    pub priority: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -85,6 +88,24 @@ impl ScheduleFilter {
     }
 }
 
+/// `priority` (root CLAUDE.md's Priority section, 1 = highest .. 4 = lowest) is filterable but
+/// deliberately not a sort key — see `project_tasks::sort_key`'s doc comment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PriorityFilter {
+    All,
+    Exact(i32),
+}
+
+impl PriorityFilter {
+    /// See `AssignedToFilter::as_value`'s identical rationale.
+    pub fn as_value(&self) -> String {
+        match self {
+            PriorityFilter::All => String::new(),
+            PriorityFilter::Exact(p) => p.to_string(),
+        }
+    }
+}
+
 /// Parsed/normalized form of `ListFilterQuery` — what every predicate and URL builder
 /// actually works against.
 #[derive(Debug, Clone, PartialEq)]
@@ -96,6 +117,7 @@ pub struct ListFilters {
     /// `true` = show recurring items (the default); `false` = hide any item whose
     /// `series_id` is set.
     pub recurring: bool,
+    pub priority: PriorityFilter,
 }
 
 impl Default for ListFilters {
@@ -106,6 +128,7 @@ impl Default for ListFilters {
             due_date: DueDateFilter::All,
             schedule: ScheduleFilter::All,
             recurring: true,
+            priority: PriorityFilter::All,
         }
     }
 }
@@ -131,6 +154,10 @@ impl ListFilters {
                 _ => ScheduleFilter::All,
             },
             recurring: q.recurring.as_deref() != Some("no"),
+            priority: match q.priority.as_deref().map(str::parse::<i32>) {
+                Some(Ok(p)) if (1..=4).contains(&p) => PriorityFilter::Exact(p),
+                _ => PriorityFilter::All,
+            },
         }
     }
 
@@ -184,6 +211,11 @@ impl ListFilters {
         if !self.recurring && item.series_id.is_some() {
             return false;
         }
+        if let PriorityFilter::Exact(p) = self.priority {
+            if item.priority() != Some(p) {
+                return false;
+            }
+        }
         true
     }
 
@@ -195,7 +227,7 @@ impl ListFilters {
     /// virtual/skipped occurrence is never complete (there's no `complete` flag on
     /// `ProjectOccurrence` at all), and the caller already excludes `Materialized` occurrences
     /// before this runs (those are real items by then, filtered via `matches` instead) — so
-    /// this only checks `assigned_to`/`due_date`/`schedule`. `recurring` has no counterpart
+    /// this only checks `assigned_to`/`due_date`/`schedule`/`priority`. `recurring` has no counterpart
     /// either: `filters.recurring == false` means the caller skips querying occurrences
     /// entirely (a virtual row is always a series occurrence), so nothing here would ever see
     /// one to reject. An occurrence carries exactly one date (`occurrence_date`), tagged by
@@ -241,6 +273,11 @@ impl ListFilters {
         if !matches_schedule {
             return false;
         }
+        if let PriorityFilter::Exact(p) = self.priority {
+            if occ.priority != Some(p) {
+                return false;
+            }
+        }
         true
     }
 
@@ -276,6 +313,9 @@ impl ListFilters {
         if !self.recurring {
             parts.push("recurring=no".to_string());
         }
+        if let PriorityFilter::Exact(p) = self.priority {
+            parts.push(format!("priority={p}"));
+        }
         parts.join("&")
     }
 }
@@ -302,6 +342,14 @@ mod tests {
             .schedule_mut()
             .expect("has schedule")
             .scheduled_date = Some(dt);
+    }
+
+    fn set_priority(item: &mut Item, priority: i32) {
+        if let ItemType::Task { priority: p, .. } = &mut item.item_type {
+            *p = Some(priority);
+        } else {
+            panic!("test item must be a Task");
+        }
     }
 
     fn set_assigned_to(item: &mut Item, user_id: &str) {
@@ -585,10 +633,52 @@ mod tests {
             due_date: Some("overdue".to_string()),
             schedule: Some("past".to_string()),
             recurring: Some("no".to_string()),
+            priority: Some("2".to_string()),
         });
         assert_eq!(
             filters.query_string(),
-            "showComplete=1&assignedTo=bob&dueDate=overdue&schedule=past&recurring=no"
+            "showComplete=1&assignedTo=bob&dueDate=overdue&schedule=past&recurring=no&priority=2"
         );
+    }
+
+    #[test]
+    fn priority_exact_matches_only_that_priority() {
+        let filters = ListFilters::from_query(ListFilterQuery {
+            priority: Some("2".to_string()),
+            ..Default::default()
+        });
+        let mut item = task();
+        assert!(!filters.matches(&item, "u1", false, utc(NOW)));
+        set_priority(&mut item, 2);
+        assert!(filters.matches(&item, "u1", false, utc(NOW)));
+        set_priority(&mut item, 1);
+        assert!(!filters.matches(&item, "u1", false, utc(NOW)));
+    }
+
+    #[test]
+    fn priority_out_of_range_or_non_numeric_falls_back_to_all() {
+        let filters = ListFilters::from_query(ListFilterQuery {
+            priority: Some("5".to_string()),
+            ..Default::default()
+        });
+        assert_eq!(filters.priority, PriorityFilter::All);
+        let filters = ListFilters::from_query(ListFilterQuery {
+            priority: Some("nope".to_string()),
+            ..Default::default()
+        });
+        assert_eq!(filters.priority, PriorityFilter::All);
+    }
+
+    #[test]
+    fn matches_occurrence_priority_exact_matches_only_that_priority() {
+        let filters = ListFilters::from_query(ListFilterQuery {
+            priority: Some("3".to_string()),
+            ..Default::default()
+        });
+        let mut occ = occurrence(utc(NOW), true);
+        occ.priority = Some(1);
+        assert!(!filters.matches_occurrence(&occ, "u1", false, utc(NOW)));
+        occ.priority = Some(3);
+        assert!(filters.matches_occurrence(&occ, "u1", false, utc(NOW)));
     }
 }

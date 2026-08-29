@@ -539,6 +539,7 @@ pub struct OccurrenceRowActionQuery {
     due_date: Option<String>,
     schedule: Option<String>,
     recurring: Option<String>,
+    priority: Option<String>,
     /// Only meaningful alongside `view=all-tasks` — see `project_tasks::handlers::
     /// OccurrenceRowActionQuery::project`'s identical rationale.
     project: Option<String>,
@@ -613,6 +614,7 @@ pub async fn skip_project_item_series_occurrence_form(
             &q.due_date,
             &q.schedule,
             &q.recurring,
+            &q.priority,
         );
         return Ok(rebuild_tasks_list_response(
             &repo,
@@ -635,6 +637,7 @@ pub async fn skip_project_item_series_occurrence_form(
             &q.due_date,
             &q.schedule,
             &q.recurring,
+            &q.priority,
         );
         return Ok(rebuild_all_tasks_list_response(
             &repo,
@@ -708,6 +711,7 @@ pub async fn unskip_project_item_series_occurrence_form(
             &q.due_date,
             &q.schedule,
             &q.recurring,
+            &q.priority,
         );
         return Ok(rebuild_tasks_list_response(
             &repo,
@@ -730,6 +734,7 @@ pub async fn unskip_project_item_series_occurrence_form(
             &q.due_date,
             &q.schedule,
             &q.recurring,
+            &q.priority,
         );
         return Ok(rebuild_all_tasks_list_response(
             &repo,

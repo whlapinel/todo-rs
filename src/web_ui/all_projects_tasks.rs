@@ -182,6 +182,8 @@ struct AllProjectsTasksListPageTemplate {
     due_date: String,
     schedule: String,
     recurring: bool,
+    /// `PriorityFilter::as_value`: `""` (any priority) | `"1"`-`"4"`.
+    priority: String,
     /// Pre-encoded `ListFilters::query_string()` — see `templates/project_tasks/list_page.html`'s
     /// identical "Filters" button dot-indicator use.
     filters_query: String,
@@ -201,6 +203,7 @@ pub struct AllProjectsTasksQuery {
     due_date: Option<String>,
     schedule: Option<String>,
     recurring: Option<String>,
+    priority: Option<String>,
     /// Cross-project-only filter dimension (`docs/list-filtering-plan.md`'s Out of scope note) —
     /// a specific project id, or absent/`"all"` for every project the requester belongs to.
     project: Option<String>,
@@ -214,6 +217,7 @@ impl AllProjectsTasksQuery {
             due_date: self.due_date.clone(),
             schedule: self.schedule.clone(),
             recurring: self.recurring.clone(),
+            priority: self.priority.clone(),
         })
     }
 
@@ -262,7 +266,7 @@ pub(crate) async fn list_all_projects_task_rows(
     let user_projects = project_service::list_projects(projects, requester_user_id).await?;
     let now = Utc::now();
 
-    let mut entries: Vec<((i32, i64), String)> = Vec::new();
+    let mut entries: Vec<(i64, String)> = Vec::new();
     for project in &user_projects {
         if project_filter.is_some_and(|pid| pid != project.id) {
             continue;
@@ -282,10 +286,7 @@ pub(crate) async fn list_all_projects_task_rows(
             if !(filters.matches(item, requester_user_id, is_team_project, now) || just_completed) {
                 continue;
             }
-            let ts = (
-                priority_rank(item.priority()),
-                item.due_date().map(|d| d.timestamp()).unwrap_or(i64::MAX),
-            );
+            let ts = item.due_date().map(|d| d.timestamp()).unwrap_or(i64::MAX);
             let skip_url =
                 item_series_service::skip_url_for_item(series, item, &project.id).await?;
             let confirmation = just_completed.then(|| "Completed".to_string());
@@ -342,7 +343,7 @@ pub(crate) async fn list_all_projects_task_rows(
             .filter(|occ| filters.matches_occurrence(occ, requester_user_id, is_team_project, now));
             for occ in occurrences {
                 entries.push((
-                    (priority_rank(occ.priority), occ.occurrence_date.timestamp()),
+                    occ.occurrence_date.timestamp(),
                     AllProjectsTaskVirtualRow::from_occurrence(
                         &occ,
                         &project.id,
@@ -359,12 +360,6 @@ pub(crate) async fn list_all_projects_task_rows(
 
     entries.sort_by_key(|(key, _)| *key);
     Ok(entries.into_iter().map(|(_, html)| html).collect())
-}
-
-/// Duplicated from `project_tasks::mod`'s identical helper — this codebase's established
-/// "duplicate small per-screen helpers" precedent (see that module's own doc comment).
-fn priority_rank(priority: Option<i32>) -> i32 {
-    priority.unwrap_or(5)
 }
 
 pub async fn all_projects_tasks_page(
@@ -438,6 +433,7 @@ pub async fn all_projects_tasks_page(
         due_date: filters.due_date.as_value().to_string(),
         schedule: filters.schedule.as_value().to_string(),
         recurring: filters.recurring,
+        priority: filters.priority.as_value(),
         filters_query: filters.query_string(),
         project_options,
         project_filter: project_filter_value,

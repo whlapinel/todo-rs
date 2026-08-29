@@ -43,32 +43,32 @@
     time an ancestor recurs — the date is recomputed from this offset.</p>
 </div>
 <script>
-(function() {
-  var wrapper = document.currentScript.previousElementSibling;
-  var input = wrapper.querySelector(".due-offset-days-input");
-  var preview = wrapper.querySelector(".due-offset-preview");
-  // The parent's (or linked event's) own due/scheduled date, resolved server-side via
-  // `resolve_offset_anchor` — NOT this item's own due date. Using the real anchor (rather than
-  // backing one out from this item's current due date + current offset) means the preview works
-  // from the very first keystroke even when this item has no offset/due date yet, which is the
-  // normal case when adding an offset for the first time.
-  var anchorDateStr = "{{ anchor_date_input }}";
-  if (!anchorDateStr) return;
-  var parts = anchorDateStr.split("-").map(Number);
-  var anchorMs = Date.UTC(parts[0], parts[1] - 1, parts[2]);
-  function pad(n) { return n < 10 ? "0" + n : "" + n; }
-  function render() {
-    var daysBefore = parseInt(input.value, 10);
-    if (isNaN(daysBefore) || daysBefore < 0) {
-      preview.textContent = "";
-      return;
+  (function () {
+    var wrapper = document.currentScript.previousElementSibling;
+    var input = wrapper.querySelector(".due-offset-days-input");
+    var preview = wrapper.querySelector(".due-offset-preview");
+    // The parent's (or linked event's) own due/scheduled date, resolved server-side via
+    // `resolve_offset_anchor` — NOT this item's own due date. Using the real anchor (rather than
+    // backing one out from this item's current due date + current offset) means the preview works
+    // from the very first keystroke even when this item has no offset/due date yet, which is the
+    // normal case when adding an offset for the first time.
+    var anchorDateStr = "{{ anchor_date_input }}";
+    if (!anchorDateStr) return;
+    var parts = anchorDateStr.split("-").map(Number);
+    var anchorMs = Date.UTC(parts[0], parts[1] - 1, parts[2]);
+    function pad(n) { return n < 10 ? "0" + n : "" + n; }
+    function render() {
+      var daysBefore = parseInt(input.value, 10);
+      if (isNaN(daysBefore) || daysBefore < 0) {
+        preview.textContent = "";
+        return;
+      }
+      var d = new Date(anchorMs - daysBefore * 86400000);
+      preview.textContent = "Due date: " + d.getUTCFullYear() + "-" + pad(d.getUTCMonth() + 1) + "-" + pad(d.getUTCDate());
     }
-    var d = new Date(anchorMs - daysBefore * 86400000);
-    preview.textContent = "Due date: " + d.getUTCFullYear() + "-" + pad(d.getUTCMonth() + 1) + "-" + pad(d.getUTCDate());
-  }
-  input.addEventListener("input", render);
-  render();
-})();
+    input.addEventListener("input", render);
+    render();
+  })();
 </script>
 {% endmacro %}
 
@@ -147,7 +147,7 @@ scheduled_end_time_input) %}
       <option value="1" {% if priority_input=="1" %}selected{% endif %}>1 (highest)</option>
       <option value="2" {% if priority_input=="2" %}selected{% endif %}>2</option>
       <option value="3" {% if priority_input=="3" %}selected{% endif %}>3</option>
-      <option value="4" {% if priority_input=="4" %}selected{% endif %}>4 (lowest)</option>
+      <option value="4" {% if priority_input=="4" %}selected{% endif %}>4 (lowest, higher than None)</option>
     </select>
   </div>
 </label>

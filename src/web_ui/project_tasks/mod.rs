@@ -126,12 +126,14 @@ pub(crate) fn normalize_row_view(q: RowViewQuery) -> Option<String> {
 /// that isn't part of the shared vocabulary (`OccurrenceRowActionQuery` in this module and in
 /// `project_item_series::handlers`), so those structs can't just wrap/deref a `ListFilterQuery`
 /// directly. Stage 2 of `docs/list-filtering-plan.md`.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn list_filters_from_parts(
     show_complete: &Option<String>,
     assigned_to: &Option<String>,
     due_date: &Option<String>,
     schedule: &Option<String>,
     recurring: &Option<String>,
+    priority: &Option<String>,
 ) -> ListFilters {
     ListFilters::from_query(ListFilterQuery {
         show_complete: show_complete.clone(),
@@ -139,6 +141,7 @@ pub(crate) fn list_filters_from_parts(
         due_date: due_date.clone(),
         schedule: schedule.clone(),
         recurring: recurring.clone(),
+        priority: priority.clone(),
     })
 }
 
@@ -747,7 +750,7 @@ pub(crate) async fn render_rows_with_virtual(
     let dep_map = item_dependencies
         .list_for_items(&visible.iter().map(|i| i.id.clone()).collect::<Vec<_>>())
         .await?;
-    let mut entries: Vec<((i32, i64), String)> = Vec::with_capacity(visible.len());
+    let mut entries: Vec<(i64, String)> = Vec::with_capacity(visible.len());
     for i in &visible {
         let just_completed = Some(i.id.as_str()) == just_completed_item_id;
         let confirmation = just_completed.then(|| "Completed".to_string());
@@ -801,7 +804,7 @@ pub(crate) async fn render_rows_with_virtual(
     if filters.recurring {
         for occ in virtual_occurrences {
             entries.push((
-                (priority_rank(occ.priority), occ.occurrence_date.timestamp()),
+                occ.occurrence_date.timestamp(),
                 ProjectTaskVirtualRow::from_occurrence(occ, project_id, tz, filters, in_list_view)
                     .render()?,
             ));
@@ -946,21 +949,13 @@ pub(crate) fn items_list_inner_html(rows: &[String]) -> String {
     }
 }
 
-/// 1 sorts first (highest priority), 4 next, unset last — matches
-/// `storage::sqlite::items`'s own `COALESCE(priority, 5)` SQL ordering (root CLAUDE.md's
-/// Priority section).
-fn priority_rank(priority: Option<i32>) -> i32 {
-    priority.unwrap_or(5)
-}
-
 /// `list_project_items_unchecked` already scopes to top-level, non-Template items — this narrows
-/// further to `Task` and sorts by priority first, then due date (undated tasks last), mirroring
-/// `tasks::list_tasks`/`team_tasks::list_team_tasks`'s original due-date-only precedent.
-fn sort_key(item: &Item) -> (i32, i64) {
-    (
-        priority_rank(item.priority()),
-        item.due_date().map(|d| d.timestamp()).unwrap_or(i64::MAX),
-    )
+/// further to `Task` and sorts by due date (undated tasks last), mirroring
+/// `tasks::list_tasks`/`team_tasks::list_team_tasks`'s original precedent. `priority` is
+/// deliberately not part of sort order (root CLAUDE.md's Priority section) — it's filterable
+/// (`ListFilters::priority`) but due date stays primary.
+fn sort_key(item: &Item) -> i64 {
+    item.due_date().map(|d| d.timestamp()).unwrap_or(i64::MAX)
 }
 
 pub(crate) async fn list_project_tasks(
@@ -1111,10 +1106,10 @@ mod tests {
             .due_date = DateTime::from_timestamp(secs, 0);
     }
 
-    /// Priority sorts first (1 highest ... 4 lowest, unset last); due date only breaks
-    /// ties within the same priority rank. See root CLAUDE.md's Priority section.
+    /// Due date sorts tasks regardless of priority (undated tasks last) — priority is
+    /// filterable, not a sort key. See root CLAUDE.md's Priority section.
     #[test]
-    fn sort_key_orders_by_priority_then_due_date() {
+    fn sort_key_orders_by_due_date_ignoring_priority() {
         let mut low_priority_early_due = task("a", "A", false);
         set_priority(&mut low_priority_early_due, 4);
         set_due_date(&mut low_priority_early_due, 1_000);
@@ -1123,24 +1118,23 @@ mod tests {
         set_priority(&mut high_priority_late_due, 1);
         set_due_date(&mut high_priority_late_due, 9_000);
 
-        let mut no_priority = task("c", "C", false);
-        set_due_date(&mut no_priority, 500);
+        let no_priority = task("c", "C", false);
 
-        let mut same_priority_earlier_due = task("d", "D", false);
-        set_priority(&mut same_priority_earlier_due, 1);
-        set_due_date(&mut same_priority_earlier_due, 2_000);
+        let mut high_priority_mid_due = task("d", "D", false);
+        set_priority(&mut high_priority_mid_due, 1);
+        set_due_date(&mut high_priority_mid_due, 2_000);
 
         let mut items = vec![
             low_priority_early_due,
             high_priority_late_due,
             no_priority,
-            same_priority_earlier_due,
+            high_priority_mid_due,
         ];
         items.sort_by_key(sort_key);
 
         assert_eq!(
             items.iter().map(|i| i.id.as_str()).collect::<Vec<_>>(),
-            vec!["d", "b", "a", "c"]
+            vec!["a", "d", "b", "c"]
         );
     }
 }
