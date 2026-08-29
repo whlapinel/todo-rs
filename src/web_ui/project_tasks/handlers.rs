@@ -1,5 +1,6 @@
 use crate::auth::AuthUser;
 use crate::domain::item::{Item, ItemKind};
+use crate::domain::project::Project;
 use crate::service::comments as comments_service;
 use crate::service::error::ItemError;
 use crate::service::item_dependencies::{self as item_dependencies_service};
@@ -40,6 +41,35 @@ fn project_tasks_list_url(project_id: &str) -> String {
 
 fn active_context(project_id: &str) -> ActiveContext {
     ActiveContext::Project(project_id.to_string())
+}
+
+/// Dispatches to the project-scoped (`team_items::resolve_offset_anchor_project`) or personal
+/// (`items::resolve_offset_anchor`) anchor resolution depending on `project.team_id`, the same
+/// way `update_project_item` dispatches the update itself (`src/service/project_items.rs`). A
+/// team-backed project's items carry a `NULL` `user_id` column (they're scoped by `project_id`,
+/// not `user_id`), so calling the personal, `user_id`-scoped `resolve_offset_anchor` against one
+/// — as every call site here used to, unconditionally — makes its internal `repo.get(user_id,
+/// parent_id)` look up the parent via `WHERE id = ? AND user_id = ?`, binding
+/// `auth_user.user_id` against a row whose `user_id` is `NULL`: SQL's three-valued logic means
+/// that comparison is never true, so `RepoError::NotFound` bubbles up as `ItemError::NotFound`
+/// even though the item's own read/write had already succeeded. See the "completing an item
+/// returns a not found error" bug in docs/issues_and_features.md — it only reproduced for a
+/// team-backed sub-item (or an event-linked task), since `resolve_offset_anchor` only ever calls
+/// `repo.get` when the item has a `parentItemId` or `sourceEventId` to resolve.
+async fn resolve_task_anchor_date(
+    repo: &Arc<dyn ItemRepo>,
+    project: &Project,
+    requester_user_id: &str,
+    item: &Item,
+) -> Result<Option<DateTime<Utc>>, ItemError> {
+    match &project.team_id {
+        Some(_) => {
+            crate::service::team_items::resolve_offset_anchor_project(repo, &project.id, item).await
+        }
+        None => {
+            Ok(crate::service::items::resolve_offset_anchor(repo, requester_user_id, item).await?)
+        }
+    }
 }
 
 /// See `NewProjectTaskPageTemplate::redirect_after_create`'s doc comment — `?redirect=1` on
@@ -385,8 +415,7 @@ pub async fn project_task_edit_page(
     };
     let (depends_on_options, depends_on_item_ids) =
         depends_on_picker_data(&repo, &item_dependencies, &project_id, &item).await?;
-    let anchor_date =
-        crate::service::items::resolve_offset_anchor(&repo, &auth_user.user_id, &item).await?;
+    let anchor_date = resolve_task_anchor_date(&repo, &project, &auth_user.user_id, &item).await?;
     let fields = ProjectTaskDetailFields::from_item(
         &item,
         &project_id,
@@ -1724,8 +1753,7 @@ pub async fn update_project_task_form(
             let (depends_on_options, depends_on_item_ids) =
                 depends_on_picker_data(&repo, &item_dependencies, &project_id, &updated).await?;
             let anchor_date =
-                crate::service::items::resolve_offset_anchor(&repo, &auth_user.user_id, &updated)
-                    .await?;
+                resolve_task_anchor_date(&repo, &project, &auth_user.user_id, &updated).await?;
             let fields = ProjectTaskDetailFields::from_item(
                 &updated,
                 &project_id,
@@ -2083,6 +2111,8 @@ pub async fn get_reschedule_task(
     TzOffset(tz): TzOffset,
     Query(q): Query<super::RowViewQuery>,
 ) -> Result<Html<String>, ItemError> {
+    let project =
+        project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
     let task = project_item_service::get_project_item(
         &repo,
         &projects,
@@ -2096,7 +2126,7 @@ pub async fn get_reschedule_task(
     let view = super::normalize_row_view(q);
     if task.is_offset_driven() {
         let anchor_date =
-            crate::service::items::resolve_offset_anchor(&repo, &auth_user.user_id, &task).await?;
+            resolve_task_anchor_date(&repo, &project, &auth_user.user_id, &task).await?;
         render(OffsetRescheduleDialog::from_task(
             &task,
             &project_id,
@@ -2165,4 +2195,112 @@ pub async fn get_add_child_task(
     .await?;
     let task = require_task(task)?;
     render(AddChildDialog::new(&task, &project_id))
+}
+
+#[cfg(test)]
+mod resolve_task_anchor_date_tests {
+    use super::*;
+    use crate::domain::item::{ItemType, Recurrence, Schedule};
+    use crate::storage::sqlite::MockItemRepo;
+    use chrono::TimeZone;
+
+    fn team_project() -> Project {
+        Project {
+            id: "proj1".to_string(),
+            name: "Team Project".to_string(),
+            owner_user_id: "owner1".to_string(),
+            team_id: Some("team1".to_string()),
+        }
+    }
+
+    fn personal_project() -> Project {
+        Project {
+            id: "proj1".to_string(),
+            name: "Personal Project".to_string(),
+            owner_user_id: "owner1".to_string(),
+            team_id: None,
+        }
+    }
+
+    fn due_at(ts: i64) -> DateTime<Utc> {
+        Utc.timestamp_opt(ts, 0).unwrap()
+    }
+
+    fn task_with_due_date(id: &str, user_id: Option<&str>, due_date: DateTime<Utc>) -> Item {
+        Item {
+            id: id.to_string(),
+            user_id: user_id.map(str::to_string),
+            project_id: Some("proj1".to_string()),
+            item_type: ItemType::Task {
+                schedule: Schedule {
+                    due_date: Some(due_date),
+                    has_due_time: false,
+                    scheduled_date: None,
+                    has_scheduled_time: false,
+                    scheduled_end_date: None,
+                    has_end_time: false,
+                },
+                recurrence: Recurrence::default(),
+                team_assignment: None,
+                source_event_id: None,
+                priority: None,
+            },
+            ..Item::default()
+        }
+    }
+
+    /// Regression test for the "completing an item returns a not found error" bug
+    /// (docs/issues_and_features.md): a team-backed project's items are stored with a `NULL`
+    /// `user_id` (see the row this was diagnosed from — a real team-project sub-item copied
+    /// from prod). Resolving a sub-item's offset anchor must go through the project-scoped
+    /// lookup (`get_by_project`), never the personal, `user_id`-scoped `get` — binding a real
+    /// requester id against a `NULL` `user_id` column would never match and would surface as a
+    /// spurious `NotFound`, even though the item's own read/write already succeeded.
+    #[tokio::test]
+    async fn team_backed_project_resolves_anchor_via_project_scoped_lookup() {
+        let mut items = MockItemRepo::new();
+        items
+            .expect_get_by_project()
+            .withf(|project_id, id| project_id == "proj1" && id == "parent1")
+            .returning(|_, id| Ok(task_with_due_date(id, None, due_at(1_000))));
+        items.expect_get().never();
+
+        let repo: Arc<dyn ItemRepo> = Arc::new(items);
+        let child = Item {
+            id: "child1".to_string(),
+            user_id: None,
+            project_id: Some("proj1".to_string()),
+            parent_item_id: Some("parent1".to_string()),
+            ..Item::default()
+        };
+
+        let anchor = resolve_task_anchor_date(&repo, &team_project(), "requester1", &child)
+            .await
+            .expect("should resolve anchor");
+        assert_eq!(anchor, Some(due_at(1_000)));
+    }
+
+    #[tokio::test]
+    async fn personal_project_resolves_anchor_via_user_scoped_lookup() {
+        let mut items = MockItemRepo::new();
+        items
+            .expect_get()
+            .withf(|user_id, id| user_id == "owner1" && id == "parent1")
+            .returning(|_, id| Ok(task_with_due_date(id, Some("owner1"), due_at(2_000))));
+        items.expect_get_by_project().never();
+
+        let repo: Arc<dyn ItemRepo> = Arc::new(items);
+        let child = Item {
+            id: "child1".to_string(),
+            user_id: Some("owner1".to_string()),
+            project_id: Some("proj1".to_string()),
+            parent_item_id: Some("parent1".to_string()),
+            ..Item::default()
+        };
+
+        let anchor = resolve_task_anchor_date(&repo, &personal_project(), "owner1", &child)
+            .await
+            .expect("should resolve anchor");
+        assert_eq!(anchor, Some(due_at(2_000)));
+    }
 }
