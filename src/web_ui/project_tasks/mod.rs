@@ -168,6 +168,22 @@ fn overlay_i32(form_value: &Option<String>, current: Option<i32>) -> Option<i32>
     }
 }
 
+/// The web UI's offset input is "days before the due date" — always non-negative from the
+/// user's perspective — while stored `due_offset_days` keeps the negative-before/positive-after
+/// convention described in CLAUDE.md's Recurrence section. Parsing as `u32` rejects a negative
+/// input the same way an unparseable one is already silently dropped elsewhere in this form.
+pub(crate) fn parse_days_before_due(s: &str) -> Option<i32> {
+    s.parse::<u32>().ok().map(|d| -(d as i32))
+}
+
+fn overlay_days_before_due(form_value: &Option<String>, current: Option<i32>) -> Option<i32> {
+    match form_value {
+        None => current,
+        Some(s) if s.trim().is_empty() => None,
+        Some(s) => parse_days_before_due(s.trim()).or(current),
+    }
+}
+
 fn overlay_bool(form_value: &Option<String>, current: bool) -> bool {
     match form_value.as_deref() {
         Some("true") => true,
@@ -297,7 +313,7 @@ pub(crate) fn create_params_from_form(
             .as_deref()
             .map(str::trim)
             .filter(|s| !s.is_empty())
-            .and_then(|s| s.parse().ok()),
+            .and_then(parse_days_before_due),
         assigned_to_user_id: non_empty(&form.assigned_to_user_id),
         points: form
             .points
@@ -347,7 +363,7 @@ pub(crate) fn update_params_from_form(
         )),
         parent_item_id: current.parent_item_id.clone(),
         item_type: Some(ItemKind::Task),
-        due_offset_days: overlay_i32(&form.due_offset_days, current.due_offset_days()),
+        due_offset_days: overlay_days_before_due(&form.due_offset_days, current.due_offset_days()),
         assigned_to_user_id: overlay_str(&form.assigned_to_user_id, current.assigned_to_user_id()),
         source_event_id: current.source_event_id(),
         timezone_offset_minutes: Some(tz),

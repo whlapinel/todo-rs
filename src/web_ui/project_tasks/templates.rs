@@ -24,8 +24,14 @@ pub fn offset_label_for(item: &Item) -> Option<String> {
     }
 }
 
+/// The web UI presents this as "days before the due date" — non-negative from the user's
+/// perspective — while `due_offset_days` itself keeps the negative-before/positive-after
+/// convention described in CLAUDE.md's Recurrence section. See `parse_days_before_due` for the
+/// inverse (form input -> stored value).
 pub fn format_offset_input(due_offset_days: Option<i32>) -> String {
-    due_offset_days.map(|d| d.to_string()).unwrap_or_default()
+    due_offset_days
+        .map(|d| (-d).to_string())
+        .unwrap_or_default()
 }
 
 pub fn format_points_input(points: Option<i32>) -> String {

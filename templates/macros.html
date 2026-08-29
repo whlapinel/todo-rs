@@ -29,18 +29,43 @@
 </label>
 {% endmacro %}
 
-{% macro due_offset_days_field(due_offset_days_input) %}
+{% macro due_offset_days_field(due_offset_days_input, due_date_input) %}
 <div class="offset-field scheduling-fields">
-  <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Due offset (days from parent's or linked
-    event's due date)
+  <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Days before due date (parent's or linked
+    event's)
     <div class="mt-2">
-      <input type="number" name="dueOffsetDays" value="{{ due_offset_days_input }}"
-        class="block w-full rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 placeholder:text-gray-400 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:placeholder:text-gray-500 dark:focus:outline-indigo-500" />
+      <input type="number" name="dueOffsetDays" value="{{ due_offset_days_input }}" min="0" step="1"
+        class="due-offset-days-input block w-full rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 placeholder:text-gray-400 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:placeholder:text-gray-500 dark:focus:outline-indigo-500" />
     </div>
   </label>
+  <p class="due-offset-preview mt-1 text-xs text-gray-500 dark:text-gray-400"></p>
   <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">Manual due-date edits on this item won't survive the next
     time an ancestor recurs — the date is recomputed from this offset.</p>
 </div>
+<script>
+(function() {
+  var wrapper = document.currentScript.previousElementSibling;
+  var input = wrapper.querySelector(".due-offset-days-input");
+  var preview = wrapper.querySelector(".due-offset-preview");
+  var baselineDaysBefore = parseInt(input.value, 10);
+  var dueDateStr = "{{ due_date_input }}";
+  if (isNaN(baselineDaysBefore) || !dueDateStr) return;
+  var parts = dueDateStr.split("-").map(Number);
+  var anchorMs = Date.UTC(parts[0], parts[1] - 1, parts[2]) + baselineDaysBefore * 86400000;
+  function pad(n) { return n < 10 ? "0" + n : "" + n; }
+  function render() {
+    var daysBefore = parseInt(input.value, 10);
+    if (isNaN(daysBefore) || daysBefore < 0) {
+      preview.textContent = "";
+      return;
+    }
+    var d = new Date(anchorMs - daysBefore * 86400000);
+    preview.textContent = "Due date: " + d.getUTCFullYear() + "-" + pad(d.getUTCMonth() + 1) + "-" + pad(d.getUTCDate());
+  }
+  input.addEventListener("input", render);
+  render();
+})();
+</script>
 {% endmacro %}
 
 {% macro scheduled_fields(scheduled_date_input, scheduled_time_input, scheduled_end_date_input,

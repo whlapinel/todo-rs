@@ -28,12 +28,19 @@ pub(crate) fn require_project_template(item: Item) -> Result<Item, ItemError> {
     }
 }
 
+/// The web UI's offset input is "days before the due date" — always non-negative from the
+/// user's perspective — while stored `due_offset_days` keeps the negative-before/positive-after
+/// convention described in CLAUDE.md's Recurrence section (a template child has no concrete
+/// anchor date of its own, but the same sign convention still applies once a real item is
+/// materialized from it). Parsing as `u32` rejects a negative input the same way an unparseable
+/// one is already silently dropped.
 pub(crate) fn parse_offset(form_value: &Option<String>) -> Option<i32> {
     form_value
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .and_then(|s| s.parse().ok())
+        .and_then(|s| s.parse::<u32>().ok())
+        .map(|d| -(d as i32))
 }
 
 pub(crate) fn non_empty(v: &Option<String>) -> Option<String> {

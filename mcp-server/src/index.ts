@@ -35,6 +35,18 @@ function toEpochSecs(iso: string): number {
   return Math.floor(new Date(iso).getTime() / 1000);
 }
 
+// The API's own `dueOffsetDays` field keeps its historical negative-before/positive-after
+// sign convention, but the server now rejects a positive value outright (see root CLAUDE.md's
+// Recurrence section) — a sub-item can never be due after the thing it's anchored to. Tools
+// expose this as `daysBeforeDue`, a non-negative number, and negate it here before it reaches
+// the wire, matching the web UI's and `prl`'s own presentation-layer sign flip.
+function toDueOffsetDays(daysBeforeDue: unknown): number {
+  if (typeof daysBeforeDue !== "number" || daysBeforeDue < 0) {
+    throw new Error("daysBeforeDue must be zero or a positive number");
+  }
+  return -daysBeforeDue;
+}
+
 const server = new Server(
   { name: "todo-mcp-server", version: "0.1.0" },
   { capabilities: { tools: {} } }
@@ -169,16 +181,16 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             description:
               "Free-text category (e.g. 'rain'). Only valid on itemType EVENT — the server rejects it on any other item type. If it matches a checklist template's own eventType, that template's children are automatically added as sourceEventId-linked top-level tasks referencing this item when it's created (not nested children — an Event can never have children).",
           },
-          dueOffsetDays: {
+          daysBeforeDue: {
             type: "number",
             description:
-              "For a child item (parentItemId) or event-linked item (sourceEventId) only: days from the top-level item's or linked event's due date (negative = before, positive = after). " +
+              "For a child item (parentItemId) or event-linked item (sourceEventId) only: days before the top-level item's or linked event's due date. Must be zero or positive — the server rejects a due date set after the anchor's. " +
               "The due date is always computed from this offset (a manually-set dueDate is ignored/overwritten) and is recalculated whenever the top-level item recurs or the linked event is rescheduled/recurs.",
           },
           sourceEventId: {
             type: "string",
             description:
-              "ID of an EVENT-typed item this (top-level) task references and tracks — mutually exclusive with parentItemId (an item either nests under a parent or references an event, never both). Like a child item, its due date is offset-driven via dueOffsetDays rather than freely settable, and it can't have scheduledDate/scheduledEndDate.",
+              "ID of an EVENT-typed item this (top-level) task references and tracks — mutually exclusive with parentItemId (an item either nests under a parent or references an event, never both). Like a child item, its due date is offset-driven via daysBeforeDue rather than freely settable, and it can't have scheduledDate/scheduledEndDate.",
           },
           timezoneOffsetMinutes: {
             type: "number",
@@ -263,9 +275,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             description: "Omit to leave the item's current kind unchanged.",
           },
           eventType: { type: "string" },
-          dueOffsetDays: {
+          daysBeforeDue: {
             type: "number",
-            description: "For a child item (parentItemId) or event-linked item (sourceEventId) only: days from the top-level item's or linked event's due date (negative = before, positive = after).",
+            description: "For a child item (parentItemId) or event-linked item (sourceEventId) only: days before the top-level item's or linked event's due date. Must be zero or positive — the server rejects a due date set after the anchor's.",
           },
           sourceEventId: {
             type: "string",
@@ -830,7 +842,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         if (args.parentItemId) body.parentItemId = args.parentItemId;
         if (args.itemType) body.itemType = args.itemType;
         if (args.eventType) body.eventType = args.eventType;
-        if (args.dueOffsetDays !== undefined) body.dueOffsetDays = args.dueOffsetDays;
+        if (args.daysBeforeDue !== undefined) body.dueOffsetDays = toDueOffsetDays(args.daysBeforeDue);
         if (args.sourceEventId) body.sourceEventId = args.sourceEventId;
         if (args.timezoneOffsetMinutes !== undefined)
           body.timezoneOffsetMinutes = args.timezoneOffsetMinutes;
@@ -883,7 +895,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         if (args.parentItemId) body.parentItemId = args.parentItemId;
         if (args.itemType) body.itemType = args.itemType;
         if (args.eventType !== undefined) body.eventType = args.eventType;
-        if (args.dueOffsetDays !== undefined) body.dueOffsetDays = args.dueOffsetDays;
+        if (args.daysBeforeDue !== undefined) body.dueOffsetDays = toDueOffsetDays(args.daysBeforeDue);
         if (args.sourceEventId !== undefined) body.sourceEventId = args.sourceEventId;
         if (args.timezoneOffsetMinutes !== undefined)
           body.timezoneOffsetMinutes = args.timezoneOffsetMinutes;

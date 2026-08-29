@@ -17,8 +17,8 @@ use crate::web_ui::nav::{self, ActiveContext, SidebarSection};
 use crate::web_ui::project_tasks::templates::*;
 use crate::web_ui::project_tasks::{
     ProjectTaskForm, active_member_options, create_params_from_form, list_filters_from_parts,
-    names_for, non_empty, render, render_scope_fragment, require_task, sibling_group,
-    update_params_from_form,
+    names_for, non_empty, parse_days_before_due, render, render_scope_fragment, require_task,
+    sibling_group, update_params_from_form,
 };
 use askama::Template;
 use axum::extract::{Extension, Form, Path, Query};
@@ -728,7 +728,7 @@ pub async fn create_project_task_series_occurrence_child_form(
             .as_deref()
             .map(str::trim)
             .filter(|s| !s.is_empty())
-            .and_then(|s| s.parse().ok()),
+            .and_then(parse_days_before_due),
         timezone_offset_minutes: Some(tz),
         ..Default::default()
     };

@@ -39,9 +39,9 @@ pub enum ItemsCommand {
         parent: Option<String>,
         #[arg(
             long,
-            help = "Days from the top-level item's due date (child items only; negative = before, positive = after)"
+            help = "Days before the top-level item's or linked event's due date (child/event-linked items only; must be zero or positive — the server rejects a due date set after the anchor's)"
         )]
-        due_offset_days: Option<i32>,
+        days_before_due: Option<i32>,
         #[arg(long, help = "Item kind: 'task' (default), 'event', or 'simple'")]
         item_type: Option<String>,
         #[arg(
@@ -169,7 +169,7 @@ pub async fn cmd_items(client: &Client, cmd: ItemsCommand, user_id: Option<Strin
             description,
             due,
             parent,
-            due_offset_days,
+            days_before_due,
             item_type,
             event_type,
             scheduled,
@@ -217,8 +217,14 @@ pub async fn cmd_items(client: &Client, cmd: ItemsCommand, user_id: Option<Strin
             if let Some(p) = parent {
                 req = req.parent_item_id(p);
             }
-            if let Some(o) = due_offset_days {
-                req = req.due_offset_days(o);
+            if let Some(o) = days_before_due {
+                if o < 0 {
+                    eprintln!(
+                        "error: --days-before-due cannot be negative — a due date after the anchor isn't allowed"
+                    );
+                    std::process::exit(1);
+                }
+                req = req.due_offset_days(-o);
             }
             if let Some(t) = item_type {
                 req = req.item_type(parse_item_type_flag(&t));
@@ -389,10 +395,14 @@ pub async fn cmd_items(client: &Client, cmd: ItemsCommand, user_id: Option<Strin
             println!("due:        {}", fmt_date_opt(item.due_date()));
             println!("scheduled:  {}", fmt_date_opt(item.scheduled_date()));
             println!("sched end:  {}", fmt_date_opt(item.scheduled_end_date()));
+            // Displayed as "days before due" (matching --days-before-due's convention) even
+            // though the wire value keeps the negative-before/positive-after convention — see
+            // Item::validate's doc comment in the server for why a positive value can no longer
+            // be freshly written, though an existing row may still carry one.
             println!(
-                "offset:     {}",
+                "days before due: {}",
                 item.due_offset_days()
-                    .map(|d| d.to_string())
+                    .map(|d| (-d).to_string())
                     .unwrap_or_else(|| "-".to_string())
             );
             println!("children:   {}", item.has_children().unwrap_or(false));

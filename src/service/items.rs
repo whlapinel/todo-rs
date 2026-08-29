@@ -959,7 +959,7 @@ mod tests {
             .times(1)
             .returning(move |_, _| Ok(event_item("event1", "u1", event_due)));
 
-        let expected_due = recurrence::apply_end_of_day(event_due + chrono::Duration::days(2), 0);
+        let expected_due = recurrence::apply_end_of_day(event_due - chrono::Duration::days(2), 0);
         mock.expect_create()
             .withf(move |item: &Item| {
                 item.source_event_id().as_deref() == Some("event1")
@@ -978,7 +978,7 @@ mod tests {
                 user_id: "u1".to_string(),
                 name: "Buy cake".to_string(),
                 source_event_id: Some("event1".to_string()),
-                due_offset_days: Some(2),
+                due_offset_days: Some(-2),
                 // A manually-submitted due_date must be ignored/overwritten for an
                 // offset-driven item — this stale value proves it never reaches storage.
                 due_date: Some(

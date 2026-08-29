@@ -16,6 +16,7 @@ use crate::web_ui::project_events::{
     update_params_from_form,
 };
 use crate::web_ui::project_tasks::handlers::{NewItemQuery, render_source_event_fragment};
+use crate::web_ui::project_tasks::parse_days_before_due;
 use askama::Template;
 use axum::extract::{Extension, Form, Path, Query};
 use axum::response::{Html, IntoResponse, Response};
@@ -400,7 +401,7 @@ pub async fn create_project_event_series_occurrence_child_form(
             .as_deref()
             .map(str::trim)
             .filter(|s| !s.is_empty())
-            .and_then(|s| s.parse().ok()),
+            .and_then(parse_days_before_due),
         timezone_offset_minutes: Some(tz),
         ..Default::default()
     };
@@ -511,7 +512,7 @@ pub async fn create_project_event_child_form(
             .as_deref()
             .map(str::trim)
             .filter(|s| !s.is_empty())
-            .and_then(|s| s.parse().ok()),
+            .and_then(parse_days_before_due),
         timezone_offset_minutes: Some(tz),
         ..Default::default()
     };

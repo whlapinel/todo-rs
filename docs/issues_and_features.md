@@ -2,17 +2,7 @@
 
 Open issues and feature requests, merged from the former `docs/issues.md` and `docs/features.md` (2026-08-20) into a single sorted list. Completed or superseded items — including ones from the old files that were already resolved but hadn't been moved out yet — live in `docs/archived/archived_issues_and_features.md`.
 
-- Add reminder schema and UI to tasks, series, and events. (schema + read-only display done, see `docs/archived/archived_issues_and_features.md`; remaining scope is a custom reminder mutation UI — add/edit/delete a reminder, configurable offsets like "15 min before" — `source = 'CUSTOM'` stays unused until then)
-
-- Task filters should be available on task full page for its sub-items, just the same as they're available for root tasks list.
-- sometimes item rows are given the href to details dialog instead of the toggleChildren(). For example when you edit the item, the row swapped in appears to not have toogleChildren().
-- Batch add should be available from project tasks page
-- Expand all: expands to show all sub-items
-- When we add a sub-item to a row item in an expanded row state, the entire list is re-rendered and all items are collapsed to hide sub-items. This may be necessary, but I am wondering if we can keep the user on their current view without having to drill down again. Not huge priority.
-- Tasks list: add pagination - show max 25 top-level items + all their sub-items per page
-- Tasks list: add option to show as flattened list
-- Tasks list: add sort option: sort by due date or by scheduled start date
-- Multi-select: let's change UI so that checkbox is used to select an item for bulk actions rather than completing it, but stays on far left. Add a more stylized checkbox just right of that which performs current function of checkbox, to mark complete.
+- Multi-select: let's change UI so that checkbox is used to select an item for bulk actions rather than completing it, but stays on far left. Add a differently stylized checkbox just right of that which performs current function of checkbox, to mark complete. The batch-action menu should be fetched from server including which items are selected so that the menu can actually show the available actions for those tasks. For example we should not show "skip current" unless all selected are series occurrences, and we should not show "set offset" unless all the tasks are sub-items of the same top-level parent, and we should not show schedule or due date unless all the tasks are top-level tasks.
     - Would like to provide following actions eventually:
         - Set Assignee (for team-items)
         - Set offset (for sub-tasks)
@@ -20,8 +10,16 @@ Open issues and feature requests, merged from the former `docs/issues.md` and `d
         - Set Due date
         - Mark complete
         - Mark incomplete
-    - The item that follows this one may be completely stale, but including it here because it's relevant. Need to look into it. 
-    - Mass rescheduling ("skip current" without completing), across projects. The single-row version already shipped (`bd000b1`, "Finish the quick-reschedule dialog and extend it to Events") — see the archived doc. The mass/bulk version is fully designed in `docs/scheduled-catchup-plan.md` but not yet built: needs a new cross-project screen, a new repo method, and a bulk-action pattern this codebase doesn't have precedent for yet. **Before implementing:** that plan doc predates the item_series redesign and has zero series-awareness in its "overdue" query — add a `series_id IS NULL` guard (or equivalent) before implementing, or it will desync a stale materialized series occurrence from its cursor.
+        - Skip current
+- Task filters should be available on task full page for its sub-items, just the same as they're available for root tasks list.
+- sometimes item rows are given the href to details dialog instead of the toggleChildren(). For example when you edit the item, the row swapped in appears to not have toogleChildren().
+- Batch add should be available from project tasks page
+- Add reminder schema and UI to tasks, series, and events. (schema + read-only display done, see `docs/archived/archived_issues_and_features.md`; remaining scope is a custom reminder mutation UI — add/edit/delete a reminder, configurable offsets like "15 min before" — `source = 'CUSTOM'` stays unused until then)
+- Expand all: expands to show all sub-items
+- When we add a sub-item to a row item in an expanded row state, the entire list is re-rendered and all items are collapsed to hide sub-items. This may be necessary, but I am wondering if we can keep the user on their current view without having to drill down again. Not huge priority.
+- Tasks list: add pagination - show max 25 top-level items + all their sub-items per page
+- Tasks list: add option to show as flattened list
+- Tasks list: add sort option: sort by due date or by scheduled start date
 - Calendar view - filters should be shown on the day drawer instead of the month grid. But they should still survive navigation between days. 
 - For sub-task scheduling we only allow setting offset but row-actions returns same schedule form as top-level items. Let's just hide that row-action and let the edit form be the only way. But we also should ideally have a client-side helper that shows the conversion from offset to date beside the field as it is changed. 
     - Design discussion on this topic please. It appears we are persisting the due date whenever a due-date-offset is updated. I wonder if this is necessary? This is a computed value based on the top-level parent's due date and changes with it based on the offset. So in theory it could be computed on the fly whenever it's needed. Let's weigh the options here and reevaluate. But, I really want to change it unless there's an obvious benefit in terms of performance gains or reduction of complexity.
@@ -54,4 +52,3 @@ Open issues and feature requests, merged from the former `docs/issues.md` and `d
 - Ctrl+click or tap+hold should select rows, allowing bulk actions: "delete-selected", "reschedule-selected", "assign-selected".
 - Need a plan for deleting old data to keep the DB from growing infinitely (completed recurring/series occurrences, activity log rows), likely via a user-configurable retention/row-limit policy. No design doc exists yet — needs its own planning pass (retention shape, global vs. per-user config, delete vs. archive) before implementation.
 - Should events have "save as template" ability? Not sure we need event templates, but perhaps — maybe templates should be called task templates to clarify the narrower purpose if we decide to rule out event templates. Needs a decision from the user, not sized as a task.
-- It doesn't really make sense to allow sub-tasks to have a due date after the parent's due date. So maybe we should modify the semantics to mean "days before top-level parent due date" and only allow positive values instead of both positive and negative ones. Would require migration and logic changes, unless we just change the presentation layer and disallow positive values in the db (this actually might make more sense).

@@ -109,13 +109,13 @@ prl items list --parent <item-id> --project <project-id>
 prl items add "Buy groceries" --project <project-id>
 prl items add "Submit report" --due 2026-06-20 --project <project-id>
 prl items add "Chapter notes" --parent <parent-item-id> --project <project-id>
-prl items add "Pack bag" --parent <parent-item-id> --due-offset-days -1 --project <project-id>
+prl items add "Pack bag" --parent <parent-item-id> --days-before-due 1 --project <project-id>
 prl items add "Team offsite" --item-type event --due 2026-09-01 --project <project-id>
 prl items add "Rain today" --item-type event --event-type rain --project <project-id>
 prl items add "Write report" --scheduled 2026-06-18 --scheduled-end 2026-06-20 --project <project-id>
 prl items add "Milk" --item-type simple --project <project-id>
 prl items add "Trip planning" --description "Book flights, hotel, and rental car" --project <project-id>
-prl items add "Buy cake" --source-event-id <event-item-id> --due-offset-days -2 --project <project-id>
+prl items add "Buy cake" --source-event-id <event-item-id> --days-before-due 2 --project <project-id>
 ```
 
 `--description` is free-form notes text (up to 5000 characters), separate from the
@@ -123,8 +123,8 @@ required `name`, and valid on every item type/kind.
 
 `--item-type` is `task` (default), `event`, or `simple` — events are calendar-style
 items, distinguished from tasks mainly for display purposes; simple items are a bare
-checkable name with no due date, scheduled window, or due offset (the
-server rejects any of those on a `simple` item). `--event-type` is a free-text
+checkable name with no due date, scheduled window, or days-before-due offset
+(the server rejects any of those on a `simple` item). `--event-type` is a free-text
 category (e.g. `rain`), only valid on `--item-type event` (the server rejects it on
 tasks and simple items — `prl` itself checks this too and errors before sending the
 request); if it matches a checklist template's own event type, that template's
@@ -139,9 +139,9 @@ already exists.
 mechanism the auto-trigger above uses, available for manually linking a task
 to an event too. It's mutually exclusive with `--parent` (an item either
 nests under a parent or references an event, never both) and, like a child's
-`--due-offset-days`, drives the task's due date instead of a manually-typed
+`--days-before-due`, drives the task's due date instead of a manually-typed
 one — the server computes it from the referenced event's own due/scheduled
-date plus the offset, ignoring any `--due` you pass alongside it.
+date minus the offset, ignoring any `--due` you pass alongside it.
 
 `--due`, `--scheduled`, and `--scheduled-end` all accept `YYYY-MM-DD` or a Unix
 timestamp. `--due` is the deadline (drives offset-based child due
@@ -163,10 +163,10 @@ prl items add "Mow the lawn" --project <project-id> --assign <user-id> --points 
 > **Note:** individual items don't support recurrence anymore — create an
 > [item series](#item-series) instead if you want something to repeat. A
 > child item (`--parent`) or event-linked task (`--source-event-id`) uses
-> `--due-offset-days` (days from the top-level item's or linked event's due
-> date, negative = before, positive = after) — the offset is what sets the
-> item's due date whenever the top-level item is edited or the linked event
-> is rescheduled.
+> `--days-before-due` (days *before* the top-level item's or linked event's
+> due date — must be zero or positive, since the server rejects a due date
+> set after the anchor's) — the offset is what sets the item's due date
+> whenever the top-level item is edited or the linked event is rescheduled.
 
 ### Download an import template
 
@@ -516,8 +516,8 @@ old per-item flag used to:
 
 A child item (created with `--parent`) or an event-linked task (created with
 `--source-event-id`) still can't have any recurrence of its own — instead it
-has an offset (days from its top-level item's or linked event's due date,
-set with `--due-offset-days`), which is used to recompute its due date
+has an offset (days before its top-level item's or linked event's due date,
+set with `--days-before-due`), which is used to recompute its due date
 whenever the top-level item is edited or the linked event is rescheduled.
 
 ---

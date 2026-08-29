@@ -103,7 +103,7 @@
             </div>
           </label>
           {% if !is_top_level || is_offset_driven %}
-          {% call macros::due_offset_days_field(due_offset_days_input) %}{% endcall %}
+          {% call macros::due_offset_days_field(due_offset_days_input, due_date_input) %}{% endcall %}
           {% endif %}
           {% if is_team_project %}
           {% call macros::points_field(is_team_admin, is_top_level, points_input) %}{% endcall %}

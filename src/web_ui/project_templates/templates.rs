@@ -128,9 +128,11 @@ impl ProjectTemplateChildDetailFields {
             template_id: template_id.to_string(),
             id: item.id.clone(),
             name: item.name.clone(),
+            // See `project_tasks::templates::format_offset_input`'s identical negation — the
+            // web UI shows this as "days before", stored `due_offset_days` keeps its own sign.
             due_offset_days_input: item
                 .due_offset_days()
-                .map(|d| d.to_string())
+                .map(|d| (-d).to_string())
                 .unwrap_or_default(),
             just_saved,
         }

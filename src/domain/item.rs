@@ -458,6 +458,20 @@ impl Item {
                 "scheduled dates are not allowed on child or event-linked items".to_string(),
             );
         }
+        // It never makes sense for a child/event-linked item's own due date to fall after its
+        // anchor's — a sub-item existing to track work that supports the parent shouldn't be
+        // "due" once the parent already is. `due_offset_days` keeps its historical signed
+        // representation (negative = before, positive = after, see CLAUDE.md's Recurrence
+        // section) for every existing positive row written before this check landed, but no
+        // new write may set one: the web UI's own offset field enforces "days before" (positive
+        // input, negated before it reaches here) at the presentation layer, and this is the
+        // matching enforcement point for every other writer (CLI, MCP, direct API calls).
+        if self.due_offset_days().is_some_and(|d| d > 0) {
+            return Err(
+                "due offset days cannot be positive (days after the due date are not allowed)"
+                    .to_string(),
+            );
+        }
         Ok(())
     }
 
@@ -696,7 +710,7 @@ mod tests {
         set_due_date(&mut item, now);
         set_scheduled_date(&mut item, now);
         set_scheduled_end_date(&mut item, now);
-        set_due_offset_days(&mut item, 1);
+        set_due_offset_days(&mut item, -1);
         assert!(item.validate().is_ok());
     }
 
