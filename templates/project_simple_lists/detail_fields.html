@@ -26,14 +26,22 @@
                `close` branch re-renders as the full, freshly-saved detail page.
              Saving from a direct-URL-loaded edit page with neither list page nor detail page
              underneath (bookmark/typed URL, no `redirect=1`) is a known, accepted gap — see the
-             plan doc's Stage 1 "Submit behavior" notes. -->
+             plan doc's Stage 1 "Submit behavior" notes.
+
+             A saved edit can also change where this item sorts in the list underneath the
+             dialog (e.g. completing it), which the row-swap the `via_full_page == false` branch
+             does can't reflect since it only replaces this one row in place. Re-fetching the
+             page underneath afterward (its URL, including any applied filters, is unchanged by
+             the dialog being open) is the simple fix over conditionally detecting which fields
+             actually affect order. -->
         <form hx-put="/web/projects/{{ project_id }}/simple-lists/{{ id }}"
           {% if via_full_page %}
           hx-target="#page" hx-select="#page" hx-swap="innerHTML"
+          hx-on::after-request="if(event.detail.successful) document.getElementById('action-dialog').close()"
           {% else %}
           hx-target="#item-{{ id }}" hx-select="#item-{{ id }}" hx-swap="outerHTML"
+          hx-on::after-request="if(event.detail.successful) { document.getElementById('action-dialog').close(); htmx.ajax('GET', window.location.href, {target: '#page', select: '#page', swap: 'innerHTML'}); }"
           {% endif %}
-          hx-on::after-request="if(event.detail.successful) document.getElementById('action-dialog').close()"
           class="space-y-3">
           {% if via_full_page %}
           <input type="hidden" name="redirect" value="1" />

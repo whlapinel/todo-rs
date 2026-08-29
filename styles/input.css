@@ -6,6 +6,16 @@
    above and would otherwise be silently dropped from the compiled CSS. */
 @source "../src/**/*.rs";
 
+/* Without this, native form-control chrome (select dropdown popups, date/time pickers)
+   renders with the browser's light-mode default regardless of the dark: Tailwind classes
+   on the closed control itself -- the popup list is browser-native chrome, not something
+   background-color CSS can reach. This hints the browser to pick native dark rendering
+   whenever prefers-color-scheme: dark matches, the same signal every dark: class here
+   already keys off. */
+:root {
+  color-scheme: light dark;
+}
+
 @keyframes toast-fade {
   0%, 60% { opacity: 1; }
   100% { opacity: 0; }
