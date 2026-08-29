@@ -117,6 +117,48 @@ pub fn notify_completion_change(
     });
 }
 
+/// Notifies every other member of `project_id` that `author_user_id` just commented on
+/// `item_name` — see docs/issues_and_features.md's "Add notifications for comments --
+/// all team members notified of any comment by default". Called from
+/// `service::comments::create_comment` after the comment is persisted. Same
+/// no-op-if-unconfigured, fan-out-to-every-other-member, fire-and-forget shape as
+/// `notify_completion_change` above (comments have no assignee to single out, so
+/// there's no `notify_assignment`-style single-recipient variant). The author's display
+/// name is resolved from the same `list_members` call used for fan-out, rather than a
+/// separate `UserRepo` lookup — every commenter is by definition a project member.
+pub fn notify_comment(
+    projects: Arc<dyn ProjectRepo>,
+    project_id: String,
+    item_name: String,
+    detail_url: Option<String>,
+    author_user_id: String,
+    comment_body: String,
+) {
+    let Some(runtime) = PushRuntime::get() else {
+        return;
+    };
+    let runtime = runtime.clone();
+    tokio::spawn(async move {
+        let members = match projects.list_members(&project_id).await {
+            Ok(members) => members,
+            Err(e) => {
+                tracing::warn!(project_id = %project_id, error = ?e, "failed to list project members for comment push");
+                return;
+            }
+        };
+        let author_name = members
+            .iter()
+            .find(|m| m.user.id == author_user_id)
+            .map(|m| format!("{} {}", m.user.first_name, m.user.last_name))
+            .unwrap_or_else(|| "Someone".to_string());
+        let title = format!("{author_name} commented on {item_name}");
+        let url = detail_url.as_deref().unwrap_or("/web/tasks");
+        for member in members.iter().filter(|m| m.user.id != author_user_id) {
+            push_to_user(&runtime, &member.user.id, &title, &comment_body, url).await;
+        }
+    });
+}
+
 /// Notifies `assignee_user_id` that `item_name` was just assigned to them — see
 /// docs/issues_and_features.md's "Send notification on being assigned a task to the
 /// assignee". Called from `service::team_items::create_team_item`/`update_team_item`

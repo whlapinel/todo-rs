@@ -2,6 +2,7 @@ use crate::domain::comment::Comment;
 use crate::domain::item::ItemKind;
 use crate::service::error::ItemError;
 use crate::service::projects::require_project_member;
+use crate::service::push;
 use crate::storage::sqlite::{CommentRepo, ItemRepo, ProjectRepo, TeamRepo};
 use chrono::Utc;
 use std::sync::Arc;
@@ -43,6 +44,16 @@ pub async fn create_comment(
         created_at: Utc::now(),
     };
     comments.create(&comment).await?;
+
+    push::notify_comment(
+        Arc::clone(projects),
+        project_id.to_string(),
+        item.name.clone(),
+        push::detail_url(&item, project_id),
+        requester_user_id.to_string(),
+        comment.body.clone(),
+    );
+
     Ok(comment)
 }
 
