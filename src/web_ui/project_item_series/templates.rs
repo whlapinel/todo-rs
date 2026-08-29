@@ -23,6 +23,10 @@ impl ProjectItemSeriesRow {
             template_name,
             assignee_name,
             points: s.points,
+            // Task-series-only (`Item::validate`/`validate_series_priority` restrict `priority`
+            // to a Task-typed series — see root CLAUDE.md's Priority section), but unlike
+            // `points` it's never admin-gated, so it's always carried straight through.
+            priority: s.priority,
             duplicate_url: Some(format!(
                 "/web/projects/{}/series/{}/duplicate",
                 s.project_id, s.id
@@ -45,6 +49,8 @@ pub struct Row {
     pub template_name: Option<String>,
     pub assignee_name: Option<String>,
     pub points: Option<i32>,
+    /// See `Row`'s (`components::row::Row`) identical `priority_label` doc comment.
+    pub priority: Option<i32>,
     pub duplicate_url: Option<String>,
 }
 

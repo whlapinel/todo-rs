@@ -25,6 +25,9 @@
       {% if let Some(assignee) = assignee_name %}
       <span class="text-indigo-600 dark:text-indigo-400">[{{ assignee }}]</span>
       {% endif %}
+      {% if let Some(p) = priority_label %}
+      <span class="text-amber-600 dark:text-amber-400">🚩 {{ p }}</span>
+      {% endif %}
       {% if is_due_date_basis %}
       <span class="{% if overdue %}text-red-600 dark:text-red-400{% endif %}">💀 {{ date_label }}</span>
       {% else %}

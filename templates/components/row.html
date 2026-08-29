@@ -78,6 +78,7 @@
                 }}]</span>{% endif %}
             {% if let Some(e) = event_type %}<span>({{ e }})</span>{% endif %}
             {% if let Some(label) = offset_label %}<span>{{ label }}</span>{% endif %}
+            {% if let Some(p) = priority_label %}<span class="text-amber-600 dark:text-amber-400">🚩 {{ p }}</span>{% endif %}
             {% if let Some(assignee) = assignee_name %}<span class="text-indigo-600 dark:text-indigo-400">[{{ assignee
                 }}]</span>{% endif %}
             {% if let Some(d) = scheduled_date %}<span>📅 {{ d }}{% if let Some(e) = scheduled_end_date %}&ndash;{{ e

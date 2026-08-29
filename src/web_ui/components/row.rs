@@ -50,6 +50,12 @@ pub struct Row {
     pub event_type: Option<String>,
     pub has_children: bool,
     pub offset_label: Option<String>,
+    /// Read-only display of this item's `priority` (root CLAUDE.md's Priority section) —
+    /// `"P1"`–`"P4"`, or `None` if unset. Task-only in practice (`ProjectTaskRow::from_item` is
+    /// the sole populator, via `priority_label_for`); every other `Row` builder
+    /// (`ProjectEventRow`/`ProjectSimpleItemRow`) leaves this `None`, since `Item::priority` is
+    /// restricted to `ItemType::Task`.
+    pub priority_label: Option<String>,
     /// Names of this row's still-incomplete "depends on" links (Task-kind, same-parent
     /// siblings only — see `service::item_dependencies`), empty when the item has no
     /// dependencies or every dependency is already complete. Set by callers that have a

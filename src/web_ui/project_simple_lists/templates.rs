@@ -27,6 +27,9 @@ impl ProjectSimpleItemRow {
             expanded_row: false,
             has_children: item.has_children,
             offset_label: None,
+            // Simple items carry no `priority` concept (Task-only — see root CLAUDE.md's
+            // Priority section).
+            priority_label: None,
             assignee_name: None,
             blocked_by_names: Vec::new(),
             blocked_by_label: String::new(),

@@ -37,6 +37,9 @@ impl ProjectEventRow {
             expanded_row: true,
             has_children: false,
             offset_label: None,
+            // An Event never carries `priority` (`Item::priority` is Task-only — see root
+            // CLAUDE.md's Priority section).
+            priority_label: None,
             assignee_name: None,
             blocked_by_names: Vec::new(),
             blocked_by_label: String::new(),

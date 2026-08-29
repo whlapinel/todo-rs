@@ -39,6 +39,13 @@ pub fn format_points_input(points: Option<i32>) -> String {
     points.map(|p| p.to_string()).unwrap_or_default()
 }
 
+/// Read-only display label for a Task's `priority` (row detail line, dialog, full page) — see
+/// root CLAUDE.md's Priority section. `None` when unset, matching `offset_label_for`'s
+/// "absent field renders nothing" convention.
+pub fn priority_label_for(priority: Option<i32>) -> Option<String> {
+    priority.map(|p| format!("P{p}"))
+}
+
 /// `Row`'s first real caller — see `docs/project-abstraction-plan.md` stage B5a. Builds a
 /// generic `components::row::Row` rather than a Task-specific template of its own.
 pub struct ProjectTaskRow;
@@ -61,6 +68,7 @@ impl ProjectTaskRow {
         let assignee_name = item
             .assigned_to_user_id()
             .map(|id| names.get(&id).cloned().unwrap_or(id));
+        let priority_label = priority_label_for(item.priority());
         Row {
             id: item.id.clone(),
             item_url: format!("/web/projects/{project_id}/tasks/{}", item.id),
@@ -81,10 +89,12 @@ impl ProjectTaskRow {
                 || item.scheduled_date().is_some()
                 || item.due_offset_days().is_some()
                 || offset_label.is_some()
-                || assignee_name.is_some(),
+                || assignee_name.is_some()
+                || priority_label.is_some(),
             has_children: item.has_children,
             offset_label,
             assignee_name,
+            priority_label,
             complete_url: Some(format!("/web/projects/{project_id}/tasks/{}", item.id)),
             edit_url: (!item.complete)
                 .then(|| format!("/web/projects/{project_id}/tasks/{}/edit", item.id)),
@@ -437,6 +447,10 @@ pub struct ProjectTaskVirtualRow {
     /// assignee until materialized. See docs/issues_and_features.md's "occurrences don't show
     /// the assignee unless it's materialized" item.
     pub assignee_name: Option<String>,
+    /// See `Row::priority_label`'s identical doc comment — sourced from `ProjectOccurrence::
+    /// priority` (the series' own priority) rather than a materialized item's, since this row is
+    /// only ever built for a still-virtual/skipped occurrence.
+    pub priority_label: Option<String>,
     /// True only when this row is being rendered for the flat Tasks list (`handlers::
     /// project_tasks_page`/`list_task_rows_for_project`), never the calendar day panel
     /// (`day_list_rows`) — gates whether the checkbox/Skip/Unskip carry `hx-target="#items-list"`
@@ -487,6 +501,7 @@ impl ProjectTaskVirtualRow {
             is_skipped: occ.is_skipped(),
             unskip_url: format!("{}{list_query}", occ.unskip_url(project_id)),
             assignee_name: occ.assigned_to_user_name.clone(),
+            priority_label: priority_label_for(occ.priority),
             in_list_view,
         }
     }
@@ -681,6 +696,8 @@ pub struct ProjectTaskDetailView {
     pub scheduled_end_date: Option<String>,
     pub is_offset_driven: bool,
     pub offset_label: Option<String>,
+    /// See `Row::priority_label`'s identical doc comment.
+    pub priority_label: Option<String>,
     pub is_team_project: bool,
     pub assignee_name: Option<String>,
     /// `Some((parent_name, parent_url))` when this item has a `parent_item_id` — closes
@@ -748,6 +765,7 @@ impl ProjectTaskDetailView {
             scheduled_end_date,
             is_offset_driven: item.is_offset_driven(),
             offset_label: offset_label_for(item),
+            priority_label: priority_label_for(item.priority()),
             is_team_project,
             assignee_name: item
                 .assigned_to_user_id()
@@ -784,6 +802,10 @@ pub struct ProjectTaskSeriesOccurrenceView {
     pub due_date: Option<String>,
     pub overdue: bool,
     pub scheduled_date: Option<String>,
+    /// See `Row::priority_label`'s identical doc comment — sourced from the series' own
+    /// `priority` (settable only on a `Task`-typed series — see root CLAUDE.md's Priority
+    /// section), since this view is only ever built for a still-virtual/skipped occurrence.
+    pub priority_label: Option<String>,
     pub is_team_project: bool,
     pub assignee_name: Option<String>,
     pub update_url: String,
@@ -827,6 +849,7 @@ impl ProjectTaskSeriesOccurrenceView {
             overdue: is_due_date_basis && occurrence_date < Utc::now(),
             due_date,
             scheduled_date,
+            priority_label: priority_label_for(series.priority),
             is_team_project,
             assignee_name: resolved_assignee_id
                 .as_ref()
