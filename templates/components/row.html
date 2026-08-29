@@ -1,4 +1,4 @@
-<li id="item-{{ id }}" class="py-2 {{ indent_class }}"{% if let Some(ms) = dismiss_after_ms %} data-dismiss-after="{{ ms }}"{% endif %}>
+<li id="item-{{ id }}" class="py-2 {{ indent_class }}" style="view-transition-name: item-{{ id }}"{% if let Some(ms) = dismiss_after_ms %} data-dismiss-after="{{ ms }}"{% endif %}>
     <div class="flex items-center gap-x-3">
         {% if let Some(url) = complete_url %}
         <input type="checkbox" {% if complete %}checked{% endif %} hx-put="{{ url }}"

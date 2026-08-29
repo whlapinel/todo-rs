@@ -33,14 +33,17 @@
              branch does can't reflect since it only replaces this one row in place. Re-fetching
              the page underneath afterward (its URL, including any applied filters, is unchanged
              by the dialog being open) is the simple fix over conditionally detecting which
-             fields actually affect order. -->
+             fields actually affect order. `transition:true` on that follow-up swap wraps it in
+             `document.startViewTransition()`; every row.html `<li>` carries a stable
+             `view-transition-name`, so the browser animates a reordered row moving to its new
+             position instead of the list just jumping. -->
         <form hx-put="/web/projects/{{ project_id }}/tasks/{{ id }}"
           {% if via_full_page %}
           hx-target="#page" hx-select="#page" hx-swap="innerHTML"
           hx-on::after-request="if(event.detail.successful) document.getElementById('action-dialog').close()"
           {% else %}
           hx-target="#item-{{ id }}" hx-select="#item-{{ id }}" hx-swap="outerHTML"
-          hx-on::after-request="if(event.detail.successful) { document.getElementById('action-dialog').close(); htmx.ajax('GET', window.location.href, {target: '#page', select: '#page', swap: 'innerHTML'}); }"
+          hx-on::after-request="if(event.detail.successful) { document.getElementById('action-dialog').close(); htmx.ajax('GET', window.location.href, {target: '#page', select: '#page', swap: 'innerHTML transition:true'}); }"
           {% endif %}
           class="space-y-3">
           {% if via_full_page %}
