@@ -1132,11 +1132,12 @@ pub async fn create_pool(url: &str) -> Result<SqlitePool, sqlx::Error> {
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_attachments_item_id ON attachments (item_id)")
         .execute(&pool)
         .await?;
-    sqlx::query(
-        "CREATE INDEX IF NOT EXISTS idx_attachments_comment_id ON attachments (comment_id)",
-    )
-    .execute(&pool)
-    .await?;
+    // idx_attachments_comment_id is deliberately NOT created here — see
+    // `EnsureAttachmentsCommentId`'s doc comment: a real prod DB ended up with an
+    // `attachments` table that predates `comment_id`, and an unconditional `CREATE INDEX`
+    // on it here (running before `run_migrations()`, same as `idx_items_project_id` below)
+    // paniced `create_pool()` on every startup with "no such column: comment_id" before that
+    // migration ever got a chance to add it.
 
     // idx_items_calendar_subscription_id / idx_items_calsub_google_event_id are
     // deliberately NOT created here — same index-ordering reason as idx_items_project_id

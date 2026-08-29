@@ -3,8 +3,12 @@ use async_trait::async_trait;
 use sqlx::SqliteConnection;
 
 /// Creates the `attachments` table — root CLAUDE.md's Attachments section: schema only,
-/// see `storage::sqlite::AttachmentRepo`, the sole writer. Brand-new table, so (like
-/// `AddComments`) `CREATE TABLE IF NOT EXISTS` alone is enough, no `column_exists` dance.
+/// see `storage::sqlite::AttachmentRepo`, the sole writer. Originally assumed (like
+/// `AddComments`) that `CREATE TABLE IF NOT EXISTS` alone was enough, no `column_exists`
+/// dance needed since the table was brand-new — that assumption broke in practice (see
+/// `EnsureAttachmentsCommentId`'s doc comment), so `idx_attachments_comment_id` no longer
+/// lives here; `EnsureAttachmentsCommentId` (the migration that actually guarantees the
+/// column exists first) creates it instead.
 pub struct AddAttachments;
 
 #[async_trait]
@@ -37,11 +41,6 @@ impl Migration for AddAttachments {
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_attachments_item_id ON attachments (item_id)")
             .execute(&mut *conn)
             .await?;
-        sqlx::query(
-            "CREATE INDEX IF NOT EXISTS idx_attachments_comment_id ON attachments (comment_id)",
-        )
-        .execute(&mut *conn)
-        .await?;
         Ok(())
     }
 }

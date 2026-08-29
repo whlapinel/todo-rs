@@ -26,6 +26,7 @@ mod add_user_timezone;
 mod backfill_projects;
 mod drop_items_team_id;
 mod drop_team_member_points;
+mod ensure_attachments_comment_id;
 mod has_tasks_to_simple;
 mod item_type_event_type;
 mod migrate_legacy_recurring_items;
@@ -61,6 +62,7 @@ use async_trait::async_trait;
 use backfill_projects::BackfillProjects;
 use drop_items_team_id::DropItemsTeamId;
 use drop_team_member_points::DropTeamMemberPoints;
+use ensure_attachments_comment_id::EnsureAttachmentsCommentId;
 use has_tasks_to_simple::HasTasksToSimple;
 use item_type_event_type::ItemTypeEventType;
 use migrate_legacy_recurring_items::MigrateLegacyRecurringItems;
@@ -134,6 +136,7 @@ fn all_migrations() -> Vec<Box<dyn Migration>> {
         Box::new(AddItemPriority),
         Box::new(AddComments),
         Box::new(AddAttachments),
+        Box::new(EnsureAttachmentsCommentId),
     ]
 }
 
@@ -560,7 +563,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 33);
+        assert_eq!(applied_count, 34);
     }
 
     #[tokio::test]
@@ -573,7 +576,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 33);
+        assert_eq!(applied_count, 34);
     }
 
     #[tokio::test]
@@ -587,6 +590,6 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 33);
+        assert_eq!(applied_count, 34);
     }
 }
