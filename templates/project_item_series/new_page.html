@@ -73,6 +73,9 @@
       </label>
       <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">If set, this template's children are copied onto every occurrence when it's materialized. Manage the template's children from the Templates screen.</p>
     </div>
+    <div class="priority-field">
+      {% call macros::priority_field("") %}{% endcall %}
+    </div>
     {% if is_team_project %}
     <div class="assignment-field">
       <span class="mt-2 flex gap-4">
@@ -170,7 +173,7 @@
       }
       function toggle() {
         var isTask = form.querySelector('input[name="itemType"][value="TASK"]').checked;
-        form.querySelectorAll(".completion-basis-field, .template-field, .assignment-field").forEach(function (el) {
+        form.querySelectorAll(".completion-basis-field, .template-field, .assignment-field, .priority-field").forEach(function (el) {
           el.hidden = !isTask;
           el.querySelectorAll("input, select").forEach(function (field) {
             field.disabled = !isTask;

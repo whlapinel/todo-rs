@@ -34,6 +34,7 @@ fn to_summary(series: ItemSeries, rotation_user_ids: Vec<String>) -> model::Item
         assigned_to_user_id: series.assigned_to_user_id,
         rotation_user_ids: (!rotation_user_ids.is_empty()).then_some(rotation_user_ids),
         points: series.points,
+        priority: series.priority,
     }
 }
 
@@ -64,6 +65,7 @@ pub async fn create_item_series(
             assigned_to_user_id: input.assigned_to_user_id,
             rotation_user_ids: input.rotation_user_ids,
             points: input.points,
+            priority: input.priority,
         },
     )
     .await
@@ -105,6 +107,7 @@ pub async fn get_item_series(
         assigned_to_user_id: series.assigned_to_user_id,
         rotation_user_ids: (!rotation_user_ids.is_empty()).then_some(rotation_user_ids),
         points: series.points,
+        priority: series.priority,
     })
 }
 
@@ -135,6 +138,7 @@ pub async fn update_item_series(
             assigned_to_user_id: input.assigned_to_user_id,
             rotation_user_ids: input.rotation_user_ids,
             points: input.points,
+            priority: input.priority,
         },
     )
     .await

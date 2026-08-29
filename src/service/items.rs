@@ -39,6 +39,10 @@ pub struct CreateItemParams {
     /// Internal-only — never exposed via Smithy/CLI/MCP. Set exclusively by
     /// `service::item_series::get_or_materialize_occurrence`.
     pub series_id: Option<String>,
+    /// Task-only, ungated — see root CLAUDE.md's Priority section. Unlike `points`
+    /// (`team_items::CreateTeamItemParams` only), this is available on personal
+    /// items too.
+    pub priority: Option<i32>,
 }
 
 /// Builds the `ItemType` payload for a given kind from a `CreateItemParams`/`UpdateItemParams`-
@@ -51,6 +55,7 @@ fn build_item_type(
     recurrence: Recurrence,
     event_type: Option<String>,
     source_event_id: Option<String>,
+    priority: Option<i32>,
 ) -> ItemType {
     match kind {
         ItemKind::Simple => ItemType::Simple,
@@ -59,6 +64,7 @@ fn build_item_type(
             recurrence,
             team_assignment: None,
             source_event_id,
+            priority,
         },
         ItemKind::Event => ItemType::Event {
             schedule,
@@ -138,6 +144,7 @@ pub async fn create_item(
         recurrence_data,
         params.event_type.clone(),
         params.source_event_id.clone(),
+        params.priority,
     );
     item.complete = params.complete.unwrap_or(false);
     item.parent_item_id = params.parent_item_id.clone();
@@ -203,6 +210,11 @@ pub struct UpdateItemParams {
     pub due_offset_days: Option<i32>,
     pub source_event_id: Option<String>,
     pub timezone_offset_minutes: Option<i32>,
+    /// Task-only, ungated — see root CLAUDE.md's Priority section. Direct-overwrite,
+    /// same convention as `event_type`: omitting it on an update clears it, so every
+    /// caller that isn't intentionally clearing priority must round-trip `current`'s
+    /// value.
+    pub priority: Option<i32>,
 }
 
 /// Moved from `json_api::items::update_item`. `repo.get` below scopes the fetch to
@@ -289,6 +301,7 @@ pub async fn update_item(
         recurrence_data,
         params.event_type.clone(),
         params.source_event_id.clone(),
+        params.priority,
     );
     item.id = params.item_id.clone();
     item.complete = params.complete;
@@ -515,6 +528,7 @@ pub(crate) fn is_pure_complete_toggle(current: &Item, item: &Item) -> bool {
         && current.due_offset_days() == item.due_offset_days()
         && current.assigned_to_user_id() == item.assigned_to_user_id()
         && current.points() == item.points()
+        && current.priority() == item.priority()
 }
 
 /// Recomputes `due_date` for every descendant of `parent_item_id` that has its own
@@ -610,6 +624,7 @@ pub(crate) fn copy_template_children<'a>(
                 recurrence,
                 team_assignment: None,
                 source_event_id: None,
+                priority: child.priority(),
             };
             let new_child_id = repo.create(&new_child).await?;
             copy_template_children(
@@ -656,6 +671,7 @@ pub(crate) fn copy_template_children_to_event<'a>(
                 recurrence,
                 team_assignment: None,
                 source_event_id: Some(event_id.to_string()),
+                priority: child.priority(),
             };
             let new_child_id = repo.create(&new_child).await?;
             copy_template_children(
@@ -796,9 +812,25 @@ mod tests {
                 recurrence: Recurrence::default(),
                 team_assignment: None,
                 source_event_id: None,
+                priority: None,
             },
             ..Item::default()
         }
+    }
+
+    /// A changed `priority` alone must fail `is_pure_complete_toggle` — otherwise a
+    /// completed item's priority could be edited without un-completing it first,
+    /// breaking the completion-transition guard (root CLAUDE.md's Completion-transition
+    /// guards section).
+    #[test]
+    fn is_pure_complete_toggle_rejects_a_changed_priority() {
+        let mut current = task_with_due_date("item1", Utc::now());
+        current.complete = true;
+        let mut edited = current.clone();
+        if let ItemType::Task { priority, .. } = &mut edited.item_type {
+            *priority = Some(2);
+        }
+        assert!(!is_pure_complete_toggle(&current, &edited));
     }
 
     fn task_with_due_offset(id: &str, parent_id: &str, offset_days: i32) -> Item {
@@ -813,6 +845,7 @@ mod tests {
                 },
                 team_assignment: None,
                 source_event_id: None,
+                priority: None,
             },
             ..Item::default()
         }

@@ -197,6 +197,9 @@ pub(crate) fn create_params_from_form(
         source_event_id: None,
         timezone_offset_minutes: Some(tz),
         points: None,
+        // Events never carry priority — Task-only, see root CLAUDE.md's Priority
+        // section.
+        priority: None,
         series_id: None,
     }
 }
@@ -244,6 +247,7 @@ pub(crate) fn update_params_from_form(
         source_event_id: None,
         timezone_offset_minutes: Some(tz),
         points: None,
+        priority: None,
         depends_on_item_ids: None,
     }
 }

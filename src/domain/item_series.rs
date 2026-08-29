@@ -70,6 +70,13 @@ pub struct ItemSeries {
     /// non-admin request, matching `create_team_item`'s existing precedent).
     pub assigned_to_user_id: Option<String>,
     pub points: Option<i32>,
+    /// 1 (highest) through 4 (lowest); `None` sorts last — mirrors `Item::priority`
+    /// (root CLAUDE.md's Priority section). Unlike `assigned_to_user_id`/`points`
+    /// above, this is *not* restricted to a team-backed project and *not*
+    /// admin-gated — only the `item_type == Task` restriction applies. Carried onto
+    /// every occurrence `get_or_materialize_occurrence` materializes, the same way
+    /// `points`/`assigned_to_user_id` already are.
+    pub priority: Option<i32>,
 }
 
 /// One occurrence date's materialization state within a series. A date with no row

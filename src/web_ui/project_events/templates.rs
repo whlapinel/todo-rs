@@ -676,6 +676,7 @@ mod tests {
             template_item_id: None,
             assigned_to_user_id: None,
             points: None,
+            priority: None,
         }
     }
 

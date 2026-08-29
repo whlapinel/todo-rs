@@ -506,6 +506,9 @@ pub struct ProjectTaskDetailFields {
     /// `service::teams::require_team_admin`, whose result populates this at render time.
     pub is_team_admin: bool,
     pub points_input: String,
+    /// 1–4, or empty for "no priority" — unlike `points_input`, always rendered
+    /// regardless of `is_team_admin`/`is_team_project`. See `macros::priority_field`.
+    pub priority_input: String,
     /// Set only on the fragment returned by a successful save — see `items.rs`'s
     /// `DetailFields.just_saved` for the full rationale.
     pub just_saved: bool,
@@ -599,6 +602,7 @@ impl ProjectTaskDetailFields {
             assigned_to_user_id: item.assigned_to_user_id(),
             is_team_admin,
             points_input: format_points_input(item.points()),
+            priority_input: format_points_input(item.priority()),
             just_saved,
             via_full_page,
             depends_on_options,
@@ -810,6 +814,7 @@ pub struct ProjectTaskSeriesOccurrenceFields {
     pub assigned_to_user_id: Option<String>,
     pub is_team_admin: bool,
     pub points_input: String,
+    pub priority_input: String,
     pub update_url: String,
 }
 
@@ -864,6 +869,7 @@ impl ProjectTaskSeriesOccurrenceFields {
             assigned_to_user_id: resolved_assignee_id,
             is_team_admin,
             points_input: format_points_input(series.points),
+            priority_input: format_points_input(series.priority),
             update_url: format!(
                 "/web/projects/{project_id}/series/{}/occurrences/{occurrence_ts}/task",
                 series.id,
@@ -1129,6 +1135,7 @@ pub struct NewProjectTaskPageTemplate {
     pub blank_due_time_input: String,
     pub is_team_admin: bool,
     pub blank_points_input: String,
+    pub blank_priority_input: String,
     /// Stage 2 of docs/list-filtering-plan.md — the list screen's non-default filters at the
     /// moment this page/dialog was opened, pre-encoded via `ListFilters::query_string()` (empty
     /// at all-default filters). Round-tripped through the "Add multiple at once" batch form's
@@ -1310,6 +1317,7 @@ mod tests {
             template_item_id: None,
             assigned_to_user_id: None,
             points: None,
+            priority: None,
         }
     }
 

@@ -828,6 +828,7 @@ pub async fn toggle_main_calendar_item_complete(
         source_event_id: current.source_event_id(),
         timezone_offset_minutes: Some(tz),
         points: current.points(),
+        priority: current.priority(),
         depends_on_item_ids: None,
     };
     project_item_service::update_project_item(

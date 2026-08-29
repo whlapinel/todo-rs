@@ -108,6 +108,7 @@
           {% if is_team_project %}
           {% call macros::points_field(is_team_admin, is_top_level, points_input) %}{% endcall %}
           {% endif %}
+          {% call macros::priority_field(priority_input) %}{% endcall %}
           {% if !depends_on_options.is_empty() %}
           <div>
             <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Depends on</label>

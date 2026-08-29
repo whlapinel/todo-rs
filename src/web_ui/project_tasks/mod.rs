@@ -67,6 +67,10 @@ pub struct ProjectTaskForm {
     assigned_to_user_id: Option<String>,
     /// Same team-only caveat as `assigned_to_user_id`.
     points: Option<String>,
+    /// 1 (highest) through 4 (lowest); empty clears it. Task-only, but — unlike
+    /// `points`/`assigned_to_user_id` — always rendered, personal or team project,
+    /// admin or not. See root CLAUDE.md's Priority section.
+    priority: Option<String>,
     /// See `tasks::TaskForm`'s identical field for the redirect-vs-in-place-fragment
     /// rationale.
     redirect: Option<String>,
@@ -321,6 +325,12 @@ pub(crate) fn create_params_from_form(
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .and_then(|s| s.parse().ok()),
+        priority: form
+            .priority
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .and_then(|s| s.parse().ok()),
         timezone_offset_minutes: Some(tz),
         ..Default::default()
     }
@@ -372,6 +382,7 @@ pub(crate) fn update_params_from_form(
         // comment: a plain edit here can't silently wipe it, and the service layer's own
         // admin gate is what actually decides whether a *changed* value is honored.
         points: overlay_i32(&form.points, current.points()),
+        priority: overlay_i32(&form.priority, current.priority()),
         event_type: current.event_type(),
         depends_on_item_ids: form.depends_on_item_ids.as_deref().map(|s| {
             s.split(',')
@@ -726,7 +737,7 @@ pub(crate) async fn render_rows_with_virtual(
     let dep_map = item_dependencies
         .list_for_items(&visible.iter().map(|i| i.id.clone()).collect::<Vec<_>>())
         .await?;
-    let mut entries: Vec<(i64, String)> = Vec::with_capacity(visible.len());
+    let mut entries: Vec<((i32, i64), String)> = Vec::with_capacity(visible.len());
     for i in &visible {
         let just_completed = Some(i.id.as_str()) == just_completed_item_id;
         let confirmation = just_completed.then(|| "Completed".to_string());
@@ -776,13 +787,13 @@ pub(crate) async fn render_rows_with_virtual(
     if filters.recurring {
         for occ in virtual_occurrences {
             entries.push((
-                occ.occurrence_date.timestamp(),
+                (priority_rank(occ.priority), occ.occurrence_date.timestamp()),
                 ProjectTaskVirtualRow::from_occurrence(occ, project_id, tz, filters, in_list_view)
                     .render()?,
             ));
         }
     }
-    entries.sort_by_key(|(ts, _)| *ts);
+    entries.sort_by_key(|(key, _)| *key);
     Ok(entries.into_iter().map(|(_, html)| html).collect())
 }
 
@@ -880,11 +891,21 @@ pub(crate) fn items_list_inner_html(rows: &[String]) -> String {
     }
 }
 
+/// 1 sorts first (highest priority), 4 next, unset last — matches
+/// `storage::sqlite::items`'s own `COALESCE(priority, 5)` SQL ordering (root CLAUDE.md's
+/// Priority section).
+fn priority_rank(priority: Option<i32>) -> i32 {
+    priority.unwrap_or(5)
+}
+
 /// `list_project_items_unchecked` already scopes to top-level, non-Template items — this narrows
-/// further to `Task` and sorts by due date (undated tasks last), mirroring
-/// `tasks::list_tasks`/`team_tasks::list_team_tasks`.
-fn sort_key(item: &Item) -> i64 {
-    item.due_date().map(|d| d.timestamp()).unwrap_or(i64::MAX)
+/// further to `Task` and sorts by priority first, then due date (undated tasks last), mirroring
+/// `tasks::list_tasks`/`team_tasks::list_team_tasks`'s original due-date-only precedent.
+fn sort_key(item: &Item) -> (i32, i64) {
+    (
+        priority_rank(item.priority()),
+        item.due_date().map(|d| d.timestamp()).unwrap_or(i64::MAX),
+    )
 }
 
 pub(crate) async fn list_project_tasks(
@@ -973,6 +994,7 @@ pub(crate) async fn render_scope_fragment(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::item::ItemType;
 
     fn task(id: &str, name: &str, complete: bool) -> Item {
         Item {
@@ -1017,5 +1039,53 @@ mod tests {
         let a = task("a", "Solo", false);
         let siblings: Vec<&Item> = vec![&a];
         assert!(blocked_by_names_for(&a, &siblings, &HashMap::new()).is_empty());
+    }
+
+    fn set_priority(item: &mut Item, priority: i32) {
+        if let ItemType::Task { priority: p, .. } = &mut item.item_type {
+            *p = Some(priority);
+        } else {
+            panic!("test item must be a Task");
+        }
+    }
+
+    fn set_due_date(item: &mut Item, secs: i64) {
+        item.item_type
+            .schedule_mut()
+            .expect("has schedule")
+            .due_date = DateTime::from_timestamp(secs, 0);
+    }
+
+    /// Priority sorts first (1 highest ... 4 lowest, unset last); due date only breaks
+    /// ties within the same priority rank. See root CLAUDE.md's Priority section.
+    #[test]
+    fn sort_key_orders_by_priority_then_due_date() {
+        let mut low_priority_early_due = task("a", "A", false);
+        set_priority(&mut low_priority_early_due, 4);
+        set_due_date(&mut low_priority_early_due, 1_000);
+
+        let mut high_priority_late_due = task("b", "B", false);
+        set_priority(&mut high_priority_late_due, 1);
+        set_due_date(&mut high_priority_late_due, 9_000);
+
+        let mut no_priority = task("c", "C", false);
+        set_due_date(&mut no_priority, 500);
+
+        let mut same_priority_earlier_due = task("d", "D", false);
+        set_priority(&mut same_priority_earlier_due, 1);
+        set_due_date(&mut same_priority_earlier_due, 2_000);
+
+        let mut items = vec![
+            low_priority_early_due,
+            high_priority_late_due,
+            no_priority,
+            same_priority_earlier_due,
+        ];
+        items.sort_by_key(sort_key);
+
+        assert_eq!(
+            items.iter().map(|i| i.id.as_str()).collect::<Vec<_>>(),
+            vec!["d", "b", "a", "c"]
+        );
     }
 }

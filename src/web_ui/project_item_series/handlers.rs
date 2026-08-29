@@ -341,6 +341,10 @@ pub struct CreateItemSeriesForm {
     /// Same team-project/Task-series-only caveat as `assigned_to_user_id`; additionally
     /// silently dropped server-side unless the requester is that project's admin.
     points: Option<String>,
+    /// 1 (highest) through 4 (lowest); empty clears it. Task-series-only, but — unlike
+    /// `points`/`assigned_to_user_id` — not team-backed-project-only and not
+    /// admin-gated. See root CLAUDE.md's Priority section.
+    priority: Option<String>,
 }
 
 /// Stage 4 of docs/assignment-rotation-plan.md — turns the form's `assignmentMode`
@@ -429,6 +433,12 @@ pub async fn create_project_item_series_form(
             rotation_user_ids,
             points: form
                 .points
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .and_then(|s| s.parse().ok()),
+            priority: form
+                .priority
                 .as_deref()
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
@@ -917,6 +927,7 @@ pub async fn edit_project_item_series_page(
         rotation_user_ids,
         is_team_admin,
         points: series.points,
+        priority: series.priority,
     })
 }
 
@@ -961,6 +972,12 @@ pub async fn update_project_item_series_form(
             rotation_user_ids,
             points: form
                 .points
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .and_then(|s| s.parse().ok()),
+            priority: form
+                .priority
                 .as_deref()
                 .map(str::trim)
                 .filter(|s| !s.is_empty())

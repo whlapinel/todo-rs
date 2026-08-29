@@ -100,4 +100,7 @@ pub struct EditProjectItemSeriesPageTemplate {
     pub rotation_user_ids: Vec<String>,
     pub is_team_admin: bool,
     pub points: Option<i32>,
+    /// Task-series-only, but — unlike `points` — not team-project-only and not
+    /// admin-gated. See root CLAUDE.md's Priority section.
+    pub priority: Option<i32>,
 }

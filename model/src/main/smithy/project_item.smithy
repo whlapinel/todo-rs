@@ -34,6 +34,10 @@ resource ProjectItem {
         dueOffsetDays: Integer
         assignedToUserId: String
         points: Integer
+        // Task-only, ungated (any project member may set it, no admin/team-backed
+        // restriction — contrast with points/assignedToUserId above). See root
+        // CLAUDE.md's Priority section.
+        priority: Integer
         sourceEventId: String
         googleEventId: String
         calendarSubscriptionId: String
@@ -96,6 +100,8 @@ operation CreateProjectItem {
         $assignedToUserId
 
         $points
+
+        $priority
 
         $sourceEventId
 
@@ -161,6 +167,8 @@ operation GetProjectItem {
 
         $points
 
+        $priority
+
         $sourceEventId
 
         $googleEventId
@@ -218,6 +226,8 @@ operation UpdateProjectItem {
         $assignedToUserId
 
         $points
+
+        $priority
 
         $sourceEventId
 
@@ -277,6 +287,7 @@ structure ProjectItemSummary for ProjectItem {
     $assignedToUserId
     assignedToUserName: String
     $points
+    $priority
     $sourceEventId
     $googleEventId
     $calendarSubscriptionId

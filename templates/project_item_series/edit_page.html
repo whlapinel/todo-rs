@@ -69,6 +69,20 @@
       </label>
       <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">If set, this template's children are copied onto every occurrence when it's materialized. Manage the template's children from the Templates screen.</p>
     </div>
+    <div class="priority-field">
+      <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Priority
+        <div class="mt-2">
+          <select name="priority"
+                  class="block w-full rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:focus:outline-indigo-500">
+            <option value="" {% if priority.is_none() %}selected{% endif %}>None</option>
+            <option value="1" {% if priority == Some(1) %}selected{% endif %}>1 (highest)</option>
+            <option value="2" {% if priority == Some(2) %}selected{% endif %}>2</option>
+            <option value="3" {% if priority == Some(3) %}selected{% endif %}>3</option>
+            <option value="4" {% if priority == Some(4) %}selected{% endif %}>4 (lowest)</option>
+          </select>
+        </div>
+      </label>
+    </div>
     {% if is_team_project %}
     <div class="assignment-field">
       <span class="mt-2 flex gap-4">
@@ -165,7 +179,7 @@
       }
       function toggle() {
         var isTask = form.querySelector('input[name="itemType"][value="TASK"]').checked;
-        form.querySelectorAll(".completion-basis-field, .template-field, .assignment-field").forEach(function (el) {
+        form.querySelectorAll(".completion-basis-field, .template-field, .assignment-field, .priority-field").forEach(function (el) {
           el.hidden = !isTask;
           el.querySelectorAll("input, select").forEach(function (field) {
             field.disabled = !isTask;

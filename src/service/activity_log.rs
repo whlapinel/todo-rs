@@ -133,6 +133,7 @@ async fn reopen_item_if_still_complete(
             source_event_id: item.source_event_id(),
             timezone_offset_minutes: Some(tz_offset_minutes),
             points: item.points(),
+            priority: item.priority(),
             depends_on_item_ids: None,
         },
     )
@@ -868,6 +869,7 @@ mod tests {
                 template_item_id: None,
                 assigned_to_user_id: None,
                 points: None,
+                priority: None,
             })
         });
         series_mock.expect_get_occurrence().returning(|_, date| {

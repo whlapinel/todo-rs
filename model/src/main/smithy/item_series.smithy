@@ -59,6 +59,8 @@ structure ItemSeriesSummary {
     rotationUserIds: StringList
 
     points: Integer
+
+    priority: Integer
 }
 
 list ItemSeriesList {
@@ -116,6 +118,9 @@ operation CreateItemSeries {
 
         @notProperty
         points: Integer
+
+        @notProperty
+        priority: Integer
     }
 
     output := {
@@ -188,6 +193,9 @@ operation GetItemSeries {
 
         @notProperty
         points: Integer
+
+        @notProperty
+        priority: Integer
     }
 
     errors: [
@@ -244,6 +252,9 @@ operation UpdateItemSeries {
 
         @notProperty
         points: Integer
+
+        @notProperty
+        priority: Integer
     }
 
     output := {}

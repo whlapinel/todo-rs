@@ -262,7 +262,7 @@ pub(crate) async fn list_all_projects_task_rows(
     let user_projects = project_service::list_projects(projects, requester_user_id).await?;
     let now = Utc::now();
 
-    let mut entries: Vec<(i64, String)> = Vec::new();
+    let mut entries: Vec<((i32, i64), String)> = Vec::new();
     for project in &user_projects {
         if project_filter.is_some_and(|pid| pid != project.id) {
             continue;
@@ -282,7 +282,10 @@ pub(crate) async fn list_all_projects_task_rows(
             if !(filters.matches(item, requester_user_id, is_team_project, now) || just_completed) {
                 continue;
             }
-            let ts = item.due_date().map(|d| d.timestamp()).unwrap_or(i64::MAX);
+            let ts = (
+                priority_rank(item.priority()),
+                item.due_date().map(|d| d.timestamp()).unwrap_or(i64::MAX),
+            );
             let skip_url =
                 item_series_service::skip_url_for_item(series, item, &project.id).await?;
             let confirmation = just_completed.then(|| "Completed".to_string());
@@ -338,7 +341,7 @@ pub(crate) async fn list_all_projects_task_rows(
             .filter(|occ| filters.matches_occurrence(occ, requester_user_id, is_team_project, now));
             for occ in occurrences {
                 entries.push((
-                    occ.occurrence_date.timestamp(),
+                    (priority_rank(occ.priority), occ.occurrence_date.timestamp()),
                     AllProjectsTaskVirtualRow::from_occurrence(
                         &occ,
                         &project.id,
@@ -353,8 +356,14 @@ pub(crate) async fn list_all_projects_task_rows(
         }
     }
 
-    entries.sort_by_key(|(ts, _)| *ts);
+    entries.sort_by_key(|(key, _)| *key);
     Ok(entries.into_iter().map(|(_, html)| html).collect())
+}
+
+/// Duplicated from `project_tasks::mod`'s identical helper — this codebase's established
+/// "duplicate small per-screen helpers" precedent (see that module's own doc comment).
+fn priority_rank(priority: Option<i32>) -> i32 {
+    priority.unwrap_or(5)
 }
 
 pub async fn all_projects_tasks_page(
@@ -590,6 +599,7 @@ pub async fn toggle_all_projects_task_complete(
         source_event_id: current.source_event_id(),
         timezone_offset_minutes: Some(tz),
         points: current.points(),
+        priority: current.priority(),
         depends_on_item_ids: None,
     };
     project_item_service::update_project_item(

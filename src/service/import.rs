@@ -148,6 +148,12 @@ fn build_row_params(
                 .map_err(|_| format!("invalid integer '{s}' for points"))
         })
         .transpose()?;
+    let priority = cell(record, headers, "priority")
+        .map(|s| {
+            s.parse::<i32>()
+                .map_err(|_| format!("invalid integer '{s}' for priority"))
+        })
+        .transpose()?;
 
     Ok(CreateProjectItemParams {
         project_id: project_id.to_string(),
@@ -168,6 +174,7 @@ fn build_row_params(
         source_event_id: cell(record, headers, "sourceEventId").map(str::to_string),
         timezone_offset_minutes: None,
         points,
+        priority,
         series_id: None,
     })
 }
@@ -255,10 +262,10 @@ pub async fn import_project_items(
 }
 
 const ITEM_IMPORT_TEMPLATE_CSV: &str = "\
-name,description,dueDate,scheduledDate,scheduledEndDate,complete,hasDueTime,hasScheduledTime,hasEndTime,itemType,eventType,dueOffsetDays,parentItemId,assignedToUserId,points,sourceEventId
-Submit report,Quarterly report for finance,2026-09-01,,,false,,,,TASK,,,,,,
-Team offsite,,,2026-09-10,2026-09-12,false,,,,EVENT,offsite,,,,,
-Buy milk,,,,,false,,,,SIMPLE,,,,,,
+name,description,dueDate,scheduledDate,scheduledEndDate,complete,hasDueTime,hasScheduledTime,hasEndTime,itemType,eventType,dueOffsetDays,parentItemId,assignedToUserId,points,priority,sourceEventId
+Submit report,Quarterly report for finance,2026-09-01,,,false,,,,TASK,,,,,,,
+Team offsite,,,2026-09-10,2026-09-12,false,,,,EVENT,offsite,,,,,,
+Buy milk,,,,,false,,,,SIMPLE,,,,,,,
 ";
 
 pub fn item_import_template() -> String {
@@ -670,6 +677,7 @@ mod tests {
                 "parentItemId",
                 "assignedToUserId",
                 "points",
+                "priority",
                 "sourceEventId",
             ]
         );

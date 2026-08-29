@@ -79,6 +79,7 @@ pub async fn get_or_materialize_occurrence(
             has_due_time: Some(true),
             assigned_to_user_id: occurrence_assignee,
             points: series.points,
+            priority: series.priority,
             series_id: Some(series.id.clone()),
             ..Default::default()
         }
@@ -93,6 +94,7 @@ pub async fn get_or_materialize_occurrence(
             has_scheduled_time: Some(true),
             assigned_to_user_id: occurrence_assignee,
             points: series.points,
+            priority: series.priority,
             series_id: Some(series.id.clone()),
             ..Default::default()
         }
@@ -653,6 +655,7 @@ pub struct CreateItemSeriesParams {
     /// `assigned_to_user_id`, validated in `resolve_series_assignment`.
     pub rotation_user_ids: Option<Vec<String>>,
     pub points: Option<i32>,
+    pub priority: Option<i32>,
 }
 
 /// Stage 7b: a series can only ever materialize Task or Event occurrences —
@@ -733,6 +736,26 @@ fn validate_series_event_type(event_type: &Option<String>) -> Result<(), ItemErr
         return Err(ItemError::Invalid(
             "event_type is not currently supported on an item series".to_string(),
         ));
+    }
+    Ok(())
+}
+
+/// Task-only, same shape as `validate_series_item_type`'s own rejection — but unlike
+/// `resolve_series_assignment` (points/assignment), never gated on a team-backed
+/// project or project-admin authority. Mirrors `Item::validate`'s own 1–4 range check
+/// (root CLAUDE.md's Priority section).
+fn validate_series_priority(item_type: ItemKind, priority: Option<i32>) -> Result<(), ItemError> {
+    if let Some(p) = priority {
+        if item_type != ItemKind::Task {
+            return Err(ItemError::Invalid(
+                "priority is only valid on a TASK series".to_string(),
+            ));
+        }
+        if !(1..=4).contains(&p) {
+            return Err(ItemError::Invalid(
+                "priority must be between 1 and 4".to_string(),
+            ));
+        }
     }
     Ok(())
 }
@@ -870,6 +893,7 @@ pub async fn create_series(
     validate_series_item_type(params.item_type)?;
     validate_series_event_type(&params.event_type)?;
     validate_series_basis(params.item_type, &params.basis, &params.recurrence)?;
+    validate_series_priority(params.item_type, params.priority)?;
     validate_series_template_item(
         repo,
         &params.project_id,
@@ -905,6 +929,7 @@ pub async fn create_series(
             template_item_id: params.template_item_id,
             assigned_to_user_id,
             points,
+            priority: params.priority,
         })
         .await?;
     if !rotation_user_ids.is_empty() {
@@ -981,6 +1006,7 @@ pub struct UpdateItemSeriesParams {
     /// `assigned_to_user_id`, validated in `resolve_series_assignment`.
     pub rotation_user_ids: Option<Vec<String>>,
     pub points: Option<i32>,
+    pub priority: Option<i32>,
 }
 
 pub async fn update_series(
@@ -997,6 +1023,7 @@ pub async fn update_series(
     validate_series_item_type(params.item_type)?;
     validate_series_event_type(&params.event_type)?;
     validate_series_basis(params.item_type, &params.basis, &params.recurrence)?;
+    validate_series_priority(params.item_type, params.priority)?;
     validate_series_template_item(
         repo,
         &current.project_id,
@@ -1045,6 +1072,7 @@ pub async fn update_series(
                 // admin's points value doesn't survive a non-admin's edit of anything else).
                 assigned_to_user_id,
                 points,
+                priority: params.priority,
             },
         )
         .await?;
@@ -1108,6 +1136,10 @@ pub struct ProjectOccurrence {
     /// every virtual row rendering as a generic undated "Due:" label regardless of the series'
     /// actual basis.
     pub is_due_date_basis: bool,
+    /// The series' own `priority` — sourced here (not re-derived by callers) so a
+    /// still-virtual/skipped occurrence sorts alongside real items the same way its
+    /// eventual materialization would. See root CLAUDE.md's Priority section.
+    pub priority: Option<i32>,
 }
 
 impl ProjectOccurrence {
@@ -1296,6 +1328,7 @@ pub async fn list_occurrence_states_for_project(
                 assigned_to_user_name: occurrence_assignee_name,
                 state,
                 is_due_date_basis: is_due_date_basis(series),
+                priority: series.priority,
             });
         }
     }
@@ -1348,6 +1381,7 @@ mod tests {
             template_item_id: None,
             assigned_to_user_id: None,
             points: None,
+            priority: None,
         }
     }
 
@@ -2917,6 +2951,7 @@ mod tests {
             assigned_to_user_id: None,
             rotation_user_ids: None,
             points: None,
+            priority: None,
         }
     }
 
@@ -2936,6 +2971,7 @@ mod tests {
             assigned_to_user_id: None,
             rotation_user_ids: None,
             points: None,
+            priority: None,
         }
     }
 
@@ -4054,6 +4090,7 @@ mod tests {
             template_item_id: None,
             assigned_to_user_id: None,
             points: None,
+            priority: None,
         }
     }
 

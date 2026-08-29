@@ -168,6 +168,7 @@ pub async fn new_project_task_page(
         blank_due_time_input: String::new(),
         is_team_admin,
         blank_points_input: String::new(),
+        blank_priority_input: String::new(),
         filters_query: filters.query_string(),
         redirect_after_create: nq.redirect.is_some(),
         nav_html,
@@ -1404,6 +1405,7 @@ fn reparent_params(
         source_event_id: current.source_event_id(),
         timezone_offset_minutes: Some(tz),
         points: current.points(),
+        priority: current.priority(),
         depends_on_item_ids: None,
     }
 }

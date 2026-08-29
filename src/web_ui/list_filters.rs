@@ -334,6 +334,7 @@ mod tests {
             assigned_to_user_name: None,
             state: OccurrenceState::Virtual,
             is_due_date_basis,
+            priority: None,
         }
     }
 

@@ -411,6 +411,7 @@ mod tests {
                         },
                         team_assignment: None,
                         source_event_id: None,
+                        priority: None,
                     },
                     ..Item::default()
                 }])
@@ -591,6 +592,7 @@ mod tests {
                         recurrence: Recurrence::default(),
                         team_assignment: None,
                         source_event_id: None,
+                        priority: None,
                     },
                     ..Item::default()
                 })

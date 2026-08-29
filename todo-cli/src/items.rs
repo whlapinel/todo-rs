@@ -73,6 +73,11 @@ pub enum ItemsCommand {
             help = "Points awarded on completion (requires --project on a team-backed project; project admin only)"
         )]
         points: Option<i32>,
+        #[arg(
+            long,
+            help = "Priority: 1 (highest) to 4 (lowest) — Task items only, no team/admin restriction"
+        )]
+        priority: Option<i32>,
     },
     /// Mark an item complete
     Done {
@@ -178,6 +183,7 @@ pub async fn cmd_items(client: &Client, cmd: ItemsCommand, user_id: Option<Strin
             project,
             assign,
             points,
+            priority,
         } => {
             if event_type.is_some()
                 && item_type.as_deref().map(str::to_lowercase).as_deref() != Some("event")
@@ -255,6 +261,13 @@ pub async fn cmd_items(client: &Client, cmd: ItemsCommand, user_id: Option<Strin
             if let Some(pts) = points {
                 req = req.points(pts);
             }
+            if let Some(p) = priority {
+                if !(1..=4).contains(&p) {
+                    eprintln!("error: --priority must be between 1 and 4");
+                    std::process::exit(1);
+                }
+                req = req.priority(p);
+            }
             let out = unwrap_or_exit(req.send().await, "add project item");
             println!("created item {}", out.item_id());
         }
@@ -319,6 +332,9 @@ pub async fn cmd_items(client: &Client, cmd: ItemsCommand, user_id: Option<Strin
             }
             if let Some(pts) = item.points() {
                 req = req.points(pts);
+            }
+            if let Some(p) = item.priority() {
+                req = req.priority(p);
             }
             unwrap_or_exit(req.send().await, "mark done");
             println!("marked {item_id} complete");
@@ -410,6 +426,12 @@ pub async fn cmd_items(client: &Client, cmd: ItemsCommand, user_id: Option<Strin
             println!(
                 "points:     {}",
                 item.points()
+                    .map(|p| p.to_string())
+                    .unwrap_or_else(|| "-".to_string())
+            );
+            println!(
+                "priority:   {}",
+                item.priority()
                     .map(|p| p.to_string())
                     .unwrap_or_else(|| "-".to_string())
             );

@@ -66,6 +66,10 @@ pub enum SeriesCommand {
         /// project's admin (silently dropped otherwise)
         #[arg(long)]
         points: Option<i32>,
+        /// 1 (highest) through 4 (lowest) — only valid on a task series; not restricted
+        /// to a team-backed project, unlike --assign/--points
+        #[arg(long)]
+        priority: Option<i32>,
         /// User id to add to the rotation — repeatable, one occurrence per user in
         /// order of user id. Mutually exclusive with --assign. Only valid on a task
         /// series on a team-backed project
@@ -108,6 +112,10 @@ pub enum SeriesCommand {
         /// project's admin; round-trip to keep it, omit to clear it
         #[arg(long)]
         points: Option<i32>,
+        /// 1 (highest) through 4 (lowest) — only valid on a task series; round-trip to
+        /// keep it, omit to clear it
+        #[arg(long)]
+        priority: Option<i32>,
         /// User id to add to the rotation — repeatable, one occurrence per user in
         /// order of user id. Mutually exclusive with --assign. Round-trip to keep the
         /// rotation, omit (along with --assign) to clear it
@@ -159,6 +167,7 @@ pub async fn cmd_series(client: &Client, cmd: SeriesCommand, _user_id: Option<St
             template,
             assign,
             points,
+            priority,
             rotate,
         } => {
             let anchor_date = parse_date(&anchor).unwrap_or_else(|e| {
@@ -195,6 +204,9 @@ pub async fn cmd_series(client: &Client, cmd: SeriesCommand, _user_id: Option<St
             if let Some(points) = points {
                 req = req.points(points);
             }
+            if let Some(priority) = priority {
+                req = req.priority(priority);
+            }
             for user_id in rotate {
                 req = req.rotation_user_ids(user_id);
             }
@@ -230,6 +242,10 @@ pub async fn cmd_series(client: &Client, cmd: SeriesCommand, _user_id: Option<St
                 out.points().map(|p| p.to_string()).unwrap_or_else(|| "-".to_string())
             );
             println!(
+                "priority:    {}",
+                out.priority().map(|p| p.to_string()).unwrap_or_else(|| "-".to_string())
+            );
+            println!(
                 "rotation:    {}",
                 if out.rotation_user_ids().is_empty() {
                     "-".to_string()
@@ -250,6 +266,7 @@ pub async fn cmd_series(client: &Client, cmd: SeriesCommand, _user_id: Option<St
             template,
             assign,
             points,
+            priority,
             rotate,
         } => {
             let anchor_date = parse_date(&anchor).unwrap_or_else(|e| {
@@ -286,6 +303,9 @@ pub async fn cmd_series(client: &Client, cmd: SeriesCommand, _user_id: Option<St
             }
             if let Some(points) = points {
                 req = req.points(points);
+            }
+            if let Some(priority) = priority {
+                req = req.priority(priority);
             }
             for user_id in rotate {
                 req = req.rotation_user_ids(user_id);

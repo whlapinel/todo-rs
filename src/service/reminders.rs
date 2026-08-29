@@ -158,6 +158,7 @@ mod tests {
                 recurrence: Recurrence::default(),
                 team_assignment,
                 source_event_id: None,
+                priority: None,
             },
             ..Item::new_project_item(project_id, "Task")
         }

@@ -2,12 +2,10 @@
 
 Open issues and feature requests, merged from the former `docs/issues.md` and `docs/features.md` (2026-08-20) into a single sorted list. Completed or superseded items — including ones from the old files that were already resolved but hadn't been moved out yet — live in `docs/archived/archived_issues_and_features.md`.
 
-- Add a `priority` field to task items and task series; sort first by priority, then by due date.
-    - Number, starting at 1, being highest priority.
-    - Max number is 4. 4 takes precedence over no priority set.
+- sometimes item rows are given the href to details dialog instead of the toggleChildren(). For example when you edit the item, the row swapped in appears to not have toogleChildren().
 - Add comments for all items. Any team-member can comment on any item. No edit or delete for now.
 - Add notifications for comments -- all team members notified of any comment by default
-- Allow adding tags to items
+- Allow adding tags to items. Tags are scoped per-project like everything else
 - Multi-select: let's change UI so that checkbox is used to select an item for bulk actions rather than completing it, but stays on far left. Add a differently stylized checkbox just right of that which performs current function of checkbox, to mark complete. The batch-action menu should be fetched from server including which items are selected so that the menu can actually show the available actions for those tasks. For example we should not show "set offset" unless all the tasks are sub-items of the same top-level parent, and we should not show schedule or due date unless all the tasks are top-level tasks.
     - Would like to provide following actions eventually:
         - Set Assignee (for team-project-items)
@@ -15,7 +13,6 @@ Open issues and feature requests, merged from the former `docs/issues.md` and `d
         - Set Schedule dates
         - Set Due date
 - Task filters should be available on task full page for its sub-items, just the same as they're available for root tasks list.
-- sometimes item rows are given the href to details dialog instead of the toggleChildren(). For example when you edit the item, the row swapped in appears to not have toogleChildren().
 - Put an add (+) button using the add icon at the top of an item's sub-item list, the current new sub-item abbreviated list of fields should be revealed by pressing the add button, and there should be an 'all fields' button to display all the sub-item fields. currently the abbreviated list of fields are shown at bottom.
 - Batch add should be available from project tasks page
 - Add reminder schema and UI to tasks, series, and events. (schema + read-only display done, see `docs/archived/archived_issues_and_features.md`; remaining scope is a custom reminder mutation UI — add/edit/delete a reminder, configurable offsets like "15 min before" — `source = 'CUSTOM'` stays unused until then)

@@ -36,6 +36,7 @@ fn row_to_series(row: &sqlx::sqlite::SqliteRow) -> ItemSeries {
         template_item_id: row.get("template_item_id"),
         assigned_to_user_id: row.get("assigned_to_user_id"),
         points: row.get("points"),
+        priority: row.get("priority"),
     }
 }
 
@@ -55,8 +56,8 @@ impl ItemSeriesRepo for SqliteItemSeriesRepo {
     async fn create_series(&self, series: &ItemSeries) -> Result<String, RepoError> {
         let id = uuid::Uuid::new_v4().to_string();
         sqlx::query(
-            "INSERT INTO item_series (id, project_id, name, description, event_type, recurrence, anchor_date, item_type, basis, template_item_id, assigned_to_user_id, points) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO item_series (id, project_id, name, description, event_type, recurrence, anchor_date, item_type, basis, template_item_id, assigned_to_user_id, points, priority) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(&series.project_id)
@@ -70,6 +71,7 @@ impl ItemSeriesRepo for SqliteItemSeriesRepo {
         .bind(&series.template_item_id)
         .bind(&series.assigned_to_user_id)
         .bind(series.points)
+        .bind(series.priority)
         .execute(&self.0)
         .await
         .map_err(db_err)?;
@@ -78,7 +80,7 @@ impl ItemSeriesRepo for SqliteItemSeriesRepo {
 
     async fn update_series(&self, series_id: &str, series: &ItemSeries) -> Result<(), RepoError> {
         let result = sqlx::query(
-            "UPDATE item_series SET name = ?, description = ?, event_type = ?, recurrence = ?, anchor_date = ?, item_type = ?, basis = ?, template_item_id = ?, assigned_to_user_id = ?, points = ? \
+            "UPDATE item_series SET name = ?, description = ?, event_type = ?, recurrence = ?, anchor_date = ?, item_type = ?, basis = ?, template_item_id = ?, assigned_to_user_id = ?, points = ?, priority = ? \
              WHERE id = ?",
         )
         .bind(&series.name)
@@ -91,6 +93,7 @@ impl ItemSeriesRepo for SqliteItemSeriesRepo {
         .bind(&series.template_item_id)
         .bind(&series.assigned_to_user_id)
         .bind(series.points)
+        .bind(series.priority)
         .bind(series_id)
         .execute(&self.0)
         .await
@@ -103,7 +106,7 @@ impl ItemSeriesRepo for SqliteItemSeriesRepo {
 
     async fn get_series(&self, series_id: &str) -> Result<ItemSeries, RepoError> {
         sqlx::query(
-            "SELECT id, project_id, name, description, event_type, recurrence, anchor_date, item_type, cursor_date, basis, template_item_id, assigned_to_user_id, points \
+            "SELECT id, project_id, name, description, event_type, recurrence, anchor_date, item_type, cursor_date, basis, template_item_id, assigned_to_user_id, points, priority \
              FROM item_series WHERE id = ?",
         )
         .bind(series_id)
@@ -119,7 +122,7 @@ impl ItemSeriesRepo for SqliteItemSeriesRepo {
         project_id: &str,
     ) -> Result<Vec<ItemSeries>, RepoError> {
         sqlx::query(
-            "SELECT id, project_id, name, description, event_type, recurrence, anchor_date, item_type, cursor_date, basis, template_item_id, assigned_to_user_id, points \
+            "SELECT id, project_id, name, description, event_type, recurrence, anchor_date, item_type, cursor_date, basis, template_item_id, assigned_to_user_id, points, priority \
              FROM item_series WHERE project_id = ? ORDER BY name ASC",
         )
         .bind(project_id)
@@ -380,7 +383,8 @@ mod tests {
                 basis TEXT,
                 template_item_id TEXT,
                 assigned_to_user_id TEXT,
-                points INTEGER
+                points INTEGER,
+                priority INTEGER
             )",
         )
         .execute(&pool)
@@ -430,6 +434,7 @@ mod tests {
             template_item_id: None,
             assigned_to_user_id: None,
             points: None,
+            priority: None,
         }
     }
 

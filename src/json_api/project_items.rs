@@ -71,6 +71,7 @@ pub async fn create_project_item(
             source_event_id: input.source_event_id,
             timezone_offset_minutes: input.timezone_offset_minutes,
             points: input.points,
+            priority: input.priority,
             series_id: None,
         },
     )
@@ -136,6 +137,7 @@ pub async fn get_project_item(
         due_offset_days: item.due_offset_days(),
         assigned_to_user_id: item.assigned_to_user_id(),
         points: item.points(),
+        priority: item.priority(),
         source_event_id: item.source_event_id(),
         google_event_id: item.google_event_id.clone(),
         calendar_subscription_id: item.calendar_subscription_id.clone(),
@@ -195,6 +197,7 @@ pub async fn update_project_item(
             source_event_id: input.source_event_id,
             timezone_offset_minutes: input.timezone_offset_minutes,
             points: input.points,
+            priority: input.priority,
             depends_on_item_ids: input.depends_on_item_ids,
         },
     )
@@ -301,6 +304,7 @@ pub async fn list_project_items(
                 .assigned_to_user_id()
                 .map(|id| names.get(&id).unwrap_or(&"<Name>".to_string()).clone()),
             points: i.points(),
+            priority: i.priority(),
             source_event_id: i.source_event_id(),
             google_event_id: i.google_event_id.clone(),
             calendar_subscription_id: i.calendar_subscription_id.clone(),

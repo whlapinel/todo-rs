@@ -614,6 +614,7 @@ fn row_to_item(row: &sqlx::sqlite::SqliteRow) -> Item {
     let event_type: Option<String> = row.get("event_type");
     let assigned_to_user_id: Option<String> = row.get("assigned_to_user_id");
     let points: Option<i32> = row.get("points");
+    let priority: Option<i32> = row.get("priority");
     let source_event_id: Option<String> = row.get("source_event_id");
 
     let kind: ItemKind = row
@@ -634,6 +635,7 @@ fn row_to_item(row: &sqlx::sqlite::SqliteRow) -> Item {
                 None
             },
             source_event_id,
+            priority,
         },
         ItemKind::Event => ItemType::Event {
             schedule,
@@ -740,6 +742,7 @@ pub async fn create_pool(url: &str) -> Result<SqlitePool, sqlx::Error> {
             due_offset_days INTEGER,
             assigned_to_user_id TEXT,
             points INTEGER,
+            priority INTEGER,
             source_event_id TEXT,
             project_id TEXT,
             series_id TEXT,
@@ -900,7 +903,8 @@ pub async fn create_pool(url: &str) -> Result<SqlitePool, sqlx::Error> {
             basis TEXT,
             template_item_id TEXT,
             assigned_to_user_id TEXT,
-            points INTEGER
+            points INTEGER,
+            priority INTEGER
         )",
     )
     .execute(&pool)

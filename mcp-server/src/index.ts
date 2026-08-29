@@ -204,6 +204,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: "number",
             description: "Points awarded on completion. Only meaningful on a team-backed project. Project admin only (silently dropped if the caller isn't an admin).",
           },
+          priority: {
+            type: "number",
+            description: "1 (highest) to 4 (lowest). Task items only. Unlike points/assignedToUserId, not restricted to a team-backed project and not admin-gated.",
+          },
         },
         required: ["projectId", "name"],
       },
@@ -292,6 +296,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           points: {
             type: "number",
             description: "Points awarded on completion. Only meaningful on a team-backed project. Project admin only (the server preserves the existing value if the caller isn't an admin).",
+          },
+          priority: {
+            type: "number",
+            description: "1 (highest) to 4 (lowest). Task items only, ungated. Omit to leave unchanged; the current value is not preserved automatically if omitted on a caller-built update, so round-trip it explicitly when editing an item that already has one.",
           },
           dependsOnItemIds: {
             type: "array",
@@ -545,6 +553,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: "number",
             description: "Points awarded to the assignee when an occurrence of this series is completed — only valid on a TASK series on a team-backed project, and only settable by that project's admin (silently dropped otherwise).",
           },
+          priority: {
+            type: "number",
+            description: "1 (highest) to 4 (lowest) for every materialized occurrence — only valid on a TASK series. Unlike points/assignedToUserId, not restricted to a team-backed project and not admin-gated.",
+          },
           rotationUserIds: {
             type: "array",
             items: { type: "string" },
@@ -600,6 +612,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           points: {
             type: "number",
             description: "Points awarded to the assignee when an occurrence of this series is completed — only valid on a TASK series on a team-backed project, and only settable by that project's admin. Round-trip to keep it, omit to clear it.",
+          },
+          priority: {
+            type: "number",
+            description: "1 (highest) to 4 (lowest) for every materialized occurrence — only valid on a TASK series. Unlike points/assignedToUserId, not restricted to a team-backed project and not admin-gated. Round-trip to keep it, omit to clear it.",
           },
           rotationUserIds: {
             type: "array",
@@ -848,6 +864,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           body.timezoneOffsetMinutes = args.timezoneOffsetMinutes;
         if (args.assignedToUserId) body.assignedToUserId = args.assignedToUserId;
         if (args.points !== undefined) body.points = args.points;
+        if (args.priority !== undefined) body.priority = args.priority;
         result = await api("POST", `/projects/${args.projectId}/items`, body);
         break;
       }
@@ -901,6 +918,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           body.timezoneOffsetMinutes = args.timezoneOffsetMinutes;
         if (args.assignedToUserId) body.assignedToUserId = args.assignedToUserId;
         if (args.points !== undefined) body.points = args.points;
+        if (args.priority !== undefined) body.priority = args.priority;
         if (args.dependsOnItemIds !== undefined) body.dependsOnItemIds = args.dependsOnItemIds;
         result = await api("PUT", `/projects/${args.projectId}/items/${args.itemId}`, body);
         break;
@@ -1014,6 +1032,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         if (args.templateItemId !== undefined) body.templateItemId = args.templateItemId;
         if (args.assignedToUserId !== undefined) body.assignedToUserId = args.assignedToUserId;
         if (args.points !== undefined) body.points = args.points;
+        if (args.priority !== undefined) body.priority = args.priority;
         if (args.rotationUserIds !== undefined) body.rotationUserIds = args.rotationUserIds;
         result = await api("POST", `/projects/${args.projectId}/series`, body);
         break;
@@ -1038,6 +1057,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         if (args.templateItemId !== undefined) body.templateItemId = args.templateItemId;
         if (args.assignedToUserId !== undefined) body.assignedToUserId = args.assignedToUserId;
         if (args.points !== undefined) body.points = args.points;
+        if (args.priority !== undefined) body.priority = args.priority;
         if (args.rotationUserIds !== undefined) body.rotationUserIds = args.rotationUserIds;
         result = await api(
           "PUT",

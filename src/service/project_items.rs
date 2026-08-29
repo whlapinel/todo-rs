@@ -245,6 +245,8 @@ pub struct CreateProjectItemParams {
     pub source_event_id: Option<String>,
     pub timezone_offset_minutes: Option<i32>,
     pub points: Option<i32>,
+    /// Task-only, ungated — see root CLAUDE.md's Priority section.
+    pub priority: Option<i32>,
     /// Internal-only — never exposed via Smithy/CLI/MCP. Set exclusively by
     /// `service::item_series::get_or_materialize_occurrence`.
     pub series_id: Option<String>,
@@ -298,6 +300,7 @@ pub async fn create_project_item(
                     source_event_id: params.source_event_id,
                     timezone_offset_minutes: params.timezone_offset_minutes,
                     points: params.points,
+                    priority: params.priority,
                     series_id: params.series_id,
                 },
             )
@@ -325,6 +328,7 @@ pub async fn create_project_item(
                     source_event_id: params.source_event_id,
                     timezone_offset_minutes: params.timezone_offset_minutes,
                     series_id: params.series_id,
+                    priority: params.priority,
                 },
             )
             .await
@@ -356,6 +360,8 @@ pub struct UpdateProjectItemParams {
     pub source_event_id: Option<String>,
     pub timezone_offset_minutes: Option<i32>,
     pub points: Option<i32>,
+    /// Task-only, ungated — see root CLAUDE.md's Priority section.
+    pub priority: Option<i32>,
     /// "Depends on" (docs/issues_and_features.md) — `None` means "leave dependencies
     /// unchanged" (deliberately not this struct's usual direct-overwrite-Option
     /// convention; see `service::item_dependencies::set_item_dependencies`'s doc comment
@@ -488,6 +494,7 @@ pub async fn update_project_item(
                     source_event_id: params.source_event_id,
                     timezone_offset_minutes: params.timezone_offset_minutes,
                     points: params.points,
+                    priority: params.priority,
                 },
             )
             .await
@@ -515,6 +522,7 @@ pub async fn update_project_item(
                     due_offset_days: params.due_offset_days,
                     source_event_id: params.source_event_id,
                     timezone_offset_minutes: params.timezone_offset_minutes,
+                    priority: params.priority,
                 },
             )
             .await
@@ -1337,6 +1345,7 @@ mod tests {
                         assigned_to_user_id: Some("member1".to_string()),
                     }),
                     source_event_id: None,
+                    priority: None,
                 },
                 ..Item::default()
             })
@@ -1386,6 +1395,7 @@ mod tests {
             template_item_id: None,
             assigned_to_user_id: Some("member1".to_string()),
             points: Some(15),
+            priority: None,
         };
         let mut series_mock = MockItemSeriesRepo::new();
         series_mock

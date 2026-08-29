@@ -48,6 +48,10 @@ pub struct CreateTeamItemParams {
     pub source_event_id: Option<String>,
     pub timezone_offset_minutes: Option<i32>,
     pub points: Option<i32>,
+    /// Task-only, ungated — see root CLAUDE.md's Priority section. Unlike
+    /// `points`/`assigned_to_user_id` above, not restricted to a team-backed
+    /// project and not admin-gated.
+    pub priority: Option<i32>,
     /// Internal-only — never exposed via Smithy/CLI/MCP. Set exclusively by
     /// `service::item_series::get_or_materialize_occurrence`.
     pub series_id: Option<String>,
@@ -57,7 +61,8 @@ pub struct CreateTeamItemParams {
 /// `Some` for `Task` — points/assignment are Task-only (see issues.md); requesting
 /// them on any other kind is silently dropped, the same shape as the existing
 /// non-admin-points-request handling below, rather than rejecting the rest of an
-/// otherwise-valid request.
+/// otherwise-valid request. `priority` follows the same Task-only drop, but —
+/// unlike `team_assignment` — is never gated on admin/team-backed status.
 fn build_item_type(
     kind: ItemKind,
     schedule: Schedule,
@@ -65,6 +70,7 @@ fn build_item_type(
     event_type: Option<String>,
     team_assignment: Option<TeamAssignment>,
     source_event_id: Option<String>,
+    priority: Option<i32>,
 ) -> ItemType {
     match kind {
         ItemKind::Simple => ItemType::Simple,
@@ -73,6 +79,7 @@ fn build_item_type(
             recurrence,
             team_assignment,
             source_event_id,
+            priority,
         },
         ItemKind::Event => ItemType::Event {
             schedule,
@@ -227,6 +234,7 @@ pub async fn create_team_item(
         params.event_type.clone(),
         team_assignment,
         params.source_event_id.clone(),
+        params.priority,
     );
     item.complete = params.complete.unwrap_or(false);
     item.parent_item_id = params.parent_item_id.clone();
@@ -382,6 +390,9 @@ pub struct UpdateTeamItemParams {
     pub source_event_id: Option<String>,
     pub timezone_offset_minutes: Option<i32>,
     pub points: Option<i32>,
+    /// Task-only, ungated — see root CLAUDE.md's Priority section. Direct-overwrite,
+    /// same convention as `event_type`: omitting it clears it.
+    pub priority: Option<i32>,
 }
 
 /// Moved from `json_api::team_items::update_team_item`; rewritten in Stage 4 of
@@ -517,6 +528,7 @@ pub async fn update_team_item(
         params.event_type.clone(),
         team_assignment,
         params.source_event_id.clone(),
+        params.priority,
     );
 
     let tz_offset = params.timezone_offset_minutes.unwrap_or(0);
@@ -809,6 +821,7 @@ mod tests {
                     assigned_to_user_id: assigned_to_user_id.map(str::to_string),
                 }),
                 source_event_id: None,
+                priority: None,
             },
             ..Item::default()
         }

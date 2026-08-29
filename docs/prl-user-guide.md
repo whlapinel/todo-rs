@@ -154,10 +154,12 @@ only supported date is the offset-derived due date.
 `--project <project-id>` is required on every `add` (see the note at the
 top of this section); `--assign <user-id>`/`--points <n>` only take effect
 on a team-backed project (silently dropped by the server on a personal
-one):
+one). `--priority <1-4>` (1 highest, 4 lowest) has no such restriction —
+it's a plain Task-only sort key any project member can set on either a
+personal or team-backed project:
 
 ```sh
-prl items add "Mow the lawn" --project <project-id> --assign <user-id> --points 25
+prl items add "Mow the lawn" --project <project-id> --assign <user-id> --points 25 --priority 2
 ```
 
 > **Note:** individual items don't support recurrence anymore — create an
@@ -221,7 +223,7 @@ prl items get <item-id> --project <project-id>
 ```
 
 The output includes `assigned`/`points` (blank/`-` on a personal project,
-where they're never set).
+where they're never set) and `priority` (`-` if unset, on any project).
 
 ### Delete an item
 
@@ -589,7 +591,9 @@ prl series create <project-id> "Water plants" "every 3 days" 2026-08-17 \
 `--points <n>` awards that many points to the assignee on completion — both
 only valid on a task series (`--item-type task`) on a team-backed project,
 and `--points` further requires that project's admin (silently dropped
-otherwise).
+otherwise). `--priority <1-4>` sets the priority every materialized
+occurrence inherits — only valid on a task series, but unlike `--assign`/
+`--points` it's not restricted to a team-backed project.
 
 As an alternative to a fixed `--assign`, `--rotate <user-id>` (repeatable)
 rotates the assignee through a set of users, one per occurrence, cycling in
@@ -621,12 +625,12 @@ list of user ids under `rotation:`.
 ### Update an item series
 
 Update is a full replace of `name`/`recurrence`/`anchor`/`description`/
-`item-type`/`basis`/`template`/`assign`/`points`/`rotate` — pass
-`--description`/`--basis`/`--template`/`--assign`/`--points`/`--rotate`
-again to keep them, or omit to clear them (omitting `--basis` resets to
-`schedule`; omitting both `--assign` and `--rotate` clears whichever
-assignment mode was set). `--item-type` is required on every update, the
-same as on create.
+`item-type`/`basis`/`template`/`assign`/`points`/`priority`/`rotate` — pass
+`--description`/`--basis`/`--template`/`--assign`/`--points`/`--priority`/
+`--rotate` again to keep them, or omit to clear them (omitting `--basis`
+resets to `schedule`; omitting both `--assign` and `--rotate` clears
+whichever assignment mode was set). `--item-type` is required on every
+update, the same as on create.
 
 ```sh
 prl series update <project-id> <series-id> "Standup" "every weekday" 2026-08-17 \

@@ -138,6 +138,21 @@ scheduled_end_time_input) %}
 {% endif %}
 {% endmacro %}
 
+{% macro priority_field(priority_input) %}
+<label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Priority
+  <div class="mt-2">
+    <select name="priority"
+      class="block w-full rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:focus:outline-indigo-500">
+      <option value="" {% if priority_input=="" %}selected{% endif %}>None</option>
+      <option value="1" {% if priority_input=="1" %}selected{% endif %}>1 (highest)</option>
+      <option value="2" {% if priority_input=="2" %}selected{% endif %}>2</option>
+      <option value="3" {% if priority_input=="3" %}selected{% endif %}>3</option>
+      <option value="4" {% if priority_input=="4" %}selected{% endif %}>4 (lowest)</option>
+    </select>
+  </div>
+</label>
+{% endmacro %}
+
 {% macro event_type_field(event_type_input) %}
 <label class="block text-sm/6 font-medium text-gray-900 dark:text-white mt-2">Event type
   <div class="mt-2">

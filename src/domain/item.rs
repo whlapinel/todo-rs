@@ -117,6 +117,11 @@ pub enum ItemType {
         /// (see `Item::validate`) and only settable on `Task` — only a Task
         /// has anywhere to put it.
         source_event_id: Option<String>,
+        /// 1 (highest) through 4 (lowest); `None` sorts last. Task-only, but
+        /// unlike `team_assignment` above it's a plain personal-productivity
+        /// field — not team-backed-project-only, not admin-gated, and not
+        /// restricted to top-level items. See root CLAUDE.md's Priority section.
+        priority: Option<i32>,
     },
     Event {
         schedule: Schedule,
@@ -140,6 +145,7 @@ impl Default for ItemType {
             recurrence: Recurrence::default(),
             team_assignment: None,
             source_event_id: None,
+            priority: None,
         }
     }
 }
@@ -164,6 +170,7 @@ impl ItemType {
                 recurrence: Recurrence::default(),
                 team_assignment: None,
                 source_event_id: None,
+                priority: None,
             },
             ItemKind::Event => ItemType::Event {
                 schedule: Schedule::default(),
@@ -238,6 +245,13 @@ impl ItemType {
             ItemType::Task {
                 source_event_id, ..
             } => source_event_id.as_deref(),
+            _ => None,
+        }
+    }
+
+    pub fn priority(&self) -> Option<i32> {
+        match self {
+            ItemType::Task { priority, .. } => *priority,
             _ => None,
         }
     }
@@ -393,6 +407,10 @@ impl Item {
         self.item_type.source_event_id().map(|s| s.to_string())
     }
 
+    pub fn priority(&self) -> Option<i32> {
+        self.item_type.priority()
+    }
+
     /// True if this item's own date is derived from an offset rather than
     /// freely set — either a structural child (`parent_item_id`) or a task
     /// referencing an Event (`source_event_id`). Every "child-like"
@@ -471,6 +489,9 @@ impl Item {
                 "due offset days cannot be positive (days after the due date are not allowed)"
                     .to_string(),
             );
+        }
+        if self.priority().is_some_and(|p| !(1..=4).contains(&p)) {
+            return Err("priority must be between 1 and 4".to_string());
         }
         Ok(())
     }
@@ -553,6 +574,13 @@ mod tests {
                 })
             }
             _ => panic!("points only settable on Task"),
+        }
+    }
+
+    fn set_priority(item: &mut Item, priority: i32) {
+        match &mut item.item_type {
+            ItemType::Task { priority: p, .. } => *p = Some(priority),
+            _ => panic!("priority only settable on Task"),
         }
     }
 
@@ -642,6 +670,32 @@ mod tests {
     fn validate_allows_points_on_top_level_item() {
         let mut item = Item::new_user_item("u1", "Task");
         set_points(&mut item, 10);
+        assert!(item.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_allows_priority_in_range() {
+        let mut item = Item::new_task("u1", "Task");
+        set_priority(&mut item, 1);
+        assert!(item.validate().is_ok());
+        set_priority(&mut item, 4);
+        assert!(item.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_priority_out_of_range() {
+        let mut item = Item::new_task("u1", "Task");
+        set_priority(&mut item, 0);
+        assert!(item.validate().is_err());
+        set_priority(&mut item, 5);
+        assert!(item.validate().is_err());
+    }
+
+    #[test]
+    fn validate_allows_priority_on_child_task() {
+        let mut item = Item::new_task("u1", "Subtask");
+        item.parent_item_id = Some("parent1".to_string());
+        set_priority(&mut item, 2);
         assert!(item.validate().is_ok());
     }
 

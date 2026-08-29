@@ -6,6 +6,7 @@ mod add_event_series;
 mod add_item_dependencies;
 mod add_item_description;
 mod add_item_points;
+mod add_item_priority;
 mod add_item_series;
 mod add_item_series_assignment;
 mod add_item_series_basis;
@@ -37,6 +38,7 @@ use add_event_series::AddEventSeries;
 use add_item_dependencies::AddItemDependencies;
 use add_item_description::AddItemDescription;
 use add_item_points::AddItemPoints;
+use add_item_priority::AddItemPriority;
 use add_item_series::AddItemSeries;
 use add_item_series_assignment::AddItemSeriesAssignment;
 use add_item_series_basis::AddItemSeriesBasis;
@@ -125,6 +127,7 @@ fn all_migrations() -> Vec<Box<dyn Migration>> {
         Box::new(AddReminders),
         Box::new(AddItemDependencies),
         Box::new(AddPushSubscriptions),
+        Box::new(AddItemPriority),
     ]
 }
 
@@ -551,7 +554,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 30);
+        assert_eq!(applied_count, 31);
     }
 
     #[tokio::test]
@@ -564,7 +567,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 30);
+        assert_eq!(applied_count, 31);
     }
 
     #[tokio::test]
@@ -578,6 +581,6 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 30);
+        assert_eq!(applied_count, 31);
     }
 }

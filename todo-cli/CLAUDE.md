@@ -16,4 +16,6 @@ A standalone Rust crate that builds the `prl` binary. Async (`#[tokio::main]`), 
 
 `prl items add` also has `--scheduled`/`--scheduled-end` (see root CLAUDE.md's Scheduled start/end section), accepting the same `YYYY-MM-DD`-or-Unix-timestamp format as `--due`. `prl items done` forwards `scheduledDate`/`scheduledEndDate`/`hasScheduledTime`/`hasEndTime` back on completion too, for the same no-service-fallback reason `dueOffsetDays`/`eventType` are forwarded.
 
+`prl items add --priority <1-4>` (root CLAUDE.md's Priority section) is validated client-side (1–4) before sending. Unlike `--assign`/`--points`, it needs no `--project` team-backed caveat — it's a plain Task-only field with no team/admin gating. `prl items done`/`prl items get` round-trip and display it the same way they already do `points`. `prl series create`/`prl series update` (`todo-cli/src/series.rs`) have the same `--priority` flag, Task-series-only, also without the team-backed-project restriction `--assign`/`--points` carry there.
+
 Build/install separately from the main server (`cargo` commands run from `todo-cli/` or via `task cli-build` / `task cli-install`).
