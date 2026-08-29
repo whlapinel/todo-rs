@@ -474,11 +474,22 @@ async fn main() {
     // no loop is spawned at all, mirroring `EmailConfig`'s "optional feature, absent if
     // unconfigured" pattern rather than spawning a loop that immediately no-ops every tick.
     if let Some(push_config) = push::PushConfig::from_env() {
+        let push_config = Arc::new(push_config);
+        let http_client = reqwest::Client::new();
+        // Registers the ambient `PushRuntime` (see `service::push`'s doc comment) that
+        // `service::team_items::create_team_item`/`update_team_item` reach for directly
+        // when notifying on completion/assignment — those are ~30 call sites removed
+        // from any handler that could otherwise hand them a `PushConfig`/`PushSubscriptionRepo`
+        // via `Extension`.
+        service::push::PushRuntime::init(
+            push_config.clone(),
+            push_subscription_repo.clone(),
+            http_client.clone(),
+        );
         let reminder_repo = reminder_repo.clone();
         let item_repo = item_repo.clone();
         let user_repo = user_repo.clone();
         let push_subscription_repo = push_subscription_repo.clone();
-        let http_client = reqwest::Client::new();
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(std::time::Duration::from_secs(60)).await;

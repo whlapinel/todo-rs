@@ -8,6 +8,7 @@ use crate::service::items::{
 use crate::service::projects::{
     require_project_admin, require_project_member, resolve_project_assignee,
 };
+use crate::service::push;
 use crate::storage::sqlite::{
     ActivityLogRepo, ItemDependencyRepo, ItemRepo, ItemSeriesRepo, ProjectRepo, ReminderRepo,
     TeamRepo,
@@ -245,6 +246,21 @@ pub async fn create_team_item(
     item.validate().map_err(ItemError::Invalid)?;
 
     let item_id = repo.create(&item).await?;
+    item.id = item_id.clone();
+
+    // "Send notification on being assigned a task to the assignee"
+    // (docs/issues_and_features.md) — only fires when the item is created already
+    // assigned to someone other than whoever created it.
+    if let Some(assignee) = item.assigned_to_user_id()
+        && assignee != requester_user_id
+    {
+        push::notify_assignment(
+            assignee,
+            requester_user_id.to_string(),
+            item.name.clone(),
+            push::detail_url(&item, &params.project_id),
+        );
+    }
 
     // Considers both the requester's personal templates and this project's own —
     // same mechanism as service::items::create_item's trigger step. Lands as
@@ -580,6 +596,37 @@ pub async fn update_team_item(
     }
 
     repo.update_by_project(&item).await?;
+
+    // "Send notification on complete or uncomplete to all project team members"
+    // (docs/issues_and_features.md) — every genuine transition, at any nesting depth
+    // (unlike the points/activity-log logging above, which is deliberately
+    // top-level-only).
+    if just_completed || just_uncompleted {
+        push::notify_completion_change(
+            projects.clone(),
+            params.project_id.clone(),
+            item.name.clone(),
+            push::detail_url(&item, &params.project_id),
+            requester_user_id.to_string(),
+            just_completed,
+        );
+    }
+    // "Send notification on being assigned a task to the assignee"
+    // (docs/issues_and_features.md) — only on a genuine new-or-changed assignment,
+    // not on every edit of an already-assigned item (`current.assigned_to_user_id()`
+    // is this item's *pre*-update assignee).
+    if let Some(assignee) = item.assigned_to_user_id()
+        && assignee != requester_user_id
+        && Some(assignee.clone()) != current.assigned_to_user_id()
+    {
+        push::notify_assignment(
+            assignee,
+            requester_user_id.to_string(),
+            item.name.clone(),
+            push::detail_url(&item, &params.project_id),
+        );
+    }
+
     // Bug fix (docs/issues_and_features.md's "top-level parent id" entry) — see the identical
     // fix in `items::update_item` for the full explanation: descendants must be measured
     // against the true top-level ancestor's anchor, not `item`'s own (possibly offset-derived)

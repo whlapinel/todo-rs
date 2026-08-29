@@ -1,11 +1,154 @@
 use crate::push::{PushConfig, PushSendOutcome, send_push};
-use crate::storage::sqlite::{ItemRepo, PushSubscriptionRepo, ReminderRepo, RepoError, UserRepo};
+use crate::storage::sqlite::{
+    ItemRepo, ProjectRepo, PushSubscriptionRepo, ReminderRepo, RepoError, UserRepo,
+};
 use crate::web_ui::reminder_labels;
 use chrono::{Offset, Utc};
 use chrono_tz::Tz;
 use std::collections::HashMap;
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
+
+/// Ambient handle to the push-sending machinery (VAPID config, the subscriptions
+/// table, and an HTTP client), set once at startup — see `src/main.rs` — only when
+/// `PushConfig::from_env()` succeeds. This is the one deliberate global in an
+/// otherwise all-DI codebase: `notify_completion_change`/`notify_assignment` below
+/// are called from deep inside `service::team_items`, which is reached from ~30
+/// `create_project_item`/`update_project_item` call sites across `web_ui`/`json_api`.
+/// Threading three more parameters through every one of those, purely to support a
+/// best-effort, fire-and-forget side effect, would mean touching every call site for
+/// no behavioral benefit — the same "optional feature, silently absent if
+/// unconfigured" shape `PushConfig`/`EmailConfig` already use, just read from a
+/// static instead of an `Extension` because the call site is a service function, not
+/// a handler.
+static RUNTIME: OnceLock<PushRuntime> = OnceLock::new();
+
+#[derive(Clone)]
+pub struct PushRuntime {
+    config: Arc<PushConfig>,
+    subs: Arc<dyn PushSubscriptionRepo>,
+    client: reqwest::Client,
+}
+
+impl PushRuntime {
+    pub fn init(
+        config: Arc<PushConfig>,
+        subs: Arc<dyn PushSubscriptionRepo>,
+        client: reqwest::Client,
+    ) {
+        // Ignored if already set — `main.rs` only ever calls this once, but a second
+        // call (e.g. in a future test harness) silently no-ops rather than panicking.
+        let _ = RUNTIME.set(PushRuntime {
+            config,
+            subs,
+            client,
+        });
+    }
+
+    fn get() -> Option<&'static PushRuntime> {
+        RUNTIME.get()
+    }
+}
+
+/// Sends a best-effort push to every subscription `user_id` has registered, logging
+/// and swallowing any per-subscription failure — mirrors `sweep_due_reminders`'s own
+/// per-subscription handling, minus the `Gone` pruning (a stale endpoint hit here is
+/// cheap enough to leave for the reminder sweep to prune next time it hits the same
+/// subscription, rather than duplicating that cleanup here too).
+async fn push_to_user(runtime: &PushRuntime, user_id: &str, title: &str, body: &str, url: &str) {
+    let subs = match runtime.subs.list_for_user(user_id).await {
+        Ok(subs) => subs,
+        Err(e) => {
+            tracing::warn!(user_id = %user_id, error = ?e, "failed to list push subscriptions");
+            return;
+        }
+    };
+    for sub in &subs {
+        if let PushSendOutcome::Failed(e) =
+            send_push(&runtime.client, &runtime.config, sub, title, body, url).await
+        {
+            tracing::warn!(subscription_id = %sub.id, error = %e, "push send failed");
+        }
+    }
+}
+
+/// Notifies every other member of `project_id` that `item_name` was just completed or
+/// reopened by `actor_user_id` — see docs/issues_and_features.md's "Send notification
+/// on complete or uncomplete to all project team members". Called from
+/// `service::team_items::update_team_item` on every genuine completion-state
+/// transition, regardless of nesting depth (a sub-item's completion is just as much
+/// "the team should know" as a top-level one, unlike points/activity-log which are
+/// deliberately top-level-only). No-ops immediately if push isn't configured on this
+/// server. Fire-and-forget (`tokio::spawn`): a notification failure must never fail,
+/// or add latency to, the update request that triggered it.
+pub fn notify_completion_change(
+    projects: Arc<dyn ProjectRepo>,
+    project_id: String,
+    item_name: String,
+    detail_url: Option<String>,
+    actor_user_id: String,
+    completed: bool,
+) {
+    let Some(runtime) = PushRuntime::get() else {
+        return;
+    };
+    let runtime = runtime.clone();
+    tokio::spawn(async move {
+        let members = match projects.list_members(&project_id).await {
+            Ok(members) => members,
+            Err(e) => {
+                tracing::warn!(project_id = %project_id, error = ?e, "failed to list project members for completion push");
+                return;
+            }
+        };
+        let title = item_name;
+        let body = if completed {
+            "Marked complete".to_string()
+        } else {
+            "Marked incomplete".to_string()
+        };
+        let url = detail_url.as_deref().unwrap_or("/web/tasks");
+        for member in members {
+            if member.user.id == actor_user_id {
+                continue;
+            }
+            push_to_user(&runtime, &member.user.id, &title, &body, url).await;
+        }
+    });
+}
+
+/// Notifies `assignee_user_id` that `item_name` was just assigned to them — see
+/// docs/issues_and_features.md's "Send notification on being assigned a task to the
+/// assignee". Called from `service::team_items::create_team_item`/`update_team_item`
+/// only on a genuine new-or-changed assignment (not on every edit of an
+/// already-assigned item), and only when the assignee isn't the person making the
+/// change. Same no-op-if-unconfigured, fire-and-forget shape as
+/// `notify_completion_change` above.
+pub fn notify_assignment(
+    assignee_user_id: String,
+    actor_user_id: String,
+    item_name: String,
+    detail_url: Option<String>,
+) {
+    if assignee_user_id == actor_user_id {
+        return;
+    }
+    let Some(runtime) = PushRuntime::get() else {
+        return;
+    };
+    let runtime = runtime.clone();
+    tokio::spawn(async move {
+        let url = detail_url.as_deref().unwrap_or("/web/tasks");
+        push_to_user(
+            &runtime,
+            &assignee_user_id,
+            "New assignment",
+            &format!("Assigned to you: {item_name}"),
+            url,
+        )
+        .await;
+    });
+}
 
 /// The background sweep's single tick — see `docs/push-notifications-plan.md`. Called from a
 /// `tokio::spawn` loop in `src/main.rs`, gated on `PushConfig::from_env().is_some()` (no loop
@@ -130,8 +273,10 @@ pub async fn sweep_due_reminders(
 
 /// Task/Event only, mirroring `service::reminders::detail_url` — duplicated per that file's
 /// own "small per-purpose helper" precedent rather than shared, since this one operates
-/// globally across users rather than per-request.
-fn detail_url(item: &crate::domain::item::Item, project_id: &str) -> Option<String> {
+/// globally across users rather than per-request. `pub(crate)` so `service::team_items` can
+/// reuse it for `notify_completion_change`/`notify_assignment`'s own links, rather than a
+/// third duplicate of the same two-line match.
+pub(crate) fn detail_url(item: &crate::domain::item::Item, project_id: &str) -> Option<String> {
     use crate::domain::item::ItemKind;
     match item.kind() {
         ItemKind::Task => Some(format!("/web/projects/{project_id}/tasks/{}", item.id)),

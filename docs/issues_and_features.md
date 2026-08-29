@@ -2,21 +2,24 @@
 
 Open issues and feature requests, merged from the former `docs/issues.md` and `docs/features.md` (2026-08-20) into a single sorted list. Completed or superseded items — including ones from the old files that were already resolved but hadn't been moved out yet — live in `docs/archived/archived_issues_and_features.md`.
 
-- Multi-select: let's change UI so that checkbox is used to select an item for bulk actions rather than completing it, but stays on far left. Add a differently stylized checkbox just right of that which performs current function of checkbox, to mark complete. The batch-action menu should be fetched from server including which items are selected so that the menu can actually show the available actions for those tasks. For example we should not show "skip current" unless all selected are series occurrences, and we should not show "set offset" unless all the tasks are sub-items of the same top-level parent, and we should not show schedule or due date unless all the tasks are top-level tasks.
+- Helper js on edit task for sub-items doesn't run if there's no offset on clicking edit. it should run even if there's no offset, in case user wants to add one. 
+- For "reschedule" on sub-items don't send the normal reschedule dialog, send a new dialog (build it now) consisting only of the days-before offset. Should have the js helper to show date that updates on each change.  
+- Add a `priority` field to task items and task series; sort first by priority, then by due date.
+- Add comments for all items. Any team-member can comment on any item. No edit or delete for now.
+- Add notifications for comments -- all team members notified of any comment by default
+- Allow adding tags to items
+- Multi-select: let's change UI so that checkbox is used to select an item for bulk actions rather than completing it, but stays on far left. Add a differently stylized checkbox just right of that which performs current function of checkbox, to mark complete. The batch-action menu should be fetched from server including which items are selected so that the menu can actually show the available actions for those tasks. For example we should not show "set offset" unless all the tasks are sub-items of the same top-level parent, and we should not show schedule or due date unless all the tasks are top-level tasks.
     - Would like to provide following actions eventually:
-        - Set Assignee (for team-items)
+        - Set Assignee (for team-project-items)
         - Set offset (for sub-tasks)
         - Set Schedule dates
         - Set Due date
-        - Mark complete
-        - Mark incomplete
-        - Skip current
 - Task filters should be available on task full page for its sub-items, just the same as they're available for root tasks list.
 - sometimes item rows are given the href to details dialog instead of the toggleChildren(). For example when you edit the item, the row swapped in appears to not have toogleChildren().
 - Batch add should be available from project tasks page
 - Add reminder schema and UI to tasks, series, and events. (schema + read-only display done, see `docs/archived/archived_issues_and_features.md`; remaining scope is a custom reminder mutation UI — add/edit/delete a reminder, configurable offsets like "15 min before" — `source = 'CUSTOM'` stays unused until then)
 - Expand all: expands to show all sub-items
-- When we add a sub-item to a row item in an expanded row state, the entire list is re-rendered and all items are collapsed to hide sub-items. This may be necessary, but I am wondering if we can keep the user on their current view without having to drill down again. Not huge priority.
+- When we add a sub-item to a row item in an expanded row state, the entire list is re-rendered and all items are collapsed to hide sub-items. This may be necessary, but I am wondering if we can keep the user on their current view without having to drill down again. Maybe use qery params? Not huge priority.
 - Tasks list: add pagination - show max 25 top-level items + all their sub-items per page
 - Tasks list: add option to show as flattened list
 - Tasks list: add sort option: sort by due date or by scheduled start date
@@ -38,15 +41,11 @@ Open issues and feature requests, merged from the former `docs/issues.md` and `d
 - Allow moving a task or event to another project (distinct from the same-project "duplicate" action above).
 - A previous solution to the Google calendar import problem was that all-day events will be given a date of 12:00pm in order to avoid the shift to the previous day. The other option I was given is having a user-configurable time-zone. It didn't occur to me at the time of implementation but why not instead add the "all-day" concept to our event schema? Let's require events to either be marked all-day or have a scheduled start time.
 - Need a way to set user's time zone via web UI. There's currently no user config 
-- Add a `priority` field to task items and task series; sort first by priority, then by due date.
-- Allow adding tags to items
+- Another big feature addition: project journals. Allow end-to-end encryption of journal for personal journal privacy. Low-priority and half-baked.
 - Consider visibly disabling inputs that will result in error. Specifically, recurring tasks that aren't current should have complete and skip grayed out, and skipped recurring tasks and events that aren't cursor should have unskip grayed out.
-- Add comments for all items. Any team-member can comment on any item. No edit or delete for now.
-- Add notifications for comments -- all team members notified of any comment by default
 - Infrastructure/dev-ops: need to automate deployment better. right now for todo for example, I run task docker-release, then cd ../home-server && task deploy, and I think one barrier to automation is I have a password for the prod server command. Ideally I'd like to set up a pipeline that activates on push, but don't necessarily want to use github actions, and want to consider switching to a local remote repo instead of github, maybe gitea?
 - Big feature addition, needs fleshing out: user should be encouraged, but not necessarily restricted in any way, to give tasks both a due date and a schedule date. So some kind of gentle warning indicator can be clicked to take user to a page that lists all tasks with scheduled date and no due date, and all tasks with due date but no scheduled date. However -- contrary to part of what I just stated, Consider this restriction: requiring due date for all tasks, and making scheduled date optional (but encouraged through this warning). This would be a very big change and would involve a migration to make all tasks scheduled and lacking a due date to have a due date matching the scheduled date.
     - Future vision worth discussing now on this: I'm envisioning a system by which user can specify a due date and scheduling window for recurring tasks, allowing assignee to schedule completion of a task within the allowed window. But this is low-priority and only half-baked currently.
-- Another big feature addition: project journals. Allow end-to-end encryption of journal for personal journal privacy. Low-priority and half-baked.
 - Audit `src/storage/migrations/` for `CREATE INDEX` statements that run before the column-adding migration they depend on — only the `source_event_id` one is confirmed fixed; there may be others in the same wrong position.
 - Contrast issue for the series "Children Template" select box: reported as white text on white background. The current markup (`templates/project_item_series/new_page.html`) already uses the standard dark-mode-aware select classes used everywhere else in the app, so this may already be fixed or may be browser/theme-specific — re-verify live in both themes before scoping any code change.
 - Ctrl+click or tap+hold should select rows, allowing bulk actions: "delete-selected", "reschedule-selected", "assign-selected".
