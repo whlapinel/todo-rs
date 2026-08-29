@@ -278,6 +278,8 @@ pub async fn project_task_edit_page(
     };
     let (depends_on_options, depends_on_item_ids) =
         depends_on_picker_data(&repo, &item_dependencies, &project_id, &item).await?;
+    let anchor_date =
+        crate::service::items::resolve_offset_anchor(&repo, &auth_user.user_id, &item).await?;
     let fields = ProjectTaskDetailFields::from_item(
         &item,
         &project_id,
@@ -289,6 +291,7 @@ pub async fn project_task_edit_page(
         edit_q.redirect.is_some(),
         depends_on_options,
         depends_on_item_ids,
+        anchor_date,
     )
     .render()?;
     let nav_html = nav::build_nav_html(
@@ -1221,6 +1224,9 @@ pub async fn update_project_task_form(
             };
             let (depends_on_options, depends_on_item_ids) =
                 depends_on_picker_data(&repo, &item_dependencies, &project_id, &updated).await?;
+            let anchor_date =
+                crate::service::items::resolve_offset_anchor(&repo, &auth_user.user_id, &updated)
+                    .await?;
             let fields = ProjectTaskDetailFields::from_item(
                 &updated,
                 &project_id,
@@ -1232,6 +1238,7 @@ pub async fn update_project_task_form(
                 false,
                 depends_on_options,
                 depends_on_item_ids,
+                anchor_date,
             )
             .render()?;
             let linked_event = resolve_linked_event(&repo, &project_id, &updated).await?;
@@ -1582,12 +1589,24 @@ pub async fn get_reschedule_task(
     .await?;
     let task = require_task(task)?;
     let view = super::normalize_row_view(q);
-    render(RescheduleDialog::from_task(
-        &task,
-        &project_id,
-        tz,
-        view.as_deref(),
-    ))
+    if task.is_offset_driven() {
+        let anchor_date =
+            crate::service::items::resolve_offset_anchor(&repo, &auth_user.user_id, &task).await?;
+        render(OffsetRescheduleDialog::from_task(
+            &task,
+            &project_id,
+            tz,
+            anchor_date,
+            view.as_deref(),
+        ))
+    } else {
+        render(RescheduleDialog::from_task(
+            &task,
+            &project_id,
+            tz,
+            view.as_deref(),
+        ))
+    }
 }
 
 pub async fn get_quick_assign_task(

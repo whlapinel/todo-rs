@@ -218,6 +218,56 @@ impl RescheduleDialog {
     }
 }
 
+/// The offset-driven counterpart to `RescheduleDialog` — opened instead of it (see
+/// `handlers::get_reschedule_task`) when the task `is_offset_driven()` (a sub-item with a
+/// `parent_item_id`, or a task linked to an Event via `source_event_id`): such a task's own
+/// `due_date` is never editable directly, only via its days-before-due offset (see CLAUDE.md's
+/// Recurrence section), so the normal due/scheduled-date fields would either be rejected or
+/// silently overwritten by the server's own offset recompute on save. Reuses the same PUT this
+/// screen's other dialogs do — submitting only `dueOffsetDays` leaves every other field
+/// unchanged via `update_params_from_form`'s overlay helpers, and `service::items::update_item`
+/// recomputes `due_date` from the new offset itself (`resolve_offset_anchor` +
+/// `deadline_from_offset`), so there's no separate save path to duplicate here either.
+#[derive(Template)]
+#[template(path = "components/offset_reschedule_dialog.html")]
+pub struct OffsetRescheduleDialog {
+    pub item_id: String,
+    pub post_reschedule_url: String,
+    pub due_offset_days_input: String,
+    /// See `ProjectTaskDetailFields::anchor_date_input`'s identical doc comment — the parent's
+    /// (or linked event's) own due/scheduled date, not this item's own, so the JS preview in
+    /// `macros::due_offset_days_field` works even before this item has ever had an offset set.
+    pub anchor_date_input: String,
+}
+
+impl OffsetRescheduleDialog {
+    /// `anchor_date`: this task's resolved offset anchor (`service::items::resolve_offset_anchor`)
+    /// — an async repo lookup the caller must already have made, mirroring
+    /// `ProjectTaskDetailFields::from_item`'s identical `anchor_date` parameter. `view`: see
+    /// `RescheduleDialog::from_task`'s identical rationale.
+    pub fn from_task(
+        task: &Item,
+        project_id: &str,
+        tz: i32,
+        anchor_date: Option<chrono::DateTime<Utc>>,
+        view: Option<&str>,
+    ) -> Self {
+        let post_reschedule_url = format!("/web/projects/{project_id}/tasks/{}", task.id);
+        let post_reschedule_url = match view {
+            Some(v) => format!("{post_reschedule_url}?view={v}"),
+            None => post_reschedule_url,
+        };
+        OffsetRescheduleDialog {
+            item_id: task.id.clone(),
+            post_reschedule_url,
+            due_offset_days_input: format_offset_input(task.due_offset_days()),
+            anchor_date_input: anchor_date
+                .map(|d| to_local(d, tz).format("%Y-%m-%d").to_string())
+                .unwrap_or_default(),
+        }
+    }
+}
+
 /// A lightweight assignee-only editor, opened from a task row's person-icon button — mirrors
 /// `RescheduleDialog` exactly (see its doc comment for the rationale): reuses the same PUT
 /// `/web/projects/:project_id/tasks/:item_id` endpoint (`handlers::update_project_task_form`),
@@ -437,6 +487,14 @@ pub struct ProjectTaskDetailFields {
     pub scheduled_end_date_input: String,
     pub scheduled_end_time_input: String,
     pub due_offset_days_input: String,
+    /// This item's true offset anchor — the parent's (or linked event's) own due/scheduled
+    /// date, resolved via `service::items::resolve_offset_anchor` — formatted `YYYY-MM-DD` in
+    /// the viewer's local timezone, or empty if the item isn't offset-driven or the anchor has
+    /// no date of its own. Fed to `macros::due_offset_days_field`'s JS preview instead of this
+    /// item's own (possibly not-yet-computed) `due_date_input`, so the preview works even when
+    /// no offset has been set yet — see docs/issues_and_features.md's "Helper js on edit task
+    /// for sub-items" entry.
+    pub anchor_date_input: String,
     /// True for a team-backed project — gates the "Assign to"/points markup, which never
     /// renders at all on a personal project (not just hidden — see
     /// `docs/project-abstraction-plan.md` stage B5a's note on why points stays
@@ -483,6 +541,7 @@ impl ProjectTaskDetailFields {
         via_full_page: bool,
         depends_on_options: Vec<(String, String)>,
         depends_on_item_ids: Vec<String>,
+        anchor_date: Option<chrono::DateTime<Utc>>,
     ) -> Self {
         let local_due_date = item.due_date().map(|d| to_local(d, tz));
         let due_date_input = local_due_date
@@ -532,6 +591,9 @@ impl ProjectTaskDetailFields {
             scheduled_end_date_input,
             scheduled_end_time_input,
             due_offset_days_input: format_offset_input(item.due_offset_days()),
+            anchor_date_input: anchor_date
+                .map(|d| to_local(d, tz).format("%Y-%m-%d").to_string())
+                .unwrap_or_default(),
             is_team_project,
             assignee_options,
             assigned_to_user_id: item.assigned_to_user_id(),

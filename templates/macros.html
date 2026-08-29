@@ -29,7 +29,7 @@
 </label>
 {% endmacro %}
 
-{% macro due_offset_days_field(due_offset_days_input, due_date_input) %}
+{% macro due_offset_days_field(due_offset_days_input, anchor_date_input) %}
 <div class="offset-field scheduling-fields">
   <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Days before due date (parent's or linked
     event's)
@@ -47,11 +47,15 @@
   var wrapper = document.currentScript.previousElementSibling;
   var input = wrapper.querySelector(".due-offset-days-input");
   var preview = wrapper.querySelector(".due-offset-preview");
-  var baselineDaysBefore = parseInt(input.value, 10);
-  var dueDateStr = "{{ due_date_input }}";
-  if (isNaN(baselineDaysBefore) || !dueDateStr) return;
-  var parts = dueDateStr.split("-").map(Number);
-  var anchorMs = Date.UTC(parts[0], parts[1] - 1, parts[2]) + baselineDaysBefore * 86400000;
+  // The parent's (or linked event's) own due/scheduled date, resolved server-side via
+  // `resolve_offset_anchor` — NOT this item's own due date. Using the real anchor (rather than
+  // backing one out from this item's current due date + current offset) means the preview works
+  // from the very first keystroke even when this item has no offset/due date yet, which is the
+  // normal case when adding an offset for the first time.
+  var anchorDateStr = "{{ anchor_date_input }}";
+  if (!anchorDateStr) return;
+  var parts = anchorDateStr.split("-").map(Number);
+  var anchorMs = Date.UTC(parts[0], parts[1] - 1, parts[2]);
   function pad(n) { return n < 10 ? "0" + n : "" + n; }
   function render() {
     var daysBefore = parseInt(input.value, 10);

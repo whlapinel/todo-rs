@@ -2,9 +2,9 @@
 
 Open issues and feature requests, merged from the former `docs/issues.md` and `docs/features.md` (2026-08-20) into a single sorted list. Completed or superseded items — including ones from the old files that were already resolved but hadn't been moved out yet — live in `docs/archived/archived_issues_and_features.md`.
 
-- Helper js on edit task for sub-items doesn't run if there's no offset on clicking edit. it should run even if there's no offset, in case user wants to add one. 
-- For "reschedule" on sub-items don't send the normal reschedule dialog, send a new dialog (build it now) consisting only of the days-before offset. Should have the js helper to show date that updates on each change.  
 - Add a `priority` field to task items and task series; sort first by priority, then by due date.
+    - Number, starting at 1, being highest priority.
+    - Max number is 4. 4 takes precedence over no priority set.
 - Add comments for all items. Any team-member can comment on any item. No edit or delete for now.
 - Add notifications for comments -- all team members notified of any comment by default
 - Allow adding tags to items
@@ -16,6 +16,7 @@ Open issues and feature requests, merged from the former `docs/issues.md` and `d
         - Set Due date
 - Task filters should be available on task full page for its sub-items, just the same as they're available for root tasks list.
 - sometimes item rows are given the href to details dialog instead of the toggleChildren(). For example when you edit the item, the row swapped in appears to not have toogleChildren().
+- Put an add (+) button using the add icon at the top of an item's sub-item list, the current new sub-item abbreviated list of fields should be revealed by pressing the add button, and there should be an 'all fields' button to display all the sub-item fields. currently the abbreviated list of fields are shown at bottom.
 - Batch add should be available from project tasks page
 - Add reminder schema and UI to tasks, series, and events. (schema + read-only display done, see `docs/archived/archived_issues_and_features.md`; remaining scope is a custom reminder mutation UI — add/edit/delete a reminder, configurable offsets like "15 min before" — `source = 'CUSTOM'` stays unused until then)
 - Expand all: expands to show all sub-items
@@ -24,8 +25,7 @@ Open issues and feature requests, merged from the former `docs/issues.md` and `d
 - Tasks list: add option to show as flattened list
 - Tasks list: add sort option: sort by due date or by scheduled start date
 - Calendar view - filters should be shown on the day drawer instead of the month grid. But they should still survive navigation between days. 
-- For sub-task scheduling we only allow setting offset but row-actions returns same schedule form as top-level items. Let's just hide that row-action and let the edit form be the only way. But we also should ideally have a client-side helper that shows the conversion from offset to date beside the field as it is changed. 
-    - Design discussion on this topic please. It appears we are persisting the due date whenever a due-date-offset is updated. I wonder if this is necessary? This is a computed value based on the top-level parent's due date and changes with it based on the offset. So in theory it could be computed on the fly whenever it's needed. Let's weigh the options here and reevaluate. But, I really want to change it unless there's an obvious benefit in terms of performance gains or reduction of complexity.
+- Design discussion: for an offset-driven sub-item, we persist `due_date` (recomputed) whenever the offset changes. Is this necessary? It's a computed value based on the top-level parent's (or linked event's) due date, so in theory it could be computed on the fly whenever it's needed instead of stored. Weigh the options and reevaluate — don't change it unless there's an obvious benefit in terms of performance gains or reduction of complexity.
 - Let's make the filters part of the URL at all times. 
 - Create user settings schema and UI
     - Configure notifications to toggle e-mail on/off (default = on)
