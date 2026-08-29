@@ -9,7 +9,8 @@ use crate::web_ui::nav::{self, ActiveContext, SidebarSection};
 use crate::web_ui::project_simple_lists::templates::*;
 use crate::web_ui::project_simple_lists::{
     ProjectSimpleItemForm, create_params_from_form, list_project_simple_items, non_empty, render,
-    render_scope_fragment, require_simple, sibling_group, update_params_from_form,
+    render_expandable_children, render_scope_fragment, require_simple, sibling_group,
+    update_params_from_form,
 };
 use askama::Template;
 use axum::extract::{Extension, Form, Path, Query};
@@ -392,12 +393,20 @@ pub async fn update_project_simple_item_form(
     }
     let siblings = sibling_group(&repo, &project_id, updated.parent_item_id.as_deref()).await?;
     let siblings_ref: Vec<&Item> = siblings.iter().collect();
-    let row = crate::web_ui::project_simple_lists::templates::ProjectSimpleItemRow::from_item(
+    let mut row = crate::web_ui::project_simple_lists::templates::ProjectSimpleItemRow::from_item(
         &updated,
         &project_id,
         &siblings_ref,
-    )
-    .render()?;
+    );
+    // Mirrors project_tasks.rs's identical fix: a swapped-in single-row response needs its own
+    // subtree inlined the same way a list-page row would be, or the name-click falls through to
+    // the dialog/navigation branch instead of toggling in place (see `Row::children_html`'s doc
+    // comment).
+    if updated.has_children {
+        row.children_html =
+            Some(render_expandable_children(&repo, &updated.id, &project_id, 1).await?);
+    }
+    let row = row.render()?;
     let fields =
         ProjectSimpleItemDetailFields::from_item(&updated, &project_id, true, false).render()?;
     Ok(Html(format!("{row}{fields}")).into_response())

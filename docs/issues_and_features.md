@@ -2,7 +2,6 @@
 
 Open issues and feature requests, merged from the former `docs/issues.md` and `docs/features.md` (2026-08-20) into a single sorted list. Completed or superseded items — including ones from the old files that were already resolved but hadn't been moved out yet — live in `docs/archived/archived_issues_and_features.md`.
 
-- sometimes item rows are given the href to details dialog instead of the toggleChildren(). For example when you edit the item, the row swapped in appears to not have toogleChildren().
 - Add comments for all items. Any team-member can comment on any item. No edit or delete for now.
 - Add notifications for comments -- all team members notified of any comment by default
 - Allow adding tags to items. Tags are scoped per-project like everything else

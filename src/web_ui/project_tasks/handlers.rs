@@ -1196,6 +1196,10 @@ pub async fn update_project_task_form(
                         confirmation,
                         dismiss_after_ms,
                     );
+                    // Without this, a row with children swapped back in after an edit falls
+                    // through to row.html's dialog/navigation name-click branch instead of
+                    // toggleChildren() — see `Row::children_html`'s doc comment.
+                    row.children_html = children_html;
                     let dep_map = item_dependencies
                         .list_for_items(&[updated.id.clone()])
                         .await?;
