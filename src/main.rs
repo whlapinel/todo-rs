@@ -117,6 +117,22 @@ fn build_web_router() -> Router {
             post(create_project_tasks_batch),
         )
         .route(
+            "/projects/:project_id/tasks/batch/priority",
+            put(batch_set_priority_form),
+        )
+        .route(
+            "/projects/:project_id/tasks/batch/dates",
+            put(batch_set_dates_form),
+        )
+        .route(
+            "/projects/:project_id/tasks/batch/offset",
+            put(batch_set_offset_form),
+        )
+        .route(
+            "/projects/:project_id/tasks/batch/assignee",
+            put(batch_set_assignee_form),
+        )
+        .route(
             "/projects/:project_id/tasks/:item_id",
             get(project_task_detail_page)
                 .put(update_project_task_form)

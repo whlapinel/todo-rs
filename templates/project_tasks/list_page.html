@@ -21,12 +21,29 @@
         <span class="absolute -top-1 -right-1 size-2.5 rounded-full bg-indigo-600 dark:bg-indigo-500"></span>
         {% endif %}
       </button>
+      <!-- Multi-select (docs/issues_and_features.md's "Multi-select" item) — select mode is a
+           genuinely different page render (`?select=1`, see templates::ProjectTaskSelectRow's
+           doc comment for why), so Select/Cancel are plain boosted links rather than a
+           client-side toggle; only the Actions button (whose enabled state tracks the current
+           selection) is JS-driven, via base.html's openBatchActionsMenu(). -->
+      {% if select_mode %}
+      <a href="/web/projects/{{ project_id }}/tasks{% if !filters_query.is_empty() %}?{{ filters_query }}{% endif %}"
+        class="inline-flex items-center justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-xs inset-ring inset-ring-gray-300 hover:bg-gray-50 dark:bg-white/10 dark:text-white dark:shadow-none dark:inset-ring-white/5 dark:hover:bg-white/20">
+        Cancel</a>
+      <button type="button" id="batch-actions-btn" onclick="openBatchActionsMenu(this)" disabled
+        class="inline-flex items-center justify-center rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-xs hover:bg-indigo-500 disabled:opacity-50 disabled:hover:bg-indigo-600 dark:bg-indigo-500 dark:shadow-none dark:hover:bg-indigo-400 dark:disabled:hover:bg-indigo-500">
+        Actions</button>
+      {% else %}
+      <a href="/web/projects/{{ project_id }}/tasks?select=1{% if !filters_query.is_empty() %}&{{ filters_query }}{% endif %}"
+        class="inline-flex items-center justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-xs inset-ring inset-ring-gray-300 hover:bg-gray-50 dark:bg-white/10 dark:text-white dark:shadow-none dark:inset-ring-white/5 dark:hover:bg-white/20">
+        Select</a>
       <button type="button"
         hx-get="/web/projects/{{ project_id }}/tasks/new{% if !filters_query.is_empty() %}?{{ filters_query }}{% endif %}"
         hx-target="#action-dialog" hx-select="#dialog-fragment" hx-swap="innerHTML"
         class="inline-flex items-center justify-center rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-xs hover:bg-indigo-500 dark:bg-indigo-500 dark:shadow-none dark:hover:bg-indigo-400">
         {% include "icons/add.html" %}
       </button>
+      {% endif %}
     </div>
   </div>
 
@@ -54,6 +71,9 @@
         class="relative transform overflow-hidden rounded-lg bg-white dark:bg-gray-800 px-4 pt-5 pb-4 text-left shadow-xl transition-all duration-300 ease-out translate-y-4 opacity-0 scale-95 group-open/dialog:translate-y-0 group-open/dialog:opacity-100 group-open/dialog:scale-100 sm:my-8 sm:w-full sm:max-w-lg sm:p-6 dark:outline dark:-outline-offset-1 dark:outline-white/10">
         <form id="filter-bar" hx-get="/web/projects/{{ project_id }}/tasks" hx-target="#page" hx-select="#page"
           hx-swap="innerHTML" hx-push-url="true">
+          <!-- Preserves select mode across Apply — without it, applying a filter navigates to
+               the plain (no `?select=1`) URL and silently drops out of select mode. -->
+          {% if select_mode %}<input type="hidden" name="select" value="1">{% endif %}
           <h3 class="text-base font-semibold text-gray-900 dark:text-white">Filters</h3>
           <div class="mt-3 flex flex-col gap-3">
             <select name="showComplete"
@@ -101,6 +121,136 @@
     </div>
   </dialog>
 
+  <!-- Multi-select batch actions (docs/issues_and_features.md's "Multi-select" item) —
+       cloned client-side into #action-menu-popover/#action-dialog by base.html's
+       openBatchActionsMenu()/openBatchActionDialog(), never fetched from the server: every
+       field option these need (assignee_options, filters_query) is already available on this
+       page. Each dialog's `itemIds` hidden input is filled in by openBatchActionDialog() from
+       the current client-side selection right before it opens. `filtersQuery` round-trips the
+       page's own active filters (same field/rationale as ProjectTaskForm::filters_query) so a
+       batch action's HX-Redirect back to the list preserves them. -->
+  <template id="batch-actions-menu">
+    <div class="divide-y divide-gray-100 dark:divide-white/10">
+      <button type="button" onclick="openBatchActionDialog('priority')"
+        class="block w-full cursor-pointer px-4 py-3 text-left text-sm text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-white/5">Set
+        priority</button>
+      <button type="button" onclick="openBatchActionDialog('dates')"
+        class="block w-full cursor-pointer px-4 py-3 text-left text-sm text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-white/5">Set
+        due / schedule dates</button>
+      <!-- "Set offset" has no entry here — offset only makes sense for a shared-parent
+           selection of sub-items, and this list only ever selects top-level tasks (see
+           templates::ProjectTaskSelectRow's doc comment). The backend route/handler/dialog
+           shape (batch_set_offset_form, require_same_parent_subitems) stays in place for a
+           future select mode scoped to one task's own sub-items panel. -->
+      {% if is_team_project %}
+      <button type="button" onclick="openBatchActionDialog('assign')"
+        class="block w-full cursor-pointer px-4 py-3 text-left text-sm text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-white/5">Set
+        assignee</button>
+      {% endif %}
+    </div>
+  </template>
+
+  <template id="batch-priority-dialog">
+    <div id="dialog-backdrop"
+      class="fixed inset-0 bg-gray-500/75 dark:bg-gray-900/50 transition-opacity duration-300 ease-out opacity-0 group-open/dialog:opacity-100">
+    </div>
+    <div tabindex="0"
+      class="relative z-10 flex min-h-full items-end justify-center p-4 text-center focus:outline-none sm:items-center sm:p-0">
+      <div
+        class="relative transform overflow-hidden rounded-lg bg-white dark:bg-gray-800 px-4 pt-5 pb-4 text-left shadow-xl transition-all duration-300 ease-out translate-y-4 opacity-0 scale-95 group-open/dialog:translate-y-0 group-open/dialog:opacity-100 group-open/dialog:scale-100 sm:my-8 sm:w-full sm:max-w-lg sm:p-6 dark:outline dark:-outline-offset-1 dark:outline-white/10">
+        <form hx-put="/web/projects/{{ project_id }}/tasks/batch/priority">
+          <input type="hidden" name="itemIds" value="">
+          <input type="hidden" name="filtersQuery" value="{{ filters_query }}">
+          <h3 class="text-base font-semibold text-gray-900 dark:text-white">Set priority</h3>
+          <div class="mt-3 text-left">
+            {% call macros::priority_field("") %}{% endcall %}
+          </div>
+          <div class="mt-5 sm:mt-6 sm:grid sm:grid-flow-row-dense sm:grid-cols-2 sm:gap-3">
+            <button type="submit"
+              class="inline-flex w-full justify-center rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-xs hover:bg-indigo-500 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600 sm:col-start-2 dark:bg-indigo-500 dark:shadow-none dark:hover:bg-indigo-400 dark:focus-visible:outline-indigo-500">Save</button>
+            <button type="button" onclick="document.getElementById('action-dialog').close()"
+              class="mt-3 inline-flex w-full justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-xs inset-ring-1 inset-ring-gray-300 hover:bg-gray-50 sm:col-start-1 sm:mt-0 dark:bg-white/10 dark:text-white dark:shadow-none dark:inset-ring-white/5 dark:hover:bg-white/20">Cancel</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </template>
+
+  <template id="batch-dates-dialog">
+    <div id="dialog-backdrop"
+      class="fixed inset-0 bg-gray-500/75 dark:bg-gray-900/50 transition-opacity duration-300 ease-out opacity-0 group-open/dialog:opacity-100">
+    </div>
+    <div tabindex="0"
+      class="relative z-10 flex min-h-full items-end justify-center p-4 text-center focus:outline-none sm:items-center sm:p-0">
+      <div
+        class="relative transform overflow-hidden rounded-lg bg-white dark:bg-gray-800 px-4 pt-5 pb-4 text-left shadow-xl transition-all duration-300 ease-out translate-y-4 opacity-0 scale-95 group-open/dialog:translate-y-0 group-open/dialog:opacity-100 group-open/dialog:scale-100 sm:my-8 sm:w-full sm:max-w-lg sm:p-6 dark:outline dark:-outline-offset-1 dark:outline-white/10">
+        <form hx-put="/web/projects/{{ project_id }}/tasks/batch/dates">
+          <input type="hidden" name="itemIds" value="">
+          <input type="hidden" name="filtersQuery" value="{{ filters_query }}">
+          <h3 class="text-base font-semibold text-gray-900 dark:text-white">Set due / schedule dates</h3>
+          <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">Only applies to top-level tasks. Leave a field
+            blank to leave it unchanged for every selected task.</p>
+          <div class="mt-3 text-left space-y-4">
+            {% call macros::due_date_fields("", "") %}{% endcall %}
+            {% call macros::scheduled_fields("", "", "", "") %}{% endcall %}
+          </div>
+          <div class="mt-5 sm:mt-6 sm:grid sm:grid-flow-row-dense sm:grid-cols-2 sm:gap-3">
+            <button type="submit"
+              class="inline-flex w-full justify-center rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-xs hover:bg-indigo-500 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600 sm:col-start-2 dark:bg-indigo-500 dark:shadow-none dark:hover:bg-indigo-400 dark:focus-visible:outline-indigo-500">Save</button>
+            <button type="button" onclick="document.getElementById('action-dialog').close()"
+              class="mt-3 inline-flex w-full justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-xs inset-ring-1 inset-ring-gray-300 hover:bg-gray-50 sm:col-start-1 sm:mt-0 dark:bg-white/10 dark:text-white dark:shadow-none dark:inset-ring-white/5 dark:hover:bg-white/20">Cancel</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </template>
+
+  {% if is_team_project %}
+  <template id="batch-assign-dialog">
+    <div id="dialog-backdrop"
+      class="fixed inset-0 bg-gray-500/75 dark:bg-gray-900/50 transition-opacity duration-300 ease-out opacity-0 group-open/dialog:opacity-100">
+    </div>
+    <div tabindex="0"
+      class="relative z-10 flex min-h-full items-end justify-center p-4 text-center focus:outline-none sm:items-center sm:p-0">
+      <div
+        class="relative transform overflow-hidden rounded-lg bg-white dark:bg-gray-800 px-4 pt-5 pb-4 text-left shadow-xl transition-all duration-300 ease-out translate-y-4 opacity-0 scale-95 group-open/dialog:translate-y-0 group-open/dialog:opacity-100 group-open/dialog:scale-100 sm:my-8 sm:w-full sm:max-w-lg sm:p-6 dark:outline dark:-outline-offset-1 dark:outline-white/10">
+        <form hx-put="/web/projects/{{ project_id }}/tasks/batch/assignee">
+          <input type="hidden" name="itemIds" value="">
+          <input type="hidden" name="filtersQuery" value="{{ filters_query }}">
+          <h3 class="text-base font-semibold text-gray-900 dark:text-white">Set assignee</h3>
+          <div class="mt-3 text-left">
+            <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Assign to
+              <div class="mt-2 grid grid-cols-1">
+                <select name="assignedToUserId"
+                  class="col-start-1 row-start-1 block w-full appearance-none rounded-md bg-white py-1.5 pr-8 pl-3 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:*:bg-gray-800 dark:focus:outline-indigo-500">
+                  <option value="" selected>Unassigned</option>
+                  {% for opt in assignee_options %}
+                  <option value="{{ opt.0 }}">{{ opt.1 }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+            </label>
+          </div>
+          <div class="mt-5 sm:mt-6 sm:grid sm:grid-flow-row-dense sm:grid-cols-2 sm:gap-3">
+            <button type="submit"
+              class="inline-flex w-full justify-center rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-xs hover:bg-indigo-500 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600 sm:col-start-2 dark:bg-indigo-500 dark:shadow-none dark:hover:bg-indigo-400 dark:focus-visible:outline-indigo-500">Save</button>
+            <button type="button" onclick="document.getElementById('action-dialog').close()"
+              class="mt-3 inline-flex w-full justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-xs inset-ring-1 inset-ring-gray-300 hover:bg-gray-50 sm:col-start-1 sm:mt-0 dark:bg-white/10 dark:text-white dark:shadow-none dark:inset-ring-white/5 dark:hover:bg-white/20">Cancel</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </template>
+  {% endif %}
+
+  {% if select_mode %}
+  <div class="rounded-md bg-gray-50 px-4 py-3 text-sm text-gray-600 dark:bg-white/5 dark:text-gray-300">
+    Click a task to select it, then use <strong>Actions</strong> to apply a change to everything
+    selected. Only top-level tasks can be selected here — sub-items aren't shown; open a task's
+    own page to manage its sub-items individually.
+  </div>
+  {% endif %}
+
   <ul id="items-list"
     class="divide-y divide-gray-100 rounded-lg border border-gray-200 bg-white px-4 dark:divide-white/5 dark:border-white/10 dark:bg-gray-800/50">
     {% if rows.is_empty() %}
@@ -112,4 +262,14 @@
     {% endif %}
   </ul>
 </div>
+{% if select_mode %}
+<!-- Runs once per real (non-fragment) page load, same convention as edit_page.html's own
+     inline script — resets the selection Set/Actions-button state for this fresh select-mode
+     load, since base.html's script itself only runs once per document load and doesn't know
+     when a boosted navigation lands back on this same page in select mode again. -->
+<script>
+  selectedItemIds = new Set();
+  updateBatchActionsUI();
+</script>
+{% endif %}
 {% endblock %}

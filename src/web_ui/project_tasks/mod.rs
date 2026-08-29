@@ -9,7 +9,7 @@ use crate::service::teams as team_service;
 use crate::storage::sqlite::{ItemDependencyRepo, ItemRepo, ItemSeriesRepo, TeamRepo, UserRepo};
 use crate::web_ui::list_filters::{ListFilterQuery, ListFilters};
 use crate::web_ui::project_tasks::templates::{
-    ProjectTaskRow, ProjectTaskRowsFragmentTemplate, ProjectTaskVirtualRow,
+    ProjectTaskRow, ProjectTaskRowsFragmentTemplate, ProjectTaskSelectRow, ProjectTaskVirtualRow,
 };
 use askama::Template;
 use async_recursion::async_recursion;
@@ -877,6 +877,47 @@ pub(crate) async fn list_task_rows_for_project(
         item_dependencies,
     )
     .await
+}
+
+/// A select-mode row (docs/issues_and_features.md's "Multi-select" item) — see
+/// `templates::ProjectTaskSelectRow`'s doc comment for why this is a wholly separate, minimal
+/// rendering rather than another `ProjectTaskRow`/`Row` variant. Deliberately top-level-only —
+/// no sub-items are rendered or fetched here at all: showing a sub-item's row nested inside its
+/// parent's meant highlighting the parent (the only element a click can actually toggle) looked
+/// like it highlighted the child too, since the parent `<li>`'s own background paints behind
+/// its nested content. Selecting a task's own sub-items is meant to happen from a select mode
+/// scoped to that one task's page instead (not yet built) — this top-level list only ever
+/// selects top-level tasks.
+fn render_select_row(item: &Item, tz: i32) -> Result<String, ItemError> {
+    ProjectTaskSelectRow {
+        id: item.id.clone(),
+        name: item.name.clone(),
+        complete: item.complete,
+        due_date: item.due_date().map(|d| {
+            crate::web_ui::format_display_date(crate::web_ui::to_local(d, tz), item.has_due_time())
+        }),
+        overdue: item.is_overdue(Utc::now()),
+    }
+    .render()
+    .map_err(ItemError::from)
+}
+
+/// Top-level select-mode rows for `items` (the project's Tasks — same `filters` the normal list
+/// view applies, so a user can still narrow down before selecting; virtual/series occurrences
+/// are excluded entirely, since they have no real item id to select yet).
+pub(crate) fn render_select_rows(
+    items: &[Item],
+    filters: &ListFilters,
+    requester_user_id: &str,
+    is_team_project: bool,
+    tz: i32,
+) -> Result<Vec<String>, ItemError> {
+    let now = Utc::now();
+    items
+        .iter()
+        .filter(|item| filters.matches(item, requester_user_id, is_team_project, now))
+        .map(|item| render_select_row(item, tz))
+        .collect()
 }
 
 /// The `#items-list` placeholder markup (`templates/project_tasks/list_page.html`'s own

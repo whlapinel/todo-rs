@@ -18,7 +18,8 @@ use crate::web_ui::nav::{self, ActiveContext, SidebarSection};
 use crate::web_ui::project_tasks::templates::*;
 use crate::web_ui::project_tasks::{
     ProjectTaskForm, active_member_options, create_params_from_form, list_filters_from_parts,
-    names_for, non_empty, parse_days_before_due, render, render_scope_fragment, require_task,
+    names_for, non_empty, overlay_due_date, overlay_has_due_time, overlay_scheduled_date,
+    overlay_scheduled_end_date, parse_days_before_due, render, render_scope_fragment, require_task,
     sibling_group, update_params_from_form,
 };
 use askama::Template;
@@ -49,6 +50,14 @@ pub struct NewItemQuery {
     pub redirect: Option<String>,
 }
 
+/// `?select=1` (docs/issues_and_features.md's "Multi-select" item) puts the Tasks list into
+/// select mode — a separate query struct (like `NewItemQuery` above) rather than a field on
+/// `ListFilterQuery`, since this isn't a filter dimension shared with any other screen.
+#[derive(serde::Deserialize, Default)]
+pub struct SelectModeQuery {
+    select: Option<String>,
+}
+
 pub async fn project_tasks_page(
     Path(project_id): Path<String>,
     Extension(auth_user): Extension<AuthUser>,
@@ -60,10 +69,12 @@ pub async fn project_tasks_page(
     Extension(item_dependencies): Extension<Arc<dyn ItemDependencyRepo>>,
     TzOffset(tz): TzOffset,
     Query(q): Query<ListFilterQuery>,
+    Query(sq): Query<SelectModeQuery>,
 ) -> Result<Html<String>, ItemError> {
     let project =
         project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
     let filters = ListFilters::from_query(q);
+    let select_mode = sq.select.is_some();
     // Stage 10 gap 2: a Task series' current occurrence is range-independent (a pure
     // function of the cursor), so any degenerate range surfaces it — see
     // `list_virtual_occurrences_for_project_unchecked`'s backlog-exemption logic (which
@@ -83,20 +94,36 @@ pub async fn project_tasks_page(
     // The actual assembly now lives in `super::list_task_rows_for_project`, shared with the
     // in-place checkbox/Skip/Unskip handlers so a mutation's response and this initial page
     // load never drift apart.
-    let rows = super::list_task_rows_for_project(
-        &repo,
-        &teams,
-        &users,
-        &series,
-        &project_id,
-        project.team_id.as_deref(),
-        &auth_user.user_id,
-        &filters,
-        tz,
-        None,
-        &item_dependencies,
-    )
-    .await?;
+    //
+    // Select mode (`select_mode`) renders a completely different, minimal row shape instead
+    // (`super::render_select_rows` — see `templates::ProjectTaskSelectRow`'s doc comment for
+    // why it doesn't reuse `list_task_rows_for_project`/`Row` at all) — virtual/series
+    // occurrences are skipped entirely there since they have no real item id to select yet.
+    let rows = if select_mode {
+        let items = super::list_project_tasks(&repo, &project_id).await?;
+        super::render_select_rows(
+            &items,
+            &filters,
+            &auth_user.user_id,
+            project.team_id.is_some(),
+            tz,
+        )?
+    } else {
+        super::list_task_rows_for_project(
+            &repo,
+            &teams,
+            &users,
+            &series,
+            &project_id,
+            project.team_id.as_deref(),
+            &auth_user.user_id,
+            &filters,
+            tz,
+            None,
+            &item_dependencies,
+        )
+        .await?
+    };
     let (points_label, assignee_options) = match &project.team_id {
         Some(team_id) => {
             let points = team_service::member_points(&teams, team_id, &auth_user.user_id).await?;
@@ -125,6 +152,7 @@ pub async fn project_tasks_page(
         recurring: filters.recurring,
         filters_query: filters.query_string(),
         points_label,
+        select_mode,
         nav_html,
     })
 }
@@ -1079,6 +1107,388 @@ pub async fn create_project_tasks_batch(
     )
     .await?
     .into_response())
+}
+
+// ---- multi-select batch actions -------------------------------------------------------
+//
+// docs/issues_and_features.md's "Multi-select" item, project_tasks' list page only for this
+// first pass. Selection itself is pure client-side state (base.html's selectedItemIds Set) —
+// these routes only see the ids a batch dialog's hidden `itemIds` field carried, comma-joined
+// (same axum-0.6-Form-can't-deserialize-repeated-keys workaround as
+// `ProjectTaskForm::depends_on_item_ids`). Each handler applies its one field's worth of
+// change to every selected item via the existing `update_project_item`, so admin/points
+// gating, the completed-item edit lock, and offset-driven due-date recompute all apply exactly
+// as they do for a single-item edit.
+
+fn parse_item_ids(raw: &str) -> Vec<String> {
+    raw.split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// Loads and membership-checks every selected item, rejecting up front on an empty selection or
+/// any id that doesn't resolve to a Task in this project — the same checked
+/// `project_items::get_project_item` + `require_task` a single-item route already uses, looped.
+async fn load_batch_items(
+    repo: &Arc<dyn ItemRepo>,
+    projects: &Arc<dyn ProjectRepo>,
+    teams: &Arc<dyn TeamRepo>,
+    project_id: &str,
+    requester_user_id: &str,
+    item_ids: &[String],
+) -> Result<Vec<Item>, ItemError> {
+    if item_ids.is_empty() {
+        return Err(ItemError::Invalid("No items selected.".to_string()));
+    }
+    let mut items = Vec::with_capacity(item_ids.len());
+    for id in item_ids {
+        let item = project_item_service::get_project_item(
+            repo,
+            projects,
+            teams,
+            project_id,
+            requester_user_id,
+            id,
+        )
+        .await?;
+        items.push(require_task(item)?);
+    }
+    Ok(items)
+}
+
+/// "Set due/schedule dates" only applies when every selected item is top-level — a sub-item's
+/// own due date is offset-driven, not independently set (see root CLAUDE.md's Recurrence
+/// section on `due_offset_days`).
+fn require_all_top_level(items: &[Item]) -> Result<(), ItemError> {
+    if items.iter().any(|i| i.parent_item_id.is_some()) {
+        return Err(ItemError::Invalid(
+            "Set due/schedule dates only applies when every selected task is top-level."
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// "Set offset" only applies to sub-items that all share the same top-level parent.
+fn require_same_parent_subitems(items: &[Item]) -> Result<(), ItemError> {
+    fn invalid() -> ItemError {
+        ItemError::Invalid(
+            "Set offset only applies to sub-items of the same top-level task.".to_string(),
+        )
+    }
+    let first = items
+        .first()
+        .and_then(|i| i.parent_item_id.clone())
+        .ok_or_else(invalid)?;
+    if items
+        .iter()
+        .any(|i| i.parent_item_id.as_deref() != Some(first.as_str()))
+    {
+        return Err(invalid());
+    }
+    Ok(())
+}
+
+/// Round-trips every `UpdateProjectItemParams` field from `item` unchanged — the batch-actions
+/// counterpart of `reparent_params` below, used as a base each batch handler overlays just its
+/// own field(s) onto.
+fn identity_params(project_id: &str, item: &Item, tz: i32) -> UpdateProjectItemParams {
+    UpdateProjectItemParams {
+        project_id: project_id.to_string(),
+        item_id: item.id.clone(),
+        name: item.name.clone(),
+        description: item.description.clone(),
+        due_date: item.due_date(),
+        scheduled_date: item.scheduled_date(),
+        scheduled_end_date: item.scheduled_end_date(),
+        complete: item.complete,
+        has_due_time: Some(item.has_due_time()),
+        has_scheduled_time: Some(item.has_scheduled_time()),
+        has_end_time: Some(item.has_end_time()),
+        parent_item_id: item.parent_item_id.clone(),
+        item_type: Some(item.kind()),
+        event_type: item.event_type(),
+        due_offset_days: item.due_offset_days(),
+        assigned_to_user_id: item.assigned_to_user_id(),
+        source_event_id: item.source_event_id(),
+        timezone_offset_minutes: Some(tz),
+        points: item.points(),
+        priority: item.priority(),
+        depends_on_item_ids: None,
+    }
+}
+
+#[derive(serde::Deserialize, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchPriorityForm {
+    item_ids: String,
+    /// Blank clears priority — this is the one dedicated field this dialog has, so unlike the
+    /// dates dialog's fields below there's no "leave unchanged" state to preserve.
+    priority: Option<String>,
+    filters_query: Option<String>,
+}
+
+pub async fn batch_set_priority_form(
+    Path(project_id): Path<String>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(activity_log): Extension<Arc<dyn ActivityLogRepo>>,
+    Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
+    Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
+    Extension(item_dependencies): Extension<Arc<dyn ItemDependencyRepo>>,
+    TzOffset(tz): TzOffset,
+    Form(form): Form<BatchPriorityForm>,
+) -> Result<Response, ItemError> {
+    let item_ids = parse_item_ids(&form.item_ids);
+    let items = load_batch_items(
+        &repo,
+        &projects,
+        &teams,
+        &project_id,
+        &auth_user.user_id,
+        &item_ids,
+    )
+    .await?;
+    let new_priority = non_empty(&form.priority).and_then(|s| s.parse::<i32>().ok());
+    for item in &items {
+        let mut params = identity_params(&project_id, item, tz);
+        params.priority = new_priority;
+        project_item_service::update_project_item(
+            &repo,
+            &projects,
+            &teams,
+            &activity_log,
+            &series,
+            &reminders,
+            &item_dependencies,
+            &auth_user.user_id,
+            params,
+        )
+        .await?;
+    }
+    Ok(redirect_to_project_tasks(
+        &project_id,
+        form.filters_query.as_deref().unwrap_or(""),
+    ))
+}
+
+#[derive(serde::Deserialize, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchDatesForm {
+    item_ids: String,
+    /// A blank date here (and in the two pairs below) means "leave this item's own value
+    /// unchanged" — unlike a single-item edit form's fields, where blank explicitly clears.
+    /// This one dialog bundles due date + scheduled start + scheduled end, so a user setting
+    /// just one of the three shouldn't wipe the others.
+    due_date: Option<String>,
+    due_time: Option<String>,
+    scheduled_date: Option<String>,
+    scheduled_time: Option<String>,
+    scheduled_end_date: Option<String>,
+    scheduled_end_time: Option<String>,
+    filters_query: Option<String>,
+}
+
+pub async fn batch_set_dates_form(
+    Path(project_id): Path<String>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(activity_log): Extension<Arc<dyn ActivityLogRepo>>,
+    Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
+    Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
+    Extension(item_dependencies): Extension<Arc<dyn ItemDependencyRepo>>,
+    TzOffset(tz): TzOffset,
+    Form(form): Form<BatchDatesForm>,
+) -> Result<Response, ItemError> {
+    let item_ids = parse_item_ids(&form.item_ids);
+    let items = load_batch_items(
+        &repo,
+        &projects,
+        &teams,
+        &project_id,
+        &auth_user.user_id,
+        &item_ids,
+    )
+    .await?;
+    require_all_top_level(&items)?;
+    let due_date_field = non_empty(&form.due_date);
+    let scheduled_date_field = non_empty(&form.scheduled_date);
+    let scheduled_end_date_field = non_empty(&form.scheduled_end_date);
+    for item in &items {
+        let mut params = identity_params(&project_id, item, tz);
+        if let Some(date) = due_date_field.clone() {
+            params.due_date = overlay_due_date(&Some(date), &form.due_time, tz, item.due_date());
+            params.has_due_time = Some(overlay_has_due_time(&form.due_time, item.has_due_time()));
+        }
+        if let Some(date) = scheduled_date_field.clone() {
+            params.scheduled_date = overlay_scheduled_date(
+                &Some(date),
+                &form.scheduled_time,
+                tz,
+                item.scheduled_date(),
+            );
+            params.has_scheduled_time = Some(overlay_has_due_time(
+                &form.scheduled_time,
+                item.has_scheduled_time(),
+            ));
+        }
+        if let Some(date) = scheduled_end_date_field.clone() {
+            params.scheduled_end_date = overlay_scheduled_end_date(
+                &Some(date),
+                &form.scheduled_end_time,
+                tz,
+                item.scheduled_end_date(),
+            );
+            params.has_end_time = Some(overlay_has_due_time(
+                &form.scheduled_end_time,
+                item.has_end_time(),
+            ));
+        }
+        project_item_service::update_project_item(
+            &repo,
+            &projects,
+            &teams,
+            &activity_log,
+            &series,
+            &reminders,
+            &item_dependencies,
+            &auth_user.user_id,
+            params,
+        )
+        .await?;
+    }
+    Ok(redirect_to_project_tasks(
+        &project_id,
+        form.filters_query.as_deref().unwrap_or(""),
+    ))
+}
+
+#[derive(serde::Deserialize, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchOffsetForm {
+    item_ids: String,
+    /// Blank clears the offset — the one dedicated field this dialog has, same convention as
+    /// `BatchPriorityForm::priority`.
+    due_offset_days: Option<String>,
+    filters_query: Option<String>,
+}
+
+pub async fn batch_set_offset_form(
+    Path(project_id): Path<String>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(activity_log): Extension<Arc<dyn ActivityLogRepo>>,
+    Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
+    Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
+    Extension(item_dependencies): Extension<Arc<dyn ItemDependencyRepo>>,
+    TzOffset(tz): TzOffset,
+    Form(form): Form<BatchOffsetForm>,
+) -> Result<Response, ItemError> {
+    let item_ids = parse_item_ids(&form.item_ids);
+    let items = load_batch_items(
+        &repo,
+        &projects,
+        &teams,
+        &project_id,
+        &auth_user.user_id,
+        &item_ids,
+    )
+    .await?;
+    require_same_parent_subitems(&items)?;
+    let new_offset = non_empty(&form.due_offset_days).and_then(|s| parse_days_before_due(&s));
+    for item in &items {
+        let mut params = identity_params(&project_id, item, tz);
+        params.due_offset_days = new_offset;
+        project_item_service::update_project_item(
+            &repo,
+            &projects,
+            &teams,
+            &activity_log,
+            &series,
+            &reminders,
+            &item_dependencies,
+            &auth_user.user_id,
+            params,
+        )
+        .await?;
+    }
+    Ok(redirect_to_project_tasks(
+        &project_id,
+        form.filters_query.as_deref().unwrap_or(""),
+    ))
+}
+
+#[derive(serde::Deserialize, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchAssigneeForm {
+    item_ids: String,
+    /// Blank unassigns — the one dedicated field this dialog has, same convention as
+    /// `BatchPriorityForm::priority`. Non-admin submissions are silently preserved unchanged by
+    /// `update_project_item`'s own admin gate (see root CLAUDE.md's Points section), same as a
+    /// single-item Assign dialog.
+    assigned_to_user_id: Option<String>,
+    filters_query: Option<String>,
+}
+
+pub async fn batch_set_assignee_form(
+    Path(project_id): Path<String>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(activity_log): Extension<Arc<dyn ActivityLogRepo>>,
+    Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
+    Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
+    Extension(item_dependencies): Extension<Arc<dyn ItemDependencyRepo>>,
+    TzOffset(tz): TzOffset,
+    Form(form): Form<BatchAssigneeForm>,
+) -> Result<Response, ItemError> {
+    let project =
+        project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
+    if project.team_id.is_none() {
+        return Err(ItemError::Invalid(
+            "Set assignee only applies to team-backed projects.".to_string(),
+        ));
+    }
+    let item_ids = parse_item_ids(&form.item_ids);
+    let items = load_batch_items(
+        &repo,
+        &projects,
+        &teams,
+        &project_id,
+        &auth_user.user_id,
+        &item_ids,
+    )
+    .await?;
+    let new_assignee = non_empty(&form.assigned_to_user_id);
+    for item in &items {
+        let mut params = identity_params(&project_id, item, tz);
+        params.assigned_to_user_id = new_assignee.clone();
+        project_item_service::update_project_item(
+            &repo,
+            &projects,
+            &teams,
+            &activity_log,
+            &series,
+            &reminders,
+            &item_dependencies,
+            &auth_user.user_id,
+            params,
+        )
+        .await?;
+    }
+    Ok(redirect_to_project_tasks(
+        &project_id,
+        form.filters_query.as_deref().unwrap_or(""),
+    ))
 }
 
 pub async fn update_project_task_form(

@@ -303,6 +303,82 @@
       popover.style.top = top + 'px';
     }
 
+    // Multi-select (docs/issues_and_features.md's "Multi-select" item) — project_tasks' list
+    // page only, for now, and rendered as a genuinely different page (`?select=1`,
+    // `templates/project_tasks/select_row.html`) rather than a client-side mode layered on top
+    // of the normal row — trying to disable the normal row's own checkbox/navigation/"⋮" menu
+    // in place (an earlier version of this) needed a pointer-events CSS rule plus a
+    // click-delegation listener fighting htmx's own bindings, and still couldn't reliably
+    // block them. A select-mode row is instead just a single native <label> wrapping a
+    // checkbox and the item's name — "click anywhere on the row toggles the checkbox" is a
+    // free native browser behavior, not something JS has to reimplement, and there's nothing
+    // else on the row (no link, no menu) left to accidentally trigger.
+    //
+    // Selection lives only in this in-memory Set — a batch action's own handler re-fetches
+    // every selected id from the server and validates it there, so this Set never needs to be
+    // a source of truth, just a UI convenience. Reset on every select-mode page load by that
+    // page's own inline <script> (list_page.html), the same "runs once per real page load"
+    // convention edit_page.html's own inline script already follows.
+    var selectedItemIds = new Set();
+
+    function updateBatchActionsUI() {
+      var btn = document.getElementById('batch-actions-btn');
+      if (!btn) return;
+      btn.disabled = selectedItemIds.size === 0;
+      btn.textContent = selectedItemIds.size > 0 ? 'Actions (' + selectedItemIds.size + ')' : 'Actions';
+    }
+
+    // A select-mode row's checkbox (select_row.html) calls this on `change` — native <label>
+    // click-through already handles "click anywhere on the row toggles the checkbox" for free.
+    function toggleBatchSelection(checkbox) {
+      var li = checkbox.closest('li');
+      var id = checkbox.dataset.itemId;
+      if (checkbox.checked) {
+        selectedItemIds.add(id);
+        if (li) li.classList.add('bg-indigo-50', 'dark:bg-indigo-500/10');
+      } else {
+        selectedItemIds.delete(id);
+        if (li) li.classList.remove('bg-indigo-50', 'dark:bg-indigo-500/10');
+      }
+      updateBatchActionsUI();
+    }
+
+    // The "Actions" button's own popover — same #action-menu-popover a row's "⋮" button uses
+    // (see openRowActionsMenu below), built from <template id="batch-actions-menu"> instead of
+    // a per-row template. Each menu item just calls openBatchActionDialog(kind) directly rather
+    // than hx-get-ing anything, since there's no server-side "which actions apply" filtering in
+    // this first pass — an action that doesn't fit the current selection errors on submit
+    // instead (see the batch dialogs' forms and ItemError's global #error-dialog handling).
+    function openBatchActionsMenu(btn) {
+      var popover = document.getElementById('action-menu-popover');
+      var tpl = document.getElementById('batch-actions-menu');
+      if (!popover || !tpl) return;
+      var home = document.querySelector('dialog[open]') || document.body;
+      if (popover.parentElement !== home) home.appendChild(popover);
+      popover.innerHTML = tpl.innerHTML;
+      popover.showPopover();
+      positionActionMenuPopover(popover, btn);
+    }
+
+    // Clones the pre-rendered <template id="batch-{kind}-dialog"> (list_page.html) into
+    // #action-dialog and fills in its hidden itemIds field from the current selection — no
+    // server round trip to open the dialog, since every dialog's own field options
+    // (assignee_options, etc.) were already available when the list page itself rendered.
+    // htmx.process() is required for the same reason openRowActionsMenu needs it: a plain
+    // innerHTML assignment doesn't auto-bind hx-* attributes on the newly inserted form.
+    function openBatchActionDialog(kind) {
+      var popover = document.getElementById('action-menu-popover');
+      if (popover && popover.matches(':popover-open')) popover.hidePopover();
+      var tpl = document.getElementById('batch-' + kind + '-dialog');
+      var dialog = document.getElementById('action-dialog');
+      if (!tpl || !dialog) return;
+      dialog.innerHTML = tpl.innerHTML;
+      var idsInput = dialog.querySelector('input[name="itemIds"]');
+      if (idsInput) idsInput.value = Array.from(selectedItemIds).join(',');
+      htmx.process(dialog);
+      dialog.showModal();
+    }
+
     // The row-actions popover's Reschedule/Assign (which hx-get #action-dialog, a separate
     // modal <dialog>, to show a full form) and Duplicate/Delete (which act directly) should all
     // close the popover once they've done something — unlike Reschedule/Assign's own target

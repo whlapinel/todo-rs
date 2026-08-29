@@ -148,6 +148,28 @@ impl ProjectTaskRow {
     }
 }
 
+/// A select-mode row (docs/issues_and_features.md's "Multi-select" item) — rendered only when
+/// the Tasks list is loaded with `?select=1` (`handlers::project_tasks_page`,
+/// `project_tasks::render_select_row`), completely independent of `Row`/`ProjectTaskRow` above.
+/// Deliberately minimal: a single native `<label>` wraps the checkbox and the name, so "click
+/// anywhere on the row toggles selection" is a free native browser behavior rather than
+/// something JS has to reimplement — see base.html's `toggleBatchSelection` doc comment for
+/// why an earlier version of this (disabling the normal row's own checkbox/menu/navigation in
+/// place, via CSS `pointer-events` + a click-delegation listener) didn't work reliably.
+///
+/// Top-level tasks only — no sub-items, no `indent_class`/`children_html` (see
+/// `project_tasks::render_select_row`'s doc comment for why nesting a sub-item's row inside its
+/// parent's made selecting the parent look like it selected the child too).
+#[derive(Template)]
+#[template(path = "project_tasks/select_row.html")]
+pub struct ProjectTaskSelectRow {
+    pub id: String,
+    pub name: String,
+    pub complete: bool,
+    pub due_date: Option<String>,
+    pub overdue: bool,
+}
+
 /// A lightweight date/schedule-only editor, opened from a task row's calendar-icon button —
 /// see `docs/archived/archived_issues_and_features.md`'s "quick reschedule" entry. Deliberately reuses the same PUT
 /// `/web/projects/:project_id/tasks/:item_id` endpoint (`handlers::update_project_task_form`)
@@ -1155,6 +1177,11 @@ pub struct ProjectTasksListPageTemplate {
     /// `Some("{n} pts")` on a team-backed project (the viewer's own balance — see
     /// `service::teams::member_points`), `None` on a personal project.
     pub points_label: Option<String>,
+    /// `?select=1` (docs/issues_and_features.md's "Multi-select" item) — when set, `rows` holds
+    /// `ProjectTaskSelectRow` markup instead of the normal `ProjectTaskRow`/virtual-occurrence
+    /// mix (see `handlers::project_tasks_page`'s dispatch), and the header shows Cancel/Actions
+    /// instead of Select.
+    pub select_mode: bool,
     pub nav_html: String,
 }
 
