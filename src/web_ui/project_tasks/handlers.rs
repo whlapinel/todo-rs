@@ -1648,21 +1648,22 @@ pub async fn update_project_task_form(
             // Reschedule/Assign save never changes an item's children, so this just re-derives
             // the same in-place-expansion subtree those screens' own row builders would.
             let children_html = if updated.has_children {
-                Some(
-                    super::render_expandable_children(
-                        &repo,
-                        &updated.id,
-                        &project_id,
-                        &names,
-                        show_complete,
-                        tz,
-                        &HashMap::new(),
-                        project.team_id.is_some(),
-                        1,
-                        Some(&item_dependencies),
-                    )
-                    .await?,
+                let descendants = super::render_expandable_children(
+                    &repo,
+                    &updated.id,
+                    &project_id,
+                    &names,
+                    show_complete,
+                    tz,
+                    &HashMap::new(),
+                    project.team_id.is_some(),
+                    1,
+                    Some(&item_dependencies),
                 )
+                .await?;
+                // has_children counts filtered-out children too — see
+                // render_expandable_children's own call sites for the same guard.
+                (!descendants.is_empty()).then_some(descendants)
             } else {
                 None
             };
@@ -1796,17 +1797,6 @@ pub async fn update_project_task_form(
             .render()?;
             Ok(Html(format!("{row}{fields}{view}")).into_response())
         }
-        // The task was recurring, just got marked complete, and the service layer replaced it
-        // with a fresh successor under a new id — same situation `tasks.rs`'s
-        // `update_task_form` handles.
-        Err(ItemError::NotFound) => Ok((
-            [(
-                axum::http::header::HeaderName::from_static("hx-refresh"),
-                "true",
-            )],
-            Html(String::new()),
-        )
-            .into_response()),
         Err(e) => Err(e),
     }
 }

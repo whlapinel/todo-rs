@@ -291,21 +291,22 @@ pub(crate) async fn list_all_projects_task_rows(
             let confirmation = just_completed.then(|| "Completed".to_string());
             let dismiss_after_ms = (just_completed && !filters.show_complete).then_some(1800u32);
             let children_html = if item.has_children {
-                Some(
-                    crate::web_ui::project_tasks::render_expandable_children(
-                        repo,
-                        &item.id,
-                        &project.id,
-                        &names,
-                        filters.show_complete,
-                        tz,
-                        &HashMap::new(),
-                        is_team_project,
-                        1,
-                        None,
-                    )
-                    .await?,
+                let descendants = crate::web_ui::project_tasks::render_expandable_children(
+                    repo,
+                    &item.id,
+                    &project.id,
+                    &names,
+                    filters.show_complete,
+                    tz,
+                    &HashMap::new(),
+                    is_team_project,
+                    1,
+                    None,
                 )
+                .await?;
+                // has_children counts filtered-out children too — see
+                // render_expandable_children's own call sites for the same guard.
+                (!descendants.is_empty()).then_some(descendants)
             } else {
                 None
             };
@@ -633,21 +634,22 @@ pub async fn toggle_all_projects_task_complete(
             let confirmation = just_completed.then(|| "Completed".to_string());
             let dismiss_after_ms = (just_completed && !show_complete).then_some(1800u32);
             let children_html = if updated.has_children {
-                Some(
-                    crate::web_ui::project_tasks::render_expandable_children(
-                        &repo,
-                        &updated.id,
-                        &project_id,
-                        &names,
-                        show_complete,
-                        tz,
-                        &HashMap::new(),
-                        project.team_id.is_some(),
-                        1,
-                        None,
-                    )
-                    .await?,
+                let descendants = crate::web_ui::project_tasks::render_expandable_children(
+                    &repo,
+                    &updated.id,
+                    &project_id,
+                    &names,
+                    show_complete,
+                    tz,
+                    &HashMap::new(),
+                    project.team_id.is_some(),
+                    1,
+                    None,
                 )
+                .await?;
+                // has_children counts filtered-out children too — see
+                // render_expandable_children's own call sites for the same guard.
+                (!descendants.is_empty()).then_some(descendants)
             } else {
                 None
             };

@@ -558,21 +558,27 @@ pub(crate) async fn render_expandable_children(
         row.blocked_by_links_html = blocked_by_links_html;
         row.expanded_row = row.expanded_row || !row.blocked_by_names.is_empty();
         if i.has_children {
-            row.children_html = Some(
-                render_expandable_children(
-                    repo,
-                    &i.id,
-                    project_id,
-                    names,
-                    show_complete,
-                    tz,
-                    skip_urls,
-                    is_team_project,
-                    depth + 1,
-                    item_dependencies,
-                )
-                .await?,
-            );
+            let descendants = render_expandable_children(
+                repo,
+                &i.id,
+                project_id,
+                names,
+                show_complete,
+                tz,
+                skip_urls,
+                is_team_project,
+                depth + 1,
+                item_dependencies,
+            )
+            .await?;
+            // A row's own has_children flag counts every child, including ones the
+            // show_complete filter drops — if that leaves nothing visible in the subtree,
+            // don't mark the row expandable (see issues_and_features.md's row-should-only-
+            // expand-when-something-to-show entry): an empty toggle target still lets the
+            // user click it and see nothing.
+            if !descendants.is_empty() {
+                row.children_html = Some(descendants);
+            }
         }
         html.push_str(&row.render()?);
     }
@@ -623,21 +629,25 @@ pub(crate) async fn render_sibling_rows(
         row.blocked_by_links_html = blocked_by_links_html;
         row.expanded_row = row.expanded_row || !row.blocked_by_names.is_empty();
         if i.has_children {
-            row.children_html = Some(
-                render_expandable_children(
-                    repo,
-                    &i.id,
-                    project_id,
-                    names,
-                    show_complete,
-                    tz,
-                    &HashMap::new(),
-                    is_team_project,
-                    1,
-                    Some(item_dependencies),
-                )
-                .await?,
-            );
+            let descendants = render_expandable_children(
+                repo,
+                &i.id,
+                project_id,
+                names,
+                show_complete,
+                tz,
+                &HashMap::new(),
+                is_team_project,
+                1,
+                Some(item_dependencies),
+            )
+            .await?;
+            // See render_expandable_children's own call site above: has_children counts
+            // filtered-out children too, so only mark the row expandable if something
+            // actually survived the show_complete filter.
+            if !descendants.is_empty() {
+                row.children_html = Some(descendants);
+            }
         }
         rows.push(row.render()?);
     }
@@ -766,21 +776,25 @@ pub(crate) async fn render_rows_with_virtual(
         // left at `ProjectTaskRow::from_item`'s own default (`None`), keeping their original
         // name-click-opens-detail behavior.
         if i.has_children {
-            row.children_html = Some(
-                render_expandable_children(
-                    repo,
-                    &i.id,
-                    project_id,
-                    names,
-                    filters.show_complete,
-                    tz,
-                    skip_urls,
-                    team_id.is_some(),
-                    1,
-                    Some(item_dependencies),
-                )
-                .await?,
-            );
+            let descendants = render_expandable_children(
+                repo,
+                &i.id,
+                project_id,
+                names,
+                filters.show_complete,
+                tz,
+                skip_urls,
+                team_id.is_some(),
+                1,
+                Some(item_dependencies),
+            )
+            .await?;
+            // See render_expandable_children's own call site above: has_children counts
+            // filtered-out children too, so only mark the row expandable if something
+            // actually survived the filters.
+            if !descendants.is_empty() {
+                row.children_html = Some(descendants);
+            }
         }
         entries.push((sort_key(i), row.render()?));
     }
