@@ -138,6 +138,70 @@ pub struct TemplateItem {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct SimpleItem;
 
+/// Implemented by every `ItemType` payload that carries a `Schedule`/`Recurrence`
+/// (`TaskItem`, `EventItem`, `TemplateItem` — not `SimpleItem`, which genuinely has
+/// neither). For a handful of truly kind-blind helpers (date-based sort/filter
+/// predicates, virtual/materialized-occurrence merges) that want to work generically
+/// across whichever of these three kinds they're given, without matching `ItemType`
+/// themselves. See `docs/item-kind-split-plan.md`'s "Traits for generic code" section
+/// for why this exists alongside, not instead of, `Item`'s own delegation methods
+/// (`Item::due_date()` etc.) — those remain the right choice at almost every call site;
+/// this trait is only for the rare function that's handed a payload struct directly.
+///
+/// `#[allow(dead_code)]`: as of Stage 2 of `docs/item-kind-split-plan.md`, no call site
+/// in this codebase is actually kind-blind in the way this trait exists to serve —
+/// every current helper (`list_filters.rs`, `item_series.rs`'s occurrence merge,
+/// `main_calendar.rs`'s fan-out) already goes through `Item`'s own delegation methods
+/// rather than touching `TaskItem`/`EventItem`/`TemplateItem` directly, so there was
+/// nothing to repoint. Remove this attribute once a real consumer exists.
+#[allow(dead_code)]
+pub trait HasSchedule {
+    fn schedule(&self) -> &Schedule;
+    fn recurrence(&self) -> &Recurrence;
+}
+
+impl HasSchedule for TaskItem {
+    fn schedule(&self) -> &Schedule {
+        &self.schedule
+    }
+
+    fn recurrence(&self) -> &Recurrence {
+        &self.recurrence
+    }
+}
+
+impl HasSchedule for EventItem {
+    fn schedule(&self) -> &Schedule {
+        &self.schedule
+    }
+
+    fn recurrence(&self) -> &Recurrence {
+        &self.recurrence
+    }
+}
+
+impl HasSchedule for TemplateItem {
+    fn schedule(&self) -> &Schedule {
+        &self.schedule
+    }
+
+    fn recurrence(&self) -> &Recurrence {
+        &self.recurrence
+    }
+}
+
+/// Implemented only by payloads whose kind can be marked complete — today that's
+/// nothing: `complete` still lives on `Item` itself, not on `TaskItem`, until Stage 3
+/// of `docs/item-kind-split-plan.md` moves it. This trait is declared now (rather than
+/// deferred whole-cloth to Stage 3) so its shape is settled ahead of that move, but it
+/// deliberately has **zero implementations** until Stage 3 gives `TaskItem` an actual
+/// `complete` field to read — see that plan's Stage 2 write-up for why implementing it
+/// against non-existent data was rejected rather than faked.
+#[allow(dead_code)]
+pub trait Completable {
+    fn complete(&self) -> bool;
+}
+
 /// What kind of thing an `Item` row represents, and the data that only makes sense
 /// for that kind. Only `Task` can carry a `TeamAssignment` (points/assignment);
 /// only `Event`/`Template` can carry `event_type` (see `create_item`/`create_team_item`
