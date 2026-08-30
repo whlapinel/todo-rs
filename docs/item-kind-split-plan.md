@@ -1,6 +1,6 @@
 # Split the `Item` domain model into per-kind Rust types
 
-**Status: Stages 0–1 complete. Stages 2–8 not started.** This is the canonical copy — edit this file in place as stages complete. It originated in a Claude Code plan-mode session (`~/.claude/plans/splendid-wishing-sphinx.md`), copied here so it survives independently of that session.
+**Status: Stages 0–7 complete (Stage 7 evaluated and not adopted — see its write-up below). Stage 8 not started.** This is the canonical copy — edit this file in place as stages complete. It originated in a Claude Code plan-mode session (`~/.claude/plans/splendid-wishing-sphinx.md`), copied here so it survives independently of that session.
 
 ## Context
 
@@ -184,7 +184,7 @@ Ship in order; each stage is its own PR/commit and leaves `cargo fmt`/`cargo tes
 - [x] Stage 4 — Move `parent_item_id` off `Item` onto `TaskItem`/`SimpleItem`/`TemplateItem`
 - [x] Stage 5 — Move `series_id` onto `TaskItem`/`EventItem`
 - [x] Stage 6 — Move `google_event_id`/`calendar_subscription_id` onto `EventItem`
-- [ ] Stage 7 — Optional per-screen web_ui ergonomic cleanup (`require_task` etc. return the concrete struct)
+- [x] Stage 7 — Optional per-screen web_ui ergonomic cleanup (`require_task` etc. return the concrete struct) — evaluated, not adopted (no payoff found)
 - [ ] Stage 8 — Remove now-provably-dead `Option`-returning delegation methods; update CLAUDE.md's Domain Models section (it's already stale re: the pre-`ItemType` shape, and will need a rewrite reflecting this plan's final shape)
 
 ### Stage 0 — Field-restriction audit
@@ -294,6 +294,13 @@ One borrow-checker wrinkle, not anticipated by the plan: two spots in `web_ui/pr
 - Per screen, change `require_task`/`require_event`/`require_simple` (currently `fn require_task(item: Item) -> Result<Item, ItemError>`) to also hand back the unwrapped concrete struct, e.g. `fn require_task(item: Item) -> Result<(Item, TaskItem), ItemError>`, so the rest of that screen's handler code can work against `&TaskItem` directly instead of continuing to call `Option`-returning `Item` accessors it already knows will be `Some`.
 - Purely additive ergonomics — sequence one screen per commit (`project_tasks`, then `project_events`, then `project_simple_lists`, then `project_templates`'s children, then `project_item_series`), each independently shippable, each skippable if it doesn't turn out to read better in practice.
 - **Verify:** `cargo test` per screen; no behavior change expected, this is a readability/API-ergonomics pass only.
+
+**Stage 7 as implemented — evaluated and not adopted, no code changed.** Before touching any call site, I checked what the plan's own premise assumed: that handler code downstream of `require_task`/`require_event`/`require_simple`/`require_project_template` still calls `Option`-returning `Item` accessors (`item.priority()`, `item.assigned_to_user_id()`, etc.) it already statically knows will be non-trivial given the kind guard, and that handing back the concrete `TaskItem`/`EventItem`/`SimpleItem`/`TemplateItem` struct would let it skip that indirection. Grepped every call site (`require_task`: 15 in `project_tasks/handlers.rs`; `require_event`: 7 in `project_events/handlers.rs`; `require_simple`: 8 in `project_simple_lists/handlers.rs`; `require_project_template`: 3 in `project_templates/handlers.rs`; `project_item_series` turned out to have no `require_*` guard at all — series occurrences never go through one) and read what each does with the guarded value afterward:
+
+- Every single downstream use passes `&item`/`item` itself into another function (`Row::from_item`, `*DetailView::from_item`, `resolve_parent_link`, `sibling_group`, `update_params_from_form`, template rendering, etc.) or calls one of `Item`'s own flat delegation methods (`item.due_date()`, `item.complete()`, `item.parent_item_id()`, `item.priority()`, ...). None of these needed simplifying: `parent_item_id()`/`series_id()`/etc. are still genuinely `Option`-returning *even for the guaranteed kind* (a Task can legitimately have `parent_item_id: None` — the guard only proves *which* struct holds the field, not that the field itself is populated), so there is no "unwrap a should-be-Some `Option`" pattern to eliminate anywhere in production code.
+- Zero production call sites (outside `build_item_type` and its `team_items.rs` twin, which already work with the concrete structs directly) destructure `item.item_type` to read or write a `TaskItem`/`EventItem`/`SimpleItem`/`TemplateItem` field by hand. Every place that does (`if let ItemType::Task(task) = &mut ..`) is either a test fixture or one of the two `build_item_type` functions — exactly the call sites the Design section's "Important nuance" paragraph predicted would stay put.
+
+Given that, `fn require_task(item: Item) -> Result<(Item, TaskItem), ItemError>` would hand every call site a `TaskItem` value nothing reads — pure unused-output churn across ~33 call sites for zero readability gain, which is the outcome the plan's own "each skippable if it doesn't turn out to read better in practice" escape hatch exists for. No files changed; `require_task`/`require_event`/`require_simple`/`require_project_template` keep their current `Item -> Item` signature.
 
 ### Stage 8 — Cleanup + CLAUDE.md update
 
