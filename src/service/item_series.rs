@@ -45,6 +45,19 @@ pub async fn get_or_materialize_occurrence(
         .get_occurrence(series_id, occurrence_date)
         .await?;
 
+    // `record_materialized_occurrence`'s upsert unconditionally clears `is_exdate` when it
+    // writes an `item_id` (`src/storage/sqlite/item_series.rs`) — without this guard, calling
+    // this function on a skipped occurrence would silently un-skip it as a side effect of
+    // materializing, bypassing `unskip_occurrence`'s cursor-safety rule entirely (only the
+    // series' current cursor date can be unskipped for a Task series, with a proper
+    // cursor-retreat). Every caller must unskip first if it wants to reinstate a skipped
+    // occurrence. See docs/issues_and_features.md.
+    if existing.as_ref().is_some_and(|o| o.is_exdate) {
+        return Err(ItemError::Invalid(
+            "cannot materialize a skipped occurrence".to_string(),
+        ));
+    }
+
     if let Some(occurrence) = existing
         && let Some(item_id) = occurrence.item_id
     {
@@ -1512,6 +1525,51 @@ mod tests {
         .expect("should return existing materialized item");
 
         assert_eq!(item.name, "Standup");
+    }
+
+    #[tokio::test]
+    async fn rejects_materializing_a_skipped_occurrence() {
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock
+            .expect_get_series()
+            .returning(|_| Ok(series("p1")));
+        series_mock.expect_get_occurrence().returning(|_, date| {
+            Ok(Some(ItemOccurrence {
+                series_id: "s1".to_string(),
+                occurrence_date: date,
+                item_id: None,
+                is_exdate: true,
+            }))
+        });
+        series_mock.expect_record_materialized_occurrence().times(0);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        let mut projects_mock = MockProjectRepo::new();
+        projects_mock
+            .expect_get()
+            .returning(|_| Ok(personal_project()));
+        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
+
+        let mut items_mock = MockItemRepo::new();
+        items_mock.expect_create().times(0);
+        let repo: Arc<dyn ItemRepo> = Arc::new(items_mock);
+
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+
+        let result = get_or_materialize_occurrence(
+            &repo,
+            &projects,
+            &teams,
+            &series_repo,
+            &no_op_reminders(),
+            "owner1",
+            "s1",
+            occurrence_date(),
+            0,
+        )
+        .await;
+
+        assert!(matches!(result, Err(ItemError::Invalid(_))));
     }
 
     #[tokio::test]
