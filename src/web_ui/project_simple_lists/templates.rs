@@ -93,15 +93,20 @@ pub struct AddChildDialog {
     /// See `project_tasks::templates::AddChildDialog::post_batch_url` for the full rationale
     /// (identical here, just posting to this screen's own batch route).
     pub post_batch_url: String,
+    /// See `project_tasks::templates::AddChildDialog::return_to` for the full rationale.
+    pub return_to: String,
 }
 
 impl AddChildDialog {
-    pub fn new(parent: &Item, project_id: &str) -> Self {
+    pub fn new(parent: &Item, project_id: &str, current_url: Option<&str>) -> Self {
+        let return_to = super::sanitize_return_to(current_url, project_id)
+            .unwrap_or_else(|| format!("/web/projects/{project_id}/simple-lists"));
         AddChildDialog {
             parent_item_id: parent.id.clone(),
             parent_name: parent.name.clone(),
             post_create_url: format!("/web/projects/{project_id}/simple-lists"),
             post_batch_url: format!("/web/projects/{project_id}/simple-lists/batch"),
+            return_to,
         }
     }
 }

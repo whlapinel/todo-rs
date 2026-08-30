@@ -22,6 +22,29 @@ pub(crate) fn render<T: Template>(t: T) -> Result<Html<String>, ItemError> {
     Ok(Html(t.render()?))
 }
 
+/// A `returnTo` value is only ever honored if it's a same-project path — this is what lets
+/// `AddChildDialog`'s create/batch-create forms redirect back to whatever page (list or item
+/// detail page) the dialog was actually opened from, seeded from `HX-Current-URL`, rather than
+/// always landing on the Tasks list (see docs/issues_and_features.md's "adding a sub-item
+/// redirects to the main Tasks list" item). `HX-Current-URL` (and the hidden `returnTo` field
+/// seeded from it) carries a full `scheme://host/path[?query]` URL, not a bare path, so the
+/// host is stripped back out before validating — this also guards a crafted `returnTo` (the
+/// field is plain client-controllable form data once it reaches `create_project_task_form`/
+/// `create_project_tasks_batch`, not just the header it's normally seeded from) from sending
+/// `HX-Redirect` off to an attacker-controlled host.
+pub(crate) fn sanitize_return_to(url: Option<&str>, project_id: &str) -> Option<String> {
+    let raw = url?.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let path = raw
+        .split_once("://")
+        .and_then(|(_, rest)| rest.find('/').map(|i| &rest[i..]))
+        .unwrap_or(raw);
+    let prefix = format!("/web/projects/{project_id}/");
+    path.starts_with(&prefix).then(|| path.to_string())
+}
+
 /// Guards every route below to the item actually being a Task — mirrors
 /// `tasks::require_task`/`team_tasks::require_team_task`.
 pub(crate) fn require_task(item: Item) -> Result<Item, ItemError> {
@@ -74,6 +97,13 @@ pub struct ProjectTaskForm {
     /// See `tasks::TaskForm`'s identical field for the redirect-vs-in-place-fragment
     /// rationale.
     redirect: Option<String>,
+    /// Where the `redirect` branch of `create_project_task_form` should send the client back
+    /// to, when set — see `sanitize_return_to`'s doc comment. Populated by `AddChildDialog`'s
+    /// own hidden field (seeded from `HX-Current-URL` at dialog-open time); every other
+    /// `redirect=1` submitter (the standalone "New task" page's dialog/batch section) simply
+    /// never includes this field, leaving `create_project_task_form`'s existing
+    /// `redirect_to_project_tasks` fallback unchanged for those.
+    return_to: Option<String>,
     /// "Depends on" (docs/issues_and_features.md) — a comma-joined string of sibling item
     /// ids, kept in sync with an unnamed checkbox group by the edit form's own `<script>`,
     /// same axum-0.6-Form-can't-deserialize-repeated-keys workaround as
@@ -1086,6 +1116,58 @@ mod tests {
             complete,
             ..Item::default()
         }
+    }
+
+    #[test]
+    fn sanitize_return_to_accepts_a_same_project_absolute_url() {
+        assert_eq!(
+            sanitize_return_to(
+                Some("https://todo.example.com/web/projects/p1/tasks/i1"),
+                "p1"
+            ),
+            Some("/web/projects/p1/tasks/i1".to_string())
+        );
+    }
+
+    #[test]
+    fn sanitize_return_to_accepts_a_bare_path() {
+        assert_eq!(
+            sanitize_return_to(Some("/web/projects/p1/tasks?due=today"), "p1"),
+            Some("/web/projects/p1/tasks?due=today".to_string())
+        );
+    }
+
+    #[test]
+    fn sanitize_return_to_rejects_a_different_project() {
+        assert_eq!(
+            sanitize_return_to(Some("/web/projects/p2/tasks/i1"), "p1"),
+            None
+        );
+    }
+
+    #[test]
+    fn sanitize_return_to_discards_an_attacker_supplied_host_and_keeps_only_the_path() {
+        // An absolute `returnTo` always has its host stripped before validation, so even a
+        // crafted value naming an off-site host can only ever resolve to a same-origin
+        // relative path here — the host itself is never echoed back into the redirect.
+        assert_eq!(
+            sanitize_return_to(Some("https://evil.example/web/projects/p1/tasks"), "p1"),
+            Some("/web/projects/p1/tasks".to_string())
+        );
+    }
+
+    #[test]
+    fn sanitize_return_to_rejects_an_off_site_url_with_no_matching_path() {
+        assert_eq!(
+            sanitize_return_to(Some("https://evil.example/steal"), "p1"),
+            None
+        );
+    }
+
+    #[test]
+    fn sanitize_return_to_rejects_absent_or_empty() {
+        assert_eq!(sanitize_return_to(None, "p1"), None);
+        assert_eq!(sanitize_return_to(Some("  "), "p1"), None);
     }
 
     #[test]

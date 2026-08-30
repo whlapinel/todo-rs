@@ -47,6 +47,8 @@ pub struct ProjectSimpleItemForm {
     /// and on every edit form's "Save and close" submission — see `tasks.rs`'s identical
     /// field for the full rationale.
     redirect: Option<String>,
+    /// See `project_tasks::ProjectTaskForm::return_to`'s identical rationale.
+    return_to: Option<String>,
 }
 
 pub(crate) fn non_empty(v: &Option<String>) -> Option<String> {
@@ -54,6 +56,23 @@ pub(crate) fn non_empty(v: &Option<String>) -> Option<String> {
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string())
+}
+
+/// See `project_tasks::sanitize_return_to`'s identical rationale, project_simple_lists' own
+/// copy per this codebase's "duplicate small per-screen helpers" precedent (matching
+/// `redirect_to_project_simple_lists` already being its own copy of
+/// `project_tasks::redirect_to_project_tasks`).
+pub(crate) fn sanitize_return_to(url: Option<&str>, project_id: &str) -> Option<String> {
+    let raw = url?.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let path = raw
+        .split_once("://")
+        .and_then(|(_, rest)| rest.find('/').map(|i| &rest[i..]))
+        .unwrap_or(raw);
+    let prefix = format!("/web/projects/{project_id}/");
+    path.starts_with(&prefix).then(|| path.to_string())
 }
 
 fn overlay_required_str(form_value: &Option<String>, current: &str) -> String {

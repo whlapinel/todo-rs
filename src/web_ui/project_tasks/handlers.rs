@@ -1495,6 +1495,7 @@ pub async fn create_project_task_form(
     let show_complete = form.show_complete.is_some();
     let redirect = form.redirect.is_some();
     let filters_query = form.filters_query.clone().unwrap_or_default();
+    let return_to = form.return_to.clone();
     let params = create_params_from_form(&project_id, &form, tz);
     let parent_item_id = params.parent_item_id.clone();
     project_item_service::create_project_item(
@@ -1507,7 +1508,12 @@ pub async fn create_project_task_form(
     )
     .await?;
     if redirect {
-        return Ok(redirect_to_project_tasks(&project_id, &filters_query));
+        return Ok(
+            match super::sanitize_return_to(return_to.as_deref(), &project_id) {
+                Some(url) => hx_redirect(url),
+                None => redirect_to_project_tasks(&project_id, &filters_query),
+            },
+        );
     }
     Ok(render_scope_fragment(
         &repo,
@@ -1534,6 +1540,9 @@ pub struct BatchForm {
     /// `ListFilters::query_string()` fragment, not individual `ListFilterQuery` fields.
     filters_query: Option<String>,
     redirect: Option<String>,
+    /// See `ProjectTaskForm::return_to`'s identical rationale — `AddChildDialog`'s "Add
+    /// multiple at once" batch form carries the same hidden field.
+    return_to: Option<String>,
 }
 
 pub async fn create_project_tasks_batch(
@@ -1574,10 +1583,15 @@ pub async fn create_project_tasks_batch(
         .await?;
     }
     if form.redirect.is_some() {
-        return Ok(redirect_to_project_tasks(
-            &project_id,
-            form.filters_query.as_deref().unwrap_or(""),
-        ));
+        return Ok(
+            match super::sanitize_return_to(form.return_to.as_deref(), &project_id) {
+                Some(url) => hx_redirect(url),
+                None => redirect_to_project_tasks(
+                    &project_id,
+                    form.filters_query.as_deref().unwrap_or(""),
+                ),
+            },
+        );
     }
     Ok(render_scope_fragment(
         &repo,
@@ -2650,6 +2664,7 @@ pub async fn get_add_child_task(
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    headers: HeaderMap,
 ) -> Result<Html<String>, ItemError> {
     let task = project_item_service::get_project_item(
         &repo,
@@ -2661,7 +2676,8 @@ pub async fn get_add_child_task(
     )
     .await?;
     let task = require_task(task)?;
-    render(AddChildDialog::new(&task, &project_id))
+    let current_url = headers.get("hx-current-url").and_then(|v| v.to_str().ok());
+    render(AddChildDialog::new(&task, &project_id, current_url))
 }
 
 #[cfg(test)]

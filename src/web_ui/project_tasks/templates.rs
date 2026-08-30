@@ -380,11 +380,13 @@ impl QuickAssignDialog {
 /// straight to the same POST `/web/projects/:project_id/tasks` endpoint the standalone "+ New
 /// Task" page and this item's own detail-page "New sub-item" form already use
 /// (`create_project_task_form`), with `parentItemId` pre-filled to this row's own id and
-/// `redirect=1` so a successful save is a full `HX-Redirect` back to the Tasks list — the
-/// simplest thing that's correct regardless of whether this row already had any children
-/// rendered inline (see `Row::children_html`'s doc comment: a leaf row has no
-/// `#item-{id}-children` container a narrower swap could target), mirroring `duplicate_url`'s
-/// existing same-shape redirect-to-list precedent.
+/// `redirect=1` so a successful save is a full `HX-Redirect` — targeting `return_to` (whatever
+/// page the dialog was actually opened from — the Tasks list, or a task's own detail page, if
+/// this row was one of its Sub-items) rather than unconditionally the Tasks list, fixing
+/// docs/issues_and_features.md's "adding a sub-item redirects to the main Tasks list instead of
+/// back to the item's own full/detail page" item. `Row::children_html`'s doc comment explains
+/// why this always has to be a full redirect rather than a narrower in-place swap: a leaf row
+/// has no `#item-{id}-children` container to swap into.
 #[derive(Template)]
 #[template(path = "components/add_child_dialog.html")]
 pub struct AddChildDialog {
@@ -396,15 +398,24 @@ pub struct AddChildDialog {
     /// (the detail page posted to it too, just with a narrower `#children-list` target instead
     /// of this dialog's full-redirect close).
     pub post_batch_url: String,
+    /// Where the create/batch-create forms' `redirect=1` should send the client back to —
+    /// seeded from the `HX-Current-URL` header on the dialog's own GET (`handlers::
+    /// get_add_child_task`), so it reflects whatever page was actually open underneath when
+    /// "Add sub-item" was clicked. Falls back to this project's Tasks list when that header is
+    /// absent (a non-htmx request) or fails `sanitize_return_to`'s same-project check.
+    pub return_to: String,
 }
 
 impl AddChildDialog {
-    pub fn new(parent: &Item, project_id: &str) -> Self {
+    pub fn new(parent: &Item, project_id: &str, current_url: Option<&str>) -> Self {
+        let return_to = super::sanitize_return_to(current_url, project_id)
+            .unwrap_or_else(|| format!("/web/projects/{project_id}/tasks"));
         AddChildDialog {
             parent_item_id: parent.id.clone(),
             parent_name: parent.name.clone(),
             post_create_url: format!("/web/projects/{project_id}/tasks"),
             post_batch_url: format!("/web/projects/{project_id}/tasks/batch"),
+            return_to,
         }
     }
 }

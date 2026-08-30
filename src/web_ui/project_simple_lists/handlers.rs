@@ -177,6 +177,7 @@ pub async fn get_add_child_simple_item(
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    headers: axum::http::HeaderMap,
 ) -> Result<Html<String>, ItemError> {
     let item = project_item_service::get_project_item(
         &repo,
@@ -188,7 +189,8 @@ pub async fn get_add_child_simple_item(
     )
     .await?;
     let item = require_simple(item)?;
-    render(AddChildDialog::new(&item, &project_id))
+    let current_url = headers.get("hx-current-url").and_then(|v| v.to_str().ok());
+    render(AddChildDialog::new(&item, &project_id, current_url))
 }
 
 pub async fn project_simple_item_children_fragment(
@@ -245,6 +247,7 @@ pub async fn create_project_simple_item_form(
     Form(form): Form<ProjectSimpleItemForm>,
 ) -> Result<Response, ItemError> {
     let redirect = form.redirect.is_some();
+    let return_to = form.return_to.clone();
     let params = create_params_from_form(&project_id, &form);
     let parent_item_id = params.parent_item_id.clone();
     project_item_service::create_project_item(
@@ -257,7 +260,12 @@ pub async fn create_project_simple_item_form(
     )
     .await?;
     if redirect {
-        return Ok(redirect_to_project_simple_lists(&project_id));
+        return Ok(
+            match super::sanitize_return_to(return_to.as_deref(), &project_id) {
+                Some(url) => hx_redirect(url),
+                None => redirect_to_project_simple_lists(&project_id),
+            },
+        );
     }
     Ok(
         render_scope_fragment(&repo, &project_id, parent_item_id.as_deref())
@@ -272,6 +280,8 @@ pub struct BatchForm {
     names: String,
     parent_item_id: Option<String>,
     redirect: Option<String>,
+    /// See `ProjectSimpleItemForm::return_to`'s identical rationale.
+    return_to: Option<String>,
 }
 
 pub async fn create_project_simple_items_batch(
@@ -307,7 +317,12 @@ pub async fn create_project_simple_items_batch(
         .await?;
     }
     if form.redirect.is_some() {
-        return Ok(redirect_to_project_simple_lists(&project_id));
+        return Ok(
+            match super::sanitize_return_to(form.return_to.as_deref(), &project_id) {
+                Some(url) => hx_redirect(url),
+                None => redirect_to_project_simple_lists(&project_id),
+            },
+        );
     }
     Ok(
         render_scope_fragment(&repo, &project_id, parent_item_id.as_deref())
