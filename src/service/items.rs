@@ -61,6 +61,7 @@ fn build_item_type(
     source_event_id: Option<String>,
     priority: Option<i32>,
     complete: bool,
+    series_id: Option<String>,
 ) -> ItemType {
     match kind {
         ItemKind::Simple => ItemType::Simple(SimpleItem { parent_item_id }),
@@ -72,11 +73,13 @@ fn build_item_type(
             source_event_id,
             priority,
             complete,
+            series_id,
         }),
         ItemKind::Event => ItemType::Event(EventItem {
             schedule,
             recurrence,
             event_type,
+            series_id,
         }),
         ItemKind::Template => ItemType::Template(TemplateItem {
             parent_item_id,
@@ -155,9 +158,9 @@ pub async fn create_item(
         params.source_event_id.clone(),
         params.priority,
         params.complete.unwrap_or(false),
+        params.series_id.clone(),
     );
     item.description = params.description.clone();
-    item.series_id = params.series_id.clone();
     // Dual-write, stage B2 (docs/project-abstraction-plan.md) — alongside the
     // still-authoritative `user_id`. Left `None` if the user somehow has no personal
     // project yet (shouldn't happen post-login, see `ensure_default_project`) rather
@@ -314,15 +317,15 @@ pub async fn update_item(
         params.source_event_id.clone(),
         params.priority,
         params.complete,
+        // Same reasoning as project_id below — series membership is set once at
+        // materialization and never re-resolved from update params.
+        current.series_id(),
     );
     item.id = params.item_id.clone();
     item.description = params.description.clone();
     // Carried forward from `current` rather than re-resolved (stage B2) — an item's
     // owner, and thus its personal project, never changes after creation.
     item.project_id = current.project_id.clone();
-    // Same reasoning as project_id above — series membership is set once at
-    // materialization and never re-resolved from update params.
-    item.series_id = current.series_id.clone();
 
     let tz_offset = params.timezone_offset_minutes.unwrap_or(0);
     if item.is_offset_driven() {
@@ -673,6 +676,7 @@ pub(crate) fn copy_template_children<'a>(
                 source_event_id: None,
                 priority: child.priority(),
                 complete: false,
+                series_id: None,
             });
             let new_child_id = repo.create(&new_child).await?;
             copy_template_children(
@@ -720,6 +724,7 @@ pub(crate) fn copy_template_children_to_event<'a>(
                 source_event_id: Some(event_id.to_string()),
                 priority: child.priority(),
                 complete: false,
+                series_id: None,
             });
             let new_child_id = repo.create(&new_child).await?;
             copy_template_children(
@@ -863,6 +868,7 @@ mod tests {
                 source_event_id: None,
                 priority: None,
                 complete: false,
+                series_id: None,
             }),
             ..Item::default()
         }
@@ -899,6 +905,7 @@ mod tests {
                 source_event_id: None,
                 priority: None,
                 complete: false,
+                series_id: None,
             }),
             ..Item::default()
         }
@@ -998,6 +1005,7 @@ mod tests {
                 },
                 recurrence: Recurrence::default(),
                 event_type: None,
+                series_id: None,
             }),
             ..Item::default()
         }
@@ -1058,6 +1066,7 @@ mod tests {
                         },
                         recurrence: Recurrence::default(),
                         event_type: None,
+                        series_id: None,
                     }),
                     ..Item::default()
                 })
@@ -1126,6 +1135,7 @@ mod tests {
                         },
                         recurrence: Recurrence::default(),
                         event_type: None,
+                        series_id: None,
                     }),
                     ..Item::default()
                 })
@@ -1170,6 +1180,7 @@ mod tests {
                         schedule: Schedule::default(),
                         recurrence: Recurrence::default(),
                         event_type: None,
+                        series_id: None,
                     }),
                     ..Item::default()
                 })

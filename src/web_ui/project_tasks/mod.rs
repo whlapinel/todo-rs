@@ -808,8 +808,7 @@ pub(crate) async fn render_rows_with_virtual(
             filters.show_complete,
             confirmation,
             dismiss_after_ms,
-            i.series_id
-                .as_ref()
+            i.series_id()
                 .map(|_| current_flags.get(&i.id).copied().unwrap_or(false)),
         );
         let (blocked_by_names, blocked_by_label, blocked_by_links_html) =

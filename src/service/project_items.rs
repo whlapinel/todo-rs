@@ -1358,6 +1358,7 @@ mod tests {
                     source_event_id: None,
                     priority: None,
                     complete: true,
+                    series_id: None,
                 }),
                 ..Item::default()
             })

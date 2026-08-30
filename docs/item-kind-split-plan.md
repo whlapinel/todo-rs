@@ -182,7 +182,7 @@ Ship in order; each stage is its own PR/commit and leaves `cargo fmt`/`cargo tes
 - [x] Stage 2 — Add `HasSchedule`/`Completable` traits; repoint the genuinely generic call sites onto them
 - [x] Stage 3 — Move `complete` off `Item` onto `TaskItem`
 - [x] Stage 4 — Move `parent_item_id` off `Item` onto `TaskItem`/`SimpleItem`/`TemplateItem`
-- [ ] Stage 5 — Move `series_id` onto `TaskItem`/`EventItem`
+- [x] Stage 5 — Move `series_id` onto `TaskItem`/`EventItem`
 - [ ] Stage 6 — Move `google_event_id`/`calendar_subscription_id` onto `EventItem`
 - [ ] Stage 7 — Optional per-screen web_ui ergonomic cleanup (`require_task` etc. return the concrete struct)
 - [ ] Stage 8 — Remove now-provably-dead `Option`-returning delegation methods; update CLAUDE.md's Domain Models section (it's already stale re: the pre-`ItemType` shape, and will need a rewrite reflecting this plan's final shape)
@@ -260,6 +260,17 @@ One borrow-checker wrinkle, not anticipated by the plan: two spots in `web_ui/pr
 
 - Same shape. Fix call sites in `src/service/item_series.rs` (`get_or_materialize_occurrence`), `src/storage/sqlite/items.rs`'s series-scoped queries, `src/web_ui/project_item_series/`.
 - **Verify:** `cargo test`, particularly `item_series`'s materialization tests and the sqlite-level `series_id_round_trips_through_create_and_update` test already in `src/storage/sqlite/items.rs`.
+
+**Stage 5 as implemented — no corrections to the plan.** Landed exactly as scoped:
+
+- `src/domain/item.rs`: `series_id: Option<String>` added to both `TaskItem` and `EventItem` (removed from `Item`'s own flat fields); `ItemType::series_id() -> Option<&str>` added (matches `Task`/`Event`, `None` for `Template`/`Simple`); `Item::series_id() -> Option<String>` delegation method added following `parent_item_id()`'s exact owned-`String` convention (not `event_type()`'s, which was already the same shape). No `Item::set_series_id()` — every write site matches into `ItemType::Task`/`ItemType::Event` directly, same as `TaskItem::complete`/`parent_item_id` before it.
+- `build_item_type` (`service::items.rs`) and its `service::team_items.rs` twin both gained a `series_id: Option<String>` parameter, threaded through from `params.series_id.clone()` on create and `current.series_id()` on update (replacing the old post-construction `item.series_id = ...` assignment, which no longer compiles once the field isn't on `Item` itself).
+- `row_to_item` (`src/storage/sqlite/mod.rs`) reads `series_id` once from the row and threads it into both the `Task` and `Event` match arms (previously it was read directly into the flat `Item` literal).
+- `src/storage/sqlite/items.rs`'s three `.bind(&item.series_id)` call sites (create/update prepared statements) became `.bind(item.series_id())` — dropped the `&` to match `item.priority()`'s no-reference convention for the other owned-value accessors on the same statement, since `series_id()` now returns an owned `Option<String>` rather than being read directly off a `Copy`/reference-friendly struct field.
+- `service::calendar_sync.rs`'s `EventItem` construction sites (`build_imported_item`, the update-on-sync-drift branch, and one test fixture) all needed `series_id: None` (create/test fixture) or `series_id: existing_item.series_id()` (the update branch, to round-trip a value that — while never actually set by calendar sync itself — shouldn't be silently dropped if it were ever set by some other path).
+- ~20 call sites total across `src/service/{items,team_items,project_items,templates,reminders,calendar_sync,item_series}.rs`, `src/storage/sqlite/{mod,items}.rs`, and `src/web_ui/{list_filters,project_events/templates,project_tasks/{mod,templates,handlers}}.rs` — all mechanical (`.series_id` field read → `.series_id()` method call; `item.series_id = ..` → a match into `ItemType::Task`/`ItemType::Event` for writes; a handful of test-fixture `Item { series_id: .., .. }` literals restructured into a nested `TaskItem { series_id: .., .. }`/`EventItem { series_id: .., .. }`).
+
+**One process note, not a plan correction, worth recording for whoever runs Stage 6 next:** an early attempt at this stage used a Python script to bulk-insert `series_id: None,` into every `TaskItem {`/`EventItem {` literal across the repo by brace-matching on the type name. This was too blunt — the brace-matcher also matched `impl HasSchedule for TaskItem { .. }`/`impl Completable for TaskItem { .. }` trait-impl blocks (which contain no field literal at all) and doc-comment prose quoting `TaskItem { .. }` shapes, and corrupted all three into invalid Rust / garbled comment text in `src/domain/item.rs` before `cargo build` caught it. Caught and fixed by re-reading `git diff` line by line before committing (5 bad insertions found and reverted by hand), but the mechanical field-additions Stage 6 needs (`google_event_id`/`calendar_subscription_id` onto `EventItem`) should be done call-site-by-call-site against `cargo build`'s actual error list, not via a repo-wide brace-matching script — the "~90/~110 call sites, all mechanical" scale of Stages 3/4 was handled by hand in those stages for the same reason.
 
 ### Stage 6 — Move `google_event_id`/`calendar_subscription_id` onto `EventItem`
 

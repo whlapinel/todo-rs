@@ -208,7 +208,7 @@ impl ListFilters {
         if !matches_schedule {
             return false;
         }
-        if !self.recurring && item.series_id.is_some() {
+        if !self.recurring && item.series_id().is_some() {
             return false;
         }
         if let PriorityFilter::Exact(p) = self.priority {
@@ -521,7 +521,10 @@ mod tests {
         });
         let mut item = task();
         assert!(filters.matches(&item, "u1", false, utc(NOW)));
-        item.series_id = Some("series-1".to_string());
+        match &mut item.item_type {
+            ItemType::Task(t) => t.series_id = Some("series-1".to_string()),
+            _ => panic!("series_id only settable on Task/Event"),
+        }
         assert!(!filters.matches(&item, "u1", false, utc(NOW)));
     }
 

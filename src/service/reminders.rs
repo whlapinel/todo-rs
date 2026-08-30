@@ -163,6 +163,7 @@ mod tests {
                 source_event_id: None,
                 priority: None,
                 complete: false,
+                series_id: None,
             }),
             ..Item::new_project_item(project_id, "Task")
         }

@@ -126,6 +126,13 @@ pub struct TaskItem {
     /// path that can attempt to complete a non-Task item without first failing to
     /// compile. See the `Completable` trait below.
     pub complete: bool,
+    /// Moved off `Item` in Stage 5 of `docs/item-kind-split-plan.md` — mirrors
+    /// `ItemSeries.item_type`'s own Task/Event restriction (`src/domain/item_series.rs`),
+    /// so a materialized occurrence's `series_id` can only ever live on the two kinds
+    /// that can actually belong to a series. Set once, at creation, only by
+    /// `service::item_series::get_or_materialize_occurrence`; carried forward
+    /// unchanged on every update, same as `parent_item_id`'s precedent before it.
+    pub series_id: Option<String>,
 }
 
 /// Payload for `ItemType::Event`. See `ItemType` below for the per-kind split rationale.
@@ -134,6 +141,8 @@ pub struct EventItem {
     pub schedule: Schedule,
     pub recurrence: Recurrence,
     pub event_type: Option<String>,
+    /// See `TaskItem::series_id`'s doc comment — same Task/Event-only restriction.
+    pub series_id: Option<String>,
 }
 
 /// Payload for `ItemType::Template`. See `ItemType` below for the per-kind split rationale.
@@ -358,6 +367,17 @@ impl ItemType {
             ItemType::Event(_) => None,
         }
     }
+
+    /// Moved off `Item` in Stage 5 of `docs/item-kind-split-plan.md` — only `Task`/`Event`
+    /// have anywhere to put a `series_id` now, mirroring `ItemSeries.item_type`'s own
+    /// Task/Event restriction.
+    pub fn series_id(&self) -> Option<&str> {
+        match self {
+            ItemType::Task(t) => t.series_id.as_deref(),
+            ItemType::Event(e) => e.series_id.as_deref(),
+            ItemType::Template(_) | ItemType::Simple(_) => None,
+        }
+    }
 }
 
 /// Max length (in `char`s) allowed for `Item::name`, enforced by `validate()` and
@@ -388,11 +408,6 @@ pub struct Item {
     pub description: Option<String>,
     pub has_children: bool,
     pub item_type: ItemType,
-    /// Set once, at creation, only by `service::item_series::get_or_materialize_occurrence` —
-    /// no Smithy field, CLI flag, or MCP parameter can ever set or clear it. `None` for every
-    /// item not materialized from a series. Carried forward on every update (like `project_id`)
-    /// since an item's series membership never changes after creation.
-    pub series_id: Option<String>,
     /// The upstream iCal `UID` (or, once Stage 7 lands, a synthetic per-occurrence id
     /// derived from it) this item was imported from — see
     /// `docs/google-calendar-import-plan.md`. Set once, at creation, only by
@@ -533,6 +548,17 @@ impl Item {
     /// (not `&str`), matching `event_type()`/`source_event_id()`'s convention.
     pub fn parent_item_id(&self) -> Option<String> {
         self.item_type.parent_item_id().map(|s| s.to_string())
+    }
+
+    /// `None` for `Template`/`Simple` — moved off `Item` in Stage 5 of
+    /// `docs/item-kind-split-plan.md`; `TaskItem`/`EventItem` are the only kinds with
+    /// anywhere to put a series membership now, mirroring `ItemSeries.item_type`'s own
+    /// Task/Event restriction. No `Item::set_series_id()` exists — every write site
+    /// matches into `ItemType::Task`/`ItemType::Event` directly, following
+    /// `TaskItem::complete`'s precedent from Stage 3. Owned `String` (not `&str`),
+    /// matching `event_type()`/`source_event_id()`'s convention.
+    pub fn series_id(&self) -> Option<String> {
+        self.item_type.series_id().map(|s| s.to_string())
     }
 
     /// True if this item's own date is derived from an offset rather than

@@ -78,6 +78,7 @@ fn build_item_type(
     source_event_id: Option<String>,
     priority: Option<i32>,
     complete: bool,
+    series_id: Option<String>,
 ) -> ItemType {
     match kind {
         ItemKind::Simple => ItemType::Simple(SimpleItem { parent_item_id }),
@@ -89,11 +90,13 @@ fn build_item_type(
             source_event_id,
             priority,
             complete,
+            series_id,
         }),
         ItemKind::Event => ItemType::Event(EventItem {
             schedule,
             recurrence,
             event_type,
+            series_id,
         }),
         ItemKind::Template => ItemType::Template(TemplateItem {
             parent_item_id,
@@ -247,9 +250,9 @@ pub async fn create_team_item(
         params.source_event_id.clone(),
         params.priority,
         params.complete.unwrap_or(false),
+        params.series_id.clone(),
     );
     item.description = params.description.clone();
-    item.series_id = params.series_id.clone();
 
     let tz_offset = params.timezone_offset_minutes.unwrap_or(0);
     if item.is_offset_driven() {
@@ -528,9 +531,6 @@ pub async fn update_team_item(
     let mut item = Item::new_project_item(&params.project_id, &params.name);
     item.id = params.item_id.clone();
     item.description = params.description.clone();
-    // Same reasoning as `items::update_item`'s project_id carry-forward — series
-    // membership is set once at materialization and never re-resolved from params.
-    item.series_id = current.series_id.clone();
     item.item_type = build_item_type(
         kind,
         params.parent_item_id.clone(),
@@ -541,6 +541,9 @@ pub async fn update_team_item(
         params.source_event_id.clone(),
         params.priority,
         params.complete,
+        // Same reasoning as `items::update_item`'s project_id carry-forward — series
+        // membership is set once at materialization and never re-resolved from params.
+        current.series_id(),
     );
 
     let tz_offset = params.timezone_offset_minutes.unwrap_or(0);
@@ -845,6 +848,7 @@ mod tests {
                 source_event_id: None,
                 priority: None,
                 complete: false,
+                series_id: None,
             }),
             ..Item::default()
         }

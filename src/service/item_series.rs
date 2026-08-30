@@ -1222,7 +1222,7 @@ pub async fn skip_url_for_item(
     item: &Item,
     project_id: &str,
 ) -> Result<Option<String>, ItemError> {
-    let Some(series_id) = &item.series_id else {
+    let Some(series_id) = item.series_id() else {
         return Ok(None);
     };
     let occurrence = series_repo.find_occurrence_by_item_id(&item.id).await?;
@@ -1609,7 +1609,7 @@ mod tests {
                 item.kind() == ItemKind::Event
                     && item.scheduled_date() == Some(occurrence_date())
                     && item.has_scheduled_time()
-                    && item.series_id == Some("s1".to_string())
+                    && item.series_id() == Some("s1".to_string())
             })
             .times(1)
             .returning(|_| Ok("new-item-id".to_string()));

@@ -1280,13 +1280,13 @@ pub async fn resolve_series_link(
     project_id: &str,
     item: &Item,
 ) -> Result<Option<(String, String)>, ItemError> {
-    let Some(series_id) = &item.series_id else {
+    let Some(series_id) = item.series_id() else {
         return Ok(None);
     };
     // `delete_series` orphans rather than cascades (see its doc comment) — a materialized
     // item can outlive its parent series, so a missing series here means "no link to show",
     // not "this item doesn't exist."
-    let series = match series.get_series(series_id).await {
+    let series = match series.get_series(&series_id).await {
         Ok(series) => series,
         Err(crate::storage::sqlite::RepoError::NotFound) => return Ok(None),
         Err(e) => return Err(e.into()),
@@ -1358,7 +1358,7 @@ pub async fn depends_on_picker_data(
         .filter(|s| {
             s.id != item.id
                 && s.kind() == ItemKind::Task
-                && (selected.contains(&s.id) || (!s.complete() && s.series_id.is_none()))
+                && (selected.contains(&s.id) || (!s.complete() && s.series_id().is_none()))
         })
         .map(|s| (s.id.clone(), s.name.clone()))
         .collect();
@@ -1563,6 +1563,7 @@ mod tests {
                     schedule: Default::default(),
                     recurrence: Default::default(),
                     event_type: None,
+                    series_id: None,
                 }),
                 ..Item::default()
             })
@@ -1586,7 +1587,10 @@ mod tests {
         // bug: `delete_series` orphans (see its doc comment) rather than cascading, so
         // `item.series_id` can point at a series row that no longer exists.
         let item = Item {
-            series_id: Some("deleted-series".to_string()),
+            item_type: ItemType::Task(TaskItem {
+                series_id: Some("deleted-series".to_string()),
+                ..TaskItem::default()
+            }),
             ..Item::default()
         };
         let mut mock = MockItemSeriesRepo::new();
@@ -1650,9 +1654,9 @@ mod tests {
             project_id: Some("p1".to_string()),
             item_type: ItemType::Task(TaskItem {
                 complete,
+                series_id: series_id.map(str::to_string),
                 ..TaskItem::default()
             }),
-            series_id: series_id.map(str::to_string),
             ..Item::default()
         }
     }

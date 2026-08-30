@@ -159,7 +159,7 @@ impl ItemRepo for SqliteItemRepo {
         .bind(item.points())
         .bind(item.priority())
         .bind(item.source_event_id())
-        .bind(&item.series_id)
+        .bind(item.series_id())
         .bind(&item.google_event_id)
         .bind(&item.calendar_subscription_id)
         .execute(&self.0)
@@ -201,7 +201,7 @@ impl ItemRepo for SqliteItemRepo {
         .bind(item.priority())
         .bind(item.source_event_id())
         .bind(&item.project_id)
-        .bind(&item.series_id)
+        .bind(item.series_id())
         .bind(&item.google_event_id)
         .bind(&item.calendar_subscription_id)
         .bind(&item.id)
@@ -246,7 +246,7 @@ impl ItemRepo for SqliteItemRepo {
         .bind(item.points())
         .bind(item.priority())
         .bind(item.source_event_id())
-        .bind(&item.series_id)
+        .bind(item.series_id())
         .bind(&item.google_event_id)
         .bind(&item.calendar_subscription_id)
         .bind(&item.id)
@@ -559,6 +559,7 @@ mod tests {
             source_event_id: None,
             priority: Some(2),
             complete: false,
+            series_id: None,
         });
         repo.update_by_project(&item).await.unwrap();
 
@@ -574,18 +575,21 @@ mod tests {
         let pool = test_pool().await;
         let repo = SqliteItemRepo(pool);
         let mut item = item_in_project("p1", "Standup");
-        item.series_id = Some("series-1".to_string());
+        match &mut item.item_type {
+            ItemType::Task(task) => task.series_id = Some("series-1".to_string()),
+            _ => panic!("series_id only settable on Task/Event"),
+        }
         let id = repo.create(&item).await.unwrap();
 
         let created = repo.get_by_project("p1", &id).await.unwrap();
-        assert_eq!(created.series_id.as_deref(), Some("series-1"));
+        assert_eq!(created.series_id().as_deref(), Some("series-1"));
 
         item.id = id.clone();
         item.name = "Standup (renamed)".to_string();
         repo.update_by_project(&item).await.unwrap();
 
         let updated = repo.get_by_project("p1", &id).await.unwrap();
-        assert_eq!(updated.series_id.as_deref(), Some("series-1"));
+        assert_eq!(updated.series_id().as_deref(), Some("series-1"));
     }
 
     #[tokio::test]

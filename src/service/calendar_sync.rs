@@ -485,6 +485,7 @@ fn build_imported_item(subscription: &CalendarSubscription, event: &ParsedIcalEv
         },
         recurrence: Recurrence::default(),
         event_type: None,
+        series_id: None,
     });
     item
 }
@@ -647,6 +648,7 @@ async fn run_diff(
                         },
                         recurrence: Recurrence::default(),
                         event_type: None,
+                        series_id: existing_item.series_id(),
                     });
                     item_repo
                         .update_by_project(&updated_item)
@@ -958,6 +960,7 @@ mod tests {
                 },
                 recurrence: Recurrence::default(),
                 event_type: None,
+                series_id: None,
             }),
             ..Item::default()
         }

@@ -2731,6 +2731,7 @@ mod resolve_task_anchor_date_tests {
                 source_event_id: None,
                 priority: None,
                 complete: false,
+                series_id: None,
             }),
             ..Item::default()
         }

@@ -45,7 +45,7 @@ impl ProjectEventRow {
             // `ItemKind::Task`), so a materialized Event occurrence's series badge never needs a
             // real lookup: it's always "part of a series, never current" when `series_id` is
             // set, and absent otherwise.
-            series_current: item.series_id.as_ref().map(|_| false),
+            series_current: item.series_id().map(|_| false),
             assignee_name: None,
             blocked_by_names: Vec::new(),
             blocked_by_label: String::new(),
@@ -555,13 +555,13 @@ pub async fn resolve_series_link(
     project_id: &str,
     item: &Item,
 ) -> Result<Option<(String, String)>, crate::service::error::ItemError> {
-    let Some(series_id) = &item.series_id else {
+    let Some(series_id) = item.series_id() else {
         return Ok(None);
     };
     // `delete_series` orphans rather than cascades (see its doc comment) — a materialized
     // item can outlive its parent series, so a missing series here means "no link to show",
     // not "this item doesn't exist."
-    let series = match series.get_series(series_id).await {
+    let series = match series.get_series(&series_id).await {
         Ok(series) => series,
         Err(crate::storage::sqlite::RepoError::NotFound) => return Ok(None),
         Err(e) => return Err(e.into()),
@@ -648,6 +648,7 @@ pub struct ProjectEventEditPageTemplate {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::item::{ItemType, TaskItem};
     use crate::storage::sqlite::{ItemSeriesRepo, MockItemSeriesRepo, RepoError};
     use std::sync::Arc;
 
@@ -657,7 +658,10 @@ mod tests {
         // bug: `delete_series` orphans (see its doc comment) rather than cascading, so
         // `item.series_id` can point at a series row that no longer exists.
         let item = Item {
-            series_id: Some("deleted-series".to_string()),
+            item_type: ItemType::Task(TaskItem {
+                series_id: Some("deleted-series".to_string()),
+                ..TaskItem::default()
+            }),
             ..Item::default()
         };
         let mut mock = MockItemSeriesRepo::new();
