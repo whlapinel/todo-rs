@@ -122,7 +122,7 @@ impl ProjectTaskRow {
             // `add_child_url` instead.
             add_linked_task_url: None,
             move_url: (item.source_event_id().is_none()
-                && (item.parent_item_id.is_some() || siblings.iter().any(|s| s.id != item.id)))
+                && (item.parent_item_id().is_some() || siblings.iter().any(|s| s.id != item.id)))
             .then(|| format!("/web/projects/{project_id}/tasks/{}/move", item.id)),
             reschedule_url: Some(format!(
                 "/web/projects/{project_id}/tasks/{}/reschedule",
@@ -686,7 +686,7 @@ impl ProjectTaskDetailFields {
             name: item.name.clone(),
             description: item.description.clone().unwrap_or_default(),
             complete: item.complete(),
-            is_top_level: item.parent_item_id.is_none(),
+            is_top_level: item.parent_item_id().is_none(),
             is_offset_driven: item.is_offset_driven(),
             due_date_input,
             due_time_input,
@@ -1233,10 +1233,10 @@ pub async fn resolve_parent_link(
     project_id: &str,
     item: &Item,
 ) -> Result<Option<(String, String)>, ItemError> {
-    let Some(parent_id) = &item.parent_item_id else {
+    let Some(parent_id) = item.parent_item_id() else {
         return Ok(None);
     };
-    let parent = match repo.get_by_project(project_id, parent_id).await {
+    let parent = match repo.get_by_project(project_id, &parent_id).await {
         Ok(parent) => parent,
         Err(crate::storage::sqlite::RepoError::NotFound) => return Ok(None),
         Err(e) => return Err(e.into()),
@@ -1349,7 +1349,7 @@ pub async fn depends_on_picker_data(
     let siblings = crate::web_ui::project_tasks::sibling_group(
         repo,
         project_id,
-        item.parent_item_id.as_deref(),
+        item.parent_item_id().as_deref(),
     )
     .await?;
     let selected = item_dependencies.list_for_item(&item.id).await?;
@@ -1529,7 +1529,10 @@ mod tests {
         // `service::project_items::delete_project_item`), so a dangling `parent_item_id`
         // must degrade to "no link," not a 500.
         let item = Item {
-            parent_item_id: Some("deleted-parent".to_string()),
+            item_type: ItemType::Task(TaskItem {
+                parent_item_id: Some("deleted-parent".to_string()),
+                ..TaskItem::default()
+            }),
             ..Item::default()
         };
         let mut mock = MockItemRepo::new();
@@ -1545,7 +1548,10 @@ mod tests {
     #[tokio::test]
     async fn resolve_parent_link_routes_to_events_for_an_event_parent() {
         let item = Item {
-            parent_item_id: Some("parent1".to_string()),
+            item_type: ItemType::Task(TaskItem {
+                parent_item_id: Some("parent1".to_string()),
+                ..TaskItem::default()
+            }),
             ..Item::default()
         };
         let mut mock = MockItemRepo::new();

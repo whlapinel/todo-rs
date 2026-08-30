@@ -55,6 +55,7 @@ pub async fn create_template(
         event_type = params.event_type;
     }
     item.item_type = ItemType::Template(TemplateItem {
+        parent_item_id: None,
         schedule,
         recurrence,
         event_type,
@@ -169,6 +170,7 @@ pub async fn create_team_template(
         event_type = params.event_type;
     }
     item.item_type = ItemType::Template(TemplateItem {
+        parent_item_id: None,
         schedule,
         recurrence,
         event_type,
@@ -391,7 +393,7 @@ mod tests {
 
         mock.expect_create()
             .withf(|item: &Item| {
-                item.parent_item_id.is_none() && matches!(item.item_type, ItemType::Template(_))
+                item.parent_item_id().is_none() && matches!(item.item_type, ItemType::Template(_))
             })
             .times(1)
             .returning(|_| Ok("tpl1".to_string()));
@@ -402,9 +404,9 @@ mod tests {
             .returning(|_| {
                 Ok(vec![Item {
                     id: "child1".to_string(),
-                    parent_item_id: Some("src".to_string()),
                     name: "Pack boxes".to_string(),
                     item_type: ItemType::Task(TaskItem {
+                        parent_item_id: Some("src".to_string()),
                         schedule: Schedule::default(),
                         recurrence: Recurrence {
                             due_offset_days: Some(-3),
@@ -421,7 +423,7 @@ mod tests {
 
         mock.expect_create()
             .withf(|item: &Item| {
-                item.parent_item_id.as_deref() == Some("tpl1")
+                item.parent_item_id().as_deref() == Some("tpl1")
                     && matches!(item.item_type, ItemType::Template(_))
                     && item.due_offset_days() == Some(-3)
             })
@@ -464,7 +466,7 @@ mod tests {
                     id: "src".to_string(),
                     user_id: Some("u1".to_string()),
                     name: "Groceries".to_string(),
-                    item_type: ItemType::Simple(SimpleItem),
+                    item_type: ItemType::Simple(SimpleItem::default()),
                     ..Item::default()
                 })
             });
@@ -498,7 +500,7 @@ mod tests {
                     id: "src".to_string(),
                     project_id: Some("p1".to_string()),
                     name: "Groceries".to_string(),
-                    item_type: ItemType::Simple(SimpleItem),
+                    item_type: ItemType::Simple(SimpleItem::default()),
                     ..Item::default()
                 })
             });
@@ -544,6 +546,7 @@ mod tests {
                     user_id: Some("u1".to_string()),
                     name: "Old name".to_string(),
                     item_type: ItemType::Template(TemplateItem {
+                        parent_item_id: None,
                         schedule: Schedule::default(),
                         recurrence: Recurrence::default(),
                         event_type: None,
@@ -590,6 +593,7 @@ mod tests {
                     user_id: Some("u1".to_string()),
                     name: "A task".to_string(),
                     item_type: ItemType::Task(TaskItem {
+                        parent_item_id: None,
                         schedule: Schedule::default(),
                         recurrence: Recurrence::default(),
                         team_assignment: None,
@@ -631,6 +635,7 @@ mod tests {
                     project_id: Some("p1".to_string()),
                     name: "Old name".to_string(),
                     item_type: ItemType::Template(TemplateItem {
+                        parent_item_id: None,
                         schedule: Schedule::default(),
                         recurrence: Recurrence::default(),
                         event_type: None,
@@ -848,6 +853,7 @@ mod tests {
                 user_id: Some("owner1".to_string()),
                 name: "Old name".to_string(),
                 item_type: ItemType::Template(TemplateItem {
+                    parent_item_id: None,
                     schedule: Schedule::default(),
                     recurrence: Recurrence::default(),
                     event_type: None,
@@ -893,6 +899,7 @@ mod tests {
                 project_id: Some("p1".to_string()),
                 name: "Old name".to_string(),
                 item_type: ItemType::Template(TemplateItem {
+                    parent_item_id: None,
                     schedule: Schedule::default(),
                     recurrence: Recurrence::default(),
                     event_type: None,

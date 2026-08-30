@@ -404,7 +404,7 @@ pub(crate) fn update_params_from_form(
             &form.scheduled_end_time,
             current.has_end_time(),
         )),
-        parent_item_id: current.parent_item_id.clone(),
+        parent_item_id: current.parent_item_id(),
         item_type: Some(ItemKind::Task),
         due_offset_days: overlay_days_before_due(&form.due_offset_days, current.due_offset_days()),
         assigned_to_user_id: overlay_str(&form.assigned_to_user_id, current.assigned_to_user_id()),

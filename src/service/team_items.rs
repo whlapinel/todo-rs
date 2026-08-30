@@ -70,6 +70,7 @@ pub struct CreateTeamItemParams {
 #[allow(clippy::too_many_arguments)]
 fn build_item_type(
     kind: ItemKind,
+    parent_item_id: Option<String>,
     schedule: Schedule,
     recurrence: Recurrence,
     event_type: Option<String>,
@@ -79,8 +80,9 @@ fn build_item_type(
     complete: bool,
 ) -> ItemType {
     match kind {
-        ItemKind::Simple => ItemType::Simple(SimpleItem),
+        ItemKind::Simple => ItemType::Simple(SimpleItem { parent_item_id }),
         ItemKind::Task => ItemType::Task(TaskItem {
+            parent_item_id,
             schedule,
             recurrence,
             team_assignment,
@@ -94,6 +96,7 @@ fn build_item_type(
             event_type,
         }),
         ItemKind::Template => ItemType::Template(TemplateItem {
+            parent_item_id,
             schedule,
             recurrence,
             event_type,
@@ -112,7 +115,7 @@ pub(crate) async fn top_level_anchor_project(
     item: &Item,
 ) -> Result<Option<DateTime<Utc>>, ItemError> {
     let mut current = item.clone();
-    while let Some(parent_id) = current.parent_item_id.clone() {
+    while let Some(parent_id) = current.parent_item_id() {
         current = repo.get_by_project(project_id, &parent_id).await?;
     }
     Ok(item_anchor(&current))
@@ -127,7 +130,7 @@ pub(crate) async fn resolve_offset_anchor_project(
     if let Some(event_id) = item.source_event_id() {
         let event = repo.get_by_project(project_id, &event_id).await?;
         Ok(event_anchor(&event))
-    } else if let Some(parent_id) = item.parent_item_id.clone() {
+    } else if let Some(parent_id) = item.parent_item_id() {
         let parent = repo.get_by_project(project_id, &parent_id).await?;
         top_level_anchor_project(repo, project_id, &parent).await
     } else {
@@ -236,6 +239,7 @@ pub async fn create_team_item(
     let mut item = Item::new_project_item(&params.project_id, &params.name);
     item.item_type = build_item_type(
         kind,
+        params.parent_item_id.clone(),
         schedule,
         recurrence_data,
         params.event_type.clone(),
@@ -244,7 +248,6 @@ pub async fn create_team_item(
         params.priority,
         params.complete.unwrap_or(false),
     );
-    item.parent_item_id = params.parent_item_id.clone();
     item.description = params.description.clone();
     item.series_id = params.series_id.clone();
 
@@ -524,13 +527,13 @@ pub async fn update_team_item(
 
     let mut item = Item::new_project_item(&params.project_id, &params.name);
     item.id = params.item_id.clone();
-    item.parent_item_id = params.parent_item_id.clone();
     item.description = params.description.clone();
     // Same reasoning as `items::update_item`'s project_id carry-forward — series
     // membership is set once at materialization and never re-resolved from params.
     item.series_id = current.series_id.clone();
     item.item_type = build_item_type(
         kind,
+        params.parent_item_id.clone(),
         schedule,
         recurrence_data,
         params.event_type.clone(),
@@ -580,7 +583,7 @@ pub async fn update_team_item(
     // project's point balance. An unassigned item has no one to credit, so it's
     // skipped entirely (no log entry, nothing for the activity feed to undo).
     if just_completed
-        && item.parent_item_id.is_none()
+        && item.parent_item_id().is_none()
         && let Some(assignee) = item.assigned_to_user_id()
     {
         let points = item.points().unwrap_or(0);
@@ -832,6 +835,7 @@ mod tests {
             id: id.to_string(),
             name: "Mow the lawn".to_string(),
             item_type: ItemType::Task(TaskItem {
+                parent_item_id: None,
                 schedule: Schedule::default(),
                 recurrence: Recurrence::default(),
                 team_assignment: Some(TeamAssignment {
@@ -1012,7 +1016,10 @@ mod tests {
             .returning(|_| {
                 Ok(vec![Item {
                     id: "child1".to_string(),
-                    parent_item_id: Some("item1".to_string()),
+                    item_type: ItemType::Task(TaskItem {
+                        parent_item_id: Some("item1".to_string()),
+                        ..TaskItem::default()
+                    }),
                     ..Item::default()
                 }])
             });
@@ -1058,8 +1065,8 @@ mod tests {
             .returning(|_| {
                 Ok(vec![Item {
                     id: "child1".to_string(),
-                    parent_item_id: Some("item1".to_string()),
                     item_type: ItemType::Task(TaskItem {
+                        parent_item_id: Some("item1".to_string()),
                         complete: true,
                         ..TaskItem::default()
                     }),

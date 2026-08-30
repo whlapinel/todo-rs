@@ -52,7 +52,7 @@ pub async fn set_item_dependencies(
                 "{dep_id} is not a Task item, so it can't be a dependency"
             )));
         }
-        if dep.parent_item_id != item.parent_item_id {
+        if dep.parent_item_id() != item.parent_item_id() {
             return Err(ItemError::Invalid(format!(
                 "{dep_id} is not a sibling of this item"
             )));
@@ -211,7 +211,9 @@ mod tests {
         let mut item = Item::new_user_item("user1", "task");
         item.id = id.to_string();
         item.project_id = Some(project_id.to_string());
-        item.parent_item_id = parent_item_id.map(|s| s.to_string());
+        if let ItemType::Task(task) = &mut item.item_type {
+            task.parent_item_id = parent_item_id.map(|s| s.to_string());
+        }
         item
     }
 
@@ -232,7 +234,7 @@ mod tests {
         let dep_repo = Arc::new(MockItemDependencyRepo::new()) as Arc<dyn ItemDependencyRepo>;
         let items = Arc::new(MockItemRepo::new()) as Arc<dyn ItemRepo>;
         let mut item = task("i1", "p1", None);
-        item.item_type = ItemType::Simple(SimpleItem);
+        item.item_type = ItemType::Simple(SimpleItem::default());
 
         let err = set_item_dependencies(&dep_repo, &items, "p1", &item, &["i2".to_string()])
             .await

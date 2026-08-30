@@ -406,7 +406,7 @@ pub async fn update_project_simple_item_form(
         })?
         .into_response());
     }
-    let siblings = sibling_group(&repo, &project_id, updated.parent_item_id.as_deref()).await?;
+    let siblings = sibling_group(&repo, &project_id, updated.parent_item_id().as_deref()).await?;
     let siblings_ref: Vec<&Item> = siblings.iter().collect();
     let mut row = crate::web_ui::project_simple_lists::templates::ProjectSimpleItemRow::from_item(
         &updated,
@@ -528,11 +528,11 @@ pub async fn get_move_simple_item_dialog(
     )
     .await?;
     let item = require_simple(item)?;
-    let parent = match &item.parent_item_id {
-        Some(pid) => Some(repo.get_by_project(&project_id, pid).await?),
+    let parent = match item.parent_item_id() {
+        Some(pid) => Some(repo.get_by_project(&project_id, &pid).await?),
         None => None,
     };
-    let siblings = sibling_group(&repo, &project_id, item.parent_item_id.as_deref()).await?;
+    let siblings = sibling_group(&repo, &project_id, item.parent_item_id().as_deref()).await?;
     render(MoveDialog::new(
         &item,
         parent.as_ref(),

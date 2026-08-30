@@ -140,7 +140,7 @@ impl ItemRepo for SqliteItemRepo {
         .bind(&id)
         .bind(&item.user_id)
         .bind(&item.project_id)
-        .bind(&item.parent_item_id)
+        .bind(item.parent_item_id())
         .bind(&item.name)
         .bind(&item.description)
         .bind(due_date)
@@ -193,7 +193,7 @@ impl ItemRepo for SqliteItemRepo {
         .bind(has_due_time)
         .bind(has_scheduled_time)
         .bind(has_end_time)
-        .bind(&item.parent_item_id)
+        .bind(item.parent_item_id())
         .bind(item_type)
         .bind(item.event_type())
         .bind(item.due_offset_days())
@@ -238,7 +238,7 @@ impl ItemRepo for SqliteItemRepo {
         .bind(has_due_time)
         .bind(has_scheduled_time)
         .bind(has_end_time)
-        .bind(&item.parent_item_id)
+        .bind(item.parent_item_id())
         .bind(item_type)
         .bind(item.event_type())
         .bind(item.due_offset_days())
@@ -444,6 +444,14 @@ mod tests {
         item
     }
 
+    fn set_parent_item_id(item: &mut Item, parent_id: &str) {
+        match &mut item.item_type {
+            ItemType::Task(task) => task.parent_item_id = Some(parent_id.to_string()),
+            ItemType::Simple(simple) => simple.parent_item_id = Some(parent_id.to_string()),
+            _ => panic!("parent_item_id only settable on Task/Simple"),
+        }
+    }
+
     #[tokio::test]
     async fn get_by_project_finds_item_scoped_to_project() {
         let pool = test_pool().await;
@@ -487,7 +495,7 @@ mod tests {
         let repo = SqliteItemRepo(pool);
         let parent_id = repo.create(&item_in_project("p1", "Parent")).await.unwrap();
         let mut child = item_in_project("p1", "Child");
-        child.parent_item_id = Some(parent_id.clone());
+        set_parent_item_id(&mut child, &parent_id);
         repo.create(&child).await.unwrap();
 
         let top_level = repo.list_by_project("p1", None).await.unwrap();
@@ -506,6 +514,7 @@ mod tests {
 
         let mut template = item_in_project("p1", "Template 1");
         template.item_type = ItemType::Template(TemplateItem {
+            parent_item_id: None,
             schedule: Schedule::default(),
             recurrence: Recurrence::default(),
             event_type: None,
@@ -518,6 +527,7 @@ mod tests {
 
         let mut other_project_template = item_in_project("p2", "Other project template");
         other_project_template.item_type = ItemType::Template(TemplateItem {
+            parent_item_id: None,
             schedule: Schedule::default(),
             recurrence: Recurrence::default(),
             event_type: None,
@@ -539,6 +549,7 @@ mod tests {
         item.id = id.clone();
         item.name = "Renamed".to_string();
         item.item_type = ItemType::Task(TaskItem {
+            parent_item_id: None,
             schedule: Schedule::default(),
             recurrence: Recurrence::default(),
             team_assignment: Some(TeamAssignment {

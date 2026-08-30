@@ -156,6 +156,7 @@ mod tests {
             id: "item1".to_string(),
             project_id: Some(project_id.to_string()),
             item_type: ItemType::Task(TaskItem {
+                parent_item_id: None,
                 schedule,
                 recurrence: Recurrence::default(),
                 team_assignment,
@@ -289,7 +290,7 @@ mod tests {
         let item = Item {
             id: "item1".to_string(),
             project_id: Some("proj1".to_string()),
-            item_type: ItemType::Simple(SimpleItem),
+            item_type: ItemType::Simple(SimpleItem::default()),
             ..Item::new_project_item("proj1", "Simple")
         };
 

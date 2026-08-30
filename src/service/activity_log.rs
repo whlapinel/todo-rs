@@ -125,7 +125,7 @@ async fn reopen_item_if_still_complete(
             has_due_time: Some(item.has_due_time()),
             has_scheduled_time: Some(item.has_scheduled_time()),
             has_end_time: Some(item.has_end_time()),
-            parent_item_id: item.parent_item_id.clone(),
+            parent_item_id: item.parent_item_id(),
             item_type: Some(item.kind()),
             event_type: item.event_type(),
             due_offset_days: item.due_offset_days(),

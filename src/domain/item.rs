@@ -97,6 +97,11 @@ pub struct TeamAssignment {
 /// Payload for `ItemType::Task`. See `ItemType` below for the per-kind split rationale.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct TaskItem {
+    /// Moved off `Item` in Stage 4 of `docs/item-kind-split-plan.md` — `Task`,
+    /// `Simple` (see `SimpleItem::parent_item_id`), and `Template` (see
+    /// `TemplateItem::parent_item_id`) items can all legitimately nest; only
+    /// `Event` structurally cannot carry a parent at all now.
+    pub parent_item_id: Option<String>,
     pub schedule: Schedule,
     pub recurrence: Recurrence,
     pub team_assignment: Option<TeamAssignment>,
@@ -134,17 +139,33 @@ pub struct EventItem {
 /// Payload for `ItemType::Template`. See `ItemType` below for the per-kind split rationale.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct TemplateItem {
+    /// **Correction to `docs/item-kind-split-plan.md`'s Stage 0 audit**, made during
+    /// Stage 4: the audit checked only `service::templates::create_template` (a
+    /// *root* template never has a parent) and concluded Template can never be a
+    /// child at all — but `service::items::copy_children_as_template` recursively
+    /// copies a real item's descendants into *nested* Template-typed rows, each
+    /// with `parent_item_id` set to the template row above it, and `create_item`'s
+    /// own "child of a Template auto-becomes a Template" branch round-trips a
+    /// caller-supplied `parent_item_id` onto a freshly created Template child the
+    /// same way. So Template *is* legitimately Task-and-Simple-and-Template for
+    /// this field, not Task-and-Simple-only — only a *root* template (no
+    /// `source_item_id`/no parent) ever has `None` here.
+    pub parent_item_id: Option<String>,
     pub schedule: Schedule,
     pub recurrence: Recurrence,
     pub event_type: Option<String>,
 }
 
 /// Payload for `ItemType::Simple` — a bare checkable name with no scheduling
-/// machinery — no due date, scheduled window, recurrence, due-offset, event_type,
-/// or team assignment. Empty today; see `docs/item-kind-split-plan.md` Stage 4 for
-/// where `parent_item_id` moves onto this struct.
+/// machinery — no due date, scheduled window, recurrence, due-offset, or
+/// event_type. `parent_item_id` moved onto this struct in Stage 4 of
+/// `docs/item-kind-split-plan.md` — `project_simple_lists/` supports nesting
+/// a Simple item under another Simple item, so this is legitimately Task-and-Simple,
+/// not Task-only (see that plan's Stage 0 audit).
 #[derive(Debug, Clone, Default, PartialEq)]
-pub struct SimpleItem;
+pub struct SimpleItem {
+    pub parent_item_id: Option<String>,
+}
 
 /// Implemented by every `ItemType` payload that carries a `Schedule`/`Recurrence`
 /// (`TaskItem`, `EventItem`, `TemplateItem` — not `SimpleItem`, which genuinely has
@@ -260,7 +281,7 @@ impl ItemType {
             ItemKind::Task => ItemType::Task(TaskItem::default()),
             ItemKind::Event => ItemType::Event(EventItem::default()),
             ItemKind::Template => ItemType::Template(TemplateItem::default()),
-            ItemKind::Simple => ItemType::Simple(SimpleItem),
+            ItemKind::Simple => ItemType::Simple(SimpleItem::default()),
         }
     }
 
@@ -328,6 +349,15 @@ impl ItemType {
             _ => None,
         }
     }
+
+    pub fn parent_item_id(&self) -> Option<&str> {
+        match self {
+            ItemType::Task(t) => t.parent_item_id.as_deref(),
+            ItemType::Simple(s) => s.parent_item_id.as_deref(),
+            ItemType::Template(t) => t.parent_item_id.as_deref(),
+            ItemType::Event(_) => None,
+        }
+    }
 }
 
 /// Max length (in `char`s) allowed for `Item::name`, enforced by `validate()` and
@@ -354,7 +384,6 @@ pub struct Item {
     /// until Stage 6 of docs/team-id-removal-plan.md dropped both the field and its
     /// backing `items.team_id` column.)
     pub project_id: Option<String>,
-    pub parent_item_id: Option<String>,
     pub name: String,
     pub description: Option<String>,
     pub has_children: bool,
@@ -414,7 +443,7 @@ impl Item {
 
     pub fn new_simple(user_id: &str, name: &str) -> Self {
         Self {
-            item_type: ItemType::Simple(SimpleItem),
+            item_type: ItemType::Simple(SimpleItem::default()),
             ..Self::new_user_item(user_id, name)
         }
     }
@@ -495,13 +524,24 @@ impl Item {
         self.item_type.priority()
     }
 
+    /// `None` for `Event` — moved off `Item` in Stage 4 of
+    /// `docs/item-kind-split-plan.md`; `TaskItem`/`SimpleItem`/`TemplateItem` are
+    /// the only kinds with anywhere to put a parent now. No
+    /// `Item::set_parent_item_id()` exists — every write site matches into
+    /// `ItemType::Task`/`ItemType::Simple`/`ItemType::Template` directly,
+    /// following `TaskItem::complete`'s precedent from Stage 3. Owned `String`
+    /// (not `&str`), matching `event_type()`/`source_event_id()`'s convention.
+    pub fn parent_item_id(&self) -> Option<String> {
+        self.item_type.parent_item_id().map(|s| s.to_string())
+    }
+
     /// True if this item's own date is derived from an offset rather than
     /// freely set — either a structural child (`parent_item_id`) or a task
     /// referencing an Event (`source_event_id`). Every "child-like"
     /// restriction (no manual scheduled window, no recurrence, due date
     /// computed rather than accepted) keys off this one predicate.
     pub fn is_offset_driven(&self) -> bool {
-        self.parent_item_id.is_some() || self.source_event_id().is_some()
+        self.parent_item_id().is_some() || self.source_event_id().is_some()
     }
 
     /// Enforces the cross-field invariants that assigning the payload to the wrong
@@ -513,7 +553,7 @@ impl Item {
         // Points are top-level-only, same shape as the recurrence+parentItemId
         // rejection in create_team_item/update_team_item — a child can't carry
         // its own point value (see CLAUDE.md's Points plan, Stage 2).
-        if self.points().is_some() && self.parent_item_id.is_some() {
+        if self.points().is_some() && self.parent_item_id().is_some() {
             return Err("child items cannot have points".to_string());
         }
         if self.name.chars().count() > MAX_NAME_LENGTH {
@@ -556,7 +596,7 @@ impl Item {
         }
         // A task either nests under a parent or references an event, never both —
         // keeps "offset-driven" unambiguous: exactly one anchor source.
-        if self.source_event_id().is_some() && self.parent_item_id.is_some() {
+        if self.source_event_id().is_some() && self.parent_item_id().is_some() {
             return Err("an item cannot both have a parent and reference an event".to_string());
         }
         // It never makes sense for a child/event-linked item's own due date to fall after its
@@ -635,6 +675,14 @@ mod tests {
             .recurrence_mut()
             .expect("has recurrence")
             .due_offset_days = Some(days);
+    }
+
+    fn set_parent_item_id(item: &mut Item, parent_id: &str) {
+        match &mut item.item_type {
+            ItemType::Task(task) => task.parent_item_id = Some(parent_id.to_string()),
+            ItemType::Simple(simple) => simple.parent_item_id = Some(parent_id.to_string()),
+            _ => panic!("parent_item_id only settable on Task/Simple"),
+        }
     }
 
     fn set_source_event_id(item: &mut Item, event_id: &str) {
@@ -755,7 +803,7 @@ mod tests {
     #[test]
     fn validate_rejects_points_on_child() {
         let mut item = Item::new_user_item("u1", "Subtask");
-        item.parent_item_id = Some("parent1".to_string());
+        set_parent_item_id(&mut item, "parent1");
         set_points(&mut item, 10);
         assert!(item.validate().is_err());
     }
@@ -788,7 +836,7 @@ mod tests {
     #[test]
     fn validate_allows_priority_on_child_task() {
         let mut item = Item::new_task("u1", "Subtask");
-        item.parent_item_id = Some("parent1".to_string());
+        set_parent_item_id(&mut item, "parent1");
         set_priority(&mut item, 2);
         assert!(item.validate().is_ok());
     }
@@ -796,7 +844,7 @@ mod tests {
     #[test]
     fn validate_rejects_item_with_both_parent_and_source_event() {
         let mut item = Item::new_task("u1", "Buy cake");
-        item.parent_item_id = Some("parent1".to_string());
+        set_parent_item_id(&mut item, "parent1");
         set_source_event_id(&mut item, "event1");
         assert!(item.validate().is_err());
     }
@@ -811,7 +859,7 @@ mod tests {
     #[test]
     fn validate_allows_scheduled_date_on_child_item() {
         let mut item = Item::new_task("u1", "Sub-task");
-        item.parent_item_id = Some("parent1".to_string());
+        set_parent_item_id(&mut item, "parent1");
         set_scheduled_date(&mut item, Utc::now());
         assert!(item.validate().is_ok());
     }
@@ -834,7 +882,7 @@ mod tests {
     #[test]
     fn is_offset_driven_true_for_child() {
         let mut item = Item::new_task("u1", "Sub-task");
-        item.parent_item_id = Some("parent1".to_string());
+        set_parent_item_id(&mut item, "parent1");
         assert!(item.is_offset_driven());
     }
 

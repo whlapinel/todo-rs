@@ -1662,7 +1662,7 @@ async fn load_batch_items(
 /// own due date is offset-driven, not independently set (see root CLAUDE.md's Recurrence
 /// section on `due_offset_days`).
 fn require_all_top_level(items: &[Item]) -> Result<(), ItemError> {
-    if items.iter().any(|i| i.parent_item_id.is_some()) {
+    if items.iter().any(|i| i.parent_item_id().is_some()) {
         return Err(ItemError::Invalid(
             "Set due/schedule dates only applies when every selected task is top-level."
                 .to_string(),
@@ -1680,11 +1680,11 @@ fn require_same_parent_subitems(items: &[Item]) -> Result<(), ItemError> {
     }
     let first = items
         .first()
-        .and_then(|i| i.parent_item_id.clone())
+        .and_then(|i| i.parent_item_id())
         .ok_or_else(invalid)?;
     if items
         .iter()
-        .any(|i| i.parent_item_id.as_deref() != Some(first.as_str()))
+        .any(|i| i.parent_item_id().as_deref() != Some(first.as_str()))
     {
         return Err(invalid());
     }
@@ -1707,7 +1707,7 @@ fn identity_params(project_id: &str, item: &Item, tz: i32) -> UpdateProjectItemP
         has_due_time: Some(item.has_due_time()),
         has_scheduled_time: Some(item.has_scheduled_time()),
         has_end_time: Some(item.has_end_time()),
-        parent_item_id: item.parent_item_id.clone(),
+        parent_item_id: item.parent_item_id(),
         item_type: Some(item.kind()),
         event_type: item.event_type(),
         due_offset_days: item.due_offset_days(),
@@ -2103,7 +2103,7 @@ pub async fn update_project_task_form(
                 None => HashMap::from([(auth_user.user_id.clone(), "You".to_string())]),
             };
             let siblings =
-                sibling_group(&repo, &project_id, updated.parent_item_id.as_deref()).await?;
+                sibling_group(&repo, &project_id, updated.parent_item_id().as_deref()).await?;
             let siblings_ref: Vec<&Item> = siblings.iter().collect();
             let skip_url =
                 item_series_service::skip_url_for_item(&series, &updated, &project_id).await?;
@@ -2457,11 +2457,11 @@ pub async fn get_move_task_dialog(
     )
     .await?;
     let task = require_task(task)?;
-    let parent = match &task.parent_item_id {
-        Some(pid) => Some(repo.get_by_project(&project_id, pid).await?),
+    let parent = match task.parent_item_id() {
+        Some(pid) => Some(repo.get_by_project(&project_id, &pid).await?),
         None => None,
     };
-    let siblings = sibling_group(&repo, &project_id, task.parent_item_id.as_deref()).await?;
+    let siblings = sibling_group(&repo, &project_id, task.parent_item_id().as_deref()).await?;
     render(MoveDialog::new(
         &task,
         parent.as_ref(),
@@ -2717,6 +2717,7 @@ mod resolve_task_anchor_date_tests {
             user_id: user_id.map(str::to_string),
             project_id: Some("proj1".to_string()),
             item_type: ItemType::Task(TaskItem {
+                parent_item_id: None,
                 schedule: Schedule {
                     due_date: Some(due_date),
                     has_due_time: false,
@@ -2756,7 +2757,10 @@ mod resolve_task_anchor_date_tests {
             id: "child1".to_string(),
             user_id: None,
             project_id: Some("proj1".to_string()),
-            parent_item_id: Some("parent1".to_string()),
+            item_type: ItemType::Task(TaskItem {
+                parent_item_id: Some("parent1".to_string()),
+                ..TaskItem::default()
+            }),
             ..Item::default()
         };
 
@@ -2780,7 +2784,10 @@ mod resolve_task_anchor_date_tests {
             id: "child1".to_string(),
             user_id: Some("owner1".to_string()),
             project_id: Some("proj1".to_string()),
-            parent_item_id: Some("parent1".to_string()),
+            item_type: ItemType::Task(TaskItem {
+                parent_item_id: Some("parent1".to_string()),
+                ..TaskItem::default()
+            }),
             ..Item::default()
         };
 

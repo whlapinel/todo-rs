@@ -51,7 +51,7 @@ pub async fn list_templates(
             has_due_time: Some(i.has_due_time()),
             has_scheduled_time: Some(i.has_scheduled_time()),
             has_end_time: Some(i.has_end_time()),
-            parent_item_id: i.parent_item_id.clone(),
+            parent_item_id: i.parent_item_id(),
             has_children: Some(i.has_children),
             item_type: Some(to_sdk_item_type(i.kind())),
             event_type: i.event_type(),

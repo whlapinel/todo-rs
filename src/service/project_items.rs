@@ -1,4 +1,4 @@
-use crate::domain::item::{Item, ItemKind};
+use crate::domain::item::{Item, ItemKind, ItemType};
 use crate::domain::project::Project;
 use crate::service::error::ItemError;
 use crate::service::item_dependencies;
@@ -139,7 +139,7 @@ async fn resolve_top_level_anchor_unchecked(
     item: &Item,
 ) -> Result<Option<DateTime<Utc>>, ItemError> {
     let mut current = item.clone();
-    while let Some(parent_id) = current.parent_item_id.clone() {
+    while let Some(parent_id) = current.parent_item_id() {
         current = repo.get_by_project(project_id, &parent_id).await?;
     }
     Ok(item_anchor(&current))
@@ -170,14 +170,14 @@ pub async fn resolve_promotion_target(
 ) -> Result<PromotionTarget, ItemError> {
     require_project_member(projects, teams, project_id, requester_user_id).await?;
     let current = repo.get_by_project(project_id, item_id).await?;
-    let Some(parent_id) = current.parent_item_id.clone() else {
+    let Some(parent_id) = current.parent_item_id() else {
         return Err(ItemError::Invalid(
             "item has no parent to promote from".to_string(),
         ));
     };
     let parent = repo.get_by_project(project_id, &parent_id).await?;
-    let grandparent = match &parent.parent_item_id {
-        Some(gp_id) => Some(repo.get_by_project(project_id, gp_id).await?),
+    let grandparent = match parent.parent_item_id() {
+        Some(gp_id) => Some(repo.get_by_project(project_id, &gp_id).await?),
         None => None,
     };
     let offset_anchor = match &grandparent {
@@ -212,7 +212,7 @@ pub async fn resolve_subordination_target(
     require_project_member(projects, teams, project_id, requester_user_id).await?;
     let current = repo.get_by_project(project_id, item_id).await?;
     let new_parent = repo.get_by_project(project_id, new_parent_id).await?;
-    if new_parent.parent_item_id != current.parent_item_id {
+    if new_parent.parent_item_id() != current.parent_item_id() {
         return Err(ItemError::Invalid(
             "target is not a sibling of this item".to_string(),
         ));
@@ -594,7 +594,12 @@ async fn copy_children(
 ) -> Result<(), ItemError> {
     let children = repo.list_children(old_parent_id).await?;
     for mut child in children {
-        child.parent_item_id = Some(new_parent_id.to_string());
+        match &mut child.item_type {
+            ItemType::Task(t) => t.parent_item_id = Some(new_parent_id.to_string()),
+            ItemType::Simple(s) => s.parent_item_id = Some(new_parent_id.to_string()),
+            ItemType::Template(t) => t.parent_item_id = Some(new_parent_id.to_string()),
+            ItemType::Event(_) => {}
+        }
         let copy_id = repo.create(&child).await?;
         copy_children(&child.id, &copy_id, repo).await?;
     }
@@ -1343,6 +1348,7 @@ mod tests {
                 name: "Standup".to_string(),
                 project_id: Some("p1".to_string()),
                 item_type: ItemType::Task(TaskItem {
+                    parent_item_id: None,
                     schedule: Schedule::default(),
                     recurrence: Recurrence::default(),
                     team_assignment: Some(TeamAssignment {

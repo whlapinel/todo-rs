@@ -54,6 +54,7 @@ pub struct CreateItemParams {
 #[allow(clippy::too_many_arguments)]
 fn build_item_type(
     kind: ItemKind,
+    parent_item_id: Option<String>,
     schedule: Schedule,
     recurrence: Recurrence,
     event_type: Option<String>,
@@ -62,8 +63,9 @@ fn build_item_type(
     complete: bool,
 ) -> ItemType {
     match kind {
-        ItemKind::Simple => ItemType::Simple(SimpleItem),
+        ItemKind::Simple => ItemType::Simple(SimpleItem { parent_item_id }),
         ItemKind::Task => ItemType::Task(TaskItem {
+            parent_item_id,
             schedule,
             recurrence,
             team_assignment: None,
@@ -77,6 +79,7 @@ fn build_item_type(
             event_type,
         }),
         ItemKind::Template => ItemType::Template(TemplateItem {
+            parent_item_id,
             schedule,
             recurrence,
             event_type,
@@ -145,6 +148,7 @@ pub async fn create_item(
     };
     item.item_type = build_item_type(
         kind,
+        params.parent_item_id.clone(),
         schedule,
         recurrence_data,
         params.event_type.clone(),
@@ -152,7 +156,6 @@ pub async fn create_item(
         params.priority,
         params.complete.unwrap_or(false),
     );
-    item.parent_item_id = params.parent_item_id.clone();
     item.description = params.description.clone();
     item.series_id = params.series_id.clone();
     // Dual-write, stage B2 (docs/project-abstraction-plan.md) — alongside the
@@ -304,6 +307,7 @@ pub async fn update_item(
     };
     item.item_type = build_item_type(
         kind,
+        params.parent_item_id.clone(),
         schedule,
         recurrence_data,
         params.event_type.clone(),
@@ -312,7 +316,6 @@ pub async fn update_item(
         params.complete,
     );
     item.id = params.item_id.clone();
-    item.parent_item_id = params.parent_item_id.clone();
     item.description = params.description.clone();
     // Carried forward from `current` rather than re-resolved (stage B2) — an item's
     // owner, and thus its personal project, never changes after creation.
@@ -341,7 +344,7 @@ pub async fn update_item(
 
     let just_completed = !current.complete() && item.complete();
     let just_uncompleted = current.complete() && !item.complete();
-    if just_completed && item.parent_item_id.is_none() {
+    if just_completed && item.parent_item_id().is_none() {
         activity_log
             .log_activity(
                 None,
@@ -501,7 +504,7 @@ pub(crate) async fn top_level_anchor(
     item: &Item,
 ) -> Result<Option<DateTime<Utc>>, RepoError> {
     let mut current = item.clone();
-    while let Some(parent_id) = current.parent_item_id.clone() {
+    while let Some(parent_id) = current.parent_item_id().map(|s| s.to_string()) {
         current = repo.get(user_id, &parent_id).await?;
     }
     Ok(item_anchor(&current))
@@ -521,7 +524,7 @@ pub(crate) async fn resolve_offset_anchor(
     if let Some(event_id) = item.source_event_id() {
         let event = repo.get(user_id, &event_id).await?;
         Ok(event_anchor(&event))
-    } else if let Some(parent_id) = item.parent_item_id.clone() {
+    } else if let Some(parent_id) = item.parent_item_id() {
         let parent = repo.get(user_id, &parent_id).await?;
         top_level_anchor(repo, user_id, &parent).await
     } else {
@@ -563,7 +566,7 @@ pub(crate) fn is_pure_complete_toggle(current: &Item, item: &Item) -> bool {
         && current.has_due_time() == item.has_due_time()
         && current.has_scheduled_time() == item.has_scheduled_time()
         && current.has_end_time() == item.has_end_time()
-        && current.parent_item_id == item.parent_item_id
+        && current.parent_item_id() == item.parent_item_id()
         && current.kind() == item.kind()
         && current.event_type() == item.event_type()
         && current.due_offset_days() == item.due_offset_days()
@@ -657,13 +660,13 @@ pub(crate) fn copy_template_children<'a>(
         for child in children {
             let mut new_child = child.clone();
             new_child.id = String::new();
-            new_child.parent_item_id = Some(new_parent_id.to_string());
             let mut schedule = child.item_type.schedule().cloned().unwrap_or_default();
             schedule.due_date =
                 root_due_date.and_then(|root| child.deadline_from_offset(root, tz_offset_minutes));
             schedule.has_due_time = false;
             let recurrence = child.item_type.recurrence().cloned().unwrap_or_default();
             new_child.item_type = ItemType::Task(TaskItem {
+                parent_item_id: Some(new_parent_id.to_string()),
                 schedule,
                 recurrence,
                 team_assignment: None,
@@ -704,13 +707,13 @@ pub(crate) fn copy_template_children_to_event<'a>(
         for child in children {
             let mut new_child = child.clone();
             new_child.id = String::new();
-            new_child.parent_item_id = None;
             let mut schedule = child.item_type.schedule().cloned().unwrap_or_default();
             schedule.due_date =
                 event_anchor.and_then(|root| child.deadline_from_offset(root, tz_offset_minutes));
             schedule.has_due_time = false;
             let recurrence = child.item_type.recurrence().cloned().unwrap_or_default();
             new_child.item_type = ItemType::Task(TaskItem {
+                parent_item_id: None,
                 schedule,
                 recurrence,
                 team_assignment: None,
@@ -754,7 +757,6 @@ pub(crate) fn copy_children_as_template<'a>(
         for child in children {
             let mut new_child = child.clone();
             new_child.id = String::new();
-            new_child.parent_item_id = Some(new_template_parent_id.to_string());
             let mut schedule = child.item_type.schedule().cloned().unwrap_or_default();
             schedule.due_date = None;
             schedule.scheduled_date = None;
@@ -762,6 +764,7 @@ pub(crate) fn copy_children_as_template<'a>(
             let recurrence = child.item_type.recurrence().cloned().unwrap_or_default();
             let event_type = child.event_type();
             new_child.item_type = ItemType::Template(TemplateItem {
+                parent_item_id: Some(new_template_parent_id.to_string()),
                 schedule,
                 recurrence,
                 event_type,
@@ -821,6 +824,7 @@ mod tests {
             id: id.to_string(),
             user_id: Some(user_id.to_string()),
             item_type: ItemType::Template(TemplateItem {
+                parent_item_id: None,
                 schedule: Schedule::default(),
                 recurrence: Recurrence::default(),
                 event_type: Some(event_type.to_string()),
@@ -832,8 +836,8 @@ mod tests {
     fn template_child(id: &str, parent_id: &str, offset_days: i32) -> Item {
         Item {
             id: id.to_string(),
-            parent_item_id: Some(parent_id.to_string()),
             item_type: ItemType::Template(TemplateItem {
+                parent_item_id: Some(parent_id.to_string()),
                 schedule: Schedule::default(),
                 recurrence: Recurrence {
                     due_offset_days: Some(offset_days),
@@ -849,6 +853,7 @@ mod tests {
         Item {
             id: id.to_string(),
             item_type: ItemType::Task(TaskItem {
+                parent_item_id: None,
                 schedule: Schedule {
                     due_date: Some(due_date),
                     ..Schedule::default()
@@ -883,8 +888,8 @@ mod tests {
     fn task_with_due_offset(id: &str, parent_id: &str, offset_days: i32) -> Item {
         Item {
             id: id.to_string(),
-            parent_item_id: Some(parent_id.to_string()),
             item_type: ItemType::Task(TaskItem {
+                parent_item_id: Some(parent_id.to_string()),
                 schedule: Schedule::default(),
                 recurrence: Recurrence {
                     due_offset_days: Some(offset_days),
@@ -904,7 +909,7 @@ mod tests {
         let mut mock = MockItemRepo::new();
 
         mock.expect_create()
-            .withf(|item: &Item| item.parent_item_id.is_none())
+            .withf(|item: &Item| item.parent_item_id().is_none())
             .times(1)
             .returning(|_| Ok("new-event-id".to_string()));
 
@@ -920,7 +925,7 @@ mod tests {
 
         mock.expect_create()
             .withf(|item: &Item| {
-                item.parent_item_id.is_none()
+                item.parent_item_id().is_none()
                     && item.source_event_id().as_deref() == Some("new-event-id")
             })
             .times(1)
@@ -1550,7 +1555,10 @@ mod tests {
             .returning(|_| {
                 Ok(vec![Item {
                     id: "child1".to_string(),
-                    parent_item_id: Some("item1".to_string()),
+                    item_type: ItemType::Task(TaskItem {
+                        parent_item_id: Some("item1".to_string()),
+                        ..TaskItem::default()
+                    }),
                     ..Item::default()
                 }])
             });
@@ -1592,8 +1600,8 @@ mod tests {
             .returning(|_| {
                 Ok(vec![Item {
                     id: "child1".to_string(),
-                    parent_item_id: Some("item1".to_string()),
                     item_type: ItemType::Task(TaskItem {
+                        parent_item_id: Some("item1".to_string()),
                         complete: true,
                         ..TaskItem::default()
                     }),

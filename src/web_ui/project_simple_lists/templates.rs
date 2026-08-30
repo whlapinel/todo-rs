@@ -51,7 +51,7 @@ impl ProjectSimpleItemRow {
             // Events-only (see `Row::add_linked_task_url`'s doc comment) — a Simple item uses
             // `add_child_url` instead.
             add_linked_task_url: None,
-            move_url: (item.parent_item_id.is_some() || siblings.iter().any(|s| s.id != item.id))
+            move_url: (item.parent_item_id().is_some() || siblings.iter().any(|s| s.id != item.id))
                 .then(|| format!("/web/projects/{project_id}/simple-lists/{}/move", item.id)),
             reschedule_url: None,
             assign_url: None,

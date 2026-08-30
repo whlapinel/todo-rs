@@ -1795,7 +1795,7 @@ mod tests {
         // The occurrence's own item.
         items_mock
             .expect_create()
-            .withf(|item: &Item| item.kind() == ItemKind::Task && item.parent_item_id.is_none())
+            .withf(|item: &Item| item.kind() == ItemKind::Task && item.parent_item_id().is_none())
             .times(1)
             .returning(|_| Ok("new-item-id".to_string()));
         // The template's one child, copied via copy_template_children.
@@ -1803,7 +1803,7 @@ mod tests {
             .expect_create()
             .withf(|item: &Item| {
                 item.kind() == ItemKind::Task
-                    && item.parent_item_id.as_deref() == Some("new-item-id")
+                    && item.parent_item_id().as_deref() == Some("new-item-id")
                     && item.due_date().is_some()
             })
             .times(1)
@@ -1815,7 +1815,9 @@ mod tests {
             .returning(|_| {
                 let mut child = Item::new_project_item("p1", "Prep agenda");
                 child.id = "template-child-1".to_string();
-                child.parent_item_id = Some("template-1".to_string());
+                if let item::ItemType::Task(task) = &mut child.item_type {
+                    task.parent_item_id = Some("template-1".to_string());
+                }
                 if let Some(recurrence) = child.item_type.recurrence_mut() {
                     recurrence.due_offset_days = Some(2);
                 }

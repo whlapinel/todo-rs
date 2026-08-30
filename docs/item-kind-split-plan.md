@@ -39,7 +39,7 @@ Before any struct is renamed for real, Stage 0 must nail down, with a citation f
 | `priority` | `ItemType::Task` payload (already split) | Task only | High |
 | `event_type` | `ItemType::Event`/`Template` payload (already split) | Event, Template | High |
 | `complete` | flat `Item` field | Task only | High — `validate()` rejects Simple/Event explicitly; Template has no complete-toggle UI/CLI/MCP path anywhere |
-| `parent_item_id` (as *this item's own* parent, i.e. "am I a child") | flat `Item` field | Task, Simple | High — Event confirmed never-a-child (`project_events/mod.rs` hardcodes `None`); Template confirmed too: `service::templates::create_template` builds its `Item` via `Item::new_user_item` (defaults `parent_item_id: None`) and never assigns it anywhere in that file |
+| `parent_item_id` (as *this item's own* parent, i.e. "am I a child") | flat `Item` field | Task, Simple, Template | High — Event confirmed never-a-child (`project_events/mod.rs` hardcodes `None`). **Correction made during Stage 4 implementation:** the original audit checked only `service::templates::create_template` (a *root* template never has a parent — that part still holds) and wrongly concluded Template can never be a child at all. It missed `service::items::copy_children_as_template`, which recursively copies a real item's descendants into *nested* Template-typed rows with `parent_item_id` set, and `create_item`'s "child of a Template auto-becomes a Template" branch, which round-trips a caller-supplied `parent_item_id` onto a freshly created Template child the same way. So Template *is* legitimately Task-and-Simple-and-Template for this field — only a *root* template has `None`. See Stage 4's write-up below. |
 | `has_children` (computed, read-only) | flat `Item` field | universal — every kind can be a parent/container | High — confirmed all four: `project_tasks`/`project_simple_lists`/`project_templates` (`project_template_children_fragment` et al.) all render a children fragment; Events' sub-item routes are documented in CLAUDE.md's Events section |
 | `depends_on_item_ids` | **not an `Item` field** — side table via `ItemDependencyRepo` | Task only, enforced in `service::item_dependencies.rs` | High — out of scope for the struct shape below since it isn't a domain-model field at all, but the Task-only runtime check becomes one of the "closed by construction" wins once only `TaskItem`'s construction path can even reach that validator meaningfully |
 | `series_id` | flat `Item` field | Task, Event (mirrors `ItemSeries.item_type`'s own Task/Event restriction) | High — every non-test write site (`service::items.rs`/`team_items.rs`'s round-trip-on-update, `service::item_series.rs`'s `get_or_materialize_occurrence`) either round-trips an existing value or is reached only through `ItemSeries` construction, which is itself already restricted to `item_type: Task \| Event` |
@@ -86,6 +86,12 @@ pub struct EventItem {
 }
 
 pub struct TemplateItem {
+    // Added during Stage 4 (not in the original draft) — see the Stage 0 table's
+    // "Correction made during Stage 4 implementation" note above. `None` for a root
+    // template; `Some(parent_template_or_child_id)` for a nested template child
+    // (`service::items::copy_children_as_template`, or a real item created as a
+    // child of a Template, which auto-becomes a Template itself).
+    pub parent_item_id: Option<String>,
     pub schedule: Schedule,
     pub recurrence: Recurrence,
     pub event_type: Option<String>,
@@ -175,7 +181,7 @@ Ship in order; each stage is its own PR/commit and leaves `cargo fmt`/`cargo tes
 - [x] Stage 1 — Wrap `ItemType`'s inline variants into named per-kind structs (no field movement)
 - [x] Stage 2 — Add `HasSchedule`/`Completable` traits; repoint the genuinely generic call sites onto them
 - [x] Stage 3 — Move `complete` off `Item` onto `TaskItem`
-- [ ] Stage 4 — Move `parent_item_id` off `Item` onto `TaskItem`/`SimpleItem`
+- [x] Stage 4 — Move `parent_item_id` off `Item` onto `TaskItem`/`SimpleItem`/`TemplateItem`
 - [ ] Stage 5 — Move `series_id` onto `TaskItem`/`EventItem`
 - [ ] Stage 6 — Move `google_event_id`/`calendar_subscription_id` onto `EventItem`
 - [ ] Stage 7 — Optional per-screen web_ui ergonomic cleanup (`require_task` etc. return the concrete struct)
@@ -237,11 +243,18 @@ One borrow-checker wrinkle, not anticipated by the plan: two spots in `web_ui/pr
 
 ~90 call sites across `src/service/{items,team_items,project_items,push,reminders,item_dependencies,activity_log,templates}.rs`, `src/storage/sqlite/{mod,items}.rs`, `src/json_api/{items,project_items,team_templates,templates}.rs`, and `src/web_ui/{list_filters,assigned_items,all_projects_tasks,project_tasks/mod,project_tasks/handlers,project_tasks/templates}.rs` were updated — all mechanical (`.complete` → `.complete()` for reads; `item.complete = ..` → a match into `ItemType::Task` for writes; a handful of test-fixture `Item { complete: .., .. }` literals moved onto a nested `TaskItem { complete: .., .. }`). Zero edits to `templates/*.html` (confirmed via `git diff --stat -- templates/`), matching the Stage 1 precedent. `cargo fmt` (plain, repo-root), `cargo test` (601 passed, 0 failed), and `task check` all clean — only the same pre-existing dead-code warnings noted in Stage 1's write-up remain, none new.
 
-### Stage 4 — Move `parent_item_id` onto `TaskItem`/`SimpleItem`
+### Stage 4 — Move `parent_item_id` onto `TaskItem`/`SimpleItem`/`TemplateItem`
 
-- Same shape as Stage 3: remove from `Item`, add to both `TaskItem` and `SimpleItem`, `Item::parent_item_id() -> Option<&str>` delegates (returning `None` for `Event`/`Template`, matching confirmed-in-Stage-0 behavior).
+- Same shape as Stage 3: remove from `Item`, add to `TaskItem` and `SimpleItem`, `Item::parent_item_id() -> Option<&str>` delegates (returning `None` for `Event`/`Template`, matching confirmed-in-Stage-0 behavior).
 - Fix ~89 call sites across `src/service/items.rs`/`team_items.rs`/`project_items.rs`, `src/web_ui/project_tasks/`, `project_simple_lists/`, `project_events/` (which reads it to confirm it's always `None`), `project_templates/`.
 - **Verify:** full `cargo test`; specifically the item-nesting tests in `project_simple_lists` and `project_tasks` (sibling-group queries, expandable-children fragments) since those are the two kinds actually exercising this field's write path.
+
+**Stage 4 as implemented — two corrections to the plan:**
+
+1. **`TemplateItem` also needed `parent_item_id`, not just `TaskItem`/`SimpleItem`.** Adding the field and fixing the ~30 resulting `TaskItem`/`SimpleItem` compile errors surfaced a hard `ItemType::Template(TemplateItem { .. missing field parent_item_id })` error at `service::items::copy_children_as_template`'s `new_child.item_type = ItemType::Template(TemplateItem { .. })` construction — a real production call site, not a test fixture. Investigating why turned up the Stage 0 gap described in the corrected table row above. `TemplateItem::parent_item_id` was added alongside `TaskItem`'s/`SimpleItem`'s in the same commit, `ItemType::parent_item_id()`'s match gained a `Template` arm, and `service::items::build_item_type`/`service::team_items::build_item_type`'s `Template` arms now thread the parameter through too (team items reject `itemType: TEMPLATE` outright at the API boundary, so that arm is unreachable in practice, but keeping the same shape as `create_item`'s twin avoids a second special case). Confirmed load-bearing, not just defensive: `json_api::templates::list_templates`/`team_templates::list_team_templates` already read `i.parent_item_id` to serialize every item in a template's subtree over the wire (unconditionally, not gated on kind) — without this fix, every Template *child*'s `parentItemId` would have silently serialized as `null`, breaking the template-tree structure `prl`/MCP/any API consumer sees.
+2. **`Item::parent_item_id()` returns owned `Option<String>`, not `Option<&str>`** — the plan's sketch matched `Item::complete() -> bool` (a `Copy` type, no ownership question), but `parent_item_id` needed the same choice `event_type()`/`source_event_id()` already made: those return owned `Option<String>` via `.map(|s| s.to_string())` over the `&str`-returning `ItemType` accessor, not a borrowed `Option<&str>`. Matching that existing convention (rather than introducing a new borrowed-return shape) meant most call sites only needed `.parent_item_id` → `.parent_item_id()` (a parens-only fix, `.as_deref()`/`.clone()` after it stayed valid unchanged); `ItemType::parent_item_id() -> Option<&str>` itself still returns borrowed, matching `ItemType::source_event_id()`'s own precedent — only `Item`'s convenience wrapper allocates.
+
+~110 call sites touched across `src/domain/item.rs`, `src/storage/sqlite/{mod,items}.rs`, `src/service/{items,team_items,project_items,templates,item_dependencies,activity_log,item_series,comments,reminders}.rs`, `src/json_api/{project_items,team_templates,templates}.rs`, and `src/web_ui/{all_projects_tasks,main_calendar,project_calendar,project_tasks/{mod,handlers,templates},project_simple_lists/{mod,handlers,templates}}.rs` — all mechanical given the two corrections above. Zero edits to `templates/*.html` (confirmed via `git diff --stat -- templates/`), matching every prior stage's precedent. `cargo fmt` (plain, repo-root), `cargo test` (601 passed, 0 failed — same count as Stage 3, no new tests added since Stage 3's existing coverage of nesting/sibling-group/template-child-copy behavior already exercises this field's write path end to end), and `cargo check` all clean — only the same pre-existing dead-code warnings noted in Stage 1/3's write-ups remain (one of which, `item_series.rs`'s unused `self` import, is now actually resolved as a side effect of this stage's `item::ItemType::Task` fully-qualified reference in a test fixture).
 
 ### Stage 5 — Move `series_id` onto `TaskItem`/`EventItem`
 

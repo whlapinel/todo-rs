@@ -592,7 +592,7 @@ pub async fn toggle_all_projects_task_complete(
         has_due_time: Some(current.has_due_time()),
         has_scheduled_time: Some(current.has_scheduled_time()),
         has_end_time: Some(current.has_end_time()),
-        parent_item_id: current.parent_item_id.clone(),
+        parent_item_id: current.parent_item_id(),
         item_type: Some(current.kind()),
         event_type: current.event_type(),
         due_offset_days: current.due_offset_days(),

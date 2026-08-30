@@ -116,7 +116,7 @@ pub(crate) fn update_params_from_form(
         name: overlay_required_str(&form.name, &current.name),
         description: overlay_str(&form.description, current.description.clone()),
         complete: false,
-        parent_item_id: current.parent_item_id.clone(),
+        parent_item_id: current.parent_item_id(),
         item_type: Some(ItemKind::Simple),
         ..Default::default()
     }

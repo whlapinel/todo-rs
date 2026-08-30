@@ -307,7 +307,7 @@ mod tests {
         let mut items_mock = MockItemRepo::new();
         items_mock.expect_get_by_project().returning(|_, id| {
             let mut item = task(id, "p1");
-            item.item_type = ItemType::Simple(SimpleItem);
+            item.item_type = ItemType::Simple(SimpleItem::default());
             Ok(item)
         });
         let mut projects_mock = MockProjectRepo::new();

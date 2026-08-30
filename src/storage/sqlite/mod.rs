@@ -650,6 +650,7 @@ fn row_to_item(row: &sqlx::sqlite::SqliteRow) -> Item {
     let points: Option<i32> = row.get("points");
     let priority: Option<i32> = row.get("priority");
     let source_event_id: Option<String> = row.get("source_event_id");
+    let parent_item_id: Option<String> = row.get("parent_item_id");
 
     let kind: ItemKind = row
         .get::<Option<String>, _>("item_type")
@@ -658,6 +659,7 @@ fn row_to_item(row: &sqlx::sqlite::SqliteRow) -> Item {
 
     let item_type = match kind {
         ItemKind::Task => ItemType::Task(TaskItem {
+            parent_item_id,
             schedule,
             recurrence,
             team_assignment: if assigned_to_user_id.is_some() || points.is_some() {
@@ -678,18 +680,18 @@ fn row_to_item(row: &sqlx::sqlite::SqliteRow) -> Item {
             event_type,
         }),
         ItemKind::Template => ItemType::Template(TemplateItem {
+            parent_item_id,
             schedule,
             recurrence,
             event_type,
         }),
-        ItemKind::Simple => ItemType::Simple(SimpleItem),
+        ItemKind::Simple => ItemType::Simple(SimpleItem { parent_item_id }),
     };
 
     Item {
         id: row.get("id"),
         user_id: row.get("user_id"),
         project_id: row.get("project_id"),
-        parent_item_id: row.get("parent_item_id"),
         name: row.get("name"),
         description: row.get("description"),
         has_children: row.get::<Option<i64>, _>("has_children").unwrap_or(0) != 0,
