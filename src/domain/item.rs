@@ -465,17 +465,6 @@ impl Item {
         if self.source_event_id().is_some() && self.parent_item_id.is_some() {
             return Err("an item cannot both have a parent and reference an event".to_string());
         }
-        // Offset-driven items (children and event-linked tasks) get their due date
-        // computed from the offset (see service::items::resolve_offset_anchor) —
-        // there's no equivalent "scheduled offset", so a manual scheduled window
-        // isn't allowed on them at all.
-        if self.is_offset_driven()
-            && (self.scheduled_date().is_some() || self.scheduled_end_date().is_some())
-        {
-            return Err(
-                "scheduled dates are not allowed on child or event-linked items".to_string(),
-            );
-        }
         // It never makes sense for a child/event-linked item's own due date to fall after its
         // anchor's — a sub-item existing to track work that supports the parent shouldn't be
         // "due" once the parent already is. `due_offset_days` keeps its historical signed
@@ -715,19 +704,19 @@ mod tests {
     }
 
     #[test]
-    fn validate_rejects_scheduled_date_on_child_item() {
+    fn validate_allows_scheduled_date_on_child_item() {
         let mut item = Item::new_task("u1", "Sub-task");
         item.parent_item_id = Some("parent1".to_string());
         set_scheduled_date(&mut item, Utc::now());
-        assert!(item.validate().is_err());
+        assert!(item.validate().is_ok());
     }
 
     #[test]
-    fn validate_rejects_scheduled_date_on_source_event_linked_task() {
+    fn validate_allows_scheduled_date_on_source_event_linked_task() {
         let mut item = Item::new_task("u1", "Buy cake");
         set_source_event_id(&mut item, "event1");
         set_scheduled_date(&mut item, Utc::now());
-        assert!(item.validate().is_err());
+        assert!(item.validate().is_ok());
     }
 
     #[test]

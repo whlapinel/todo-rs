@@ -444,9 +444,16 @@ pub(crate) async fn unlink_source_event_tasks(
 }
 
 /// An item's own reference date for anything measured relative to it (offset children,
-/// template auto-trigger copies) — `due_date` if set, else `scheduled_date`, else neither.
+/// template auto-trigger copies) — `due_date` only, never `scheduled_date`. Scheduled dates are
+/// always independently set (see `Item::validate`'s removal of the old "no scheduled window on
+/// offset-driven items" restriction, docs/issues_and_features.md's "Can't schedule sub-items"
+/// entry) — they must never become the basis another item's due date is derived from, or a
+/// child/event-linked task's own "independent" scheduled window would end up silently gated on
+/// an ancestor's, exactly the coupling that restriction existed to sidestep. An ancestor/Event
+/// with no `due_date` (only a `scheduled_date`) simply has no anchor at all — nothing derives
+/// from it — rather than falling back to its scheduled window.
 pub(crate) fn item_anchor(item: &Item) -> Option<DateTime<Utc>> {
-    item.due_date().or(item.scheduled_date())
+    item.due_date()
 }
 
 /// Walks `item`'s `parent_item_id` chain up to its true top-level ancestor and returns that
@@ -1024,6 +1031,61 @@ mod tests {
         )
         .await
         .expect("should create source-event-linked task");
+    }
+
+    #[tokio::test]
+    async fn create_item_leaves_due_date_unset_when_source_event_has_only_a_scheduled_date() {
+        // `item_anchor` must never fall back to `scheduled_date` — see its own doc comment and
+        // docs/issues_and_features.md's "Can't schedule sub-items" entry. An Event with a
+        // scheduled window but no due date has no offset anchor at all, not a scheduled-date
+        // one, so a source-event-linked task's own due date stays unset rather than being
+        // silently derived from the event's (independent) scheduled window.
+        let mut mock = MockItemRepo::new();
+        let event_scheduled = DateTime::parse_from_rfc3339("2026-01-10T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        mock.expect_get()
+            .withf(|user_id: &str, item_id: &str| user_id == "u1" && item_id == "event1")
+            .times(1)
+            .returning(move |_, _| {
+                Ok(Item {
+                    id: "event1".to_string(),
+                    user_id: Some("u1".to_string()),
+                    item_type: ItemType::Event {
+                        schedule: Schedule {
+                            scheduled_date: Some(event_scheduled),
+                            ..Schedule::default()
+                        },
+                        recurrence: Recurrence::default(),
+                        event_type: None,
+                    },
+                    ..Item::default()
+                })
+            });
+
+        mock.expect_create()
+            .withf(|item: &Item| {
+                item.source_event_id().as_deref() == Some("event1") && item.due_date().is_none()
+            })
+            .times(1)
+            .returning(|_| Ok("new-task-id".to_string()));
+
+        let repo: Arc<dyn ItemRepo> = Arc::new(mock);
+
+        create_item(
+            &repo,
+            &no_personal_project(),
+            CreateItemParams {
+                user_id: "u1".to_string(),
+                name: "Buy cake".to_string(),
+                source_event_id: Some("event1".to_string()),
+                due_offset_days: Some(-2),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("should still create the task, just with no computed due date");
     }
 
     #[tokio::test]
