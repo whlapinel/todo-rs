@@ -67,6 +67,11 @@
               (computed from the offset below)
             </p>
           </div>
+          <!-- Scheduled start/end are independent of the due-date offset above (never
+               recomputed by it — see root CLAUDE.md's Recurrence section, `due_offset_days`
+               only ever drives `due_date`), so they're settable here same as any other item. -->
+          {% call macros::scheduled_fields(scheduled_date_input, scheduled_time_input, scheduled_end_date_input,
+          scheduled_end_time_input) %}{% endcall %}
           {% else %}
           <div class="flex items-end gap-x-4">
             <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Due date

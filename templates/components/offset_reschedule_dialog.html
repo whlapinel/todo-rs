@@ -1,11 +1,11 @@
 {% import "macros.html" as macros %}
 <!-- Sub-item ("offset-driven" — has a parent or a source event) counterpart to
-     `components/reschedule_dialog.html`: a sub-item's date is never set directly, only via its
-     days-before-due offset (see CLAUDE.md's Recurrence section), so its own "Reschedule" row
-     action opens this instead of the normal due/scheduled-date form — see
-     docs/issues_and_features.md's "For 'reschedule' on sub-items..." entry. Swapped into
-     #action-dialog's innerHTML exactly like `reschedule_dialog.html` (hx-select="unset" on the
-     row-actions-menu's "Reschedule" button) — no `#dialog-fragment` wrapper of its own. -->
+     `components/reschedule_dialog.html`: a sub-item's due date is never set directly, only via
+     its days-before-due offset (see CLAUDE.md's Recurrence section), so its own "Reschedule" row
+     action opens this instead of the normal due-date form. Its scheduled start/end window is
+     independent of that offset and settable directly, same as `reschedule_dialog.html`'s. Swapped
+     into #action-dialog's innerHTML exactly like `reschedule_dialog.html` (hx-select="unset" on
+     the row-actions-menu's "Reschedule" button) — no `#dialog-fragment` wrapper of its own. -->
 <div id="dialog-backdrop"
     class="fixed inset-0 bg-gray-500/75 dark:bg-gray-900/50 transition-opacity duration-300 ease-out opacity-0 group-open/dialog:opacity-100">
 </div>
@@ -17,8 +17,10 @@
             hx-swap="outerHTML"
             hx-on::after-request="if(event.detail.successful) document.getElementById('action-dialog').close()">
             <h3 class="text-base font-semibold text-gray-900 dark:text-white">Reschedule</h3>
-            <div class="mt-3 text-left">
+            <div class="mt-3 text-left space-y-3">
                 {% call macros::due_offset_days_field(due_offset_days_input, anchor_date_input) %}{% endcall %}
+                {% call macros::scheduled_fields(scheduled_start_date, scheduled_start_time, scheduled_end_date,
+                scheduled_end_time) %}{% endcall %}
             </div>
             <div class="mt-5 sm:mt-6 sm:grid sm:grid-flow-row-dense sm:grid-cols-2 sm:gap-3">
                 <button type="submit"

@@ -263,12 +263,15 @@ impl RescheduleDialog {
 /// `handlers::get_reschedule_task`) when the task `is_offset_driven()` (a sub-item with a
 /// `parent_item_id`, or a task linked to an Event via `source_event_id`): such a task's own
 /// `due_date` is never editable directly, only via its days-before-due offset (see CLAUDE.md's
-/// Recurrence section), so the normal due/scheduled-date fields would either be rejected or
-/// silently overwritten by the server's own offset recompute on save. Reuses the same PUT this
-/// screen's other dialogs do — submitting only `dueOffsetDays` leaves every other field
-/// unchanged via `update_params_from_form`'s overlay helpers, and `service::items::update_item`
-/// recomputes `due_date` from the new offset itself (`resolve_offset_anchor` +
-/// `deadline_from_offset`), so there's no separate save path to duplicate here either.
+/// Recurrence section), so the due-date fields are omitted here (read-only display lives on the
+/// full edit form instead). `scheduled_date`/`scheduled_end_date` are unaffected by the offset —
+/// `due_offset_days` only ever recomputes `due_date` (`Item::deadline_from_offset`), never the
+/// scheduled window — so they're independently settable here exactly like `RescheduleDialog`'s.
+/// Reuses the same PUT this screen's other dialogs do — `update_params_from_form`'s overlay
+/// helpers leave every field this dialog omits (name, assignment, points, ...) unchanged, and
+/// `service::items::update_item` recomputes `due_date` from the new offset itself
+/// (`resolve_offset_anchor` + `deadline_from_offset`), so there's no separate save path to
+/// duplicate here either.
 #[derive(Template)]
 #[template(path = "components/offset_reschedule_dialog.html")]
 pub struct OffsetRescheduleDialog {
@@ -279,6 +282,10 @@ pub struct OffsetRescheduleDialog {
     /// (or linked event's) own due/scheduled date, not this item's own, so the JS preview in
     /// `macros::due_offset_days_field` works even before this item has ever had an offset set.
     pub anchor_date_input: String,
+    pub scheduled_start_date: String,
+    pub scheduled_start_time: String,
+    pub scheduled_end_date: String,
+    pub scheduled_end_time: String,
 }
 
 impl OffsetRescheduleDialog {
@@ -293,6 +300,8 @@ impl OffsetRescheduleDialog {
         anchor_date: Option<chrono::DateTime<Utc>>,
         view: Option<&str>,
     ) -> Self {
+        let local_scheduled_date = task.scheduled_date().map(|d| to_local(d, tz));
+        let local_scheduled_end_date = task.scheduled_end_date().map(|d| to_local(d, tz));
         let post_reschedule_url = format!("/web/projects/{project_id}/tasks/{}", task.id);
         let post_reschedule_url = match view {
             Some(v) => format!("{post_reschedule_url}?view={v}"),
@@ -305,6 +314,26 @@ impl OffsetRescheduleDialog {
             anchor_date_input: anchor_date
                 .map(|d| to_local(d, tz).format("%Y-%m-%d").to_string())
                 .unwrap_or_default(),
+            scheduled_start_date: local_scheduled_date
+                .map(|d| d.format("%Y-%m-%d").to_string())
+                .unwrap_or_default(),
+            scheduled_start_time: if task.has_scheduled_time() {
+                local_scheduled_date
+                    .map(|d| d.format("%H:%M").to_string())
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            },
+            scheduled_end_date: local_scheduled_end_date
+                .map(|d| d.format("%Y-%m-%d").to_string())
+                .unwrap_or_default(),
+            scheduled_end_time: if task.has_end_time() {
+                local_scheduled_end_date
+                    .map(|d| d.format("%H:%M").to_string())
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            },
         }
     }
 }
