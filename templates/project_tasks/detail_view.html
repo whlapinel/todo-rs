@@ -114,11 +114,29 @@
 <div id="item-{{ id }}-comments" class="mt-4 overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm dark:border-white/10 dark:bg-gray-800/50 dark:shadow-none">
   <div class="px-4 py-4 sm:px-6">
     <h3 class="text-sm font-medium text-gray-900 dark:text-gray-100">Comments</h3>
+    <details class="mt-2">
+      <summary class="cursor-pointer text-xs font-medium text-indigo-600 hover:text-indigo-500 dark:text-indigo-400 dark:hover:text-indigo-300">+ Add comment</summary>
+      <form class="mt-2" enctype="multipart/form-data" hx-encoding="multipart/form-data"
+            hx-post="/web/projects/{{ project_id }}/tasks/{{ id }}/comments"
+            hx-target="#item-{{ id }}-comments" hx-select="#item-{{ id }}-comments" hx-swap="outerHTML"
+            hx-on::after-request="if(event.detail.successful) this.reset()">
+        <textarea name="body" rows="2" placeholder="Add a comment (optional if attaching a file)"
+          class="block w-full rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 placeholder:text-gray-400 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:placeholder:text-gray-500 dark:focus:outline-indigo-500"></textarea>
+        <input type="file" name="file"
+          class="mt-2 block w-full text-sm text-gray-900 file:mr-3 file:rounded-md file:border-0 file:bg-indigo-600 file:px-3 file:py-1.5 file:text-sm file:font-semibold file:text-white hover:file:bg-indigo-500 dark:text-gray-100" />
+        <button type="submit"
+          class="mt-2 inline-flex items-center rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-semibold text-white shadow-xs hover:bg-indigo-500 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600 dark:bg-indigo-500 dark:shadow-none dark:hover:bg-indigo-400 dark:focus-visible:outline-indigo-500">Post</button>
+      </form>
+    </details>
+    <details class="mt-4" {% if comments_expanded %}open{% endif %}>
+      <summary class="cursor-pointer text-xs font-medium text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200">
+        {% if comments.is_empty() %}Show comments{% else %}Show comments ({{ comments.len() }}){% endif %}
+      </summary>
     {% if comments.is_empty() %}
     <p class="mt-2 text-sm text-gray-500 dark:text-gray-400">No comments yet.</p>
     {% else %}
     <ul class="mt-2 space-y-4">
-      {% for c in comments %}
+      {% for c in comments.iter().rev() %}
       <li id="comment-{{ c.id }}" class="text-sm">
         {% if c.editing %}
         <div class="text-xs text-gray-500 dark:text-gray-400">{{ c.author_name }} · {{ c.created_at }}</div>
@@ -130,7 +148,7 @@
           <div class="mt-1 flex gap-x-2">
             <button type="submit"
               class="cursor-pointer text-xs font-semibold text-indigo-600 hover:text-indigo-500 dark:text-indigo-400 dark:hover:text-indigo-300">Save</button>
-            <button type="button" hx-get="/web/projects/{{ project_id }}/tasks/{{ id }}"
+            <button type="button" hx-get="/web/projects/{{ project_id }}/tasks/{{ id }}/comments"
                     hx-target="#item-{{ id }}-comments" hx-select="#item-{{ id }}-comments" hx-swap="outerHTML"
                     class="cursor-pointer text-xs text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200">Cancel</button>
           </div>
@@ -175,16 +193,6 @@
       {% endfor %}
     </ul>
     {% endif %}
-    <form class="mt-4" enctype="multipart/form-data" hx-encoding="multipart/form-data"
-          hx-post="/web/projects/{{ project_id }}/tasks/{{ id }}/comments"
-          hx-target="#item-{{ id }}-comments" hx-select="#item-{{ id }}-comments" hx-swap="outerHTML"
-          hx-on::after-request="if(event.detail.successful) this.reset()">
-      <textarea name="body" rows="2" placeholder="Add a comment (optional if attaching a file)"
-        class="block w-full rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 placeholder:text-gray-400 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:placeholder:text-gray-500 dark:focus:outline-indigo-500"></textarea>
-      <input type="file" name="file"
-        class="mt-2 block w-full text-sm text-gray-900 file:mr-3 file:rounded-md file:border-0 file:bg-indigo-600 file:px-3 file:py-1.5 file:text-sm file:font-semibold file:text-white hover:file:bg-indigo-500 dark:text-gray-100" />
-      <button type="submit"
-        class="mt-2 inline-flex items-center rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-semibold text-white shadow-xs hover:bg-indigo-500 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600 dark:bg-indigo-500 dark:shadow-none dark:hover:bg-indigo-400 dark:focus-visible:outline-indigo-500">Post</button>
-    </form>
+    </details>
   </div>
 </div>

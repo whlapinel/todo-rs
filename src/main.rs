@@ -160,7 +160,7 @@ fn build_web_router() -> Router {
         )
         .route(
             "/projects/:project_id/tasks/:item_id/comments",
-            post(create_project_task_comment_form),
+            get(cancel_project_task_comment_edit_form).post(create_project_task_comment_form),
         )
         .route(
             "/projects/:project_id/tasks/:item_id/comments/:comment_id",

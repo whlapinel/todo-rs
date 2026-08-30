@@ -842,10 +842,21 @@ pub struct ProjectTaskDetailView {
     /// rows. Empty for an item with no due/scheduled dates, or on a personal project item
     /// whose caller didn't resolve them. No mutation UI yet — see that plan doc's scope note.
     pub reminders: Vec<String>,
-    /// "Add comments for tasks" (docs/issues_and_features.md) — oldest first, see
-    /// `comment_lines`. Task-only: this view struct is never built for an Event/SimpleList/
-    /// Template item (`require_task` already guards every caller of `from_item`).
+    /// "Add comments for tasks" (docs/issues_and_features.md) — oldest first (matches
+    /// `CommentRepo::list_for_item`), see `comment_lines`; `detail_view.html` displays them
+    /// newest-first via `.iter().rev()`, so this field's own order stays the stable
+    /// oldest-first contract every other reader of it relies on. Task-only: this view struct
+    /// is never built for an Event/SimpleList/Template item (`require_task` already guards
+    /// every caller of `from_item`).
     pub comments: Vec<CommentLine>,
+    /// Whether the "Show comments (N)" disclosure starts open. `true` for every render that's
+    /// a direct result of a comment/attachment action (post/edit-toggle/save/cancel/delete —
+    /// `render_project_task_comments_view`'s callers, plus `create_project_task_comment_form`/
+    /// `delete_project_task_attachment_form`), so the panel doesn't collapse back on the user
+    /// mid-interaction; `false` for a plain page load or an unrelated field edit
+    /// (`project_task_detail_page`, `update_project_task_form`), matching the "only show
+    /// comments when the user asks" request this was added for.
+    pub comments_expanded: bool,
 }
 
 impl ProjectTaskDetailView {
@@ -865,6 +876,7 @@ impl ProjectTaskDetailView {
         attachments: Vec<Attachment>,
         requester_user_id: &str,
         editing_comment_id: Option<&str>,
+        comments_expanded: bool,
     ) -> Self {
         let due_date = item
             .due_date()
@@ -910,6 +922,7 @@ impl ProjectTaskDetailView {
                 requester_user_id,
                 editing_comment_id,
             ),
+            comments_expanded,
         }
     }
 }

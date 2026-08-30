@@ -291,6 +291,7 @@ pub async fn project_task_detail_page(
         item_attachments,
         &auth_user.user_id,
         None,
+        false,
     )
     .render()?;
     let dialog = ProjectTaskDetailDialog::new(
@@ -436,6 +437,7 @@ pub async fn create_project_task_comment_form(
         item_attachments,
         &auth_user.user_id,
         None,
+        true,
     ))
 }
 
@@ -500,6 +502,7 @@ async fn render_project_task_comments_view(
         item_attachments,
         &auth_user.user_id,
         editing_comment_id,
+        true,
     ))
 }
 
@@ -545,6 +548,45 @@ pub async fn edit_project_task_comment_form(
         &attachments,
         tz,
         Some(&comment_id),
+    )
+    .await
+}
+
+/// `GET .../comments` — re-renders the comments block in plain (non-editing) view. This is
+/// what an in-progress edit's Cancel button hits (`detail_view.html`), rather than the full
+/// `GET .../tasks/{id}` page route: that route's response also embeds a second copy of this
+/// same comments block inside `ProjectTaskDetailDialog` (its confirm-complete dialog carries
+/// a clone of the whole read-only view for its own use), so an `hx-select="#item-{id}-comments"`
+/// against it matches two elements and both get swapped in — the comment appearing duplicated
+/// on Cancel, even though a page reload shows only one (`list_for_item` was never touched).
+/// This route's response has no dialog at all, so the selector only ever matches once.
+pub async fn cancel_project_task_comment_edit_form(
+    Path((project_id, item_id)): Path<(String, String)>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
+    Extension(item_dependencies): Extension<Arc<dyn ItemDependencyRepo>>,
+    Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
+    Extension(comments): Extension<Arc<dyn CommentRepo>>,
+    Extension(attachments): Extension<Arc<dyn AttachmentRepo>>,
+    TzOffset(tz): TzOffset,
+) -> Result<Html<String>, ItemError> {
+    render_project_task_comments_view(
+        &project_id,
+        &item_id,
+        &auth_user,
+        &repo,
+        &projects,
+        &teams,
+        &series,
+        &item_dependencies,
+        &reminders,
+        &comments,
+        &attachments,
+        tz,
+        None,
     )
     .await
 }
@@ -754,6 +796,7 @@ pub async fn delete_project_task_attachment_form(
         item_attachments,
         &auth_user.user_id,
         None,
+        true,
     ))
 }
 
@@ -2008,6 +2051,7 @@ pub async fn update_project_task_form(
                 item_attachments,
                 &auth_user.user_id,
                 None,
+                false,
             )
             .render()?;
             let dialog = ProjectTaskDetailDialog::new(
@@ -2225,6 +2269,7 @@ pub async fn update_project_task_form(
                 item_attachments,
                 &auth_user.user_id,
                 None,
+                false,
             )
             .render()?;
             Ok(Html(format!("{row}{fields}{view}")).into_response())
