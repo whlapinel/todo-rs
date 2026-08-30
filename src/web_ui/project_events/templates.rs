@@ -40,6 +40,12 @@ impl ProjectEventRow {
             // An Event never carries `priority` (`Item::priority` is Task-only — see root
             // CLAUDE.md's Priority section).
             priority_label: None,
+            // An Event-typed series' `is_current` is always `false` at the source (see
+            // `list_occurrence_states_for_project`'s `is_current` computation — restricted to
+            // `ItemKind::Task`), so a materialized Event occurrence's series badge never needs a
+            // real lookup: it's always "part of a series, never current" when `series_id` is
+            // set, and absent otherwise.
+            series_current: item.series_id.as_ref().map(|_| false),
             assignee_name: None,
             blocked_by_names: Vec::new(),
             blocked_by_label: String::new(),

@@ -56,6 +56,16 @@ pub struct Row {
     /// (`ProjectEventRow`/`ProjectSimpleItemRow`) leaves this `None`, since `Item::priority` is
     /// restricted to `ItemType::Task`.
     pub priority_label: Option<String>,
+    /// `None` when this item isn't materialized from an `item_series` (`Item::series_id` unset).
+    /// `Some(true)`/`Some(false)` otherwise — whether this is that series' current occurrence,
+    /// mirroring `ProjectOccurrence::is_current`/`ProjectTaskVirtualRow::is_current` so a
+    /// materialized row's series badge can't independently drift from a still-virtual one's, the
+    /// bug docs/issues_and_features.md's "Virtual rows look different from materialized ones"
+    /// item reported. Sourced from `list_occurrence_states_for_project`'s own per-occurrence
+    /// `is_current` (see `project_tasks::list_task_rows_for_project`'s `current_flags` map) —
+    /// only ever set by callers that already run that query for their virtual-occurrence merge;
+    /// every other `Row` builder leaves this `None`, same convention as `type_badge`.
+    pub series_current: Option<bool>,
     /// Names of this row's still-incomplete "depends on" links (Task-kind, same-parent
     /// siblings only — see `service::item_dependencies`), empty when the item has no
     /// dependencies or every dependency is already complete. Set by callers that have a

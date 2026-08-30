@@ -1197,6 +1197,39 @@ pub struct ProjectTaskSeriesOccurrenceChildForm {
     due_offset_days: Option<String>,
 }
 
+/// `GET` counterpart to `create_project_task_series_occurrence_child_form` below — opens the
+/// "Add sub-item" dialog for a still-virtual/skipped occurrence, prefilled from nothing but the
+/// series' name (no side effect: doesn't materialize just to render a dialog whose own POST
+/// already handles that). Added alongside `docs/issues_and_features.md`'s "all row actions
+/// should be available and will auto-materialize a virtual row if taken" item — the POST route
+/// this opens into existed since Stage C of `docs/unify-virtual-materialized-occurrences-plan.md`
+/// but had no UI entry point until now.
+pub async fn get_project_task_series_occurrence_add_child_dialog(
+    Path((project_id, series_id, occurrence_ts)): Path<(String, String, i64)>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(item_series): Extension<Arc<dyn ItemSeriesRepo>>,
+) -> Result<Html<String>, ItemError> {
+    let series = item_series_service::get_series(
+        &projects,
+        &teams,
+        &item_series,
+        &auth_user.user_id,
+        &series_id,
+    )
+    .await?;
+    if series.project_id != project_id || series.item_type != ItemKind::Task {
+        return Err(ItemError::NotFound);
+    }
+    render(ProjectTaskSeriesOccurrenceAddChildDialog {
+        parent_name: series.name.clone(),
+        post_create_url: format!(
+            "/web/projects/{project_id}/series/{series_id}/occurrences/{occurrence_ts}/task-children"
+        ),
+    })
+}
+
 /// Stage C — "adding a sub-item" to a still-virtual occurrence: materializes it first, then
 /// creates the child underneath the resulting real item, then redirects to that item's
 /// canonical `/tasks/{id}` page (mirrors `update_project_task_series_occurrence_form`'s own
@@ -2107,6 +2140,10 @@ pub async fn update_project_task_form(
                         show_complete,
                         confirmation,
                         dismiss_after_ms,
+                        // This single-row rebuild (after an edit/checkbox toggle) has no
+                        // batched occurrence-state query on hand the way the full list render
+                        // does — see `Row::series_current`'s doc comment on this gap.
+                        None,
                     );
                     // Without this, a row with children swapped back in after an edit falls
                     // through to row.html's dialog/navigation name-click branch instead of

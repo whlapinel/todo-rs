@@ -192,6 +192,10 @@ pub(crate) fn calendar_row(
             show_complete,
             confirmation,
             dismiss_after_ms,
+            // This per-project calendar doesn't run the batched occurrence-state query needed
+            // to know this row's current/planned status — see `Row::series_current`'s doc
+            // comment on this gap.
+            None,
         ),
     };
     row.type_badge = Some(type_symbol(item.kind()));

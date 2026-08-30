@@ -4,6 +4,9 @@
     <span class="shrink-0 size-4"></span>
     <span class="min-w-0 flex-1 truncate line-through text-gray-400 dark:text-gray-500">{{ name }}</span>
     <span class="shrink-0 text-[10px] uppercase tracking-wide font-semibold text-gray-400 dark:text-gray-500">Skipped</span>
+    <button hx-post="{{ unskip_url }}"
+      {% if in_list_view %}hx-target="#items-list" hx-select="unset" hx-swap="innerHTML"{% endif %}
+      class="shrink-0 cursor-pointer text-xs text-gray-400 hover:text-indigo-500 dark:text-gray-500 dark:hover:text-indigo-400">Unskip</button>
     {% else %}
     <input type="checkbox" hx-post="{{ complete_url }}"
       {% if in_list_view %}hx-target="#items-list" hx-select="unset" hx-swap="innerHTML"{% endif %}
@@ -15,18 +18,53 @@
     <a href="{{ materialize_url }}" hx-get="{{ materialize_url }}" hx-target="#action-dialog"
       hx-select="#dialog-fragment" hx-swap="innerHTML"
       class="min-w-0 flex-1 truncate text-gray-900 dark:text-white">{{ name }}</a>
+    <!-- Mirrors components/row.html's own series symbol + Current label — see
+         Row::series_current's doc comment for why the two can't drift independently. Every row
+         built from this struct is a series occurrence by construction, so the symbol is
+         unconditional here (unlike Row, where it's gated on `series_current.is_some()`). -->
+    <span class="shrink-0 [&>svg]:size-4" title="Part of a recurring series">{% include "icons/recurring.html" %}</span>
     {% if is_current %}
     <span class="shrink-0 text-[10px] uppercase tracking-wide font-semibold text-indigo-600 dark:text-indigo-400">Current</span>
     {% endif %}
+    <button hx-post="{{ skip_url }}" hx-confirm="Skip this occurrence?"
+      {% if in_list_view %}hx-target="#items-list" hx-select="unset" hx-swap="innerHTML"{% endif %}
+      class="shrink-0 cursor-pointer text-xs text-gray-400 hover:text-red-500 dark:text-gray-500 dark:hover:text-red-400">Skip</button>
     {% endif %}
+    <!-- Unconditional (unlike the pre-2026-08-29 version, which only gave the non-skipped
+         branch a menu) — docs/issues_and_features.md's "vertical ellipses on ALL" ask covers a
+         skipped occurrence's row too, even though its menu only ever has "Details" to offer. -->
+    <button type="button" onclick="openRowActionsMenu('{{ row_id }}', this)"
+      class="shrink-0 cursor-pointer text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300">
+      {% include "icons/ellipses.html" %}
+    </button>
+    <!-- Same pre-rendered/hidden pattern as components/row.html's own menu — see its doc
+         comment. Edit/Add sub-item materialize the occurrence as an internal step of their own
+         write (see ProjectOccurrence::edit_url/add_task_child_url's doc comments) — everything
+         else (Duplicate/Move/Save as template/Delete) still requires a real item id and stays
+         out of scope here, tracked in docs/issues_and_features.md. -->
+    <template id="row-actions-menu-{{ row_id }}">
+      <div class="divide-y divide-gray-100 dark:divide-white/10">
+        <a href="{{ materialize_url }}" hx-get="{{ materialize_url }}" hx-target="#action-dialog"
+          hx-select="#dialog-fragment" hx-swap="innerHTML"
+          class="block px-4 py-3 text-sm text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-white/5">Details</a>
+        {% if !is_skipped %}
+        <a href="{{ edit_url }}" hx-get="{{ edit_url }}" hx-target="#action-dialog"
+          hx-select="#dialog-fragment" hx-swap="innerHTML"
+          class="block px-4 py-3 text-sm text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-white/5">Edit</a>
+        <button type="button" hx-get="{{ add_child_url }}" hx-target="#action-dialog"
+          hx-select="unset" hx-swap="innerHTML"
+          class="block w-full cursor-pointer px-4 py-3 text-left text-sm text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-white/5">Add sub-item</button>
+        {% endif %}
+      </div>
+    </template>
   </div>
   <div class="mt-1 flex items-center gap-x-3 pl-7 text-xs text-gray-500 dark:text-gray-400">
     <div class="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1">
-      {% if let Some(assignee) = assignee_name %}
-      <span class="text-indigo-600 dark:text-indigo-400">[{{ assignee }}]</span>
-      {% endif %}
       {% if let Some(p) = priority_label %}
       <span class="text-amber-600 dark:text-amber-400">🚩 {{ p }}</span>
+      {% endif %}
+      {% if let Some(assignee) = assignee_name %}
+      <span class="text-indigo-600 dark:text-indigo-400">[{{ assignee }}]</span>
       {% endif %}
       {% if is_due_date_basis %}
       <span class="{% if overdue %}text-red-600 dark:text-red-400{% endif %}">💀 {{ date_label }}</span>
@@ -34,14 +72,5 @@
       <span>📅 {{ date_label }}</span>
       {% endif %}
     </div>
-    {% if is_skipped %}
-    <button hx-post="{{ unskip_url }}"
-      {% if in_list_view %}hx-target="#items-list" hx-select="unset" hx-swap="innerHTML"{% endif %}
-      class="shrink-0 cursor-pointer text-gray-400 hover:text-indigo-500 dark:text-gray-500 dark:hover:text-indigo-400">Unskip</button>
-    {% else %}
-    <button hx-post="{{ skip_url }}" hx-confirm="Skip this occurrence?"
-      {% if in_list_view %}hx-target="#items-list" hx-select="unset" hx-swap="innerHTML"{% endif %}
-      class="shrink-0 cursor-pointer text-gray-400 hover:text-red-500 dark:text-gray-500 dark:hover:text-red-400">Skip</button>
-    {% endif %}
   </div>
 </li>

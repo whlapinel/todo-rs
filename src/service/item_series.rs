@@ -1176,6 +1176,24 @@ impl ProjectOccurrence {
     pub fn complete_url(&self, project_id: &str) -> String {
         format!("{}/complete", self.materialize_url(project_id))
     }
+
+    /// Row-actions-menu "Edit" target for a still-virtual/skipped Task occurrence — the no-
+    /// side-effect edit form (`project_item_series_occurrence_edit_page`), prefilled from the
+    /// series rather than a real `Item`. Docs/issues_and_features.md's "all row actions should
+    /// be available and will auto-materialize a virtual row if taken" item: this exposes the
+    /// same edit form the Details dialog's own Edit button already links to, directly from the
+    /// row's "⋮" menu, so a full round trip through Details is no longer required just to edit.
+    pub fn edit_url(&self, project_id: &str) -> String {
+        format!("{}/edit", self.materialize_url(project_id))
+    }
+
+    /// Row-actions-menu "Add sub-item" target — `GET` opens a materialize-on-save dialog
+    /// (`get_project_task_series_occurrence_add_child_dialog`), whose form posts to this same
+    /// path (`create_project_task_series_occurrence_child_form`, already existed but had no UI
+    /// entry point before this). Task-typed series only, mirroring `complete_url`.
+    pub fn add_task_child_url(&self, project_id: &str) -> String {
+        format!("{}/task-children", self.materialize_url(project_id))
+    }
 }
 
 /// Skip-button URL for an already-materialized series occurrence's own item row — Tasks and
@@ -1303,6 +1321,11 @@ pub async fn list_occurrence_states_for_project(
             } else {
                 None
             };
+            // Full "First Last" name, matching `project_tasks::names_for`'s own format — a
+            // materialized occurrence's assignee is resolved through that map, so a still-
+            // virtual/skipped occurrence rendering only a first name here was exactly the kind
+            // of drift docs/issues_and_features.md's "Virtual rows look different from
+            // materialized ones" item called out.
             let occurrence_assignee_name = match &occurrence_assignee {
                 None => None,
                 Some(user_id) => match names.get(user_id) {
@@ -1312,8 +1335,9 @@ pub async fn list_occurrence_states_for_project(
                             .get(user_id)
                             .await
                             .map_err(|_| ItemError::Internal("error fetching user".to_string()))?;
-                        names.insert(user_id.clone(), user.first_name.clone());
-                        Some(user.first_name)
+                        let full_name = format!("{} {}", user.first_name, user.last_name);
+                        names.insert(user_id.clone(), full_name.clone());
+                        Some(full_name)
                     }
                 },
             };
@@ -4247,11 +4271,17 @@ mod tests {
         // matching rotation_assignee's `index % rotation.len()`.
         assert_eq!(result.len(), 3);
         assert_eq!(result[0].assigned_to_user_id.as_deref(), Some("alice"));
-        assert_eq!(result[0].assigned_to_user_name.as_deref(), Some("Alice"));
+        assert_eq!(
+            result[0].assigned_to_user_name.as_deref(),
+            Some("Alice Doe")
+        );
         assert_eq!(result[1].assigned_to_user_id.as_deref(), Some("bob"));
-        assert_eq!(result[1].assigned_to_user_name.as_deref(), Some("Bob"));
+        assert_eq!(result[1].assigned_to_user_name.as_deref(), Some("Bob Doe"));
         assert_eq!(result[2].assigned_to_user_id.as_deref(), Some("alice"));
-        assert_eq!(result[2].assigned_to_user_name.as_deref(), Some("Alice"));
+        assert_eq!(
+            result[2].assigned_to_user_name.as_deref(),
+            Some("Alice Doe")
+        );
     }
 
     #[tokio::test]

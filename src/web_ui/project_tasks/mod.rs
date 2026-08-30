@@ -552,6 +552,9 @@ pub(crate) async fn render_expandable_children(
             show_complete,
             None,
             None,
+            // In-place expanded children never carry a series badge yet — see
+            // `Row::series_current`'s doc comment on the partial-rollout state.
+            None,
         );
         row.indent_class = indent_class(depth);
         let (blocked_by_names, blocked_by_label, blocked_by_links_html) =
@@ -624,6 +627,7 @@ pub(crate) async fn render_sibling_rows(
             show_complete,
             None,
             None,
+            None,
         );
         let (blocked_by_names, blocked_by_label, blocked_by_links_html) =
             render_blocked_by(project_id, blocked_by_names_for(i, visible, &dep_map))?;
@@ -684,6 +688,7 @@ pub(crate) fn render_rows(
                 show_complete,
                 None,
                 None,
+                None,
             )
             .render()
         })
@@ -734,6 +739,13 @@ pub(crate) async fn render_rows_with_virtual(
     just_completed_item_id: Option<&str>,
     in_list_view: bool,
     item_dependencies: &Arc<dyn ItemDependencyRepo>,
+    // item_id -> is_current, for every already-materialized series occurrence
+    // `list_task_rows_for_project` found in its own (unfiltered) occurrence-state query — see
+    // `Row::series_current`'s doc comment. An item with `series_id` set but absent from this map
+    // is a series occurrence that isn't currently the series' cursor (e.g. an already-completed
+    // historical one surfaced by `show_complete`); it still gets the series symbol, just no
+    // Current/Planned label, since "Planned" would misleadingly imply it's upcoming.
+    current_flags: &HashMap<String, bool>,
 ) -> Result<Vec<String>, ItemError> {
     let now = Utc::now();
     let is_team_project = team_id.is_some();
@@ -766,6 +778,9 @@ pub(crate) async fn render_rows_with_virtual(
             filters.show_complete,
             confirmation,
             dismiss_after_ms,
+            i.series_id
+                .as_ref()
+                .map(|_| current_flags.get(&i.id).copied().unwrap_or(false)),
         );
         let (blocked_by_names, blocked_by_label, blocked_by_links_html) =
             render_blocked_by(project_id, blocked_by_names_for(i, &visible, &dep_map))?;
@@ -851,26 +866,43 @@ pub(crate) async fn list_task_rows_for_project(
     // reason to pay for the query.
     let now = Utc::now();
     let is_team_project = team_id.is_some();
-    let virtual_occurrences: Vec<_> = if filters.recurring {
-        item_series_service::list_occurrence_states_for_project(
+    // Computed together (rather than as two separate queries) since both come from the same
+    // unfiltered `list_occurrence_states_for_project` call: `current_flags` keeps every
+    // `Materialized` entry's own `is_current` (see `render_rows_with_virtual`'s doc comment on
+    // its `current_flags` param) before `virtual_occurrences` filters those entries back out.
+    let (virtual_occurrences, current_flags): (Vec<_>, HashMap<String, bool>) = if filters.recurring
+    {
+        let all_occurrences = item_series_service::list_occurrence_states_for_project(
             series, users, project_id, now, now, tz,
         )
-        .await?
-        .into_iter()
-        .filter(|occ| occ.item_type == ItemKind::Task && occ.is_current)
-        .filter(|occ| {
-            !matches!(
-                occ.state,
-                item_series_service::OccurrenceState::Materialized { .. }
-            )
-        })
-        // See `render_rows_with_virtual`'s doc comment: this is `filters.matches`' own
-        // occurrence-shaped counterpart — without it, a filter that would exclude a real item
-        // (e.g. "assigned to Bob") left its series' current occurrence showing regardless.
-        .filter(|occ| filters.matches_occurrence(occ, requester_user_id, is_team_project, now))
-        .collect()
+        .await?;
+        let current_flags = all_occurrences
+            .iter()
+            .filter_map(|occ| match &occ.state {
+                item_series_service::OccurrenceState::Materialized { item_id } => {
+                    Some((item_id.clone(), occ.is_current))
+                }
+                _ => None,
+            })
+            .collect();
+        let virtual_occurrences = all_occurrences
+            .into_iter()
+            .filter(|occ| occ.item_type == ItemKind::Task && occ.is_current)
+            .filter(|occ| {
+                !matches!(
+                    occ.state,
+                    item_series_service::OccurrenceState::Materialized { .. }
+                )
+            })
+            // See `render_rows_with_virtual`'s doc comment: this is `filters.matches`' own
+            // occurrence-shaped counterpart — without it, a filter that would exclude a real
+            // item (e.g. "assigned to Bob") left its series' current occurrence showing
+            // regardless.
+            .filter(|occ| filters.matches_occurrence(occ, requester_user_id, is_team_project, now))
+            .collect();
+        (virtual_occurrences, current_flags)
     } else {
-        Vec::new()
+        (Vec::new(), HashMap::new())
     };
     let mut skip_urls: HashMap<String, String> = HashMap::new();
     for item in &items {
@@ -892,6 +924,7 @@ pub(crate) async fn list_task_rows_for_project(
         just_completed_item_id,
         true,
         item_dependencies,
+        &current_flags,
     )
     .await
 }

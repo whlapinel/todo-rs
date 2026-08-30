@@ -64,6 +64,12 @@ impl ProjectTaskRow {
         show_complete: bool,
         confirmation: Option<String>,
         dismiss_after_ms: Option<u32>,
+        // `None` when `item.series_id` is unset; `Some(is_current)` otherwise — see
+        // `Row::series_current`'s doc comment. Only `render_rows_with_virtual` (the flat Tasks
+        // list's own merge, which already runs the query this comes from) passes a real value;
+        // every other caller of `from_item` passes `None`, leaving that row's series badge
+        // absent until it too threads a `current_flags` map through.
+        series_current: Option<bool>,
     ) -> Row {
         let offset_label = offset_label_for(item);
         let assignee_name = item
@@ -96,6 +102,7 @@ impl ProjectTaskRow {
             offset_label,
             assignee_name,
             priority_label,
+            series_current,
             complete_url: Some(format!("/web/projects/{project_id}/tasks/{}", item.id)),
             edit_url: (!item.complete)
                 .then(|| format!("/web/projects/{project_id}/tasks/{}/edit", item.id)),
@@ -425,6 +432,12 @@ impl MoveDialog {
 pub struct ProjectTaskVirtualRow {
     pub series_id: String,
     pub occurrence_ts: i64,
+    /// `"{series_id}-{occurrence_ts}"` — this row's own id for `openRowActionsMenu()`'s
+    /// `#row-actions-menu-{row_id}` lookup (see `components/row.html`'s identical convention,
+    /// keyed there off a real item id instead). Kept as a separate precomputed field rather than
+    /// formatting it inline in the template, matching `list_query`'s own precomputed-in-Rust
+    /// convention below.
+    pub row_id: String,
     pub name: String,
     pub date_label: String,
     /// Mirrors `ProjectTaskRow`'s 💀-vs-📅 date icon choice — see
@@ -443,6 +456,12 @@ pub struct ProjectTaskVirtualRow {
     /// materialize link/Skip button.
     pub is_skipped: bool,
     pub unskip_url: String,
+    /// `GET`s the materialize-on-save edit form directly, skipping the Details detour — see
+    /// `ProjectOccurrence::edit_url`'s doc comment. Rendered only when `!is_skipped`.
+    pub edit_url: String,
+    /// `GET`s the materialize-on-save "Add sub-item" dialog — see
+    /// `ProjectOccurrence::add_task_child_url`'s doc comment. Rendered only when `!is_skipped`.
+    pub add_child_url: String,
     /// Populated the same way `ProjectTaskRow::assignee_name` is — previously dropped despite
     /// `ProjectOccurrence` already carrying it, so a virtual occurrence's row silently showed no
     /// assignee until materialized. See docs/issues_and_features.md's "occurrences don't show
@@ -491,6 +510,7 @@ impl ProjectTaskVirtualRow {
         Self {
             series_id: occ.series_id.clone(),
             occurrence_ts: occ.occurrence_date.timestamp(),
+            row_id: format!("{}-{}", occ.series_id, occ.occurrence_date.timestamp()),
             name: occ.series_name.clone(),
             date_label: format_display_date(local, true),
             is_due_date_basis: occ.is_due_date_basis,
@@ -501,6 +521,8 @@ impl ProjectTaskVirtualRow {
             is_current: occ.is_current,
             is_skipped: occ.is_skipped(),
             unskip_url: format!("{}{list_query}", occ.unskip_url(project_id)),
+            edit_url: occ.edit_url(project_id),
+            add_child_url: occ.add_task_child_url(project_id),
             assignee_name: occ.assigned_to_user_name.clone(),
             priority_label: priority_label_for(occ.priority),
             in_list_view,
@@ -1071,6 +1093,20 @@ impl ProjectTaskSeriesOccurrenceFields {
             ),
         }
     }
+}
+
+/// The "Add sub-item" dialog for a still-virtual/skipped Task series occurrence — mirrors
+/// `AddChildDialog`, but posts to the occurrence-scoped `.../task-children` route
+/// (`create_project_task_series_occurrence_child_form`, which materializes the occurrence
+/// before creating the child) rather than the generic create-task route, and has no
+/// `parentItemId` field since the occurrence path already identifies the parent. No batch-add
+/// section — `create_project_task_series_occurrence_child_form` only ever accepts a single
+/// `name`/`due_offset_days` pair, matching `ProjectTaskSeriesOccurrenceChildForm`'s shape.
+#[derive(Template)]
+#[template(path = "project_tasks/series_occurrence_add_child_dialog.html")]
+pub struct ProjectTaskSeriesOccurrenceAddChildDialog {
+    pub parent_name: String,
+    pub post_create_url: String,
 }
 
 /// Stage 2 of docs/dialog-item-forms-plan.md — the read-only dialog for a still-virtual/

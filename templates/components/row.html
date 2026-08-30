@@ -39,6 +39,15 @@
             {% if has_children %}<span class="text-gray-400 dark:text-gray-500">&#9656;</span>{% endif %} {{ name }}
         </a>
         {% endif %}
+        {% if let Some(is_current) = series_current %}
+        <!-- Mirrors project_tasks/virtual_row.html's own series symbol + Current label — see
+             Row::series_current's doc comment for why this can't just be a virtual-row-only
+             affordance. -->
+        <span class="shrink-0 [&>svg]:size-4" title="Part of a recurring series">{% include "icons/recurring.html" %}</span>
+        {% if is_current %}
+        <span class="shrink-0 text-[10px] uppercase tracking-wide font-semibold text-indigo-600 dark:text-indigo-400">Current</span>
+        {% endif %}
+        {% endif %}
         {% if let Some(msg) = confirmation %}
         <span class="toast-fade shrink-0 text-xs font-medium text-green-600 dark:text-green-400">&#10003; {{ msg
             }}</span>

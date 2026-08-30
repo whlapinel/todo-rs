@@ -139,6 +139,10 @@ pub(crate) fn all_projects_task_row(
         show_complete,
         confirmation,
         dismiss_after_ms,
+        // This cross-project screen only ever shows a series' current occurrence (mirroring
+        // `project_tasks`'s own flat-list restriction — see `Row::series_current`'s doc
+        // comment), but doesn't yet run the batched query needed to confirm that per row.
+        None,
     );
     row.expanded_row = true;
     row.project_name = Some(project_name.to_string());
