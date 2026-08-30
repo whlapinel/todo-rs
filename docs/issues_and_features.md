@@ -27,6 +27,7 @@ Open issues and feature requests, merged from the former `docs/issues.md` and `d
 - Add reminder schema and UI to tasks, series, and events. (schema + read-only display done, see `docs/archived/archived_issues_and_features.md`; remaining scope is a custom reminder mutation UI — add/edit/delete a reminder, configurable offsets like "15 min before" — `source = 'CUSTOM'` stays unused until then)
 - Expand all: expands to show all sub-items
 - When we add a sub-item to a row item in an expanded row state, the entire list is re-rendered and all items are collapsed to hide sub-items. This may be necessary, but I am wondering if we can keep the user on their current view without having to drill down again. Maybe use qery params? Not huge priority.
+- Adding a sub-item to a task redirects to the main Tasks list screen instead of back to the item's own full/detail page the user was on when they added it. Related to the item above (both are "adding a sub-item loses the user's current view"), but this one's about the full-page view specifically, not the list's expand/collapse state. Should probably carry something like `?item-view=<item-id>` through the add-sub-item flow so the redirect can return the user to the page they were actually on.
 - Tasks list: add pagination - show max 25 top-level items + all their sub-items per page
 - Tasks list: add option to show as flattened list
 - Tasks list: add sort option: sort by due date or by scheduled start date
