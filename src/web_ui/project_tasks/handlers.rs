@@ -2209,6 +2209,13 @@ pub async fn update_project_task_form(
                     // through to row.html's dialog/navigation name-click branch instead of
                     // toggleChildren() — see `Row::children_html`'s doc comment.
                     row.children_html = children_html;
+                    // Without this, `from_item`'s default `indent_class: ""` makes a nested
+                    // row (a sub-item of a sub-item, say) render as if it were top-level once
+                    // its own checkbox/edit swaps it back in — see `depth_of_item`'s doc
+                    // comment.
+                    row.indent_class = super::indent_class(
+                        super::depth_of_item(&repo, &project_id, &updated).await?,
+                    );
                     let dep_map = item_dependencies
                         .list_for_items(&[updated.id.clone()])
                         .await?;

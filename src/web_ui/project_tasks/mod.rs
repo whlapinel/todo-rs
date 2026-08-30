@@ -481,6 +481,34 @@ fn indent_class(depth: u8) -> &'static str {
     }
 }
 
+/// Number of ancestors above `item` (0 for a top-level item), for picking the right
+/// `indent_class` when a single row is swapped back in after an edit/checkbox toggle rather
+/// than rendered as part of a whole-list/whole-subtree walk (which already tracks depth as it
+/// recurses — see `render_expandable_children`). Without this, a single-row re-render (e.g.
+/// `update_project_task_form`/`update_project_simple_item_form`'s plain-row branch) falls back
+/// to `ProjectTaskRow`/`ProjectSimpleItemRow::from_item`'s default `indent_class: ""`, making a
+/// nested item (a sub-item of a sub-item, say) visually jump up to look like a shallower one —
+/// the "completing a sub-item un-indents it" bug. Best-effort like `resolve_parent_link`: a
+/// broken chain (a deleted ancestor) just stops counting rather than erroring the whole request.
+pub(crate) async fn depth_of_item(
+    repo: &Arc<dyn ItemRepo>,
+    project_id: &str,
+    item: &Item,
+) -> Result<u8, ItemError> {
+    let mut depth = 0u8;
+    let mut parent_id = item.parent_item_id();
+    while let Some(id) = parent_id {
+        let parent = match repo.get_by_project(project_id, &id).await {
+            Ok(parent) => parent,
+            Err(crate::storage::sqlite::RepoError::NotFound) => break,
+            Err(e) => return Err(e.into()),
+        };
+        depth = depth.saturating_add(1);
+        parent_id = parent.parent_item_id();
+    }
+    Ok(depth)
+}
+
 /// (id, name) of `item`'s still-incomplete "depends on" links, for the row's "Blocked by ..."
 /// badge (`components/row.html`) — looks each dependency id up in `siblings` (dependencies are
 /// always same-parent siblings, see `service::item_dependencies`, so every dependency of an item

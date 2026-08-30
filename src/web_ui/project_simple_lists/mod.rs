@@ -144,6 +144,30 @@ fn indent_class(depth: u8) -> &'static str {
     }
 }
 
+/// Number of ancestors above `item` (0 for a top-level item) — mirrors
+/// `project_tasks::depth_of_item`'s identical rationale: a single-row swap (e.g.
+/// `update_project_simple_item_form`'s plain-row branch) has no depth on hand the way a
+/// whole-subtree walk does, so without this it falls back to `from_item`'s default
+/// `indent_class: ""` and a nested row visually jumps up to look shallower than it is.
+pub(crate) async fn depth_of_item(
+    repo: &Arc<dyn ItemRepo>,
+    project_id: &str,
+    item: &Item,
+) -> Result<u8, ItemError> {
+    let mut depth = 0u8;
+    let mut parent_id = item.parent_item_id();
+    while let Some(id) = parent_id {
+        let parent = match repo.get_by_project(project_id, &id).await {
+            Ok(parent) => parent,
+            Err(crate::storage::sqlite::RepoError::NotFound) => break,
+            Err(e) => return Err(e.into()),
+        };
+        depth = depth.saturating_add(1);
+        parent_id = parent.parent_item_id();
+    }
+    Ok(depth)
+}
+
 /// Recursively renders `parent_item_id`'s full descendant subtree as ready-to-insert `<li>`
 /// markup, each descendant's own row in turn carrying its own nested `children_html` — the
 /// flat Simple Lists screen's in-place "expand to view sub-items" feature, mirroring

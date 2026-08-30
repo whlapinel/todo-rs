@@ -8,9 +8,9 @@ use crate::storage::sqlite::{ItemRepo, ItemSeriesRepo, ProjectRepo, ReminderRepo
 use crate::web_ui::nav::{self, ActiveContext, SidebarSection};
 use crate::web_ui::project_simple_lists::templates::*;
 use crate::web_ui::project_simple_lists::{
-    ProjectSimpleItemForm, create_params_from_form, list_project_simple_items, non_empty, render,
-    render_expandable_children, render_scope_fragment, require_simple, sibling_group,
-    update_params_from_form,
+    ProjectSimpleItemForm, create_params_from_form, depth_of_item, indent_class,
+    list_project_simple_items, non_empty, render, render_expandable_children,
+    render_scope_fragment, require_simple, sibling_group, update_params_from_form,
 };
 use askama::Template;
 use axum::extract::{Extension, Form, Path, Query};
@@ -421,6 +421,10 @@ pub async fn update_project_simple_item_form(
         row.children_html =
             Some(render_expandable_children(&repo, &updated.id, &project_id, 1).await?);
     }
+    // Without this, `from_item`'s default `indent_class: ""` makes a nested row (a sub-item
+    // of a sub-item, say) render as if it were top-level once its own edit swaps it back in —
+    // see `depth_of_item`'s doc comment.
+    row.indent_class = indent_class(depth_of_item(&repo, &project_id, &updated).await?);
     let row = row.render()?;
     let fields =
         ProjectSimpleItemDetailFields::from_item(&updated, &project_id, true, false).render()?;
