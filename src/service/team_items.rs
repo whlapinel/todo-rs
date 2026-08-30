@@ -1,4 +1,7 @@
-use crate::domain::item::{Item, ItemKind, ItemType, Recurrence, Schedule, TeamAssignment};
+use crate::domain::item::{
+    EventItem, Item, ItemKind, ItemType, Recurrence, Schedule, SimpleItem, TaskItem,
+    TeamAssignment, TemplateItem,
+};
 use crate::service::activity_log::reverse_entry;
 use crate::service::item_series;
 use crate::service::items::{
@@ -74,24 +77,24 @@ fn build_item_type(
     priority: Option<i32>,
 ) -> ItemType {
     match kind {
-        ItemKind::Simple => ItemType::Simple,
-        ItemKind::Task => ItemType::Task {
+        ItemKind::Simple => ItemType::Simple(SimpleItem),
+        ItemKind::Task => ItemType::Task(TaskItem {
             schedule,
             recurrence,
             team_assignment,
             source_event_id,
             priority,
-        },
-        ItemKind::Event => ItemType::Event {
+        }),
+        ItemKind::Event => ItemType::Event(EventItem {
             schedule,
             recurrence,
             event_type,
-        },
-        ItemKind::Template => ItemType::Template {
+        }),
+        ItemKind::Template => ItemType::Template(TemplateItem {
             schedule,
             recurrence,
             event_type,
-        },
+        }),
     }
 }
 
@@ -825,7 +828,7 @@ mod tests {
         Item {
             id: id.to_string(),
             name: "Mow the lawn".to_string(),
-            item_type: ItemType::Task {
+            item_type: ItemType::Task(TaskItem {
                 schedule: Schedule::default(),
                 recurrence: Recurrence::default(),
                 team_assignment: Some(TeamAssignment {
@@ -834,7 +837,7 @@ mod tests {
                 }),
                 source_event_id: None,
                 priority: None,
-            },
+            }),
             ..Item::default()
         }
     }

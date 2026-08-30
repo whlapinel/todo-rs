@@ -1304,7 +1304,7 @@ mod tests {
     #[tokio::test]
     async fn update_project_item_uncomplete_reverses_points_and_restores_series_cursor() {
         use crate::domain::activity_log::ActivityLogEntry;
-        use crate::domain::item::{ItemType, Recurrence, Schedule, TeamAssignment};
+        use crate::domain::item::{ItemType, Recurrence, Schedule, TaskItem, TeamAssignment};
         use crate::domain::item_series::{ItemOccurrence, ItemSeries};
 
         let occurrence_date = DateTime::from_timestamp(1_700_500_000, 0).unwrap();
@@ -1337,7 +1337,7 @@ mod tests {
                 name: "Standup".to_string(),
                 project_id: Some("p1".to_string()),
                 complete: true,
-                item_type: ItemType::Task {
+                item_type: ItemType::Task(TaskItem {
                     schedule: Schedule::default(),
                     recurrence: Recurrence::default(),
                     team_assignment: Some(TeamAssignment {
@@ -1346,7 +1346,7 @@ mod tests {
                     }),
                     source_event_id: None,
                     priority: None,
-                },
+                }),
                 ..Item::default()
             })
         });

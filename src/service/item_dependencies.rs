@@ -204,7 +204,7 @@ pub async fn assert_movable(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::item::ItemType;
+    use crate::domain::item::{ItemType, SimpleItem};
     use crate::storage::sqlite::{MockItemDependencyRepo, MockItemRepo};
 
     fn task(id: &str, project_id: &str, parent_item_id: Option<&str>) -> Item {
@@ -232,7 +232,7 @@ mod tests {
         let dep_repo = Arc::new(MockItemDependencyRepo::new()) as Arc<dyn ItemDependencyRepo>;
         let items = Arc::new(MockItemRepo::new()) as Arc<dyn ItemRepo>;
         let mut item = task("i1", "p1", None);
-        item.item_type = ItemType::Simple;
+        item.item_type = ItemType::Simple(SimpleItem);
 
         let err = set_item_dependencies(&dep_repo, &items, "p1", &item, &["i2".to_string()])
             .await

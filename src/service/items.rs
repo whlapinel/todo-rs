@@ -1,4 +1,6 @@
-use crate::domain::item::{Item, ItemKind, ItemType, Recurrence, Schedule};
+use crate::domain::item::{
+    EventItem, Item, ItemKind, ItemType, Recurrence, Schedule, SimpleItem, TaskItem, TemplateItem,
+};
 #[cfg(test)]
 use crate::domain::recurrence;
 use crate::service::activity_log::reverse_entry;
@@ -58,24 +60,24 @@ fn build_item_type(
     priority: Option<i32>,
 ) -> ItemType {
     match kind {
-        ItemKind::Simple => ItemType::Simple,
-        ItemKind::Task => ItemType::Task {
+        ItemKind::Simple => ItemType::Simple(SimpleItem),
+        ItemKind::Task => ItemType::Task(TaskItem {
             schedule,
             recurrence,
             team_assignment: None,
             source_event_id,
             priority,
-        },
-        ItemKind::Event => ItemType::Event {
+        }),
+        ItemKind::Event => ItemType::Event(EventItem {
             schedule,
             recurrence,
             event_type,
-        },
-        ItemKind::Template => ItemType::Template {
+        }),
+        ItemKind::Template => ItemType::Template(TemplateItem {
             schedule,
             recurrence,
             event_type,
-        },
+        }),
     }
 }
 
@@ -445,11 +447,8 @@ pub(crate) async fn unlink_source_event_tasks(
 ) -> Result<(), RepoError> {
     let tasks = repo.list_by_source_event(event_id).await?;
     for mut task in tasks {
-        if let ItemType::Task {
-            source_event_id, ..
-        } = &mut task.item_type
-        {
-            *source_event_id = None;
+        if let ItemType::Task(task_item) = &mut task.item_type {
+            task_item.source_event_id = None;
         }
         repo.update_by_project(&task).await?;
     }
@@ -662,13 +661,13 @@ pub(crate) fn copy_template_children<'a>(
                 root_due_date.and_then(|root| child.deadline_from_offset(root, tz_offset_minutes));
             schedule.has_due_time = false;
             let recurrence = child.item_type.recurrence().cloned().unwrap_or_default();
-            new_child.item_type = ItemType::Task {
+            new_child.item_type = ItemType::Task(TaskItem {
                 schedule,
                 recurrence,
                 team_assignment: None,
                 source_event_id: None,
                 priority: child.priority(),
-            };
+            });
             let new_child_id = repo.create(&new_child).await?;
             copy_template_children(
                 repo,
@@ -709,13 +708,13 @@ pub(crate) fn copy_template_children_to_event<'a>(
                 event_anchor.and_then(|root| child.deadline_from_offset(root, tz_offset_minutes));
             schedule.has_due_time = false;
             let recurrence = child.item_type.recurrence().cloned().unwrap_or_default();
-            new_child.item_type = ItemType::Task {
+            new_child.item_type = ItemType::Task(TaskItem {
                 schedule,
                 recurrence,
                 team_assignment: None,
                 source_event_id: Some(event_id.to_string()),
                 priority: child.priority(),
-            };
+            });
             let new_child_id = repo.create(&new_child).await?;
             copy_template_children(
                 repo,
@@ -760,11 +759,11 @@ pub(crate) fn copy_children_as_template<'a>(
             schedule.scheduled_end_date = None;
             let recurrence = child.item_type.recurrence().cloned().unwrap_or_default();
             let event_type = child.event_type();
-            new_child.item_type = ItemType::Template {
+            new_child.item_type = ItemType::Template(TemplateItem {
                 schedule,
                 recurrence,
                 event_type,
-            };
+            });
             let new_child_id = repo.create(&new_child).await?;
             copy_children_as_template(repo, &child.id, &new_child_id).await?;
         }
@@ -819,11 +818,11 @@ mod tests {
         Item {
             id: id.to_string(),
             user_id: Some(user_id.to_string()),
-            item_type: ItemType::Template {
+            item_type: ItemType::Template(TemplateItem {
                 schedule: Schedule::default(),
                 recurrence: Recurrence::default(),
                 event_type: Some(event_type.to_string()),
-            },
+            }),
             ..Item::default()
         }
     }
@@ -832,14 +831,14 @@ mod tests {
         Item {
             id: id.to_string(),
             parent_item_id: Some(parent_id.to_string()),
-            item_type: ItemType::Template {
+            item_type: ItemType::Template(TemplateItem {
                 schedule: Schedule::default(),
                 recurrence: Recurrence {
                     due_offset_days: Some(offset_days),
                     ..Recurrence::default()
                 },
                 event_type: None,
-            },
+            }),
             ..Item::default()
         }
     }
@@ -847,7 +846,7 @@ mod tests {
     fn task_with_due_date(id: &str, due_date: DateTime<Utc>) -> Item {
         Item {
             id: id.to_string(),
-            item_type: ItemType::Task {
+            item_type: ItemType::Task(TaskItem {
                 schedule: Schedule {
                     due_date: Some(due_date),
                     ..Schedule::default()
@@ -856,7 +855,7 @@ mod tests {
                 team_assignment: None,
                 source_event_id: None,
                 priority: None,
-            },
+            }),
             ..Item::default()
         }
     }
@@ -870,8 +869,8 @@ mod tests {
         let mut current = task_with_due_date("item1", Utc::now());
         current.complete = true;
         let mut edited = current.clone();
-        if let ItemType::Task { priority, .. } = &mut edited.item_type {
-            *priority = Some(2);
+        if let ItemType::Task(task) = &mut edited.item_type {
+            task.priority = Some(2);
         }
         assert!(!is_pure_complete_toggle(&current, &edited));
     }
@@ -880,7 +879,7 @@ mod tests {
         Item {
             id: id.to_string(),
             parent_item_id: Some(parent_id.to_string()),
-            item_type: ItemType::Task {
+            item_type: ItemType::Task(TaskItem {
                 schedule: Schedule::default(),
                 recurrence: Recurrence {
                     due_offset_days: Some(offset_days),
@@ -889,7 +888,7 @@ mod tests {
                 team_assignment: None,
                 source_event_id: None,
                 priority: None,
-            },
+            }),
             ..Item::default()
         }
     }
@@ -981,14 +980,14 @@ mod tests {
         Item {
             id: id.to_string(),
             user_id: Some(user_id.to_string()),
-            item_type: ItemType::Event {
+            item_type: ItemType::Event(EventItem {
                 schedule: Schedule {
                     due_date: Some(due_date),
                     ..Schedule::default()
                 },
                 recurrence: Recurrence::default(),
                 event_type: None,
-            },
+            }),
             ..Item::default()
         }
     }
@@ -1041,14 +1040,14 @@ mod tests {
                 Ok(Item {
                     id: "event1".to_string(),
                     user_id: Some("u1".to_string()),
-                    item_type: ItemType::Event {
+                    item_type: ItemType::Event(EventItem {
                         schedule: Schedule {
                             scheduled_date: Some(event_scheduled),
                             ..Schedule::default()
                         },
                         recurrence: Recurrence::default(),
                         event_type: None,
-                    },
+                    }),
                     ..Item::default()
                 })
             });
@@ -1108,7 +1107,7 @@ mod tests {
                 Ok(Item {
                     id: "event1".to_string(),
                     user_id: Some("u1".to_string()),
-                    item_type: ItemType::Event {
+                    item_type: ItemType::Event(EventItem {
                         schedule: Schedule {
                             due_date: Some(event_due),
                             scheduled_date: Some(event_scheduled),
@@ -1116,7 +1115,7 @@ mod tests {
                         },
                         recurrence: Recurrence::default(),
                         event_type: None,
-                    },
+                    }),
                     ..Item::default()
                 })
             });
@@ -1156,11 +1155,11 @@ mod tests {
                 Ok(Item {
                     id: "event1".to_string(),
                     user_id: Some("u1".to_string()),
-                    item_type: ItemType::Event {
+                    item_type: ItemType::Event(EventItem {
                         schedule: Schedule::default(),
                         recurrence: Recurrence::default(),
                         event_type: None,
-                    },
+                    }),
                     ..Item::default()
                 })
             });
@@ -1177,11 +1176,8 @@ mod tests {
                 .with_timezone(&Utc),
         );
         linked_task.user_id = Some("u1".to_string());
-        if let ItemType::Task {
-            source_event_id, ..
-        } = &mut linked_task.item_type
-        {
-            *source_event_id = Some("event1".to_string());
+        if let ItemType::Task(task) = &mut linked_task.item_type {
+            task.source_event_id = Some("event1".to_string());
         }
         let returned_task = linked_task.clone();
         mock.expect_list_by_source_event()

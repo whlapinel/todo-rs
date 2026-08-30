@@ -136,7 +136,9 @@ pub async fn list_due_notifications_for_user(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::item::{Item, ItemType, Recurrence, Schedule, TeamAssignment};
+    use crate::domain::item::{
+        Item, ItemType, Recurrence, Schedule, SimpleItem, TaskItem, TeamAssignment,
+    };
     use crate::domain::project::Project;
     use crate::storage::sqlite::{MockProjectRepo, MockReminderRepo};
     use chrono::{DateTime, Utc};
@@ -153,13 +155,13 @@ mod tests {
         Item {
             id: "item1".to_string(),
             project_id: Some(project_id.to_string()),
-            item_type: ItemType::Task {
+            item_type: ItemType::Task(TaskItem {
                 schedule,
                 recurrence: Recurrence::default(),
                 team_assignment,
                 source_event_id: None,
                 priority: None,
-            },
+            }),
             ..Item::new_project_item(project_id, "Task")
         }
     }
@@ -286,7 +288,7 @@ mod tests {
         let item = Item {
             id: "item1".to_string(),
             project_id: Some("proj1".to_string()),
-            item_type: ItemType::Simple,
+            item_type: ItemType::Simple(SimpleItem),
             ..Item::new_project_item("proj1", "Simple")
         };
 

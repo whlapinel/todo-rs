@@ -94,6 +94,50 @@ pub struct TeamAssignment {
     pub points: Option<i32>,
 }
 
+/// Payload for `ItemType::Task`. See `ItemType` below for the per-kind split rationale.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TaskItem {
+    pub schedule: Schedule,
+    pub recurrence: Recurrence,
+    pub team_assignment: Option<TeamAssignment>,
+    /// The Event this task tracks, if it was auto-copied from a matching
+    /// template or manually linked from the event's own "Linked tasks"
+    /// form — a reference, not structural nesting, so the task stays
+    /// top-level (assignable/pointable) while still being offset-driven
+    /// off the event's own date. Mutually exclusive with `parent_item_id`
+    /// (see `Item::validate`) and only settable on `Task` — only a Task
+    /// has anywhere to put it.
+    pub source_event_id: Option<String>,
+    /// 1 (highest) through 4 (lowest); `None` sorts last. Task-only, but
+    /// unlike `team_assignment` above it's a plain personal-productivity
+    /// field — not team-backed-project-only, not admin-gated, and not
+    /// restricted to top-level items. See root CLAUDE.md's Priority section.
+    pub priority: Option<i32>,
+}
+
+/// Payload for `ItemType::Event`. See `ItemType` below for the per-kind split rationale.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct EventItem {
+    pub schedule: Schedule,
+    pub recurrence: Recurrence,
+    pub event_type: Option<String>,
+}
+
+/// Payload for `ItemType::Template`. See `ItemType` below for the per-kind split rationale.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TemplateItem {
+    pub schedule: Schedule,
+    pub recurrence: Recurrence,
+    pub event_type: Option<String>,
+}
+
+/// Payload for `ItemType::Simple` — a bare checkable name with no scheduling
+/// machinery — no due date, scheduled window, recurrence, due-offset, event_type,
+/// or team assignment. Empty today; see `docs/item-kind-split-plan.md` Stage 4 for
+/// where `parent_item_id` moves onto this struct.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SimpleItem;
+
 /// What kind of thing an `Item` row represents, and the data that only makes sense
 /// for that kind. Only `Task` can carry a `TeamAssignment` (points/assignment);
 /// only `Event`/`Template` can carry `event_type` (see `create_item`/`create_team_item`
@@ -105,58 +149,25 @@ pub struct TeamAssignment {
 /// this replaced didn't actually make these invariants type-safe.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ItemType {
-    Task {
-        schedule: Schedule,
-        recurrence: Recurrence,
-        team_assignment: Option<TeamAssignment>,
-        /// The Event this task tracks, if it was auto-copied from a matching
-        /// template or manually linked from the event's own "Linked tasks"
-        /// form — a reference, not structural nesting, so the task stays
-        /// top-level (assignable/pointable) while still being offset-driven
-        /// off the event's own date. Mutually exclusive with `parent_item_id`
-        /// (see `Item::validate`) and only settable on `Task` — only a Task
-        /// has anywhere to put it.
-        source_event_id: Option<String>,
-        /// 1 (highest) through 4 (lowest); `None` sorts last. Task-only, but
-        /// unlike `team_assignment` above it's a plain personal-productivity
-        /// field — not team-backed-project-only, not admin-gated, and not
-        /// restricted to top-level items. See root CLAUDE.md's Priority section.
-        priority: Option<i32>,
-    },
-    Event {
-        schedule: Schedule,
-        recurrence: Recurrence,
-        event_type: Option<String>,
-    },
-    Template {
-        schedule: Schedule,
-        recurrence: Recurrence,
-        event_type: Option<String>,
-    },
-    /// A bare checkable name with no scheduling machinery — no due date, scheduled
-    /// window, recurrence, due-offset, event_type, or team assignment.
-    Simple,
+    Task(TaskItem),
+    Event(EventItem),
+    Template(TemplateItem),
+    Simple(SimpleItem),
 }
 
 impl Default for ItemType {
     fn default() -> Self {
-        ItemType::Task {
-            schedule: Schedule::default(),
-            recurrence: Recurrence::default(),
-            team_assignment: None,
-            source_event_id: None,
-            priority: None,
-        }
+        ItemType::Task(TaskItem::default())
     }
 }
 
 impl ItemType {
     pub fn kind(&self) -> ItemKind {
         match self {
-            ItemType::Task { .. } => ItemKind::Task,
-            ItemType::Event { .. } => ItemKind::Event,
-            ItemType::Template { .. } => ItemKind::Template,
-            ItemType::Simple => ItemKind::Simple,
+            ItemType::Task(_) => ItemKind::Task,
+            ItemType::Event(_) => ItemKind::Event,
+            ItemType::Template(_) => ItemKind::Template,
+            ItemType::Simple(_) => ItemKind::Simple,
         }
     }
 
@@ -165,93 +176,74 @@ impl ItemType {
     /// hasn't supplied schedule/recurrence/assignment data yet.
     pub fn from_kind(kind: ItemKind) -> Self {
         match kind {
-            ItemKind::Task => ItemType::Task {
-                schedule: Schedule::default(),
-                recurrence: Recurrence::default(),
-                team_assignment: None,
-                source_event_id: None,
-                priority: None,
-            },
-            ItemKind::Event => ItemType::Event {
-                schedule: Schedule::default(),
-                recurrence: Recurrence::default(),
-                event_type: None,
-            },
-            ItemKind::Template => ItemType::Template {
-                schedule: Schedule::default(),
-                recurrence: Recurrence::default(),
-                event_type: None,
-            },
-            ItemKind::Simple => ItemType::Simple,
+            ItemKind::Task => ItemType::Task(TaskItem::default()),
+            ItemKind::Event => ItemType::Event(EventItem::default()),
+            ItemKind::Template => ItemType::Template(TemplateItem::default()),
+            ItemKind::Simple => ItemType::Simple(SimpleItem),
         }
     }
 
     pub fn schedule(&self) -> Option<&Schedule> {
         match self {
-            ItemType::Task { schedule, .. }
-            | ItemType::Event { schedule, .. }
-            | ItemType::Template { schedule, .. } => Some(schedule),
-            ItemType::Simple => None,
+            ItemType::Task(t) => Some(&t.schedule),
+            ItemType::Event(e) => Some(&e.schedule),
+            ItemType::Template(t) => Some(&t.schedule),
+            ItemType::Simple(_) => None,
         }
     }
 
     pub fn schedule_mut(&mut self) -> Option<&mut Schedule> {
         match self {
-            ItemType::Task { schedule, .. }
-            | ItemType::Event { schedule, .. }
-            | ItemType::Template { schedule, .. } => Some(schedule),
-            ItemType::Simple => None,
+            ItemType::Task(t) => Some(&mut t.schedule),
+            ItemType::Event(e) => Some(&mut e.schedule),
+            ItemType::Template(t) => Some(&mut t.schedule),
+            ItemType::Simple(_) => None,
         }
     }
 
     pub fn recurrence(&self) -> Option<&Recurrence> {
         match self {
-            ItemType::Task { recurrence, .. }
-            | ItemType::Event { recurrence, .. }
-            | ItemType::Template { recurrence, .. } => Some(recurrence),
-            ItemType::Simple => None,
+            ItemType::Task(t) => Some(&t.recurrence),
+            ItemType::Event(e) => Some(&e.recurrence),
+            ItemType::Template(t) => Some(&t.recurrence),
+            ItemType::Simple(_) => None,
         }
     }
 
     pub fn recurrence_mut(&mut self) -> Option<&mut Recurrence> {
         match self {
-            ItemType::Task { recurrence, .. }
-            | ItemType::Event { recurrence, .. }
-            | ItemType::Template { recurrence, .. } => Some(recurrence),
-            ItemType::Simple => None,
+            ItemType::Task(t) => Some(&mut t.recurrence),
+            ItemType::Event(e) => Some(&mut e.recurrence),
+            ItemType::Template(t) => Some(&mut t.recurrence),
+            ItemType::Simple(_) => None,
         }
     }
 
     pub fn event_type(&self) -> Option<&str> {
         match self {
-            ItemType::Event { event_type, .. } | ItemType::Template { event_type, .. } => {
-                event_type.as_deref()
-            }
-            ItemType::Task { .. } | ItemType::Simple => None,
+            ItemType::Event(e) => e.event_type.as_deref(),
+            ItemType::Template(t) => t.event_type.as_deref(),
+            ItemType::Task(_) | ItemType::Simple(_) => None,
         }
     }
 
     pub fn team_assignment(&self) -> Option<&TeamAssignment> {
         match self {
-            ItemType::Task {
-                team_assignment, ..
-            } => team_assignment.as_ref(),
+            ItemType::Task(t) => t.team_assignment.as_ref(),
             _ => None,
         }
     }
 
     pub fn source_event_id(&self) -> Option<&str> {
         match self {
-            ItemType::Task {
-                source_event_id, ..
-            } => source_event_id.as_deref(),
+            ItemType::Task(t) => t.source_event_id.as_deref(),
             _ => None,
         }
     }
 
     pub fn priority(&self) -> Option<i32> {
         match self {
-            ItemType::Task { priority, .. } => *priority,
+            ItemType::Task(t) => t.priority,
             _ => None,
         }
     }
@@ -342,7 +334,7 @@ impl Item {
 
     pub fn new_simple(user_id: &str, name: &str) -> Self {
         Self {
-            item_type: ItemType::Simple,
+            item_type: ItemType::Simple(SimpleItem),
             ..Self::new_user_item(user_id, name)
         }
     }
@@ -422,7 +414,7 @@ impl Item {
 
     /// Enforces the cross-field invariants that assigning the payload to the wrong
     /// variant would otherwise still allow at construction time (a caller can still
-    /// build `ItemType::Task { team_assignment: Some(..), .. }` on a child by hand) —
+    /// build `ItemType::Task(TaskItem { team_assignment: Some(..), .. })` on a child by hand) —
     /// called by the service layer once an `Item` is fully assembled, right before
     /// it's persisted.
     pub fn validate(&self) -> Result<(), String> {
@@ -545,21 +537,17 @@ mod tests {
 
     fn set_source_event_id(item: &mut Item, event_id: &str) {
         match &mut item.item_type {
-            ItemType::Task {
-                source_event_id, ..
-            } => *source_event_id = Some(event_id.to_string()),
+            ItemType::Task(task) => task.source_event_id = Some(event_id.to_string()),
             _ => panic!("source_event_id only settable on Task"),
         }
     }
 
     fn set_points(item: &mut Item, points: i32) {
         match &mut item.item_type {
-            ItemType::Task {
-                team_assignment, ..
-            } => {
-                *team_assignment = Some(TeamAssignment {
+            ItemType::Task(task) => {
+                task.team_assignment = Some(TeamAssignment {
                     points: Some(points),
-                    ..team_assignment.clone().unwrap_or_default()
+                    ..task.team_assignment.clone().unwrap_or_default()
                 })
             }
             _ => panic!("points only settable on Task"),
@@ -568,16 +556,15 @@ mod tests {
 
     fn set_priority(item: &mut Item, priority: i32) {
         match &mut item.item_type {
-            ItemType::Task { priority: p, .. } => *p = Some(priority),
+            ItemType::Task(task) => task.priority = Some(priority),
             _ => panic!("priority only settable on Task"),
         }
     }
 
     fn set_event_type(item: &mut Item, event_type: &str) {
         match &mut item.item_type {
-            ItemType::Event { event_type: e, .. } | ItemType::Template { event_type: e, .. } => {
-                *e = Some(event_type.to_string())
-            }
+            ItemType::Event(e) => e.event_type = Some(event_type.to_string()),
+            ItemType::Template(t) => t.event_type = Some(event_type.to_string()),
             _ => panic!("event_type only settable on Event/Template"),
         }
     }
@@ -780,7 +767,7 @@ mod tests {
         // A Task variant has no field to put event_type in at all — this is the
         // compile-time guarantee the old flat-Option + validate() rejection used to
         // enforce only at runtime.
-        assert!(matches!(item.item_type, ItemType::Task { .. }));
+        assert!(matches!(item.item_type, ItemType::Task(_)));
     }
 
     #[test]

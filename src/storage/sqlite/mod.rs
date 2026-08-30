@@ -15,7 +15,10 @@ use crate::domain::{
     attachment::Attachment,
     calendar_subscription::CalendarSubscription,
     comment::Comment,
-    item::{Item, ItemKind, ItemType, Recurrence, Schedule, TeamAssignment},
+    item::{
+        EventItem, Item, ItemKind, ItemType, Recurrence, Schedule, SimpleItem, TaskItem,
+        TeamAssignment, TemplateItem,
+    },
     item_series::{ItemOccurrence, ItemSeries},
     project::Project,
     push_subscription::PushSubscription,
@@ -654,7 +657,7 @@ fn row_to_item(row: &sqlx::sqlite::SqliteRow) -> Item {
         .unwrap_or_default();
 
     let item_type = match kind {
-        ItemKind::Task => ItemType::Task {
+        ItemKind::Task => ItemType::Task(TaskItem {
             schedule,
             recurrence,
             team_assignment: if assigned_to_user_id.is_some() || points.is_some() {
@@ -667,18 +670,18 @@ fn row_to_item(row: &sqlx::sqlite::SqliteRow) -> Item {
             },
             source_event_id,
             priority,
-        },
-        ItemKind::Event => ItemType::Event {
+        }),
+        ItemKind::Event => ItemType::Event(EventItem {
             schedule,
             recurrence,
             event_type,
-        },
-        ItemKind::Template => ItemType::Template {
+        }),
+        ItemKind::Template => ItemType::Template(TemplateItem {
             schedule,
             recurrence,
             event_type,
-        },
-        ItemKind::Simple => ItemType::Simple,
+        }),
+        ItemKind::Simple => ItemType::Simple(SimpleItem),
     };
 
     Item {

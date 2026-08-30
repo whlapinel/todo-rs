@@ -1496,7 +1496,7 @@ pub struct ProjectTaskEditPageTemplate {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::item::ItemType;
+    use crate::domain::item::{EventItem, ItemType};
     use crate::storage::sqlite::{
         ItemDependencyRepo, ItemSeriesRepo, MockItemDependencyRepo, MockItemRepo,
         MockItemSeriesRepo, RepoError,
@@ -1542,11 +1542,11 @@ mod tests {
             Ok(Item {
                 id: "parent1".to_string(),
                 name: "Company Picnic".to_string(),
-                item_type: ItemType::Event {
+                item_type: ItemType::Event(EventItem {
                     schedule: Default::default(),
                     recurrence: Default::default(),
                     event_type: None,
-                },
+                }),
                 ..Item::default()
             })
         });

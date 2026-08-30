@@ -2667,7 +2667,7 @@ pub async fn get_add_child_task(
 #[cfg(test)]
 mod resolve_task_anchor_date_tests {
     use super::*;
-    use crate::domain::item::{ItemType, Recurrence, Schedule};
+    use crate::domain::item::{ItemType, Recurrence, Schedule, TaskItem};
     use crate::storage::sqlite::MockItemRepo;
     use chrono::TimeZone;
 
@@ -2698,7 +2698,7 @@ mod resolve_task_anchor_date_tests {
             id: id.to_string(),
             user_id: user_id.map(str::to_string),
             project_id: Some("proj1".to_string()),
-            item_type: ItemType::Task {
+            item_type: ItemType::Task(TaskItem {
                 schedule: Schedule {
                     due_date: Some(due_date),
                     has_due_time: false,
@@ -2711,7 +2711,7 @@ mod resolve_task_anchor_date_tests {
                 team_assignment: None,
                 source_event_id: None,
                 priority: None,
-            },
+            }),
             ..Item::default()
         }
     }

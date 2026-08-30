@@ -39,7 +39,7 @@
 //! recurring event unconditionally).
 
 use crate::domain::calendar_subscription::CalendarSubscription;
-use crate::domain::item::{Item, ItemType, Recurrence, Schedule};
+use crate::domain::item::{EventItem, Item, ItemType, Recurrence, Schedule};
 use crate::storage::sqlite::{CalendarSubscriptionRepo, ItemRepo, RepoError, UserRepo};
 use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use chrono_tz::Tz;
@@ -474,7 +474,7 @@ fn build_imported_item(subscription: &CalendarSubscription, event: &ParsedIcalEv
     item.description = event.description.clone();
     item.google_event_id = Some(event.uid.clone());
     item.calendar_subscription_id = Some(subscription.id.clone());
-    item.item_type = ItemType::Event {
+    item.item_type = ItemType::Event(EventItem {
         schedule: Schedule {
             due_date: None,
             has_due_time: false,
@@ -485,7 +485,7 @@ fn build_imported_item(subscription: &CalendarSubscription, event: &ParsedIcalEv
         },
         recurrence: Recurrence::default(),
         event_type: None,
-    };
+    });
     item
 }
 
@@ -636,7 +636,7 @@ async fn run_diff(
                     let mut updated_item = (*existing_item).clone();
                     updated_item.name = event.summary.clone();
                     updated_item.description = event.description.clone();
-                    updated_item.item_type = ItemType::Event {
+                    updated_item.item_type = ItemType::Event(EventItem {
                         schedule: Schedule {
                             due_date: None,
                             has_due_time: false,
@@ -647,7 +647,7 @@ async fn run_diff(
                         },
                         recurrence: Recurrence::default(),
                         event_type: None,
-                    };
+                    });
                     item_repo
                         .update_by_project(&updated_item)
                         .await
@@ -948,7 +948,7 @@ mod tests {
             name: "Test Event".to_string(),
             google_event_id: Some(uid.to_string()),
             calendar_subscription_id: Some(sub_id.to_string()),
-            item_type: ItemType::Event {
+            item_type: ItemType::Event(EventItem {
                 schedule: Schedule {
                     scheduled_date: Some(start),
                     has_scheduled_time: true,
@@ -958,7 +958,7 @@ mod tests {
                 },
                 recurrence: Recurrence::default(),
                 event_type: None,
-            },
+            }),
             ..Item::default()
         }
     }

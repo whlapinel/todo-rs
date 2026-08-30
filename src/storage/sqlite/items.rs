@@ -392,7 +392,9 @@ impl ItemRepo for SqliteItemRepo {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::item::{ItemType, Recurrence, Schedule, TeamAssignment};
+    use crate::domain::item::{
+        ItemType, Recurrence, Schedule, TaskItem, TeamAssignment, TemplateItem,
+    };
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use std::str::FromStr;
 
@@ -503,11 +505,11 @@ mod tests {
         let repo = SqliteItemRepo(pool);
 
         let mut template = item_in_project("p1", "Template 1");
-        template.item_type = ItemType::Template {
+        template.item_type = ItemType::Template(TemplateItem {
             schedule: Schedule::default(),
             recurrence: Recurrence::default(),
             event_type: None,
-        };
+        });
         repo.create(&template).await.unwrap();
 
         repo.create(&item_in_project("p1", "Not a template"))
@@ -515,11 +517,11 @@ mod tests {
             .unwrap();
 
         let mut other_project_template = item_in_project("p2", "Other project template");
-        other_project_template.item_type = ItemType::Template {
+        other_project_template.item_type = ItemType::Template(TemplateItem {
             schedule: Schedule::default(),
             recurrence: Recurrence::default(),
             event_type: None,
-        };
+        });
         repo.create(&other_project_template).await.unwrap();
 
         let templates = repo.list_templates_by_project("p1").await.unwrap();
@@ -536,7 +538,7 @@ mod tests {
 
         item.id = id.clone();
         item.name = "Renamed".to_string();
-        item.item_type = ItemType::Task {
+        item.item_type = ItemType::Task(TaskItem {
             schedule: Schedule::default(),
             recurrence: Recurrence::default(),
             team_assignment: Some(TeamAssignment {
@@ -545,7 +547,7 @@ mod tests {
             }),
             source_event_id: None,
             priority: Some(2),
-        };
+        });
         repo.update_by_project(&item).await.unwrap();
 
         let updated = repo.get_by_project("p1", &id).await.unwrap();

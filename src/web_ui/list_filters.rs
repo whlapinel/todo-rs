@@ -345,19 +345,16 @@ mod tests {
     }
 
     fn set_priority(item: &mut Item, priority: i32) {
-        if let ItemType::Task { priority: p, .. } = &mut item.item_type {
-            *p = Some(priority);
+        if let ItemType::Task(task) = &mut item.item_type {
+            task.priority = Some(priority);
         } else {
             panic!("test item must be a Task");
         }
     }
 
     fn set_assigned_to(item: &mut Item, user_id: &str) {
-        if let ItemType::Task {
-            team_assignment, ..
-        } = &mut item.item_type
-        {
-            *team_assignment = Some(TeamAssignment {
+        if let ItemType::Task(task) = &mut item.item_type {
+            task.team_assignment = Some(TeamAssignment {
                 assigned_to_user_id: Some(user_id.to_string()),
                 points: None,
             });

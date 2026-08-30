@@ -1125,8 +1125,8 @@ mod tests {
     }
 
     fn set_priority(item: &mut Item, priority: i32) {
-        if let ItemType::Task { priority: p, .. } = &mut item.item_type {
-            *p = Some(priority);
+        if let ItemType::Task(task) = &mut item.item_type {
+            task.priority = Some(priority);
         } else {
             panic!("test item must be a Task");
         }

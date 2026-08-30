@@ -279,7 +279,7 @@ pub async fn list_comments_for_item(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::item::{Item, ItemType};
+    use crate::domain::item::{Item, ItemType, SimpleItem};
     use crate::domain::project::Project;
     use crate::storage::attachment_store::MockAttachmentStore;
     use crate::storage::sqlite::{
@@ -307,7 +307,7 @@ mod tests {
         let mut items_mock = MockItemRepo::new();
         items_mock.expect_get_by_project().returning(|_, id| {
             let mut item = task(id, "p1");
-            item.item_type = ItemType::Simple;
+            item.item_type = ItemType::Simple(SimpleItem);
             Ok(item)
         });
         let mut projects_mock = MockProjectRepo::new();

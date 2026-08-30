@@ -1,6 +1,6 @@
 # Split the `Item` domain model into per-kind Rust types
 
-**Status: Stage 0 complete (audit). Stages 1–8 not started.** This is the canonical copy — edit this file in place as stages complete. It originated in a Claude Code plan-mode session (`~/.claude/plans/splendid-wishing-sphinx.md`), copied here so it survives independently of that session.
+**Status: Stages 0–1 complete. Stages 2–8 not started.** This is the canonical copy — edit this file in place as stages complete. It originated in a Claude Code plan-mode session (`~/.claude/plans/splendid-wishing-sphinx.md`), copied here so it survives independently of that session.
 
 ## Context
 
@@ -172,7 +172,7 @@ Ship in order; each stage is its own PR/commit and leaves `cargo fmt`/`cargo tes
 ### Stage status
 
 - [x] Stage 0 — Confirm the field-restriction table above (audit only, no code changes)
-- [ ] Stage 1 — Wrap `ItemType`'s inline variants into named per-kind structs (no field movement)
+- [x] Stage 1 — Wrap `ItemType`'s inline variants into named per-kind structs (no field movement)
 - [ ] Stage 2 — Add `HasSchedule`/`Completable` traits; repoint the genuinely generic call sites onto them
 - [ ] Stage 3 — Move `complete` off `Item` onto `TaskItem`
 - [ ] Stage 4 — Move `parent_item_id` off `Item` onto `TaskItem`/`SimpleItem`
@@ -205,6 +205,8 @@ Pure research, no code changes. For every row in the target-shape table above ma
 - `src/domain/item.rs`: define `TaskItem`/`EventItem`/`TemplateItem`/`SimpleItem` with exactly today's per-variant field sets (no field moves yet); change `ItemType` to `Task(TaskItem)`/`Event(EventItem)`/`Template(TemplateItem)`/`Simple(SimpleItem)`. Keep every existing `Item::due_date()`/`event_type()`/etc. delegation method working (just re-point the match arms at `.0.schedule` instead of destructured field names).
 - Fix every resulting compile error across `src/storage/sqlite/`, `src/service/`, `src/web_ui/` — purely mechanical (`ItemType::Task { schedule, .. }` patterns become `ItemType::Task(TaskItem { schedule, .. })` or `ItemType::Task(task)` + `task.schedule`).
 - **Verify:** `cargo build`, `cargo test` clean, no behavior change (this stage cannot change behavior — it moves zero fields and adds zero restrictions). Diff the SQL and Askama layers to confirm they're untouched (per the Web UI section above, they should need zero edits at this stage).
+
+**Stage 1 as implemented:** landed exactly as scoped, no corrections needed. `SimpleItem` (an empty unit-like struct) was introduced alongside `TaskItem`/`EventItem`/`TemplateItem` even though `Simple` carries no payload today — this keeps all four `ItemType` variants tuple-shaped (`Simple(SimpleItem)` rather than a bare unit variant) so the target shape in the Design section above (which already shows `Simple(SimpleItem)` gaining `parent_item_id` in Stage 4) doesn't need a second wrapping step later. 15 files touched: `src/domain/item.rs` (the type definitions and every internal match arm/test helper), `src/service/{items,team_items,calendar_sync,templates,comments,item_dependencies,project_items,reminders}.rs`, `src/storage/sqlite/{mod,items}.rs`, `src/web_ui/{list_filters,project_tasks/handlers,project_tasks/mod,project_tasks/templates}.rs`. Zero edits to `templates/*.html` or the Smithy model, confirmed via `git diff --stat -- templates/` showing no output. `cargo build`, `cargo test` (595 passed, 0 failed), `cargo fmt` (repo-root, no path args), and `task check` all clean — only pre-existing dead-code warnings remain (`item_series.rs`'s unused `self` import, `storage/sqlite/users.rs`'s unused `Row` import, and several `never used`/`never constructed` warnings predating this stage), none introduced by this change.
 
 ### Stage 2 — `HasSchedule`/`Completable` traits
 

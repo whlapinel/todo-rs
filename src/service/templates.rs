@@ -1,4 +1,4 @@
-use crate::domain::item::{Item, ItemType, Recurrence, Schedule};
+use crate::domain::item::{Item, ItemType, Recurrence, Schedule, TemplateItem};
 use crate::service::items::{ItemError, copy_children_as_template};
 use crate::service::projects::require_project_member;
 use crate::storage::sqlite::{ItemRepo, ProjectRepo, TeamRepo};
@@ -33,7 +33,7 @@ pub async fn create_template(
     let source_id = params.source_item_id;
     if let Some(source_id) = &source_id {
         let source = repo.get(&params.user_id, source_id).await?;
-        if matches!(source.item_type, ItemType::Simple) {
+        if matches!(source.item_type, ItemType::Simple(_)) {
             return Err(ItemError::Invalid(
                 "Simple list items cannot be saved as templates".to_string(),
             ));
@@ -54,11 +54,11 @@ pub async fn create_template(
     if params.event_type.is_some() {
         event_type = params.event_type;
     }
-    item.item_type = ItemType::Template {
+    item.item_type = ItemType::Template(TemplateItem {
         schedule,
         recurrence,
         event_type,
-    };
+    });
     item.description = description;
 
     let template_id = repo.create(&item).await?;
@@ -88,15 +88,15 @@ pub async fn update_template(
     params: UpdateTemplateParams,
 ) -> Result<(), ItemError> {
     let current = repo.get(&params.user_id, &params.template_id).await?;
-    if !matches!(current.item_type, ItemType::Template { .. }) {
+    if !matches!(current.item_type, ItemType::Template(_)) {
         return Err(ItemError::Invalid("item is not a template".to_string()));
     }
 
     let mut item = current;
     item.name = params.name;
     item.description = params.description;
-    if let ItemType::Template { event_type, .. } = &mut item.item_type {
-        *event_type = params.event_type;
+    if let ItemType::Template(t) = &mut item.item_type {
+        t.event_type = params.event_type;
     }
 
     repo.update(&item).await?;
@@ -147,7 +147,7 @@ pub async fn create_team_template(
     if let Some(source_id) = &source_id {
         // get_by_project (not get) confirms the source item actually belongs to this project.
         let source = repo.get_by_project(&params.project_id, source_id).await?;
-        if matches!(source.item_type, ItemType::Simple) {
+        if matches!(source.item_type, ItemType::Simple(_)) {
             return Err(ItemError::Invalid(
                 "Simple list items cannot be saved as templates".to_string(),
             ));
@@ -168,11 +168,11 @@ pub async fn create_team_template(
     if params.event_type.is_some() {
         event_type = params.event_type;
     }
-    item.item_type = ItemType::Template {
+    item.item_type = ItemType::Template(TemplateItem {
         schedule,
         recurrence,
         event_type,
-    };
+    });
     item.description = description;
 
     let template_id = repo.create(&item).await?;
@@ -216,15 +216,15 @@ pub async fn update_team_template(
     let current = repo
         .get_by_project(&params.project_id, &params.template_id)
         .await?;
-    if !matches!(current.item_type, ItemType::Template { .. }) {
+    if !matches!(current.item_type, ItemType::Template(_)) {
         return Err(ItemError::Invalid("item is not a template".to_string()));
     }
 
     let mut item = current;
     item.name = params.name;
     item.description = params.description;
-    if let ItemType::Template { event_type, .. } = &mut item.item_type {
-        *event_type = params.event_type;
+    if let ItemType::Template(t) = &mut item.item_type {
+        t.event_type = params.event_type;
     }
 
     repo.update_by_project(&item).await?;
@@ -369,6 +369,7 @@ pub async fn update_project_template(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::item::{SimpleItem, TaskItem};
     use crate::domain::team::TeamRole;
     use crate::storage::sqlite::MockItemRepo;
 
@@ -390,7 +391,7 @@ mod tests {
 
         mock.expect_create()
             .withf(|item: &Item| {
-                item.parent_item_id.is_none() && matches!(item.item_type, ItemType::Template { .. })
+                item.parent_item_id.is_none() && matches!(item.item_type, ItemType::Template(_))
             })
             .times(1)
             .returning(|_| Ok("tpl1".to_string()));
@@ -403,7 +404,7 @@ mod tests {
                     id: "child1".to_string(),
                     parent_item_id: Some("src".to_string()),
                     name: "Pack boxes".to_string(),
-                    item_type: ItemType::Task {
+                    item_type: ItemType::Task(TaskItem {
                         schedule: Schedule::default(),
                         recurrence: Recurrence {
                             due_offset_days: Some(-3),
@@ -412,7 +413,7 @@ mod tests {
                         team_assignment: None,
                         source_event_id: None,
                         priority: None,
-                    },
+                    }),
                     ..Item::default()
                 }])
             });
@@ -420,7 +421,7 @@ mod tests {
         mock.expect_create()
             .withf(|item: &Item| {
                 item.parent_item_id.as_deref() == Some("tpl1")
-                    && matches!(item.item_type, ItemType::Template { .. })
+                    && matches!(item.item_type, ItemType::Template(_))
                     && item.due_offset_days() == Some(-3)
             })
             .times(1)
@@ -462,7 +463,7 @@ mod tests {
                     id: "src".to_string(),
                     user_id: Some("u1".to_string()),
                     name: "Groceries".to_string(),
-                    item_type: ItemType::Simple,
+                    item_type: ItemType::Simple(SimpleItem),
                     ..Item::default()
                 })
             });
@@ -496,7 +497,7 @@ mod tests {
                     id: "src".to_string(),
                     project_id: Some("p1".to_string()),
                     name: "Groceries".to_string(),
-                    item_type: ItemType::Simple,
+                    item_type: ItemType::Simple(SimpleItem),
                     ..Item::default()
                 })
             });
@@ -541,11 +542,11 @@ mod tests {
                     id: "tpl1".to_string(),
                     user_id: Some("u1".to_string()),
                     name: "Old name".to_string(),
-                    item_type: ItemType::Template {
+                    item_type: ItemType::Template(TemplateItem {
                         schedule: Schedule::default(),
                         recurrence: Recurrence::default(),
                         event_type: None,
-                    },
+                    }),
                     ..Item::default()
                 })
             });
@@ -554,7 +555,7 @@ mod tests {
             .withf(|item: &Item| {
                 item.id == "tpl1"
                     && item.name == "New name"
-                    && matches!(&item.item_type, ItemType::Template { event_type, .. } if event_type.as_deref() == Some("rain"))
+                    && matches!(&item.item_type, ItemType::Template(t) if t.event_type.as_deref() == Some("rain"))
             })
             .times(1)
             .returning(|_| Ok(()));
@@ -587,13 +588,13 @@ mod tests {
                     id: "item1".to_string(),
                     user_id: Some("u1".to_string()),
                     name: "A task".to_string(),
-                    item_type: ItemType::Task {
+                    item_type: ItemType::Task(TaskItem {
                         schedule: Schedule::default(),
                         recurrence: Recurrence::default(),
                         team_assignment: None,
                         source_event_id: None,
                         priority: None,
-                    },
+                    }),
                     ..Item::default()
                 })
             });
@@ -627,11 +628,11 @@ mod tests {
                     id: "tpl1".to_string(),
                     project_id: Some("p1".to_string()),
                     name: "Old name".to_string(),
-                    item_type: ItemType::Template {
+                    item_type: ItemType::Template(TemplateItem {
                         schedule: Schedule::default(),
                         recurrence: Recurrence::default(),
                         event_type: None,
-                    },
+                    }),
                     ..Item::default()
                 })
             });
@@ -640,7 +641,7 @@ mod tests {
             .withf(|item: &Item| {
                 item.id == "tpl1"
                     && item.name == "New name"
-                    && matches!(&item.item_type, ItemType::Template { event_type, .. } if event_type.as_deref() == Some("rain"))
+                    && matches!(&item.item_type, ItemType::Template(t) if t.event_type.as_deref() == Some("rain"))
             })
             .times(1)
             .returning(|_| Ok(()));
@@ -766,7 +767,7 @@ mod tests {
             .withf(|item: &Item| {
                 item.user_id.as_deref() == Some("owner1")
                     && item.project_id.as_deref() == Some("p1")
-                    && matches!(item.item_type, ItemType::Template { .. })
+                    && matches!(item.item_type, ItemType::Template(_))
             })
             .times(1)
             .returning(|_| Ok("tpl1".to_string()));
@@ -806,7 +807,7 @@ mod tests {
             .expect_create()
             .withf(|item: &Item| {
                 item.project_id.as_deref() == Some("p1")
-                    && matches!(item.item_type, ItemType::Template { .. })
+                    && matches!(item.item_type, ItemType::Template(_))
             })
             .times(1)
             .returning(|_| Ok("tpl1".to_string()));
@@ -844,11 +845,11 @@ mod tests {
                 id: "tpl1".to_string(),
                 user_id: Some("owner1".to_string()),
                 name: "Old name".to_string(),
-                item_type: ItemType::Template {
+                item_type: ItemType::Template(TemplateItem {
                     schedule: Schedule::default(),
                     recurrence: Recurrence::default(),
                     event_type: None,
-                },
+                }),
                 ..Item::default()
             })
         });
@@ -889,11 +890,11 @@ mod tests {
                 id: "tpl1".to_string(),
                 project_id: Some("p1".to_string()),
                 name: "Old name".to_string(),
-                item_type: ItemType::Template {
+                item_type: ItemType::Template(TemplateItem {
                     schedule: Schedule::default(),
                     recurrence: Recurrence::default(),
                     event_type: None,
-                },
+                }),
                 ..Item::default()
             })
         });
