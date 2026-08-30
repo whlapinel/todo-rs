@@ -174,7 +174,7 @@ impl ListFilters {
         is_team_project: bool,
         now: DateTime<Utc>,
     ) -> bool {
-        if !self.show_complete && item.complete {
+        if !self.show_complete && item.complete() {
             return false;
         }
         if is_team_project {
@@ -390,7 +390,9 @@ mod tests {
         let filters = ListFilters::default();
         let mut item = task();
         assert!(filters.matches(&item, "u1", false, utc(NOW)));
-        item.complete = true;
+        if let ItemType::Task(task) = &mut item.item_type {
+            task.complete = true;
+        }
         assert!(!filters.matches(&item, "u1", false, utc(NOW)));
     }
 
@@ -401,7 +403,9 @@ mod tests {
             ..Default::default()
         });
         let mut item = task();
-        item.complete = true;
+        if let ItemType::Task(task) = &mut item.item_type {
+            task.complete = true;
+        }
         assert!(filters.matches(&item, "u1", false, utc(NOW)));
     }
 

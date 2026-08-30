@@ -51,12 +51,12 @@ impl AssignedItemRow {
             id: item.id.clone(),
             detail_link: detail_url(item, &project_id),
             name: item.name.clone(),
-            complete: item.complete,
+            complete: item.complete(),
             due_date: item
                 .due_date()
                 .map(|d| format_display_date(to_local(d, tz), true)),
             overdue: item.is_overdue(Utc::now()),
-            toggle_complete_json: (!item.complete).to_string(),
+            toggle_complete_json: (!item.complete()).to_string(),
         })
     }
 }

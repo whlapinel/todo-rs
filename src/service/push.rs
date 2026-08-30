@@ -240,7 +240,7 @@ pub async fn sweep_due_reminders(
                 continue;
             }
         };
-        if item.complete {
+        if item.complete() {
             let _ = reminders.mark_pushed(&reminder.id).await;
             continue;
         }
@@ -412,7 +412,10 @@ mod tests {
         let mut items = MockItemRepo::new();
         items.expect_get_by_project().returning(|_, _| {
             Ok(Item {
-                complete: true,
+                item_type: crate::domain::item::ItemType::Task(crate::domain::item::TaskItem {
+                    complete: true,
+                    ..Default::default()
+                }),
                 ..Item::new_project_item("proj1", "Task")
             })
         });

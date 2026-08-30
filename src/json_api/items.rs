@@ -52,7 +52,7 @@ pub async fn list_items_due(
                     .item
                     .scheduled_date()
                     .map(|dt| SmithyDateTime::from_secs(dt.timestamp())),
-                complete: Some(di.item.complete),
+                complete: Some(di.item.complete()),
                 has_due_time: Some(di.item.has_due_time()),
             }
         })
@@ -100,7 +100,7 @@ pub async fn list_assigned_items(
                 scheduled_date: i
                     .scheduled_date()
                     .map(|dt| SmithyDateTime::from_secs(dt.timestamp())),
-                complete: Some(i.complete),
+                complete: Some(i.complete()),
                 has_due_time: Some(i.has_due_time()),
             }
         })

@@ -51,6 +51,7 @@ pub struct CreateItemParams {
 /// shaped set of flat fields — the one place that decides which of `Schedule`/`Recurrence`/
 /// `event_type` a kind actually gets to carry. Personal items never get a `TeamAssignment`
 /// (points/assignment are team-item-only — see `team_items::build_item_type`, its sibling).
+#[allow(clippy::too_many_arguments)]
 fn build_item_type(
     kind: ItemKind,
     schedule: Schedule,
@@ -58,6 +59,7 @@ fn build_item_type(
     event_type: Option<String>,
     source_event_id: Option<String>,
     priority: Option<i32>,
+    complete: bool,
 ) -> ItemType {
     match kind {
         ItemKind::Simple => ItemType::Simple(SimpleItem),
@@ -67,6 +69,7 @@ fn build_item_type(
             team_assignment: None,
             source_event_id,
             priority,
+            complete,
         }),
         ItemKind::Event => ItemType::Event(EventItem {
             schedule,
@@ -147,8 +150,8 @@ pub async fn create_item(
         params.event_type.clone(),
         params.source_event_id.clone(),
         params.priority,
+        params.complete.unwrap_or(false),
     );
-    item.complete = params.complete.unwrap_or(false);
     item.parent_item_id = params.parent_item_id.clone();
     item.description = params.description.clone();
     item.series_id = params.series_id.clone();
@@ -259,7 +262,7 @@ pub async fn update_item(
     }
 
     if params.complete
-        && !current.complete
+        && !current.complete()
         && has_incomplete_children(repo, &params.item_id).await?
     {
         return Err(ItemError::Invalid(
@@ -306,9 +309,9 @@ pub async fn update_item(
         params.event_type.clone(),
         params.source_event_id.clone(),
         params.priority,
+        params.complete,
     );
     item.id = params.item_id.clone();
-    item.complete = params.complete;
     item.parent_item_id = params.parent_item_id.clone();
     item.description = params.description.clone();
     // Carried forward from `current` rather than re-resolved (stage B2) — an item's
@@ -330,14 +333,14 @@ pub async fn update_item(
 
     item.validate().map_err(ItemError::Invalid)?;
 
-    if current.complete && !is_pure_complete_toggle(&current, &item) {
+    if current.complete() && !is_pure_complete_toggle(&current, &item) {
         return Err(ItemError::Invalid(
             "cannot edit a completed item; un-complete it first".to_string(),
         ));
     }
 
-    let just_completed = !current.complete && item.complete;
-    let just_uncompleted = current.complete && !item.complete;
+    let just_completed = !current.complete() && item.complete();
+    let just_uncompleted = current.complete() && !item.complete();
     if just_completed && item.parent_item_id.is_none() {
         activity_log
             .log_activity(
@@ -538,7 +541,7 @@ pub(crate) async fn has_incomplete_children(
         .list_children(item_id)
         .await?
         .iter()
-        .any(|child| !child.complete))
+        .any(|child| !child.complete()))
 }
 
 /// True if `item` differs from `current` only in `complete` — the edit-lock's definition of
@@ -655,7 +658,6 @@ pub(crate) fn copy_template_children<'a>(
             let mut new_child = child.clone();
             new_child.id = String::new();
             new_child.parent_item_id = Some(new_parent_id.to_string());
-            new_child.complete = false;
             let mut schedule = child.item_type.schedule().cloned().unwrap_or_default();
             schedule.due_date =
                 root_due_date.and_then(|root| child.deadline_from_offset(root, tz_offset_minutes));
@@ -667,6 +669,7 @@ pub(crate) fn copy_template_children<'a>(
                 team_assignment: None,
                 source_event_id: None,
                 priority: child.priority(),
+                complete: false,
             });
             let new_child_id = repo.create(&new_child).await?;
             copy_template_children(
@@ -702,7 +705,6 @@ pub(crate) fn copy_template_children_to_event<'a>(
             let mut new_child = child.clone();
             new_child.id = String::new();
             new_child.parent_item_id = None;
-            new_child.complete = false;
             let mut schedule = child.item_type.schedule().cloned().unwrap_or_default();
             schedule.due_date =
                 event_anchor.and_then(|root| child.deadline_from_offset(root, tz_offset_minutes));
@@ -714,6 +716,7 @@ pub(crate) fn copy_template_children_to_event<'a>(
                 team_assignment: None,
                 source_event_id: Some(event_id.to_string()),
                 priority: child.priority(),
+                complete: false,
             });
             let new_child_id = repo.create(&new_child).await?;
             copy_template_children(
@@ -752,7 +755,6 @@ pub(crate) fn copy_children_as_template<'a>(
             let mut new_child = child.clone();
             new_child.id = String::new();
             new_child.parent_item_id = Some(new_template_parent_id.to_string());
-            new_child.complete = false;
             let mut schedule = child.item_type.schedule().cloned().unwrap_or_default();
             schedule.due_date = None;
             schedule.scheduled_date = None;
@@ -855,6 +857,7 @@ mod tests {
                 team_assignment: None,
                 source_event_id: None,
                 priority: None,
+                complete: false,
             }),
             ..Item::default()
         }
@@ -867,7 +870,9 @@ mod tests {
     #[test]
     fn is_pure_complete_toggle_rejects_a_changed_priority() {
         let mut current = task_with_due_date("item1", Utc::now());
-        current.complete = true;
+        if let ItemType::Task(task) = &mut current.item_type {
+            task.complete = true;
+        }
         let mut edited = current.clone();
         if let ItemType::Task(task) = &mut edited.item_type {
             task.priority = Some(2);
@@ -888,6 +893,7 @@ mod tests {
                 team_assignment: None,
                 source_event_id: None,
                 priority: None,
+                complete: false,
             }),
             ..Item::default()
         }
@@ -1535,7 +1541,6 @@ mod tests {
             Ok(Item {
                 id: "item1".to_string(),
                 user_id: Some("u1".to_string()),
-                complete: false,
                 ..Item::default()
             })
         });
@@ -1546,7 +1551,6 @@ mod tests {
                 Ok(vec![Item {
                     id: "child1".to_string(),
                     parent_item_id: Some("item1".to_string()),
-                    complete: false,
                     ..Item::default()
                 }])
             });
@@ -1579,7 +1583,6 @@ mod tests {
             Ok(Item {
                 id: "item1".to_string(),
                 user_id: Some("u1".to_string()),
-                complete: false,
                 ..Item::default()
             })
         });
@@ -1590,7 +1593,10 @@ mod tests {
                 Ok(vec![Item {
                     id: "child1".to_string(),
                     parent_item_id: Some("item1".to_string()),
-                    complete: true,
+                    item_type: ItemType::Task(TaskItem {
+                        complete: true,
+                        ..TaskItem::default()
+                    }),
                     ..Item::default()
                 }])
             });
@@ -1638,7 +1644,10 @@ mod tests {
                 id: "item1".to_string(),
                 user_id: Some("u1".to_string()),
                 name: "Original name".to_string(),
-                complete: true,
+                item_type: ItemType::Task(TaskItem {
+                    complete: true,
+                    ..TaskItem::default()
+                }),
                 ..Item::default()
             })
         });
@@ -1672,7 +1681,10 @@ mod tests {
                 id: "item1".to_string(),
                 user_id: Some("u1".to_string()),
                 name: "Same name".to_string(),
-                complete: true,
+                item_type: ItemType::Task(TaskItem {
+                    complete: true,
+                    ..TaskItem::default()
+                }),
                 ..Item::default()
             })
         });

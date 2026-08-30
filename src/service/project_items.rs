@@ -424,7 +424,7 @@ pub async fn update_project_item(
     // item's state *before* this update, not after). Always fetched now (previously skipped
     // when `complete == true`, since only the uncomplete-order check needed it) — the depends-on
     // guards below need it in both directions.
-    let was_complete = repo.get_by_project(&project_id, &item_id).await?.complete;
+    let was_complete = repo.get_by_project(&project_id, &item_id).await?.complete();
 
     // Stage 10a: reject an out-of-order Task-series completion before any mutation
     // happens — `record_task_completion` below only ever runs after a successful
@@ -1070,12 +1070,16 @@ mod tests {
         let mut items_mock = MockItemRepo::new();
         items_mock.expect_get_by_project().returning(|_, _| {
             let mut item = Item::new_user_item("owner1", "Task");
-            item.complete = true;
+            if let crate::domain::item::ItemType::Task(task) = &mut item.item_type {
+                task.complete = true;
+            }
             Ok(item)
         });
         items_mock.expect_get().returning(|_, _| {
             let mut item = Item::new_user_item("owner1", "Task");
-            item.complete = true;
+            if let crate::domain::item::ItemType::Task(task) = &mut item.item_type {
+                task.complete = true;
+            }
             Ok(item)
         });
         items_mock.expect_update().times(1).returning(|_| Ok(()));
@@ -1202,7 +1206,9 @@ mod tests {
         // asks for `complete: false`, so it is.
         items_mock.expect_get_by_project().returning(|_, _| {
             let mut item = Item::new_user_item("owner1", "Old name");
-            item.complete = true;
+            if let crate::domain::item::ItemType::Task(task) = &mut item.item_type {
+                task.complete = true;
+            }
             Ok(item)
         });
         items_mock.expect_update().times(1).returning(|_| Ok(()));
@@ -1336,7 +1342,6 @@ mod tests {
                 id: "i1".to_string(),
                 name: "Standup".to_string(),
                 project_id: Some("p1".to_string()),
-                complete: true,
                 item_type: ItemType::Task(TaskItem {
                     schedule: Schedule::default(),
                     recurrence: Recurrence::default(),
@@ -1346,6 +1351,7 @@ mod tests {
                     }),
                     source_event_id: None,
                     priority: None,
+                    complete: true,
                 }),
                 ..Item::default()
             })

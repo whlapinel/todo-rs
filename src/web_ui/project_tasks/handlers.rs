@@ -298,7 +298,7 @@ pub async fn project_task_detail_page(
         &item.id,
         &project_id,
         &item.name,
-        item.complete,
+        item.complete(),
         view.clone(),
     )
     .render()?;
@@ -309,11 +309,12 @@ pub async fn project_task_detail_page(
         SidebarSection::Tasks,
     )
     .await?;
+    let complete = item.complete();
     render(ProjectTaskDetailPageTemplate {
         id: item.id,
         project_id,
         name: item.name,
-        complete: item.complete,
+        complete,
         view,
         dialog,
         nav_html,
@@ -1702,7 +1703,7 @@ fn identity_params(project_id: &str, item: &Item, tz: i32) -> UpdateProjectItemP
         due_date: item.due_date(),
         scheduled_date: item.scheduled_date(),
         scheduled_end_date: item.scheduled_end_date(),
-        complete: item.complete,
+        complete: item.complete(),
         has_due_time: Some(item.has_due_time()),
         has_scheduled_time: Some(item.has_scheduled_time()),
         has_end_time: Some(item.has_end_time()),
@@ -2068,11 +2069,12 @@ pub async fn update_project_task_form(
                 false,
             )
             .render()?;
+            let updated_complete = updated.complete();
             let dialog = ProjectTaskDetailDialog::new(
                 &updated.id,
                 &project_id,
                 &updated.name,
-                updated.complete,
+                updated_complete,
                 view.clone(),
             )
             .render()?;
@@ -2087,7 +2089,7 @@ pub async fn update_project_task_form(
                 id: updated.id.clone(),
                 project_id: project_id.clone(),
                 name: updated.name.clone(),
-                complete: updated.complete,
+                complete: updated_complete,
                 view,
                 dialog,
                 nav_html,
@@ -2112,7 +2114,7 @@ pub async fn update_project_task_form(
             // load, per row.html) — the only way the server can know what the requester's
             // current "Show completed" toggle is set to.
             let show_complete = form.show_complete.is_some();
-            let just_completed = !current.complete && updated.complete;
+            let just_completed = !current.complete() && updated.complete();
             let confirmation = just_completed.then(|| "Completed".to_string());
             let dismiss_after_ms = (just_completed && !show_complete).then_some(1800u32);
             let parent_link = resolve_parent_link(&repo, &project_id, &updated).await?;
@@ -2405,7 +2407,7 @@ fn reparent_params(
         due_date,
         scheduled_date: current.scheduled_date(),
         scheduled_end_date: current.scheduled_end_date(),
-        complete: current.complete,
+        complete: current.complete(),
         has_due_time: Some(current.has_due_time()),
         has_scheduled_time: Some(current.has_scheduled_time()),
         has_end_time: Some(current.has_end_time()),
@@ -2727,6 +2729,7 @@ mod resolve_task_anchor_date_tests {
                 team_assignment: None,
                 source_event_id: None,
                 priority: None,
+                complete: false,
             }),
             ..Item::default()
         }

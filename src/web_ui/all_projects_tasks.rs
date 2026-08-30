@@ -630,7 +630,7 @@ pub async fn toggle_all_projects_task_complete(
             // always passed `None, None`, so completing a task on this screen never showed the
             // "Completed" badge the per-project Tasks list already gives the same checkbox).
             let show_complete = form.show_complete.is_some();
-            let just_completed = !current.complete && updated.complete;
+            let just_completed = !current.complete() && updated.complete();
             let confirmation = just_completed.then(|| "Completed".to_string());
             let dismiss_after_ms = (just_completed && !show_complete).then_some(1800u32);
             let children_html = if updated.has_children {

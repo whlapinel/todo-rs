@@ -101,7 +101,7 @@ async fn reopen_item_if_still_complete(
     let Ok(item) = repo.get_by_project(project_id, item_id).await else {
         return Ok(());
     };
-    if !item.complete {
+    if !item.complete() {
         return Ok(());
     }
     project_items::update_project_item(
@@ -181,7 +181,7 @@ async fn reverse_and_reopen(
     // own no-op) or one that's already incomplete/gone.
     if let Some(project_id) = &entry.project_id
         && let Ok(item) = repo.get_by_project(project_id, &entry.item_id).await
-        && item.complete
+        && item.complete()
     {
         item_series::validate_uncompletable(series, &entry.item_id).await?;
     }
@@ -297,7 +297,7 @@ pub async fn undo_project_activity_log_entry(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::item::Item;
+    use crate::domain::item::{Item, ItemType, TaskItem};
     use crate::storage::sqlite::{
         MockActivityLogRepo, MockItemDependencyRepo, MockItemRepo, MockItemSeriesRepo,
         MockProjectRepo, MockReminderRepo, MockTeamRepo,
@@ -716,7 +716,10 @@ mod tests {
                 id: "item1".to_string(),
                 name: "Mow the lawn".to_string(),
                 project_id: Some("p1".to_string()),
-                complete: true,
+                item_type: ItemType::Task(TaskItem {
+                    complete: true,
+                    ..TaskItem::default()
+                }),
                 ..Item::default()
             })
         });
@@ -729,7 +732,10 @@ mod tests {
                 name: "Mow the lawn".to_string(),
                 user_id: Some("u1".to_string()),
                 project_id: Some("p1".to_string()),
-                complete: true,
+                item_type: ItemType::Task(TaskItem {
+                    complete: true,
+                    ..TaskItem::default()
+                }),
                 ..Item::default()
             })
         });
@@ -818,7 +824,10 @@ mod tests {
                 id: "item1".to_string(),
                 name: "Standup".to_string(),
                 project_id: Some("p1".to_string()),
-                complete: true,
+                item_type: ItemType::Task(TaskItem {
+                    complete: true,
+                    ..TaskItem::default()
+                }),
                 ..Item::default()
             })
         });

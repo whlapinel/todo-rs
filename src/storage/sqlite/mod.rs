@@ -670,6 +670,7 @@ fn row_to_item(row: &sqlx::sqlite::SqliteRow) -> Item {
             },
             source_event_id,
             priority,
+            complete: complete.unwrap_or(0) != 0,
         }),
         ItemKind::Event => ItemType::Event(EventItem {
             schedule,
@@ -691,7 +692,6 @@ fn row_to_item(row: &sqlx::sqlite::SqliteRow) -> Item {
         parent_item_id: row.get("parent_item_id"),
         name: row.get("name"),
         description: row.get("description"),
-        complete: complete.unwrap_or(0) != 0,
         has_children: row.get::<Option<i64>, _>("has_children").unwrap_or(0) != 0,
         item_type,
         series_id: row.get("series_id"),

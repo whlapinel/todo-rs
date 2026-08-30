@@ -67,6 +67,7 @@ pub struct CreateTeamItemParams {
 /// non-admin-points-request handling below, rather than rejecting the rest of an
 /// otherwise-valid request. `priority` follows the same Task-only drop, but —
 /// unlike `team_assignment` — is never gated on admin/team-backed status.
+#[allow(clippy::too_many_arguments)]
 fn build_item_type(
     kind: ItemKind,
     schedule: Schedule,
@@ -75,6 +76,7 @@ fn build_item_type(
     team_assignment: Option<TeamAssignment>,
     source_event_id: Option<String>,
     priority: Option<i32>,
+    complete: bool,
 ) -> ItemType {
     match kind {
         ItemKind::Simple => ItemType::Simple(SimpleItem),
@@ -84,6 +86,7 @@ fn build_item_type(
             team_assignment,
             source_event_id,
             priority,
+            complete,
         }),
         ItemKind::Event => ItemType::Event(EventItem {
             schedule,
@@ -239,8 +242,8 @@ pub async fn create_team_item(
         team_assignment,
         params.source_event_id.clone(),
         params.priority,
+        params.complete.unwrap_or(false),
     );
-    item.complete = params.complete.unwrap_or(false);
     item.parent_item_id = params.parent_item_id.clone();
     item.description = params.description.clone();
     item.series_id = params.series_id.clone();
@@ -447,7 +450,7 @@ pub async fn update_team_item(
     }
 
     if params.complete
-        && !current.complete
+        && !current.complete()
         && has_incomplete_children(repo, &params.item_id).await?
     {
         return Err(ItemError::Invalid(
@@ -521,7 +524,6 @@ pub async fn update_team_item(
 
     let mut item = Item::new_project_item(&params.project_id, &params.name);
     item.id = params.item_id.clone();
-    item.complete = params.complete;
     item.parent_item_id = params.parent_item_id.clone();
     item.description = params.description.clone();
     // Same reasoning as `items::update_item`'s project_id carry-forward — series
@@ -535,6 +537,7 @@ pub async fn update_team_item(
         team_assignment,
         params.source_event_id.clone(),
         params.priority,
+        params.complete,
     );
 
     let tz_offset = params.timezone_offset_minutes.unwrap_or(0);
@@ -549,7 +552,7 @@ pub async fn update_team_item(
 
     item.validate().map_err(ItemError::Invalid)?;
 
-    if current.complete && !is_pure_complete_toggle(&current, &item) {
+    if current.complete() && !is_pure_complete_toggle(&current, &item) {
         return Err(ItemError::Invalid(
             "cannot edit a completed item; un-complete it first".to_string(),
         ));
@@ -562,8 +565,8 @@ pub async fn update_team_item(
     // docs/archived/archived_issues_and_features.md. Points still only ever go to
     // the item's `assigned_to_user_id` (never whoever clicked complete), so an
     // unassigned completion simply has no one to log/award against below.
-    let just_completed = !current.complete && item.complete;
-    let just_uncompleted = current.complete && !item.complete;
+    let just_completed = !current.complete() && item.complete();
+    let just_uncompleted = current.complete() && !item.complete();
 
     // Logging/reversal must run against `current`'s captured identity, strictly before
     // the recurrence branch below deletes it and creates a successor under a fresh id
@@ -837,6 +840,7 @@ mod tests {
                 }),
                 source_event_id: None,
                 priority: None,
+                complete: false,
             }),
             ..Item::default()
         }
@@ -1009,7 +1013,6 @@ mod tests {
                 Ok(vec![Item {
                     id: "child1".to_string(),
                     parent_item_id: Some("item1".to_string()),
-                    complete: false,
                     ..Item::default()
                 }])
             });
@@ -1056,7 +1059,10 @@ mod tests {
                 Ok(vec![Item {
                     id: "child1".to_string(),
                     parent_item_id: Some("item1".to_string()),
-                    complete: true,
+                    item_type: ItemType::Task(TaskItem {
+                        complete: true,
+                        ..TaskItem::default()
+                    }),
                     ..Item::default()
                 }])
             });
@@ -1108,7 +1114,10 @@ mod tests {
                 id: "item1".to_string(),
                 project_id: Some("p1".to_string()),
                 name: "Original name".to_string(),
-                complete: true,
+                item_type: ItemType::Task(TaskItem {
+                    complete: true,
+                    ..TaskItem::default()
+                }),
                 ..Item::default()
             })
         });
@@ -1145,7 +1154,10 @@ mod tests {
                 id: "item1".to_string(),
                 project_id: Some("p1".to_string()),
                 name: "Same name".to_string(),
-                complete: true,
+                item_type: ItemType::Task(TaskItem {
+                    complete: true,
+                    ..TaskItem::default()
+                }),
                 ..Item::default()
             })
         });
@@ -1420,10 +1432,11 @@ mod tests {
         // are never called on this path.
         let mut items = MockItemRepo::new();
         items.expect_get_by_project().returning(|_, _| {
-            Ok(Item {
-                complete: true,
-                ..team_item_with_points_and_assignee("item1", Some(20), Some("member1"))
-            })
+            let mut item = team_item_with_points_and_assignee("item1", Some(20), Some("member1"));
+            if let ItemType::Task(task) = &mut item.item_type {
+                task.complete = true;
+            }
+            Ok(item)
         });
         items
             .expect_update_by_project()
@@ -1461,10 +1474,11 @@ mod tests {
         // must claw back 20, not 999 (see CLAUDE.md's Points plan, Stage 6).
         let mut items = MockItemRepo::new();
         items.expect_get_by_project().returning(|_, _| {
-            Ok(Item {
-                complete: true,
-                ..team_item_with_points_and_assignee("item1", Some(999), Some("member1"))
-            })
+            let mut item = team_item_with_points_and_assignee("item1", Some(999), Some("member1"));
+            if let ItemType::Task(task) = &mut item.item_type {
+                task.complete = true;
+            }
+            Ok(item)
         });
         items
             .expect_update_by_project()

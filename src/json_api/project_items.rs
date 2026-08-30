@@ -126,7 +126,7 @@ pub async fn get_project_item(
         due_date,
         scheduled_date,
         scheduled_end_date,
-        complete: item.complete,
+        complete: item.complete(),
         has_due_time: Some(item.has_due_time()),
         has_scheduled_time: Some(item.has_scheduled_time()),
         has_end_time: Some(item.has_end_time()),
@@ -290,7 +290,7 @@ pub async fn list_project_items(
             scheduled_end_date: i
                 .scheduled_end_date()
                 .map(|dt| SmithyDateTime::from_secs(dt.timestamp())),
-            complete: Some(i.complete),
+            complete: Some(i.complete()),
             has_due_time: Some(i.has_due_time()),
             has_scheduled_time: Some(i.has_scheduled_time()),
             has_end_time: Some(i.has_end_time()),

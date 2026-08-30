@@ -154,7 +154,7 @@ pub(crate) async fn has_incomplete_dependencies(
     item_id: &str,
 ) -> Result<bool, ItemError> {
     for dep_id in dep_repo.list_for_item(item_id).await? {
-        if !items.get_by_project(project_id, &dep_id).await?.complete {
+        if !items.get_by_project(project_id, &dep_id).await?.complete() {
             return Ok(true);
         }
     }
@@ -386,7 +386,9 @@ mod tests {
         let mut items_mock = MockItemRepo::new();
         items_mock.expect_get_by_project().returning(|_, _| {
             let mut dep = task("i2", "p1", None);
-            dep.complete = true;
+            if let ItemType::Task(t) = &mut dep.item_type {
+                t.complete = true;
+            }
             Ok(dep)
         });
         let dep_repo = Arc::new(dep_repo_mock) as Arc<dyn ItemDependencyRepo>;

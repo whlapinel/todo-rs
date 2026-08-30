@@ -34,7 +34,7 @@ pub async fn sync_item_reminders(
     // A completed item has nothing left to remind about — clear any reminder rows
     // rather than letting them go stale. Un-completing recomputes fresh rows the next
     // time this function runs (the create/update funnel always calls it).
-    if item.complete {
+    if item.complete() {
         reminders.delete_for_item(&item.id).await?;
         return Ok(());
     }
@@ -118,7 +118,7 @@ pub async fn list_due_notifications_for_user(
             Err(RepoError::NotFound) => continue,
             Err(e) => return Err(e.into()),
         };
-        if item.complete {
+        if item.complete() {
             continue;
         }
         let Some(detail_url) = detail_url(&item, &reminder.project_id) else {
@@ -161,6 +161,7 @@ mod tests {
                 team_assignment,
                 source_event_id: None,
                 priority: None,
+                complete: false,
             }),
             ..Item::new_project_item(project_id, "Task")
         }
@@ -315,7 +316,9 @@ mod tests {
             ..Schedule::default()
         };
         let mut item = task_item("proj1", schedule, None);
-        item.complete = true;
+        if let ItemType::Task(task) = &mut item.item_type {
+            task.complete = true;
+        }
 
         let projects = MockProjectRepo::new();
         let mut reminder_repo = MockReminderRepo::new();
@@ -438,7 +441,9 @@ mod tests {
                     },
                     None,
                 );
-                item.complete = true;
+                if let ItemType::Task(task) = &mut item.item_type {
+                    task.complete = true;
+                }
                 Ok(item)
             });
 

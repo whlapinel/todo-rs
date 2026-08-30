@@ -113,6 +113,14 @@ pub struct TaskItem {
     /// field — not team-backed-project-only, not admin-gated, and not
     /// restricted to top-level items. See root CLAUDE.md's Priority section.
     pub priority: Option<i32>,
+    /// Moved off `Item` in Stage 3 of `docs/item-kind-split-plan.md` — only a `Task`
+    /// has anywhere to put a `complete` flag now; `EventItem`/`TemplateItem`/
+    /// `SimpleItem` structurally cannot represent a completed item at all. No
+    /// `set_complete()` convenience exists anywhere (on `Item` or `Completable`) —
+    /// every write site matches into `ItemType::Task` directly, so there's no code
+    /// path that can attempt to complete a non-Task item without first failing to
+    /// compile. See the `Completable` trait below.
+    pub complete: bool,
 }
 
 /// Payload for `ItemType::Event`. See `ItemType` below for the per-kind split rationale.
@@ -190,16 +198,25 @@ impl HasSchedule for TemplateItem {
     }
 }
 
-/// Implemented only by payloads whose kind can be marked complete — today that's
-/// nothing: `complete` still lives on `Item` itself, not on `TaskItem`, until Stage 3
-/// of `docs/item-kind-split-plan.md` moves it. This trait is declared now (rather than
-/// deferred whole-cloth to Stage 3) so its shape is settled ahead of that move, but it
-/// deliberately has **zero implementations** until Stage 3 gives `TaskItem` an actual
-/// `complete` field to read — see that plan's Stage 2 write-up for why implementing it
-/// against non-existent data was rejected rather than faked.
+/// Implemented only by payloads whose kind can be marked complete — as of Stage 3 of
+/// `docs/item-kind-split-plan.md`, that's `TaskItem` alone. `EventItem`/`TemplateItem`/
+/// `SimpleItem` deliberately have no impl: there's no `complete` field on those structs
+/// to read, so "can this be completed" is now a compile-time question, not a runtime
+/// `validate()` one. See `docs/item-kind-split-plan.md`'s "Traits for generic code"
+/// section for why this exists alongside `Item::complete()` rather than instead of it.
+///
+/// `#[allow(dead_code)]`: no genuinely kind-blind call site consumes this yet (same
+/// situation as `HasSchedule` above) — every current caller goes through `Item::complete()`.
+/// Remove this attribute once a real consumer exists.
 #[allow(dead_code)]
 pub trait Completable {
     fn complete(&self) -> bool;
+}
+
+impl Completable for TaskItem {
+    fn complete(&self) -> bool {
+        self.complete
+    }
 }
 
 /// What kind of thing an `Item` row represents, and the data that only makes sense
@@ -340,7 +357,6 @@ pub struct Item {
     pub parent_item_id: Option<String>,
     pub name: String,
     pub description: Option<String>,
-    pub complete: bool,
     pub has_children: bool,
     pub item_type: ItemType,
     /// Set once, at creation, only by `service::item_series::get_or_materialize_occurrence` —
@@ -405,6 +421,18 @@ impl Item {
 
     pub fn kind(&self) -> ItemKind {
         self.item_type.kind()
+    }
+
+    /// `false` for every non-`Task` kind — matches today's implicit behavior, since
+    /// `validate()` already forbade `true` on those kinds before this field moved onto
+    /// `TaskItem` in Stage 3 of `docs/item-kind-split-plan.md`. No `Item::set_complete()`
+    /// exists — see `TaskItem::complete`'s doc comment for why every write site must
+    /// match into `ItemType::Task` directly instead.
+    pub fn complete(&self) -> bool {
+        match &self.item_type {
+            ItemType::Task(t) => t.complete,
+            _ => false,
+        }
     }
 
     pub fn due_date(&self) -> Option<DateTime<Utc>> {
@@ -504,7 +532,17 @@ impl Item {
         }
         // Simple items are bare checkable-off-nothing names: create or delete, no
         // completion concept at all (unlike Task, which supports it).
-        if self.complete && self.kind() == ItemKind::Simple {
+        //
+        // As of Stage 3 of `docs/item-kind-split-plan.md`, `complete` lives only on
+        // `TaskItem` — `self.complete()` structurally cannot return `true` for a
+        // `Simple`/`Event` item (there's no field to read), so these two checks are
+        // now unreachable for any internally-constructed `Item`. Left in place rather
+        // than deleted: they still document the rule, and they're the actual
+        // enforcement point if a future wire-input boundary ever regains a way to
+        // request completion alongside a non-Task kind (see Non-goals #1 in that plan
+        // — the Smithy wire format itself is untouched and stays a flat, unvalidated
+        // property bag).
+        if self.complete() && self.kind() == ItemKind::Simple {
             return Err("simple items cannot be marked complete".to_string());
         }
         // Events are scheduled entries, not actionable to-dos — no checkbox, no
@@ -513,7 +551,7 @@ impl Item {
         // to advance a recurring Event's date) was retired in Stage 10; recurring
         // Events now live on item_series, advanced by materialization, independent of
         // this field. See docs/archived/archived_issues_and_features.md for the removal.
-        if self.complete && self.kind() == ItemKind::Event {
+        if self.complete() && self.kind() == ItemKind::Event {
             return Err("events cannot be marked complete".to_string());
         }
         // A task either nests under a parent or references an event, never both —
@@ -563,7 +601,7 @@ impl Item {
     /// — "overdue" is a deadline concept, not a planning-window one (see the Scheduled
     /// start/end section of CLAUDE.md for that distinction).
     pub fn is_overdue(&self, now: DateTime<Utc>) -> bool {
-        !self.complete && self.due_date().is_some_and(|d| d < now)
+        !self.complete() && self.due_date().is_some_and(|d| d < now)
     }
 }
 
@@ -622,6 +660,13 @@ mod tests {
         match &mut item.item_type {
             ItemType::Task(task) => task.priority = Some(priority),
             _ => panic!("priority only settable on Task"),
+        }
+    }
+
+    fn set_complete(item: &mut Item, complete: bool) {
+        match &mut item.item_type {
+            ItemType::Task(task) => task.complete = complete,
+            _ => panic!("complete only settable on Task"),
         }
     }
 
@@ -684,18 +729,27 @@ mod tests {
         assert!(item.validate().is_ok());
     }
 
+    // `validate_rejects_complete_simple_item`/`validate_rejects_complete_event` (the
+    // pre-Stage-3 runtime tests that did `item.complete = true` on a Simple/Event `Item`)
+    // no longer compile as of Stage 3 of `docs/item-kind-split-plan.md`: `complete` now
+    // lives only on `TaskItem`, so `ItemType::Simple(SimpleItem { complete: true, .. })`
+    // and `ItemType::Event(EventItem { complete: true, .. })` are not expressible at all
+    // — neither struct has such a field. That's the actual point of the migration: what
+    // used to be a `validate()` rejection is now a compile error. The tests below assert
+    // the type-level guarantee's runtime-observable consequence instead (`complete()`
+    // always reads `false` for these kinds), since "this doesn't compile" isn't itself a
+    // `#[test]`-able fact.
+
     #[test]
-    fn validate_rejects_complete_simple_item() {
-        let mut item = Item::new_simple("u1", "Milk");
-        item.complete = true;
-        assert!(item.validate().is_err());
+    fn simple_item_complete_is_always_false() {
+        let item = Item::new_simple("u1", "Milk");
+        assert!(!item.complete());
     }
 
     #[test]
-    fn validate_rejects_complete_event() {
-        let mut item = Item::new_event("u1", "Standup");
-        item.complete = true;
-        assert!(item.validate().is_err());
+    fn event_item_complete_is_always_false() {
+        let item = Item::new_event("u1", "Standup");
+        assert!(!item.complete());
     }
 
     #[test]
@@ -852,8 +906,8 @@ mod tests {
     fn new_items_are_not_complete() {
         let user_item = Item::new_user_item("u1", "task");
         let project_item = Item::new_project_item("p1", "task");
-        assert!(!user_item.complete);
-        assert!(!project_item.complete);
+        assert!(!user_item.complete());
+        assert!(!project_item.complete());
     }
 
     #[test]
@@ -928,7 +982,7 @@ mod tests {
     fn is_overdue_false_when_complete_even_if_due_date_past() {
         let mut item = Item::new_user_item("u1", "Pay rent");
         set_due_date(&mut item, utc("2020-01-01T00:00:00Z"));
-        item.complete = true;
+        set_complete(&mut item, true);
         assert!(!item.is_overdue(utc("2026-01-01T00:00:00Z")));
     }
 }

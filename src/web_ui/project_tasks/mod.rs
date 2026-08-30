@@ -394,7 +394,7 @@ pub(crate) fn update_params_from_form(
             tz,
             current.scheduled_end_date(),
         ),
-        complete: overlay_bool(&form.complete, current.complete),
+        complete: overlay_bool(&form.complete, current.complete()),
         has_due_time: Some(overlay_has_due_time(&form.due_time, current.has_due_time())),
         has_scheduled_time: Some(overlay_has_due_time(
             &form.scheduled_time,
@@ -498,7 +498,7 @@ fn blocked_by_names_for(
         .into_iter()
         .flatten()
         .filter_map(|dep_id| siblings.iter().find(|s| &s.id == dep_id))
-        .filter(|dep| !dep.complete)
+        .filter(|dep| !dep.complete())
         .map(|dep| (dep.id.clone(), dep.name.clone()))
         .collect()
 }
@@ -560,7 +560,7 @@ pub(crate) async fn render_expandable_children(
         list_project_items_unchecked(repo, project_id, Some(parent_item_id.to_string())).await?;
     let visible: Vec<&Item> = children
         .iter()
-        .filter(|i| show_complete || !i.complete)
+        .filter(|i| show_complete || !i.complete())
         .collect();
     let dep_map = match item_dependencies {
         Some(deps) => {
@@ -702,7 +702,7 @@ pub(crate) fn render_rows(
 ) -> Result<Vec<String>, ItemError> {
     let visible: Vec<&Item> = items
         .iter()
-        .filter(|i| show_complete || !i.complete)
+        .filter(|i| show_complete || !i.complete())
         .collect();
     visible
         .iter()
@@ -972,7 +972,7 @@ fn render_select_row(item: &Item, tz: i32) -> Result<String, ItemError> {
     ProjectTaskSelectRow {
         id: item.id.clone(),
         name: item.name.clone(),
-        complete: item.complete,
+        complete: item.complete(),
         due_date: item.due_date().map(|d| {
             crate::web_ui::format_display_date(crate::web_ui::to_local(d, tz), item.has_due_time())
         }),
@@ -1107,13 +1107,16 @@ pub(crate) async fn render_scope_fragment(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::item::ItemType;
+    use crate::domain::item::{ItemType, TaskItem};
 
     fn task(id: &str, name: &str, complete: bool) -> Item {
         Item {
             id: id.to_string(),
             name: name.to_string(),
-            complete,
+            item_type: ItemType::Task(TaskItem {
+                complete,
+                ..TaskItem::default()
+            }),
             ..Item::default()
         }
     }

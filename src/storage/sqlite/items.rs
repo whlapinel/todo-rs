@@ -128,7 +128,7 @@ impl ItemRepo for SqliteItemRepo {
         let due_date: Option<i64> = item.due_date().map(|dt| dt.timestamp());
         let scheduled_date: Option<i64> = item.scheduled_date().map(|dt| dt.timestamp());
         let scheduled_end_date: Option<i64> = item.scheduled_end_date().map(|dt| dt.timestamp());
-        let complete: i64 = item.complete as i64;
+        let complete: i64 = item.complete() as i64;
         let has_due_time: i64 = item.has_due_time() as i64;
         let has_scheduled_time: i64 = item.has_scheduled_time() as i64;
         let has_end_time: i64 = item.has_end_time() as i64;
@@ -172,7 +172,7 @@ impl ItemRepo for SqliteItemRepo {
         let due_date: Option<i64> = item.due_date().map(|dt| dt.timestamp());
         let scheduled_date: Option<i64> = item.scheduled_date().map(|dt| dt.timestamp());
         let scheduled_end_date: Option<i64> = item.scheduled_end_date().map(|dt| dt.timestamp());
-        let complete: i64 = item.complete as i64;
+        let complete: i64 = item.complete() as i64;
         let has_due_time: i64 = item.has_due_time() as i64;
         let has_scheduled_time: i64 = item.has_scheduled_time() as i64;
         let has_end_time: i64 = item.has_end_time() as i64;
@@ -217,7 +217,7 @@ impl ItemRepo for SqliteItemRepo {
         let due_date: Option<i64> = item.due_date().map(|dt| dt.timestamp());
         let scheduled_date: Option<i64> = item.scheduled_date().map(|dt| dt.timestamp());
         let scheduled_end_date: Option<i64> = item.scheduled_end_date().map(|dt| dt.timestamp());
-        let complete: i64 = item.complete as i64;
+        let complete: i64 = item.complete() as i64;
         let has_due_time: i64 = item.has_due_time() as i64;
         let has_scheduled_time: i64 = item.has_scheduled_time() as i64;
         let has_end_time: i64 = item.has_end_time() as i64;
@@ -547,6 +547,7 @@ mod tests {
             }),
             source_event_id: None,
             priority: Some(2),
+            complete: false,
         });
         repo.update_by_project(&item).await.unwrap();
 

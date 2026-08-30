@@ -413,6 +413,7 @@ mod tests {
                         team_assignment: None,
                         source_event_id: None,
                         priority: None,
+                        complete: false,
                     }),
                     ..Item::default()
                 }])
@@ -594,6 +595,7 @@ mod tests {
                         team_assignment: None,
                         source_event_id: None,
                         priority: None,
+                        complete: false,
                     }),
                     ..Item::default()
                 })

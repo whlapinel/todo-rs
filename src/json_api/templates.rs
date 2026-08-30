@@ -47,7 +47,7 @@ pub async fn list_templates(
             due_date: None,
             scheduled_date: None,
             scheduled_end_date: None,
-            complete: Some(i.complete),
+            complete: Some(i.complete()),
             has_due_time: Some(i.has_due_time()),
             has_scheduled_time: Some(i.has_scheduled_time()),
             has_end_time: Some(i.has_end_time()),

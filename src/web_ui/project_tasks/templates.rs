@@ -80,7 +80,7 @@ impl ProjectTaskRow {
             id: item.id.clone(),
             item_url: format!("/web/projects/{project_id}/tasks/{}", item.id),
             name: item.name.clone(),
-            complete: item.complete,
+            complete: item.complete(),
             due_date: item
                 .due_date()
                 .map(|d| format_display_date(to_local(d, tz), item.has_due_time())),
@@ -104,7 +104,7 @@ impl ProjectTaskRow {
             priority_label,
             series_current,
             complete_url: Some(format!("/web/projects/{project_id}/tasks/{}", item.id)),
-            edit_url: (!item.complete)
+            edit_url: (!item.complete())
                 .then(|| format!("/web/projects/{project_id}/tasks/{}/edit", item.id)),
             duplicate_url: Some(format!(
                 "/web/projects/{project_id}/tasks/{}/duplicate",
@@ -131,7 +131,7 @@ impl ProjectTaskRow {
             assign_url: is_team_project
                 .then(|| format!("/web/projects/{project_id}/tasks/{}/assign", item.id)),
             skip_url,
-            toggle_complete_json: (!item.complete).to_string(),
+            toggle_complete_json: (!item.complete()).to_string(),
             show_complete,
             confirmation,
             dismiss_after_ms,
@@ -685,7 +685,7 @@ impl ProjectTaskDetailFields {
             project_id: project_id.to_string(),
             name: item.name.clone(),
             description: item.description.clone().unwrap_or_default(),
-            complete: item.complete,
+            complete: item.complete(),
             is_top_level: item.parent_item_id.is_none(),
             is_offset_driven: item.is_offset_driven(),
             due_date_input,
@@ -931,8 +931,8 @@ impl ProjectTaskDetailView {
             id: item.id.clone(),
             project_id: project_id.to_string(),
             description: item.description.clone(),
-            complete: item.complete,
-            toggle_complete_json: (!item.complete).to_string(),
+            complete: item.complete(),
+            toggle_complete_json: (!item.complete()).to_string(),
             due_date,
             overdue: item.is_overdue(Utc::now()),
             scheduled_date,
@@ -1358,7 +1358,7 @@ pub async fn depends_on_picker_data(
         .filter(|s| {
             s.id != item.id
                 && s.kind() == ItemKind::Task
-                && (selected.contains(&s.id) || (!s.complete && s.series_id.is_none()))
+                && (selected.contains(&s.id) || (!s.complete() && s.series_id.is_none()))
         })
         .map(|s| (s.id.clone(), s.name.clone()))
         .collect();
@@ -1507,7 +1507,7 @@ pub struct ProjectTaskEditPageTemplate {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::item::{EventItem, ItemType};
+    use crate::domain::item::{EventItem, ItemType, TaskItem};
     use crate::storage::sqlite::{
         ItemDependencyRepo, ItemSeriesRepo, MockItemDependencyRepo, MockItemRepo,
         MockItemSeriesRepo, RepoError,
@@ -1642,7 +1642,10 @@ mod tests {
             id: id.to_string(),
             name: name.to_string(),
             project_id: Some("p1".to_string()),
-            complete,
+            item_type: ItemType::Task(TaskItem {
+                complete,
+                ..TaskItem::default()
+            }),
             series_id: series_id.map(str::to_string),
             ..Item::default()
         }
