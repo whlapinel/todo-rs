@@ -160,8 +160,8 @@ impl ItemRepo for SqliteItemRepo {
         .bind(item.priority())
         .bind(item.source_event_id())
         .bind(item.series_id())
-        .bind(&item.google_event_id)
-        .bind(&item.calendar_subscription_id)
+        .bind(item.google_event_id())
+        .bind(item.calendar_subscription_id())
         .execute(&self.0)
         .await
         .map_err(db_err)?;
@@ -202,8 +202,8 @@ impl ItemRepo for SqliteItemRepo {
         .bind(item.source_event_id())
         .bind(&item.project_id)
         .bind(item.series_id())
-        .bind(&item.google_event_id)
-        .bind(&item.calendar_subscription_id)
+        .bind(item.google_event_id())
+        .bind(item.calendar_subscription_id())
         .bind(&item.id)
         .bind(&item.user_id)
         .execute(&self.0)
@@ -247,8 +247,8 @@ impl ItemRepo for SqliteItemRepo {
         .bind(item.priority())
         .bind(item.source_event_id())
         .bind(item.series_id())
-        .bind(&item.google_event_id)
-        .bind(&item.calendar_subscription_id)
+        .bind(item.google_event_id())
+        .bind(item.calendar_subscription_id())
         .bind(&item.id)
         .bind(&item.project_id)
         .execute(&self.0)
@@ -393,7 +393,7 @@ impl ItemRepo for SqliteItemRepo {
 mod tests {
     use super::*;
     use crate::domain::item::{
-        ItemType, Recurrence, Schedule, TaskItem, TeamAssignment, TemplateItem,
+        EventItem, ItemType, Recurrence, Schedule, TaskItem, TeamAssignment, TemplateItem,
     };
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use std::str::FromStr;
@@ -450,6 +450,17 @@ mod tests {
             ItemType::Simple(simple) => simple.parent_item_id = Some(parent_id.to_string()),
             _ => panic!("parent_item_id only settable on Task/Simple"),
         }
+    }
+
+    /// Turns `item` into an `Event` and sets its calendar-import fields — used by tests
+    /// that only care about `google_event_id`/`calendar_subscription_id` round-tripping,
+    /// not the rest of an `EventItem`'s payload.
+    fn set_google_event_id(item: &mut Item, uid: &str, sub_id: &str) {
+        item.item_type = ItemType::Event(EventItem {
+            google_event_id: Some(uid.to_string()),
+            calendar_subscription_id: Some(sub_id.to_string()),
+            ..EventItem::default()
+        });
     }
 
     #[tokio::test]
@@ -598,13 +609,11 @@ mod tests {
         let repo = SqliteItemRepo(pool.clone());
 
         let mut in_sub = item_in_project("p1", "Dentist");
-        in_sub.calendar_subscription_id = Some("sub1".to_string());
-        in_sub.google_event_id = Some("evt1".to_string());
+        set_google_event_id(&mut in_sub, "evt1", "sub1");
         repo.create(&in_sub).await.unwrap();
 
         let mut other_sub = item_in_project("p1", "Other subscription");
-        other_sub.calendar_subscription_id = Some("sub2".to_string());
-        other_sub.google_event_id = Some("evt2".to_string());
+        set_google_event_id(&mut other_sub, "evt2", "sub2");
         repo.create(&other_sub).await.unwrap();
 
         repo.create(&item_in_project("p1", "Not imported"))
@@ -621,21 +630,20 @@ mod tests {
         let pool = test_pool().await;
         let repo = SqliteItemRepo(pool);
         let mut item = item_in_project("p1", "Imported Event");
-        item.google_event_id = Some("evt-1".to_string());
-        item.calendar_subscription_id = Some("sub-1".to_string());
+        set_google_event_id(&mut item, "evt-1", "sub-1");
         let id = repo.create(&item).await.unwrap();
 
         let created = repo.get_by_project("p1", &id).await.unwrap();
-        assert_eq!(created.google_event_id.as_deref(), Some("evt-1"));
-        assert_eq!(created.calendar_subscription_id.as_deref(), Some("sub-1"));
+        assert_eq!(created.google_event_id().as_deref(), Some("evt-1"));
+        assert_eq!(created.calendar_subscription_id().as_deref(), Some("sub-1"));
 
         item.id = id.clone();
         item.name = "Imported Event (renamed)".to_string();
         repo.update_by_project(&item).await.unwrap();
 
         let updated = repo.get_by_project("p1", &id).await.unwrap();
-        assert_eq!(updated.google_event_id.as_deref(), Some("evt-1"));
-        assert_eq!(updated.calendar_subscription_id.as_deref(), Some("sub-1"));
+        assert_eq!(updated.google_event_id().as_deref(), Some("evt-1"));
+        assert_eq!(updated.calendar_subscription_id().as_deref(), Some("sub-1"));
     }
 
     /// Regression test for a bug caught during Stage 5's live smoke test
@@ -651,16 +659,15 @@ mod tests {
         let pool = test_pool().await;
         let repo = SqliteItemRepo(pool);
         let mut item = item_in_project("p1", "Imported Event");
+        set_google_event_id(&mut item, "evt-1", "sub-1");
         item.item_type.schedule_mut().unwrap().due_date = Some(chrono::Utc::now());
-        item.google_event_id = Some("evt-1".to_string());
-        item.calendar_subscription_id = Some("sub-1".to_string());
         repo.create(&item).await.unwrap();
 
         let due = repo.list_due_by_project("p1", None, None).await.unwrap();
         assert_eq!(due.len(), 1);
-        assert_eq!(due[0].item.google_event_id.as_deref(), Some("evt-1"));
+        assert_eq!(due[0].item.google_event_id().as_deref(), Some("evt-1"));
         assert_eq!(
-            due[0].item.calendar_subscription_id.as_deref(),
+            due[0].item.calendar_subscription_id().as_deref(),
             Some("sub-1")
         );
     }
@@ -670,14 +677,13 @@ mod tests {
         let pool = test_pool().await;
         let repo = SqliteItemRepo(pool);
         let mut item = Item::new_user_item("u1", "Imported Event");
+        set_google_event_id(&mut item, "evt-1", "sub-1");
         item.item_type.schedule_mut().unwrap().due_date = Some(chrono::Utc::now());
-        item.google_event_id = Some("evt-1".to_string());
-        item.calendar_subscription_id = Some("sub-1".to_string());
         repo.create(&item).await.unwrap();
 
         let due = repo.list_due("u1", None, None).await.unwrap();
         assert_eq!(due.len(), 1);
-        assert_eq!(due[0].item.google_event_id.as_deref(), Some("evt-1"));
+        assert_eq!(due[0].item.google_event_id().as_deref(), Some("evt-1"));
     }
 
     #[tokio::test]

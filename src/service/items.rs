@@ -80,6 +80,14 @@ fn build_item_type(
             recurrence,
             event_type,
             series_id,
+            // Never settable via `CreateItemParams`/`UpdateItemParams` (see
+            // `EventItem::google_event_id`'s doc comment) — only
+            // `service::calendar_sync` writes these, directly onto an `Item` it
+            // builds itself, not through this function. `update_item`'s
+            // `current.google_event_id().is_some()` guard means this function is
+            // never even reached for an already-imported item's update.
+            google_event_id: None,
+            calendar_subscription_id: None,
         }),
         ItemKind::Template => ItemType::Template(TemplateItem {
             parent_item_id,
@@ -261,7 +269,7 @@ pub async fn update_item(
 
     let current = repo.get(&params.user_id, &params.item_id).await?;
 
-    if current.google_event_id.is_some() {
+    if current.google_event_id().is_some() {
         return Err(ItemError::Invalid(
             "this item was imported from Google Calendar and cannot be edited".to_string(),
         ));
@@ -422,7 +430,7 @@ pub async fn delete_item(
     item_id: &str,
 ) -> Result<(), ItemError> {
     let current = repo.get(user_id, item_id).await?;
-    if current.google_event_id.is_some() {
+    if current.google_event_id().is_some() {
         return Err(ItemError::Invalid(
             "this item was imported from Google Calendar and cannot be deleted".to_string(),
         ));
@@ -1006,6 +1014,8 @@ mod tests {
                 recurrence: Recurrence::default(),
                 event_type: None,
                 series_id: None,
+                google_event_id: None,
+                calendar_subscription_id: None,
             }),
             ..Item::default()
         }
@@ -1067,6 +1077,8 @@ mod tests {
                         recurrence: Recurrence::default(),
                         event_type: None,
                         series_id: None,
+                        google_event_id: None,
+                        calendar_subscription_id: None,
                     }),
                     ..Item::default()
                 })
@@ -1136,6 +1148,8 @@ mod tests {
                         recurrence: Recurrence::default(),
                         event_type: None,
                         series_id: None,
+                        google_event_id: None,
+                        calendar_subscription_id: None,
                     }),
                     ..Item::default()
                 })
@@ -1181,6 +1195,8 @@ mod tests {
                         recurrence: Recurrence::default(),
                         event_type: None,
                         series_id: None,
+                        google_event_id: None,
+                        calendar_subscription_id: None,
                     }),
                     ..Item::default()
                 })
@@ -1315,8 +1331,11 @@ mod tests {
         mock.expect_get().returning(|_, _| {
             Ok(Item {
                 id: "item1".to_string(),
-                google_event_id: Some("gcal-uid-1".to_string()),
-                calendar_subscription_id: Some("sub1".to_string()),
+                item_type: ItemType::Event(EventItem {
+                    google_event_id: Some("gcal-uid-1".to_string()),
+                    calendar_subscription_id: Some("sub1".to_string()),
+                    ..EventItem::default()
+                }),
                 ..Item::default()
             })
         });
@@ -1345,8 +1364,11 @@ mod tests {
         mock.expect_get().returning(|_, _| {
             Ok(Item {
                 id: "item1".to_string(),
-                google_event_id: Some("gcal-uid-1".to_string()),
-                calendar_subscription_id: Some("sub1".to_string()),
+                item_type: ItemType::Event(EventItem {
+                    google_event_id: Some("gcal-uid-1".to_string()),
+                    calendar_subscription_id: Some("sub1".to_string()),
+                    ..EventItem::default()
+                }),
                 ..Item::default()
             })
         });

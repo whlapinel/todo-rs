@@ -51,7 +51,7 @@ impl ProjectEventRow {
             blocked_by_label: String::new(),
             blocked_by_links_html: String::new(),
             complete_url: None,
-            edit_url: if item.google_event_id.is_some() {
+            edit_url: if item.google_event_id().is_some() {
                 None
             } else {
                 Some(format!(
@@ -59,7 +59,7 @@ impl ProjectEventRow {
                     item.id
                 ))
             },
-            duplicate_url: if item.google_event_id.is_some() {
+            duplicate_url: if item.google_event_id().is_some() {
                 None
             } else {
                 Some(format!(
@@ -86,7 +86,7 @@ impl ProjectEventRow {
             // An Event is always top-level and never has siblings tracked here (see this impl's
             // own doc comment) — no Move action to offer.
             move_url: None,
-            reschedule_url: if item.google_event_id.is_some() {
+            reschedule_url: if item.google_event_id().is_some() {
                 None
             } else {
                 Some(format!(
@@ -100,7 +100,7 @@ impl ProjectEventRow {
             show_complete: false,
             confirmation: None,
             dismiss_after_ms: None,
-            is_imported: item.google_event_id.is_some(),
+            is_imported: item.google_event_id().is_some(),
             // Calendar-only fields — see `Row`'s doc comments. The calendar screens build a
             // `Row` via this same `from_item` and then override these themselves.
             type_badge: None,

@@ -163,7 +163,7 @@ pub async fn project_event_detail_page(
         .map_err(ItemError::from)?;
     let view =
         ProjectEventDetailView::from_item(&item, tz, series_link, item_reminders).render()?;
-    let is_imported = item.google_event_id.is_some();
+    let is_imported = item.google_event_id().is_some();
     let dialog =
         ProjectEventDetailDialog::new(&item.id, &project_id, &item.name, is_imported, view)
             .render()?;
@@ -645,7 +645,7 @@ pub async fn update_project_event_form(
         let view =
             ProjectEventDetailView::from_item(&updated, tz, series_link.clone(), item_reminders)
                 .render()?;
-        let is_imported = updated.google_event_id.is_some();
+        let is_imported = updated.google_event_id().is_some();
         let dialog = ProjectEventDetailDialog::new(
             &updated.id,
             &project_id,
@@ -812,7 +812,7 @@ pub async fn delete_project_event_form(
 
 /// Events-duplicate parity — see `project_tasks::handlers::duplicate_project_task_form`'s
 /// identical shape. `ProjectEventRow::from_item` gates `duplicate_url` to `None` for an
-/// imported event (`google_event_id.is_some()`), so this is never reached for one — but
+/// imported event (`google_event_id().is_some()`), so this is never reached for one — but
 /// `duplicate_project_item` has no imported-item awareness of its own, so nothing here
 /// additionally checks that.
 pub async fn duplicate_project_event_form(

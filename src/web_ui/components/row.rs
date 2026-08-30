@@ -155,7 +155,7 @@ pub struct Row {
     /// completion-specific, any action's row response can set it. `None` means "stay put."
     pub dismiss_after_ms: Option<u32>,
     /// True when this item was imported from a Google Calendar subscription
-    /// (`Item::google_event_id.is_some()`) — see CLAUDE.md's read-only-enforcement note.
+    /// (`Item::google_event_id().is_some()`) — see CLAUDE.md's read-only-enforcement note.
     /// Only ever `true` for a `ProjectEventRow` (imported items are always Events); every
     /// other screen's rows pass `false`. Hides the row's reschedule/duplicate/delete actions
     /// (each would either no-op against a server-side rejection or, for duplicate, hit the

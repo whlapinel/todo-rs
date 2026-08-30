@@ -657,6 +657,8 @@ fn row_to_item(row: &sqlx::sqlite::SqliteRow) -> Item {
         .and_then(|s| s.parse().ok())
         .unwrap_or_default();
     let series_id: Option<String> = row.get("series_id");
+    let google_event_id: Option<String> = row.get("google_event_id");
+    let calendar_subscription_id: Option<String> = row.get("calendar_subscription_id");
 
     let item_type = match kind {
         ItemKind::Task => ItemType::Task(TaskItem {
@@ -681,6 +683,8 @@ fn row_to_item(row: &sqlx::sqlite::SqliteRow) -> Item {
             recurrence,
             event_type,
             series_id,
+            google_event_id,
+            calendar_subscription_id,
         }),
         ItemKind::Template => ItemType::Template(TemplateItem {
             parent_item_id,
@@ -699,8 +703,6 @@ fn row_to_item(row: &sqlx::sqlite::SqliteRow) -> Item {
         description: row.get("description"),
         has_children: row.get::<Option<i64>, _>("has_children").unwrap_or(0) != 0,
         item_type,
-        google_event_id: row.get("google_event_id"),
-        calendar_subscription_id: row.get("calendar_subscription_id"),
     }
 }
 

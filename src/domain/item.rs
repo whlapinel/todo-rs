@@ -143,6 +143,17 @@ pub struct EventItem {
     pub event_type: Option<String>,
     /// See `TaskItem::series_id`'s doc comment — same Task/Event-only restriction.
     pub series_id: Option<String>,
+    /// Moved off `Item` in Stage 6 of `docs/item-kind-split-plan.md` — confirmed
+    /// Event-only in Stage 0's audit (the only production write site,
+    /// `service::calendar_sync.rs`, always constructs `ItemType::Event` alongside
+    /// setting this). The upstream iCal `UID` this item was imported from — see
+    /// `docs/google-calendar-import-plan.md`. Set once, at creation, only by
+    /// `service::calendar_sync::sync_subscription`; `None` for every non-imported item.
+    pub google_event_id: Option<String>,
+    /// The `calendar_subscriptions` row this item was imported from, alongside
+    /// `google_event_id` above. `None` for every non-imported item. Moved off `Item`
+    /// in Stage 6 of `docs/item-kind-split-plan.md`, same as `google_event_id`.
+    pub calendar_subscription_id: Option<String>,
 }
 
 /// Payload for `ItemType::Template`. See `ItemType` below for the per-kind split rationale.
@@ -378,6 +389,23 @@ impl ItemType {
             ItemType::Template(_) | ItemType::Simple(_) => None,
         }
     }
+
+    /// Moved off `Item` in Stage 6 of `docs/item-kind-split-plan.md` — only `Event`
+    /// has anywhere to put a `google_event_id` now.
+    pub fn google_event_id(&self) -> Option<&str> {
+        match self {
+            ItemType::Event(e) => e.google_event_id.as_deref(),
+            _ => None,
+        }
+    }
+
+    /// See `google_event_id` above — same Event-only restriction.
+    pub fn calendar_subscription_id(&self) -> Option<&str> {
+        match self {
+            ItemType::Event(e) => e.calendar_subscription_id.as_deref(),
+            _ => None,
+        }
+    }
 }
 
 /// Max length (in `char`s) allowed for `Item::name`, enforced by `validate()` and
@@ -408,16 +436,6 @@ pub struct Item {
     pub description: Option<String>,
     pub has_children: bool,
     pub item_type: ItemType,
-    /// The upstream iCal `UID` (or, once Stage 7 lands, a synthetic per-occurrence id
-    /// derived from it) this item was imported from — see
-    /// `docs/google-calendar-import-plan.md`. Set once, at creation, only by
-    /// `service::calendar_sync::sync_subscription`; `None` for every non-imported item.
-    /// Follows `series_id`'s exact precedent: carried forward unchanged on every update,
-    /// never settable via Smithy/CLI/MCP.
-    pub google_event_id: Option<String>,
-    /// The `calendar_subscriptions` row this item was imported from, alongside
-    /// `google_event_id` above. `None` for every non-imported item.
-    pub calendar_subscription_id: Option<String>,
 }
 
 impl Item {
@@ -559,6 +577,23 @@ impl Item {
     /// matching `event_type()`/`source_event_id()`'s convention.
     pub fn series_id(&self) -> Option<String> {
         self.item_type.series_id().map(|s| s.to_string())
+    }
+
+    /// `None` for every non-`Event` kind — moved off `Item` in Stage 6 of
+    /// `docs/item-kind-split-plan.md`; `EventItem` is the only kind with anywhere to
+    /// put a calendar-import reference now. No `Item::set_google_event_id()` exists —
+    /// every write site matches into `ItemType::Event` directly, following
+    /// `TaskItem::complete`'s precedent from Stage 3. Owned `String` (not `&str`),
+    /// matching `event_type()`/`source_event_id()`'s convention.
+    pub fn google_event_id(&self) -> Option<String> {
+        self.item_type.google_event_id().map(|s| s.to_string())
+    }
+
+    /// See `google_event_id` above — same Event-only restriction and conventions.
+    pub fn calendar_subscription_id(&self) -> Option<String> {
+        self.item_type
+            .calendar_subscription_id()
+            .map(|s| s.to_string())
     }
 
     /// True if this item's own date is derived from an offset rather than

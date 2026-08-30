@@ -472,8 +472,6 @@ fn expand_master_event(
 fn build_imported_item(subscription: &CalendarSubscription, event: &ParsedIcalEvent) -> Item {
     let mut item = Item::new_project_item(&subscription.project_id, &event.summary);
     item.description = event.description.clone();
-    item.google_event_id = Some(event.uid.clone());
-    item.calendar_subscription_id = Some(subscription.id.clone());
     item.item_type = ItemType::Event(EventItem {
         schedule: Schedule {
             due_date: None,
@@ -486,6 +484,8 @@ fn build_imported_item(subscription: &CalendarSubscription, event: &ParsedIcalEv
         recurrence: Recurrence::default(),
         event_type: None,
         series_id: None,
+        google_event_id: Some(event.uid.clone()),
+        calendar_subscription_id: Some(subscription.id.clone()),
     });
     item
 }
@@ -615,9 +615,9 @@ async fn run_diff(
         .await
         .map_err(repo_err)?;
 
-    let existing_by_uid: HashMap<&str, &Item> = existing
+    let existing_by_uid: HashMap<String, &Item> = existing
         .iter()
-        .filter_map(|item| item.google_event_id.as_deref().map(|uid| (uid, item)))
+        .filter_map(|item| item.google_event_id().map(|uid| (uid, item)))
         .collect();
 
     let mut created = 0usize;
@@ -649,6 +649,8 @@ async fn run_diff(
                         recurrence: Recurrence::default(),
                         event_type: None,
                         series_id: existing_item.series_id(),
+                        google_event_id: existing_item.google_event_id(),
+                        calendar_subscription_id: existing_item.calendar_subscription_id(),
                     });
                     item_repo
                         .update_by_project(&updated_item)
@@ -662,10 +664,10 @@ async fn run_diff(
 
     let mut deleted = 0usize;
     for item in &existing {
-        let Some(uid) = item.google_event_id.as_deref() else {
+        let Some(uid) = item.google_event_id() else {
             continue;
         };
-        if !seen_uids.contains(uid) {
+        if !seen_uids.contains(uid.as_str()) {
             item_repo.delete(&item.id).await.map_err(repo_err)?;
             deleted += 1;
         }
@@ -948,8 +950,6 @@ mod tests {
             id: id.to_string(),
             project_id: Some("project-1".to_string()),
             name: "Test Event".to_string(),
-            google_event_id: Some(uid.to_string()),
-            calendar_subscription_id: Some(sub_id.to_string()),
             item_type: ItemType::Event(EventItem {
                 schedule: Schedule {
                     scheduled_date: Some(start),
@@ -961,6 +961,8 @@ mod tests {
                 recurrence: Recurrence::default(),
                 event_type: None,
                 series_id: None,
+                google_event_id: Some(uid.to_string()),
+                calendar_subscription_id: Some(sub_id.to_string()),
             }),
             ..Item::default()
         }
@@ -977,8 +979,8 @@ mod tests {
         item_repo
             .expect_create()
             .withf(|item: &Item| {
-                item.google_event_id.as_deref() == Some("evt-1")
-                    && item.calendar_subscription_id.as_deref() == Some("sub-1")
+                item.google_event_id().as_deref() == Some("evt-1")
+                    && item.calendar_subscription_id().as_deref() == Some("sub-1")
                     && item.kind() == ItemKind::Event
             })
             .returning(|_| Ok("new-id".to_string()));

@@ -1564,6 +1564,8 @@ mod tests {
                     recurrence: Default::default(),
                     event_type: None,
                     series_id: None,
+                    google_event_id: None,
+                    calendar_subscription_id: None,
                 }),
                 ..Item::default()
             })

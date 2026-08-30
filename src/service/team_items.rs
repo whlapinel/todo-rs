@@ -97,6 +97,13 @@ fn build_item_type(
             recurrence,
             event_type,
             series_id,
+            // See `service::items::build_item_type`'s identical arm — never settable
+            // via `CreateTeamItemParams`/`UpdateTeamItemParams`, only
+            // `service::calendar_sync` writes these, and `update_team_item`'s
+            // `current.google_event_id().is_some()` guard means this function is
+            // never reached for an already-imported item's update.
+            google_event_id: None,
+            calendar_subscription_id: None,
         }),
         ItemKind::Template => ItemType::Template(TemplateItem {
             parent_item_id,
@@ -330,7 +337,7 @@ pub async fn delete_team_item(
 ) -> Result<(), ItemError> {
     require_project_member(projects, teams, project_id, requester_user_id).await?;
     let current = repo.get_by_project(project_id, item_id).await?;
-    if current.google_event_id.is_some() {
+    if current.google_event_id().is_some() {
         return Err(ItemError::Invalid(
             "this item was imported from Google Calendar and cannot be deleted".to_string(),
         ));
@@ -449,7 +456,7 @@ pub async fn update_team_item(
         .get_by_project(&params.project_id, &params.item_id)
         .await?;
 
-    if current.google_event_id.is_some() {
+    if current.google_event_id().is_some() {
         return Err(ItemError::Invalid(
             "this item was imported from Google Calendar and cannot be edited".to_string(),
         ));
@@ -861,8 +868,11 @@ mod tests {
             Ok(Item {
                 id: "item1".to_string(),
                 project_id: Some("p1".to_string()),
-                google_event_id: Some("gcal-uid-1".to_string()),
-                calendar_subscription_id: Some("sub1".to_string()),
+                item_type: ItemType::Event(EventItem {
+                    google_event_id: Some("gcal-uid-1".to_string()),
+                    calendar_subscription_id: Some("sub1".to_string()),
+                    ..EventItem::default()
+                }),
                 ..Item::default()
             })
         });
@@ -898,8 +908,11 @@ mod tests {
             Ok(Item {
                 id: "item1".to_string(),
                 project_id: Some("p1".to_string()),
-                google_event_id: Some("gcal-uid-1".to_string()),
-                calendar_subscription_id: Some("sub1".to_string()),
+                item_type: ItemType::Event(EventItem {
+                    google_event_id: Some("gcal-uid-1".to_string()),
+                    calendar_subscription_id: Some("sub1".to_string()),
+                    ..EventItem::default()
+                }),
                 ..Item::default()
             })
         });

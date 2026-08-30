@@ -139,8 +139,8 @@ pub async fn get_project_item(
         points: item.points(),
         priority: item.priority(),
         source_event_id: item.source_event_id(),
-        google_event_id: item.google_event_id.clone(),
-        calendar_subscription_id: item.calendar_subscription_id.clone(),
+        google_event_id: item.google_event_id(),
+        calendar_subscription_id: item.calendar_subscription_id(),
         depends_on_item_ids: Some(depends_on_item_ids),
     })
 }
@@ -306,8 +306,8 @@ pub async fn list_project_items(
             points: i.points(),
             priority: i.priority(),
             source_event_id: i.source_event_id(),
-            google_event_id: i.google_event_id.clone(),
-            calendar_subscription_id: i.calendar_subscription_id.clone(),
+            google_event_id: i.google_event_id(),
+            calendar_subscription_id: i.calendar_subscription_id(),
         })
         .collect();
     Ok(output::ListProjectItemsOutput { items })
