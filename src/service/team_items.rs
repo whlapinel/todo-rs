@@ -2,8 +2,9 @@ use crate::domain::item::{Item, ItemKind, ItemType, Recurrence, Schedule, TeamAs
 use crate::service::activity_log::reverse_entry;
 use crate::service::item_series;
 use crate::service::items::{
-    ItemError, copy_template_children_to_event, has_incomplete_children, is_pure_complete_toggle,
-    item_anchor, sync_offset_children, sync_source_event_tasks, unlink_source_event_tasks,
+    ItemError, copy_template_children_to_event, event_anchor, has_incomplete_children,
+    is_pure_complete_toggle, item_anchor, sync_offset_children, sync_source_event_tasks,
+    unlink_source_event_tasks,
 };
 use crate::service::projects::{
     require_project_admin, require_project_member, resolve_project_assignee,
@@ -119,7 +120,7 @@ pub(crate) async fn resolve_offset_anchor_project(
 ) -> Result<Option<DateTime<Utc>>, ItemError> {
     if let Some(event_id) = item.source_event_id() {
         let event = repo.get_by_project(project_id, &event_id).await?;
-        Ok(item_anchor(&event))
+        Ok(event_anchor(&event))
     } else if let Some(parent_id) = item.parent_item_id.clone() {
         let parent = repo.get_by_project(project_id, &parent_id).await?;
         top_level_anchor_project(repo, project_id, &parent).await
@@ -279,7 +280,9 @@ pub async fn create_team_item(
     // `list_team_templates`.
     if let Some(event_type) = item.event_type() {
         let tz_offset = params.timezone_offset_minutes.unwrap_or(0);
-        let root_date = item_anchor(&item);
+        // `item` here is always the just-created Event — its anchor is `event_anchor`
+        // (scheduled_date), never `item_anchor` (due_date). See `event_anchor`'s doc comment.
+        let root_date = event_anchor(&item);
         let mut templates = repo.list_templates(requester_user_id).await?;
         templates.extend(repo.list_templates_by_project(&params.project_id).await?);
         for tpl in templates
@@ -643,14 +646,23 @@ pub async fn update_team_item(
     // fix in `items::update_item` for the full explanation: descendants must be measured
     // against the true top-level ancestor's anchor, not `item`'s own (possibly offset-derived)
     // anchor.
-    let old_anchor = top_level_anchor_project(repo, &params.project_id, &current).await?;
-    let new_anchor = top_level_anchor_project(repo, &params.project_id, &item).await?;
-    if let Some(new_anchor) = new_anchor
-        && Some(new_anchor) != old_anchor
+    let old_due_anchor = top_level_anchor_project(repo, &params.project_id, &current).await?;
+    let new_due_anchor = top_level_anchor_project(repo, &params.project_id, &item).await?;
+    if let Some(new_due_anchor) = new_due_anchor
+        && Some(new_due_anchor) != old_due_anchor
     {
-        sync_offset_children(repo, &item.id, new_anchor, tz_offset).await?;
-        if item.kind() == ItemKind::Event {
-            sync_source_event_tasks(repo, &item.id, new_anchor, tz_offset).await?;
+        sync_offset_children(repo, &item.id, new_due_anchor, tz_offset).await?;
+    }
+    // See the identical split in `items::update_item` — a source-event-linked task's anchor is
+    // the Event's `scheduled_date` (`event_anchor`), never its `due_date` (`item_anchor`), so
+    // this is a separate "did the anchor move" check from the due-date one above.
+    if item.kind() == ItemKind::Event {
+        let old_event_anchor = event_anchor(&current);
+        let new_event_anchor = event_anchor(&item);
+        if let Some(new_event_anchor) = new_event_anchor
+            && Some(new_event_anchor) != old_event_anchor
+        {
+            sync_source_event_tasks(repo, &item.id, new_event_anchor, tz_offset).await?;
         }
     }
     Ok(())

@@ -179,7 +179,9 @@ pub async fn create_item(
     // than nested children since Events can't have children.
     if let Some(event_type) = item.event_type() {
         let tz_offset = params.timezone_offset_minutes.unwrap_or(0);
-        let root_date = item_anchor(&item);
+        // `item` here is always the just-created Event (see this trigger's own doc comment
+        // above) — its anchor is `event_anchor` (scheduled_date), never `item_anchor` (due_date).
+        let root_date = event_anchor(&item);
         let templates = repo.list_templates(&params.user_id).await?;
         for tpl in templates
             .iter()
@@ -360,14 +362,25 @@ pub async fn update_item(
     // — using `item_anchor(&item)` here silently chained a mid-chain item's own (already
     // offset-derived) date to its children whenever `item` itself has a `parent_item_id`,
     // corrupting every deeper descendant's due date.
-    let old_anchor = top_level_anchor(repo, &params.user_id, &current).await?;
-    let new_anchor = top_level_anchor(repo, &params.user_id, &item).await?;
-    if let Some(new_anchor) = new_anchor
-        && Some(new_anchor) != old_anchor
+    let old_due_anchor = top_level_anchor(repo, &params.user_id, &current).await?;
+    let new_due_anchor = top_level_anchor(repo, &params.user_id, &item).await?;
+    if let Some(new_due_anchor) = new_due_anchor
+        && Some(new_due_anchor) != old_due_anchor
     {
-        sync_offset_children(repo, &item.id, new_anchor, tz_offset).await?;
-        if item.kind() == ItemKind::Event {
-            sync_source_event_tasks(repo, &item.id, new_anchor, tz_offset).await?;
+        sync_offset_children(repo, &item.id, new_due_anchor, tz_offset).await?;
+    }
+    // A source-event-linked task's own anchor is the Event's `scheduled_date` (`event_anchor`),
+    // never its `due_date` (`item_anchor`) — see that function's doc comment — so this is a
+    // genuinely separate "did the anchor move" check from the due-date one above, not something
+    // `top_level_anchor` above can also answer (an Event is always top-level, but its own
+    // `item_anchor`/`due_date` is a different value entirely from its `event_anchor`).
+    if item.kind() == ItemKind::Event {
+        let old_event_anchor = event_anchor(&current);
+        let new_event_anchor = event_anchor(&item);
+        if let Some(new_event_anchor) = new_event_anchor
+            && Some(new_event_anchor) != old_event_anchor
+        {
+            sync_source_event_tasks(repo, &item.id, new_event_anchor, tz_offset).await?;
         }
     }
     Ok(())
@@ -443,17 +456,34 @@ pub(crate) async fn unlink_source_event_tasks(
     Ok(())
 }
 
-/// An item's own reference date for anything measured relative to it (offset children,
-/// template auto-trigger copies) — `due_date` only, never `scheduled_date`. Scheduled dates are
-/// always independently set (see `Item::validate`'s removal of the old "no scheduled window on
-/// offset-driven items" restriction, docs/issues_and_features.md's "Can't schedule sub-items"
-/// entry) — they must never become the basis another item's due date is derived from, or a
-/// child/event-linked task's own "independent" scheduled window would end up silently gated on
-/// an ancestor's, exactly the coupling that restriction existed to sidestep. An ancestor/Event
-/// with no `due_date` (only a `scheduled_date`) simply has no anchor at all — nothing derives
-/// from it — rather than falling back to its scheduled window.
+/// A Task's own reference date for anything measured relative to it (offset children nested via
+/// `parent_item_id`, "Use template" copies) — `due_date` only, never `scheduled_date`. Scheduled
+/// dates are always independently set (see `Item::validate`'s removal of the old "no scheduled
+/// window on offset-driven items" restriction, docs/issues_and_features.md's "Can't schedule
+/// sub-items" entry) — they must never become the basis another item's due date is derived from,
+/// or a child's own "independent" scheduled window would end up silently gated on its parent's,
+/// exactly the coupling that restriction existed to sidestep. A Task with no `due_date` (only a
+/// `scheduled_date`) simply has no anchor at all — nothing derives from it — rather than falling
+/// back to its scheduled window.
+///
+/// Task-only — an Event's own anchor is `event_anchor` below, never this. Conflating the two
+/// was a same-day bug (see docs/archived/archived_issues_and_features.md's "Can't schedule
+/// sub-items" entry's second follow-up): an Event is meant to never carry a `due_date` at all
+/// (see docs/issues_and_features.md's "Remove the dueDate/dueTime field from Events" entry —
+/// not yet enforced, but that's the direction), so resolving a source-event-linked task's anchor
+/// through this function would silently strand it with no computable due date at all.
 pub(crate) fn item_anchor(item: &Item) -> Option<DateTime<Utc>> {
     item.due_date()
+}
+
+/// An Event's own reference date for anything measured relative to it (a source-event-linked
+/// task's offset, or the event-auto-trigger's template-children copy) — `scheduled_date`, never
+/// `due_date`. The counterpart to `item_anchor` above: a Task chains off its ancestor's
+/// `due_date`, but an Event is scheduled-window-primary and is meant to never carry a `due_date`
+/// at all (see docs/issues_and_features.md's "Remove the dueDate/dueTime field from Events"
+/// entry), so anything deriving a date from an Event must key off `scheduled_date` instead.
+pub(crate) fn event_anchor(event: &Item) -> Option<DateTime<Utc>> {
+    event.scheduled_date()
 }
 
 /// Walks `item`'s `parent_item_id` chain up to its true top-level ancestor and returns that
@@ -476,9 +506,11 @@ pub(crate) async fn top_level_anchor(
 }
 
 /// Resolves the anchor date an offset-driven item's `due_date` should be measured from —
-/// either the Event it references (`source_event_id`) or the true top-level ancestor of the
-/// parent it nests under (`parent_item_id`), never both (see `Item::validate`). `None` if the
-/// item isn't offset-driven at all, or the resolved anchor itself has no date.
+/// either the Event it references (`source_event_id`, via `event_anchor` — the event's
+/// `scheduled_date`, never its `due_date`) or the true top-level ancestor of the parent it nests
+/// under (`parent_item_id`, via `item_anchor`/`top_level_anchor` — that ancestor's `due_date`),
+/// never both (see `Item::validate`). `None` if the item isn't offset-driven at all, or the
+/// resolved anchor itself has no date.
 pub(crate) async fn resolve_offset_anchor(
     repo: &Arc<dyn ItemRepo>,
     user_id: &str,
@@ -486,7 +518,7 @@ pub(crate) async fn resolve_offset_anchor(
 ) -> Result<Option<DateTime<Utc>>, RepoError> {
     if let Some(event_id) = item.source_event_id() {
         let event = repo.get(user_id, &event_id).await?;
-        Ok(item_anchor(&event))
+        Ok(event_anchor(&event))
     } else if let Some(parent_id) = item.parent_item_id.clone() {
         let parent = repo.get(user_id, &parent_id).await?;
         top_level_anchor(repo, user_id, &parent).await
@@ -571,10 +603,14 @@ pub(crate) fn sync_offset_children<'a>(
 
 /// Recomputes `due_date` for every task referencing `event_id` via `source_event_id`, measured
 /// against `new_anchor` — the source-event-reference counterpart to `sync_offset_children`,
-/// called after a plain edit to an Event's own anchor date. Unlike `sync_offset_children`, this
-/// doesn't recurse by walking `parent_item_id` itself (a source-event task is never nested), but
-/// each referencing task can have its own ordinary `parent_item_id` subtree, which still needs
-/// the normal cascade — hence the trailing `sync_offset_children` call per task.
+/// called after a plain edit to an Event's own `scheduled_date` (`event_anchor`, never its
+/// `due_date` — see that function's doc comment; the caller is responsible for passing the right
+/// one in). Unlike `sync_offset_children`, this doesn't recurse by walking `parent_item_id`
+/// itself (a source-event task is never nested), but each referencing task can have its own
+/// ordinary `parent_item_id` subtree, which still needs the normal cascade (measured against
+/// *that* task's own `due_date` via `item_anchor`, once its own due date is recomputed below —
+/// a Task's descendants still chain off `due_date`, only the Event → task link uses
+/// `scheduled_date`) — hence the trailing `sync_offset_children` call per task.
 pub(crate) async fn sync_source_event_tasks(
     repo: &Arc<dyn ItemRepo>,
     event_id: &str,
@@ -988,22 +1024,40 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_item_computes_due_date_from_source_event_anchor() {
+    async fn create_item_computes_due_date_from_source_events_scheduled_date() {
+        // An Event is scheduled-window-primary and is meant to never carry a `due_date` at all
+        // (see `event_anchor`'s doc comment and docs/issues_and_features.md's "Remove the
+        // dueDate/dueTime field from Events" entry) — a source-event-linked task's offset
+        // anchor must be the event's `scheduled_date`, not its `due_date`.
         let mut mock = MockItemRepo::new();
-        let event_due = DateTime::parse_from_rfc3339("2026-01-10T00:00:00Z")
+        let event_scheduled = DateTime::parse_from_rfc3339("2026-01-10T00:00:00Z")
             .unwrap()
             .with_timezone(&Utc);
 
         mock.expect_get()
             .withf(|user_id: &str, item_id: &str| user_id == "u1" && item_id == "event1")
             .times(1)
-            .returning(move |_, _| Ok(event_item("event1", "u1", event_due)));
+            .returning(move |_, _| {
+                Ok(Item {
+                    id: "event1".to_string(),
+                    user_id: Some("u1".to_string()),
+                    item_type: ItemType::Event {
+                        schedule: Schedule {
+                            scheduled_date: Some(event_scheduled),
+                            ..Schedule::default()
+                        },
+                        recurrence: Recurrence::default(),
+                        event_type: None,
+                    },
+                    ..Item::default()
+                })
+            });
 
-        let expected_due = recurrence::apply_end_of_day(event_due - chrono::Duration::days(2), 0);
+        let expected_due =
+            recurrence::apply_end_of_day(event_scheduled - chrono::Duration::days(2), 0);
         mock.expect_create()
             .withf(move |item: &Item| {
                 item.source_event_id().as_deref() == Some("event1")
-                    && item.parent_item_id.is_none()
                     && item.due_date() == Some(expected_due)
             })
             .times(1)
@@ -1030,17 +1084,19 @@ mod tests {
             },
         )
         .await
-        .expect("should create source-event-linked task");
+        .expect("should create source-event-linked task with a computed due date");
     }
 
     #[tokio::test]
-    async fn create_item_leaves_due_date_unset_when_source_event_has_only_a_scheduled_date() {
-        // `item_anchor` must never fall back to `scheduled_date` — see its own doc comment and
-        // docs/issues_and_features.md's "Can't schedule sub-items" entry. An Event with a
-        // scheduled window but no due date has no offset anchor at all, not a scheduled-date
-        // one, so a source-event-linked task's own due date stays unset rather than being
-        // silently derived from the event's (independent) scheduled window.
+    async fn create_item_ignores_source_events_due_date_as_anchor() {
+        // Regression guard: even if an Event somehow carries a `due_date` (not supposed to
+        // happen going forward, but no enforcement exists yet — see the entry referenced
+        // above), it must never be used as a source-event-linked task's anchor. Only the
+        // event's `scheduled_date` counts.
         let mut mock = MockItemRepo::new();
+        let event_due = DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
         let event_scheduled = DateTime::parse_from_rfc3339("2026-01-10T00:00:00Z")
             .unwrap()
             .with_timezone(&Utc);
@@ -1054,6 +1110,7 @@ mod tests {
                     user_id: Some("u1".to_string()),
                     item_type: ItemType::Event {
                         schedule: Schedule {
+                            due_date: Some(event_due),
                             scheduled_date: Some(event_scheduled),
                             ..Schedule::default()
                         },
@@ -1064,10 +1121,10 @@ mod tests {
                 })
             });
 
+        let expected_due =
+            recurrence::apply_end_of_day(event_scheduled - chrono::Duration::days(2), 0);
         mock.expect_create()
-            .withf(|item: &Item| {
-                item.source_event_id().as_deref() == Some("event1") && item.due_date().is_none()
-            })
+            .withf(move |item: &Item| item.due_date() == Some(expected_due))
             .times(1)
             .returning(|_| Ok("new-task-id".to_string()));
 
@@ -1085,7 +1142,7 @@ mod tests {
             },
         )
         .await
-        .expect("should still create the task, just with no computed due date");
+        .expect("should anchor off scheduled_date, ignoring the event's due_date");
     }
 
     #[tokio::test]
