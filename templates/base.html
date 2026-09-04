@@ -237,9 +237,20 @@
     // the one that actually lands in time. Capturing on `document` since #action-menu-popover
     // doesn't exist yet when this script runs, and ToggleEvent doesn't bubble.
     let lastPopoverCloseInfo = null;
+    // The ⋮ button that most recently opened the popover — restored on close (below) so
+    // Escape/outside-click dismissal doesn't drop keyboard focus onto <body>. Set in
+    // openRowActionsMenu(); a detached button (e.g. its row was just Deleted) makes the
+    // restoring .focus() call below a harmless no-op, same as if this didn't run at all.
+    let lastPopoverOpenerBtn = null;
     document.addEventListener('beforetoggle', function (evt) {
       if (evt.target && evt.target.id === 'action-menu-popover' && evt.newState === 'closed') {
         lastPopoverCloseInfo = { rowId: evt.target.dataset.rowId, time: evt.timeStamp };
+        // Only when focus is still inside the popover being closed — a programmatic close
+        // that already lost focus elsewhere (e.g. a just-opened Reschedule dialog autofocusing
+        // itself) shouldn't be dragged back to the ⋮ button.
+        if (lastPopoverOpenerBtn && evt.target.contains(document.activeElement)) {
+          lastPopoverOpenerBtn.focus();
+        }
       }
     }, true);
 
@@ -253,6 +264,13 @@
       var isHidden = ul.classList.toggle('hidden');
       var chevron = document.getElementById('chevron-' + id);
       if (chevron) chevron.innerHTML = isHidden ? '&#9656;' : '&#9662;';
+      // Keeps aria-expanded in sync regardless of how this was triggered (mouse click on the
+      // name button, or the treegrid keydown handler's Right/Left Arrow) — a single place to
+      // update it, rather than each caller separately, so the two can't drift.
+      var row = document.getElementById('item-' + id);
+      if (row && row.hasAttribute('aria-expanded')) {
+        row.setAttribute('aria-expanded', isHidden ? 'false' : 'true');
+      }
     }
 
     function openRowActionsMenu(rowId, btn) {
@@ -283,6 +301,15 @@
       htmx.process(popover);
       popover.showPopover();
       positionActionMenuPopover(popover, btn);
+      // Popover-API `showPopover()` only autofocuses when a descendant carries `autofocus` —
+      // otherwise focus stays right where it was (on `btn`), which is what left keyboard users
+      // with no way to reach the menu at all (arrow keys/Tab from `btn` never lands inside a
+      // top-layer element it's not an ancestor of). Move focus onto the first item ourselves,
+      // matching the standard menu-button pattern (activating the button opens the menu *and*
+      // moves focus into it) regardless of whether `btn` was activated by mouse or keyboard.
+      lastPopoverOpenerBtn = btn;
+      const firstItem = popover.querySelector('a, button');
+      if (firstItem) firstItem.focus();
     }
 
     // Plain viewport-relative positioning rather than CSS anchor positioning (which is even
@@ -303,45 +330,181 @@
       popover.style.top = top + 'px';
     }
 
+    // Arrow-key navigation among #action-menu-popover's own items (row-actions and batch-
+    // actions alike — both are just a flat `<div>` of `a`/`button`s, built from
+    // components/row_actions_menu.html or the `batch-actions-menu` <template>, see
+    // openRowActionsMenu/openBatchActionsMenu above) — Tab/Shift-Tab already move through them
+    // via native focus order, this adds the WAI-ARIA APG menu-button convention's Up/Down/Home/
+    // End on top of that rather than replacing it. No wrap-around at the top/bottom, matching
+    // the treegrid's own Arrow-key behavior further down. Delegated on `document` (the popover
+    // is reparented at open time — see openRowActionsMenu's own doc comment — so it can't carry
+    // its own listener reliably) and gated on `:popover-open` so this never fires while closed.
+    document.addEventListener('keydown', function (evt) {
+      if (evt.key !== 'ArrowDown' && evt.key !== 'ArrowUp' && evt.key !== 'Home' && evt.key !== 'End') return;
+      var popover = document.getElementById('action-menu-popover');
+      if (!popover || !popover.matches(':popover-open') || !popover.contains(evt.target)) return;
+      var items = Array.from(popover.querySelectorAll('a, button')).filter(function (el) { return !el.disabled; });
+      var idx = items.indexOf(evt.target);
+      var target =
+        evt.key === 'ArrowDown' ? items[idx + 1] :
+        evt.key === 'ArrowUp' ? items[idx - 1] :
+        evt.key === 'Home' ? items[0] :
+        items[items.length - 1];
+      if (target) { target.focus(); evt.preventDefault(); }
+    });
+
     // Multi-select (docs/issues_and_features.md's "Multi-select" item) — project_tasks' list
-    // page only, for now, and rendered as a genuinely different page (`?select=1`,
-    // `templates/project_tasks/select_row.html`) rather than a client-side mode layered on top
-    // of the normal row — trying to disable the normal row's own checkbox/navigation/"⋮" menu
-    // in place (an earlier version of this) needed a pointer-events CSS rule plus a
-    // click-delegation listener fighting htmx's own bindings, and still couldn't reliably
-    // block them. A select-mode row is instead just a single native <label> wrapping a
-    // checkbox and the item's name — "click anywhere on the row toggles the checkbox" is a
-    // free native browser behavior, not something JS has to reimplement, and there's nothing
-    // else on the row (no link, no menu) left to accidentally trigger.
+    // page only, for now. Always-on and layered directly on the normal treegrid rows (no more
+    // separate `?select=1` page render/row shape): a row's own click/Enter/Space either selects
+    // it or, if it's already the sole selection, opens its row-actions menu — see `activateRow`
+    // below, wired up from both the document 'click' listener and the treegrid keydown
+    // handler's Enter/Space case further down.
     //
     // Selection lives only in this in-memory Set — a batch action's own handler re-fetches
     // every selected id from the server and validates it there, so this Set never needs to be
-    // a source of truth, just a UI convenience. Reset on every select-mode page load by that
-    // page's own inline <script> (list_page.html), the same "runs once per real page load"
-    // convention edit_page.html's own inline script already follows.
+    // a source of truth, just a UI convenience. Reset on every list-page load by that page's
+    // own inline <script> (list_page.html), the same "runs once per real page load" convention
+    // edit_page.html's own inline script already follows.
     var selectedItemIds = new Set();
+    // The row a Shift-click range extends from — the last row selected by a plain or Ctrl
+    // click, independent of `selectedItemIds`' own (unordered) contents. `null` until a first
+    // selection exists; a Shift-click with no anchor yet just selects the clicked row alone.
+    var selectionAnchorId = null;
 
     function updateBatchActionsUI() {
       var btn = document.getElementById('batch-actions-btn');
       if (!btn) return;
       btn.disabled = selectedItemIds.size === 0;
       btn.textContent = selectedItemIds.size > 0 ? 'Actions (' + selectedItemIds.size + ')' : 'Actions';
+      updateRowMenuButtonsVisibility();
     }
 
-    // A select-mode row's checkbox (select_row.html) calls this on `change` — native <label>
-    // click-through already handles "click anywhere on the row toggles the checkbox" for free.
-    function toggleBatchSelection(checkbox) {
-      var li = checkbox.closest('li');
-      var id = checkbox.dataset.itemId;
-      if (checkbox.checked) {
-        selectedItemIds.add(id);
-        if (li) li.classList.add('bg-indigo-50', 'dark:bg-indigo-500/10');
-      } else {
-        selectedItemIds.delete(id);
-        if (li) li.classList.remove('bg-indigo-50', 'dark:bg-indigo-500/10');
+    function rowItemId(row) {
+      return row.id.replace(/^item-/, '');
+    }
+
+    // With more than one row selected, a row's own "⋮" only ever offers single-item actions
+    // (Edit, Reschedule, Delete, ...) that don't make sense as "which of my N selected rows
+    // does this apply to" — the top "Actions" button (batch dialogs) is the only actions entry
+    // point once a multi-row selection exists. Disabled-and-grayed-out rather than hidden: an
+    // absent button shifts every control to its right/left (the ellipses is the last cell in
+    // the row), so hovering a row's controls would visibly reflow depending on selection count;
+    // disabling keeps every row's layout identical regardless of selection state, at the cost
+    // of an inert control briefly inviting a click that does nothing (mitigated by the grayed-
+    // out styling reading as "not applicable right now"). Scoped to `[role="treegrid"]` rows
+    // only — every screen this id convention (`row-menu-btn-{id}`,
+    // components/row.html/project_tasks/virtual_row.html) appears on that *isn't* the Tasks
+    // list has no selection concept, so this only ever actually does something there.
+    function updateRowMenuButtonsVisibility() {
+      var disable = selectedItemIds.size > 1;
+      document.querySelectorAll('[role="treegrid"]').forEach(function (grid) {
+        treegridRows(grid).forEach(function (row) {
+          var btn = document.getElementById('row-menu-btn-' + rowItemId(row));
+          if (!btn) return;
+          btn.disabled = disable;
+          btn.classList.toggle('opacity-30', disable);
+          btn.classList.toggle('cursor-not-allowed', disable);
+          btn.classList.toggle('cursor-pointer', !disable);
+        });
+      });
+    }
+
+    function setRowSelected(row, selected) {
+      row.setAttribute('aria-selected', selected ? 'true' : 'false');
+      row.classList.toggle('bg-indigo-50', selected);
+      row.classList.toggle('dark:bg-indigo-500/10', selected);
+    }
+
+    // Plain click/Enter/Space on a row when it's not already the sole selection: replaces
+    // whatever was selected with just this row — covers both the "nothing selected yet" case
+    // and "some other row(s) selected" case the same way, per the user-facing rule that a plain
+    // activation always collapses the selection to one row.
+    function selectOnly(grid, row) {
+      selectedItemIds.forEach(function (id) {
+        var r = document.getElementById('item-' + id);
+        if (r) setRowSelected(r, false);
+      });
+      selectedItemIds.clear();
+      selectedItemIds.add(rowItemId(row));
+      setRowSelected(row, true);
+      selectionAnchorId = row.id;
+      updateBatchActionsUI();
+    }
+
+    // Ctrl/Cmd-click: adds or removes just the clicked row, leaving every other row's selection
+    // state untouched — the standard accessible multi-select toggle (WAI-ARIA APG's
+    // "Multi-Selectable Listbox" Ctrl+Click pattern).
+    function toggleSelect(row) {
+      var id = rowItemId(row);
+      var selected = !selectedItemIds.has(id);
+      if (selected) selectedItemIds.add(id); else selectedItemIds.delete(id);
+      setRowSelected(row, selected);
+      selectionAnchorId = row.id;
+      updateBatchActionsUI();
+    }
+
+    // Shift-click: adds `row` and every row between it and the current anchor to the
+    // selection (never removes) — the anchor itself doesn't move, matching how a second
+    // Shift-click extending further (or pulling back in) is expected to behave. The `item-`
+    // prefix guard below only ever excludes the id-less "No tasks yet" empty-state placeholder
+    // (see the 'click' listener's own doc comment) — a still-virtual occurrence row is
+    // `item-`-prefixed same as a real one and participates in the range normally.
+    function rangeSelectTo(grid, row) {
+      var rows = treegridRows(grid);
+      var anchor = (selectionAnchorId && document.getElementById(selectionAnchorId)) || row;
+      var ai = rows.indexOf(anchor);
+      var ri = rows.indexOf(row);
+      if (ai === -1) ai = ri;
+      var lo = Math.min(ai, ri), hi = Math.max(ai, ri);
+      for (var i = lo; i <= hi; i++) {
+        if (rows[i].id.indexOf('item-') !== 0) continue;
+        var id = rowItemId(rows[i]);
+        if (!selectedItemIds.has(id)) {
+          selectedItemIds.add(id);
+          setRowSelected(rows[i], true);
+        }
       }
       updateBatchActionsUI();
     }
+
+    // Shared activation logic for any selectable row — a materialized item or a still-virtual
+    // series occurrence alike (both rendered with an `item-`-prefixed `<li>` id; see
+    // ProjectTaskVirtualRow::row_id's doc comment for why a virtual occurrence's id is safe to
+    // treat exactly like a real one here) — whether triggered by a click or by Enter/Space
+    // while the row itself is focused. Modifier keys always extend/toggle the selection; a
+    // plain activation opens the row-actions menu if and only if this row is already the sole
+    // selection, otherwise it (re)selects just this row. A batch action applied to a selection
+    // containing a virtual occurrence's composite id materializes it server-side on submit
+    // (handlers::load_batch_items/parse_virtual_occurrence_id) — nothing here needs to know
+    // that happens.
+    function activateRow(grid, row, mods) {
+      if (mods.shiftKey) { rangeSelectTo(grid, row); return; }
+      if (mods.ctrlKey) { toggleSelect(row); return; }
+      var id = rowItemId(row);
+      if (selectedItemIds.size === 1 && selectedItemIds.has(id)) {
+        var menuBtn = document.getElementById('row-menu-btn-' + id);
+        openRowActionsMenu(id, menuBtn || row);
+      } else {
+        selectOnly(grid, row);
+      }
+    }
+
+    // Delegated rather than per-row, since row markup itself carries no click handler for this
+    // (see components/row.html's doc comment on why the name is now plain text) — any click
+    // landing on an actual control (the expand arrow, "⋮", Skip, ...) is left alone so that
+    // control's own handler runs instead of this one. Scoped to `item-`-prefixed rows, which
+    // now covers both real materialized rows and still-virtual occurrences alike (see
+    // `activateRow`'s doc comment) — the only row this excludes is the unstyled "No tasks yet"
+    // empty-state placeholder, which carries no id at all.
+    document.addEventListener('click', function (evt) {
+      var grid = evt.target.closest('[role="treegrid"]');
+      if (!grid) return;
+      var row = evt.target.closest('[role="row"]');
+      if (!row || row.id.indexOf('item-') !== 0) return;
+      if (evt.target.closest('a, button, input, label, summary')) return;
+      treegridSetActive(grid, row, false);
+      activateRow(grid, row, { shiftKey: evt.shiftKey, ctrlKey: evt.ctrlKey || evt.metaKey });
+    });
 
     // The "Actions" button's own popover — same #action-menu-popover a row's "⋮" button uses
     // (see openRowActionsMenu below), built from <template id="batch-actions-menu"> instead of
@@ -405,13 +568,26 @@
     // depend on; the dismissScheduled guard keeps this idempotent across the repeated scans.
     // Reusable by any row/fragment for any successful action, not just completion — a
     // handler just needs to set the attribute.
+    //
+    // This is the one row-removal path with no htmx swap around it at all — it's a plain
+    // setTimeout — so the generalized `pendingRemovalFocus` mechanism further down (which hooks
+    // htmx:beforeSwap/afterSwap) can't see it. `el` here is always the row's own [role="row"]
+    // <li> itself (see components/row.html's `data-dismiss-after` placement), so right before
+    // actually removing it, check whether it's still holding keyboard focus and, if so, compute
+    // `findRemovalFallback` while `el` is still attached (there's nothing left to compute a
+    // "next sibling" from once it's gone) and refocus it after.
     document.body.addEventListener('htmx:afterSwap', function () {
       document.querySelectorAll('[data-dismiss-after]:not([data-dismiss-scheduled])').forEach(function (el) {
         el.setAttribute('data-dismiss-scheduled', '1');
         var delay = parseInt(el.getAttribute('data-dismiss-after'), 10) || 0;
         window.setTimeout(function () {
           el.classList.add('dismiss-fade-out');
-          window.setTimeout(function () { el.remove(); }, 300);
+          window.setTimeout(function () {
+            var grid = el.closest('[role="treegrid"]');
+            var refocus = grid && el.contains(document.activeElement) && findRemovalFallback(grid, el);
+            el.remove();
+            if (refocus) treegridSetActive(grid, refocus, true);
+          }, 300);
         }, delay);
       });
     });
@@ -427,6 +603,320 @@
       if (!sidebar || sidebar.contains(evt.target)) return;
       if (toggleBtn && toggleBtn.contains(evt.target)) return;
       toggleSidebar();
+    });
+
+    // Treegrid keyboard navigation (WAI-ARIA APG treegrid pattern) for any hierarchical row
+    // list opted into it server-side (currently just `#items-list` — see components/row.html's
+    // `treegrid`/`level` fields and root CLAUDE.md's Web UI section). Progressive enhancement:
+    // every row and its controls are plain, natively-tabbable elements as rendered by the
+    // server — this only *narrows* the tab sequence to one stop per grid (arrow keys + Tab then
+    // move within it), applied by rewriting tabindex at runtime. If this script fails to run,
+    // the page falls back to today's flat "tab through every control in every row" behavior
+    // rather than trapping focus anywhere.
+    //
+    // A visible row is any [role="row"] not inside a currently-collapsed
+    // (item-{id}-children.hidden) branch — walks ancestors up to the treegrid itself rather
+    // than trusting offsetParent, since a row can be non-null-offsetParent but still inside a
+    // collapsed ancestor several levels up.
+    function treegridRowVisible(li, grid) {
+      for (var el = li.parentElement; el && el !== grid; el = el.parentElement) {
+        if (el.classList && el.classList.contains('hidden')) return false;
+      }
+      return true;
+    }
+
+    function treegridRows(grid) {
+      return Array.from(grid.querySelectorAll('[role="row"]')).filter(function (li) {
+        return treegridRowVisible(li, grid);
+      });
+    }
+
+    // Where keyboard focus should land if `row` is about to be removed from `grid` entirely
+    // (as opposed to merely updated in place) — the user's "move focus to the parent or the
+    // next sibling" ask. Mirrors the ArrowLeft handler's own `row.parentElement.closest(...)`
+    // parent lookup further down, rather than parsing `aria-level`, since DOM nesting is the
+    // more direct source of truth an id-keyed rebuild can't disturb. `rows` is already the
+    // flattened depth-first visible-row order `treegridRows` produces, so "the next row sharing
+    // `row`'s own parent" is exactly the next sibling; scanning past it costs nothing since only
+    // a row still nested under that same parent could ever match. Falls back to the previous
+    // sibling (covers "this was the last child"), then the parent row itself (`null` for a
+    // root-level row with no siblings — e.g. the last remaining top-level task), which the
+    // caller then falls back from again to `treegridRows(grid)[0]` post-removal.
+    function findRemovalFallback(grid, row) {
+      var rows = treegridRows(grid);
+      var idx = rows.indexOf(row);
+      if (idx === -1) return null;
+      var parentRow = row.parentElement.closest('[role="row"]');
+      for (var i = idx + 1; i < rows.length; i++) {
+        if (rows[i].parentElement.closest('[role="row"]') === parentRow) return rows[i];
+      }
+      for (var j = idx - 1; j >= 0; j--) {
+        if (rows[j].parentElement.closest('[role="row"]') === parentRow) return rows[j];
+      }
+      return parentRow;
+    }
+
+    // A row's own focusable "cells" — see components/row.html's `role="gridcell"` wrappers.
+    // Only one control per cell in this app's rows, so the control itself is the tab stop
+    // (the APG-recommended optimization over giving the wrapper cell its own tabindex).
+    function treegridControls(row) {
+      return Array.from(row.querySelectorAll(':scope > .flex > [role="gridcell"] :is(a,button,input)'))
+        // `!el.disabled` excludes a row's own "⋮" while it's disabled for a multi-row selection
+        // (see updateRowMenuButtonsVisibility) — a disabled control can't actually receive
+        // focus, so leaving it in this list would make Tab/Right-Arrow "land" on a control the
+        // user can't interact with.
+        .filter(function (el) { return !el.disabled; });
+    }
+
+    // Resets every row/control in `grid` to tabindex="-1" — the shared first step before
+    // establishing a new single tab stop, so a stray tabindex="0" left over from a previous
+    // interaction can never accumulate into a second reachable stop.
+    function treegridReset(grid) {
+      treegridRows(grid).forEach(function (row) {
+        row.tabIndex = -1;
+        treegridControls(row).forEach(function (c) { c.tabIndex = -1; });
+      });
+    }
+
+    function treegridSetActive(grid, node, focusIt) {
+      treegridReset(grid);
+      node.tabIndex = 0;
+      var row = node.closest('[role="row"]');
+      if (row) grid.dataset.activeRowId = row.id;
+      if (focusIt) node.focus();
+    }
+
+    // Re-applies the roving tabindex after any (re)render of a treegrid's contents — htmx
+    // swaps replace nodes wholesale, so tabindex has to be reassigned on fresh elements each
+    // time. Restores the same row the user was last on (by id) when it still exists, so e.g.
+    // checking a box and having #items-list rebuild doesn't reset keyboard focus to row one.
+    function treegridInit(grid) {
+      var rows = treegridRows(grid);
+      treegridReset(grid);
+      var restoreId = grid.dataset.activeRowId;
+      var active = (restoreId && rows.find(function (r) { return r.id === restoreId; })) || rows[0];
+      if (active) active.tabIndex = 0;
+      // Re-applies selection highlighting to whichever of `rows` are still in `selectedItemIds`
+      // — a swap (single-row or whole-list) always produces fresh DOM nodes, which start with
+      // none of the selection state JS applied earlier. `selectedItemIds` itself isn't touched
+      // here (see its own doc comment on when it's reset). The `item-` prefix guard only ever
+      // excludes the id-less "No tasks yet" empty-state placeholder (see the 'click' listener's
+      // own doc comment) — a still-virtual occurrence row gets reconciled same as a real one.
+      rows.forEach(function (row) {
+        if (row.id.indexOf('item-') !== 0) return;
+        setRowSelected(row, selectedItemIds.has(rowItemId(row)));
+      });
+      // Freshly-swapped rows start with no `hidden` class regardless of the current selection
+      // count — reconcile them the same way updateBatchActionsUI does after a selection change.
+      updateRowMenuButtonsVisibility();
+    }
+
+    // A row-actions menu's "Mark complete" button (components/row_actions_menu.html) replaces
+    // its own row via an outerHTML swap, same as the old checkbox this replaced — the focused
+    // button is destroyed in the process, which would otherwise drop keyboard focus onto <body>
+    // (the browser's default when the focused element is removed). Advance focus to the next
+    // sibling (or the previous one, if this was the last child) or, failing either, the parent
+    // row — reuses `findRemovalFallback` (defined further down, see its own doc comment), the
+    // same "where should focus land" logic the generalized row-removal mechanism uses, rather
+    // than a flat next-row-in-the-list jump: completing the last child under a parent shouldn't
+    // hop focus over to some unrelated cousin task two subtrees away just because it happens to
+    // be next in document order. "Mark incomplete" (`data-complete-toggle="uncomplete"`) is
+    // deliberately excluded — only completing advances focus.
+    //
+    // Captured on 'click' — before htmx's own request for the same click even goes out, so the
+    // fallback is computed from the pre-swap DOM. That's safe because the button's outerHTML
+    // swap only ever replaces the *completed* row's own <li>, never its siblings, so a
+    // reference to the sibling/parent captured beforehand is still attached and focusable once
+    // the swap lands.
+    //
+    // The button itself lives inside #action-menu-popover at click time (openRowActionsMenu
+    // copies row_actions_menu.html's markup into it, elsewhere in the DOM entirely — see its
+    // own doc comment) rather than inside the row's own <li>, so `btn.closest('[role="row"]')`
+    // can't find it; the popover's own `data-row-id` (set by openRowActionsMenu) is what ties
+    // this click back to the row it was opened for.
+    let pendingCompleteFocus = null;
+    document.addEventListener('click', function (evt) {
+      var btn = evt.target.closest('[data-complete-toggle]');
+      if (!btn || btn.dataset.completeToggle !== 'complete') return;
+      var popover = btn.closest('#action-menu-popover');
+      var rowId = popover ? popover.dataset.rowId : null;
+      var row = rowId ? document.getElementById('item-' + rowId) : null;
+      var grid = row ? row.closest('[role="treegrid"]') : null;
+      if (!row || !grid) return;
+      var next = findRemovalFallback(grid, row);
+      pendingCompleteFocus = next ? { rowId: row.id, next: next } : null;
+    });
+
+    // Generalized version of the above for any row-removing action, not just "Mark complete"
+    // clicked via that specific button — Delete (single-row outerHTML swap to empty),
+    // Skip/Unskip, a batch action, or a Filters resubmit (all whole-list innerHTML rebuilds
+    // that may drop the focused row for any reason: cursor advance, no longer matching a
+    // filter, ...). Captured at htmx:beforeSwap time, while the pre-swap DOM — and therefore
+    // the row's siblings/parent — is still intact; there's nothing left to compute "next
+    // sibling" from once the swap has already happened. `target.contains(row)` covers both
+    // swap shapes: a single-row outerHTML swap where `target` *is* the row (Node.contains
+    // includes the node itself), and a whole-list innerHTML swap where `target` is the grid
+    // and `row` is one of its descendants.
+    //
+    // Only actually acted on in htmx:afterSwap below if the originally-focused row turns out to
+    // really be gone — an ordinary in-place update (including "Mark complete"'s own swap, which
+    // leaves the row visible until its later data-dismiss-after fade-out) still has a row with
+    // that same id post-swap, so this silently no-ops there and defers to treegridInit's own
+    // restore-by-id instead. That also means this never double-fires against
+    // pendingCompleteFocus above for the same click: by the time this check runs, the "just
+    // completed" row is still present, so this mechanism finds nothing to do.
+    var pendingRemovalFocus = null;
+    document.addEventListener('htmx:beforeSwap', function (evt) {
+      pendingRemovalFocus = null;
+      var target = evt.detail && evt.detail.target;
+      if (!target) return;
+      var grid = target.closest('[role="treegrid"]');
+      if (!grid) return;
+      var focused = document.activeElement;
+      var row = focused && focused.closest && focused.closest('[role="row"]');
+      if (!row || !target.contains(row)) return;
+      var fallback = findRemovalFallback(grid, row);
+      pendingRemovalFocus = { rowId: row.id, fallbackId: fallback ? fallback.id : null, grid: grid };
+    });
+
+    document.addEventListener('htmx:afterSwap', function (evt) {
+      document.querySelectorAll('[role="treegrid"]').forEach(treegridInit);
+      // Matched against `evt.detail.target`'s own id (the resolved `hx-target`, i.e. this same
+      // row's own "item-" + id) rather than `evt.detail.elt` (the triggering button) — the
+      // button lives inside a popover that's reparented/repopulated independently of any given
+      // click (see openRowActionsMenu's doc comment), and htmx's own request-context object
+      // isn't guaranteed to hand back that exact same reference by the time this fires. The
+      // target id is simpler and verifiably correct: it's literally what this button's own
+      // hx-target attribute (row_actions_menu.html) resolves to. Still guarded (not applied
+      // unconditionally on the very next afterSwap) so an unrelated swap firing in between
+      // never consumes a stale pending focus target.
+      if (pendingCompleteFocus && evt.detail && evt.detail.target && evt.detail.target.id === pendingCompleteFocus.rowId) {
+        var grid = pendingCompleteFocus.next.closest('[role="treegrid"]');
+        if (grid) treegridSetActive(grid, pendingCompleteFocus.next, true);
+        pendingCompleteFocus = null;
+      }
+      if (pendingRemovalFocus) {
+        var p = pendingRemovalFocus;
+        pendingRemovalFocus = null;
+        if (!document.getElementById(p.rowId)) {
+          var target = (p.fallbackId && document.getElementById(p.fallbackId)) || treegridRows(p.grid)[0];
+          if (target) treegridSetActive(p.grid, target, true);
+        }
+      }
+    });
+    document.querySelectorAll('[role="treegrid"]').forEach(treegridInit);
+
+    document.addEventListener('keydown', function (evt) {
+      var grid = evt.target.closest('[role="treegrid"]');
+      if (!grid) return;
+      var row = evt.target.closest('[role="row"]');
+      if (!row) return;
+      var onRowItself = evt.target === row;
+      var rows = treegridRows(grid);
+      var idx = rows.indexOf(row);
+      var controls = treegridControls(row);
+
+      if (evt.key === 'ArrowDown' || evt.key === 'ArrowUp') {
+        var next = rows[evt.key === 'ArrowDown' ? idx + 1 : idx - 1];
+        if (next) { treegridSetActive(grid, next, true); evt.preventDefault(); }
+        return;
+      }
+      if (evt.key === 'Home' || evt.key === 'End') {
+        var target = rows[evt.key === 'Home' ? 0 : rows.length - 1];
+        if (target) { treegridSetActive(grid, target, true); evt.preventDefault(); }
+        return;
+      }
+      if ((evt.key === 'Enter' || evt.key === ' ') && onRowItself) {
+        // A selectable row (real or still-virtual alike, both `item-`-prefixed — see
+        // `activateRow`'s doc comment) selects/opens its menu. The `else` here is now only ever
+        // reached by the id-less "No tasks yet" empty-state placeholder (no controls of its own
+        // either, so it's a no-op) — kept as a defensive fallback rather than assumed
+        // unreachable. preventDefault unconditionally: a focused, non-interactive [role="row"]
+        // otherwise scrolls the page on Space, browsers' default behavior for a focused plain
+        // element.
+        if (row.id.indexOf('item-') === 0) {
+          activateRow(grid, row, { shiftKey: evt.shiftKey, ctrlKey: evt.ctrlKey || evt.metaKey });
+        } else if (controls[0]) {
+          treegridSetActive(grid, controls[0], true);
+        }
+        evt.preventDefault();
+        return;
+      }
+      if (evt.key === 'ArrowRight' && onRowItself) {
+        if (row.getAttribute('aria-expanded') === 'false') {
+          toggleChildren(row.id.replace(/^item-/, ''));
+        } else if (controls[0]) {
+          treegridSetActive(grid, controls[0], true);
+        }
+        evt.preventDefault();
+        return;
+      }
+      if (evt.key === 'ArrowLeft') {
+        if (onRowItself) {
+          if (row.getAttribute('aria-expanded') === 'true') {
+            toggleChildren(row.id.replace(/^item-/, ''));
+            evt.preventDefault();
+          } else {
+            var parentRow = row.parentElement.closest('[role="row"]');
+            if (parentRow) { treegridSetActive(grid, parentRow, true); evt.preventDefault(); }
+          }
+        } else {
+          treegridSetActive(grid, row, true);
+          evt.preventDefault();
+        }
+        return;
+      }
+      if (evt.key === 'Tab') {
+        if (onRowItself) {
+          // Shift+Tab from the row itself needs no handling: every other row/control in the
+          // grid is tabindex="-1", so native Shift+Tab already exits to whatever precedes the
+          // grid in the page.
+          if (!evt.shiftKey && controls[0]) {
+            treegridSetActive(grid, controls[0], true);
+            evt.preventDefault();
+          }
+        } else {
+          var cIdx = controls.indexOf(evt.target);
+          var nextControl = controls[evt.shiftKey ? cIdx - 1 : cIdx + 1];
+          if (nextControl) {
+            treegridSetActive(grid, nextControl, true);
+            evt.preventDefault();
+          } else if (evt.shiftKey) {
+            treegridSetActive(grid, row, true);
+            evt.preventDefault();
+          }
+          // Tab off the last control falls through natively: nothing else in the row is
+          // tabbable, so the browser's own Tab already exits the grid.
+        }
+      }
+    });
+
+    // Global "jump to the list" shortcut — dismissing a dialog (Escape, or its own close
+    // button) doesn't restore focus anywhere in particular, so it lands on <body>, and from
+    // there the only way back into the list was tabbing through the entire header/sidebar
+    // first. 'k' (the list-nav key convention several list-heavy apps already use — Gmail,
+    // Superhuman, etc. — for exactly this) jumps straight to whichever row already holds the
+    // roving tabindex (the last one actually focused, or row one if none yet), the same target
+    // treegridInit itself always restores to. Only meaningful when there's a treegrid on the
+    // page at all (every screen but Tasks has none, so this silently no-ops there); guarded off
+    // while typing in an editable field (so an ordinary "k" keystroke in a name/description
+    // input isn't hijacked) and while a modal <dialog> or the row-actions popover is open (so
+    // this can't steal focus out from under either while it's still meant to hold it).
+    document.addEventListener('keydown', function (evt) {
+      if (evt.key !== 'k' && evt.key !== 'K') return;
+      if (evt.ctrlKey || evt.metaKey || evt.altKey) return;
+      var target = evt.target;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' ||
+        target.tagName === 'SELECT' || target.isContentEditable)) return;
+      if (document.querySelector('dialog[open]')) return;
+      var popover = document.getElementById('action-menu-popover');
+      if (popover && popover.matches(':popover-open')) return;
+      var grid = document.querySelector('[role="treegrid"]');
+      if (!grid) return;
+      var rows = treegridRows(grid);
+      var restoreId = grid.dataset.activeRowId;
+      var active = (restoreId && rows.find(function (r) { return r.id === restoreId; })) || rows[0];
+      if (active) { treegridSetActive(grid, active, true); evt.preventDefault(); }
     });
   </script>
   <!-- Persistent action dialog — row action buttons (e.g. the reschedule calendar icon)

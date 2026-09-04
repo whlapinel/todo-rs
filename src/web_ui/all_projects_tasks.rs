@@ -307,6 +307,10 @@ pub(crate) async fn list_all_projects_task_rows(
                     is_team_project,
                     1,
                     None,
+                    // Treegrid keyboard-nav pilot is Tasks-list-only for now — see
+                    // `Row::treegrid`'s doc comment.
+                    false,
+                    0,
                 )
                 .await?;
                 // has_children counts filtered-out children too — see
@@ -645,6 +649,10 @@ pub async fn toggle_all_projects_task_complete(
                     project.team_id.is_some(),
                     1,
                     None,
+                    // Treegrid keyboard-nav pilot is Tasks-list-only for now — see
+                    // `Row::treegrid`'s doc comment.
+                    false,
+                    0,
                 )
                 .await?;
                 // has_children counts filtered-out children too — see

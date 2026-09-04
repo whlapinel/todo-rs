@@ -82,14 +82,6 @@ pub struct NewItemQuery {
     pub redirect: Option<String>,
 }
 
-/// `?select=1` (docs/issues_and_features.md's "Multi-select" item) puts the Tasks list into
-/// select mode — a separate query struct (like `NewItemQuery` above) rather than a field on
-/// `ListFilterQuery`, since this isn't a filter dimension shared with any other screen.
-#[derive(serde::Deserialize, Default)]
-pub struct SelectModeQuery {
-    select: Option<String>,
-}
-
 pub async fn project_tasks_page(
     Path(project_id): Path<String>,
     Extension(auth_user): Extension<AuthUser>,
@@ -101,12 +93,10 @@ pub async fn project_tasks_page(
     Extension(item_dependencies): Extension<Arc<dyn ItemDependencyRepo>>,
     TzOffset(tz): TzOffset,
     Query(q): Query<ListFilterQuery>,
-    Query(sq): Query<SelectModeQuery>,
 ) -> Result<Html<String>, ItemError> {
     let project =
         project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
     let filters = ListFilters::from_query(q);
-    let select_mode = sq.select.is_some();
     // Stage 10 gap 2: a Task series' current occurrence is range-independent (a pure
     // function of the cursor), so any degenerate range surfaces it — see
     // `list_virtual_occurrences_for_project_unchecked`'s backlog-exemption logic (which
@@ -126,36 +116,20 @@ pub async fn project_tasks_page(
     // The actual assembly now lives in `super::list_task_rows_for_project`, shared with the
     // in-place checkbox/Skip/Unskip handlers so a mutation's response and this initial page
     // load never drift apart.
-    //
-    // Select mode (`select_mode`) renders a completely different, minimal row shape instead
-    // (`super::render_select_rows` — see `templates::ProjectTaskSelectRow`'s doc comment for
-    // why it doesn't reuse `list_task_rows_for_project`/`Row` at all) — virtual/series
-    // occurrences are skipped entirely there since they have no real item id to select yet.
-    let rows = if select_mode {
-        let items = super::list_project_tasks(&repo, &project_id).await?;
-        super::render_select_rows(
-            &items,
-            &filters,
-            &auth_user.user_id,
-            project.team_id.is_some(),
-            tz,
-        )?
-    } else {
-        super::list_task_rows_for_project(
-            &repo,
-            &teams,
-            &users,
-            &series,
-            &project_id,
-            project.team_id.as_deref(),
-            &auth_user.user_id,
-            &filters,
-            tz,
-            None,
-            &item_dependencies,
-        )
-        .await?
-    };
+    let rows = super::list_task_rows_for_project(
+        &repo,
+        &teams,
+        &users,
+        &series,
+        &project_id,
+        project.team_id.as_deref(),
+        &auth_user.user_id,
+        &filters,
+        tz,
+        None,
+        &item_dependencies,
+    )
+    .await?;
     let (points_label, assignee_options) = match &project.team_id {
         Some(team_id) => {
             let points = team_service::member_points(&teams, team_id, &auth_user.user_id).await?;
@@ -185,7 +159,6 @@ pub async fn project_tasks_page(
         priority: filters.priority.as_value(),
         filters_query: filters.query_string(),
         points_label,
-        select_mode,
         nav_html,
     })
 }
@@ -1628,31 +1601,85 @@ fn parse_item_ids(raw: &str) -> Vec<String> {
         .collect()
 }
 
+/// Splits a batch-selection id into `(series_id, occurrence_ts)` when it's a still-virtual
+/// series occurrence's composite selection id rather than a real item id. A real item id is
+/// always a bare UUID (`storage::sqlite::items`' own id generation) and never contains `:`, so
+/// this is unambiguous without any extra marker prefix. `ProjectTaskVirtualRow::row_id` (see its
+/// own doc comment) is built as this exact `"{series_id}:{occurrence_ts}"` shape specifically so
+/// `base.html`'s row-selection JS never has to know or care which kind of row it's looking at —
+/// see `load_batch_items`, the one place that actually resolves the difference.
+fn parse_virtual_occurrence_id(id: &str) -> Option<(&str, i64)> {
+    let (series_id, ts) = id.split_once(':')?;
+    let occurrence_ts = ts.parse().ok()?;
+    Some((series_id, occurrence_ts))
+}
+
 /// Loads and membership-checks every selected item, rejecting up front on an empty selection or
 /// any id that doesn't resolve to a Task in this project — the same checked
 /// `project_items::get_project_item` + `require_task` a single-item route already uses, looped.
+///
+/// A selected id may also be a still-virtual series occurrence's composite id (see
+/// `parse_virtual_occurrence_id`'s doc comment) — the row-selection UI never distinguishes a
+/// real item from a virtual occurrence (base.html's `activateRow`/`selectOnly` treat every
+/// `[role="row"]` the same way), so this materializes it on the spot, via the same
+/// `get_or_materialize_occurrence` a single-row Edit/Complete action already uses, before
+/// treating it exactly like any other item for the rest of the batch handler. Mirrors
+/// `update_project_task_series_occurrence_form`'s own series/project/kind validation (a series
+/// must belong to this project and be a Task series) — a crafted composite id must not be able
+/// to reach an occurrence from a different project.
 async fn load_batch_items(
     repo: &Arc<dyn ItemRepo>,
     projects: &Arc<dyn ProjectRepo>,
     teams: &Arc<dyn TeamRepo>,
+    series_repo: &Arc<dyn ItemSeriesRepo>,
+    reminders: &Arc<dyn ReminderRepo>,
     project_id: &str,
     requester_user_id: &str,
     item_ids: &[String],
+    tz: i32,
 ) -> Result<Vec<Item>, ItemError> {
     if item_ids.is_empty() {
         return Err(ItemError::Invalid("No items selected.".to_string()));
     }
     let mut items = Vec::with_capacity(item_ids.len());
     for id in item_ids {
-        let item = project_item_service::get_project_item(
-            repo,
-            projects,
-            teams,
-            project_id,
-            requester_user_id,
-            id,
-        )
-        .await?;
+        let item = if let Some((series_id, occurrence_ts)) = parse_virtual_occurrence_id(id) {
+            let series = item_series_service::get_series(
+                projects,
+                teams,
+                series_repo,
+                requester_user_id,
+                series_id,
+            )
+            .await?;
+            if series.project_id != project_id || series.item_type != ItemKind::Task {
+                return Err(ItemError::NotFound);
+            }
+            let occurrence_date = DateTime::<Utc>::from_timestamp(occurrence_ts, 0)
+                .ok_or_else(|| ItemError::Invalid("invalid occurrence timestamp".to_string()))?;
+            item_series_service::get_or_materialize_occurrence(
+                repo,
+                projects,
+                teams,
+                series_repo,
+                reminders,
+                requester_user_id,
+                series_id,
+                occurrence_date,
+                tz,
+            )
+            .await?
+        } else {
+            project_item_service::get_project_item(
+                repo,
+                projects,
+                teams,
+                project_id,
+                requester_user_id,
+                id,
+            )
+            .await?
+        };
         items.push(require_task(item)?);
     }
     Ok(items)
@@ -1748,9 +1775,12 @@ pub async fn batch_set_priority_form(
         &repo,
         &projects,
         &teams,
+        &series,
+        &reminders,
         &project_id,
         &auth_user.user_id,
         &item_ids,
+        tz,
     )
     .await?;
     let new_priority = non_empty(&form.priority).and_then(|s| s.parse::<i32>().ok());
@@ -1811,9 +1841,12 @@ pub async fn batch_set_dates_form(
         &repo,
         &projects,
         &teams,
+        &series,
+        &reminders,
         &project_id,
         &auth_user.user_id,
         &item_ids,
+        tz,
     )
     .await?;
     require_all_top_level(&items)?;
@@ -1897,9 +1930,12 @@ pub async fn batch_set_offset_form(
         &repo,
         &projects,
         &teams,
+        &series,
+        &reminders,
         &project_id,
         &auth_user.user_id,
         &item_ids,
+        tz,
     )
     .await?;
     require_same_parent_subitems(&items)?;
@@ -1963,9 +1999,12 @@ pub async fn batch_set_assignee_form(
         &repo,
         &projects,
         &teams,
+        &series,
+        &reminders,
         &project_id,
         &auth_user.user_id,
         &item_ids,
+        tz,
     )
     .await?;
     let new_assignee = non_empty(&form.assigned_to_user_id);
@@ -2125,6 +2164,15 @@ pub async fn update_project_task_form(
             // series cursor, so a single-row swap (not a whole-list rebuild, unlike
             // `complete_project_item_series_occurrence_form`) is always correct here.
             let parent_name = parent_link.as_ref().map(|(name, _)| name.clone());
+            // Treegrid keyboard-nav pilot (see `Row::treegrid`'s doc comment) — this single-row
+            // rebuild is reached from `#items-list`/`#children-list` (Tasks-owned, in scope) and
+            // Events' Linked-tasks panel (out of scope) alike; `?view=tasks-list` is the only
+            // signal distinguishing them (see `render_rows_with_virtual`'s doc comment on why it
+            // appends that suffix to a row's own `complete_url`/`edit_url`), so only that case
+            // gets `treegrid`/`level` set below. `depth_of_item` doubles as this row's own
+            // `aria-level` base — see `indent_class`'s use of the same value further down.
+            let is_tasks_list_view = row_view.as_deref() == Some("tasks-list");
+            let depth = super::depth_of_item(&repo, &project_id, &updated).await?;
             // Mirrors `project_calendar`/`main_calendar`'s own `children_html_for` — a
             // Reschedule/Assign save never changes an item's children, so this just re-derives
             // the same in-place-expansion subtree those screens' own row builders would.
@@ -2140,6 +2188,8 @@ pub async fn update_project_task_form(
                     project.team_id.is_some(),
                     1,
                     Some(&item_dependencies),
+                    is_tasks_list_view,
+                    depth as u32 + 1,
                 )
                 .await?;
                 // has_children counts filtered-out children too — see
@@ -2213,9 +2263,13 @@ pub async fn update_project_task_form(
                     // row (a sub-item of a sub-item, say) render as if it were top-level once
                     // its own checkbox/edit swaps it back in — see `depth_of_item`'s doc
                     // comment.
-                    row.indent_class = super::indent_class(
-                        super::depth_of_item(&repo, &project_id, &updated).await?,
-                    );
+                    row.indent_class = super::indent_class(depth);
+                    // Treegrid keyboard-nav pilot — see this function's own `is_tasks_list_view`
+                    // doc comment above and `Row::treegrid`'s doc comment.
+                    if is_tasks_list_view {
+                        row.treegrid = true;
+                        row.level = depth as u32 + 1;
+                    }
                     let dep_map = item_dependencies
                         .list_for_items(&[updated.id.clone()])
                         .await?;
@@ -2803,5 +2857,43 @@ mod resolve_task_anchor_date_tests {
             .await
             .expect("should resolve anchor");
         assert_eq!(anchor, Some(due_at(2_000)));
+    }
+}
+
+#[cfg(test)]
+mod parse_virtual_occurrence_id_tests {
+    use super::*;
+
+    #[test]
+    fn recognizes_a_series_occurrence_composite_id() {
+        assert_eq!(
+            parse_virtual_occurrence_id("series1:1699999999"),
+            Some(("series1", 1_699_999_999))
+        );
+    }
+
+    #[test]
+    fn rejects_a_bare_real_item_id() {
+        // A real item id is always a UUID (storage::sqlite::items' own id generation) — no
+        // colon, so this must not be misread as a composite id.
+        assert_eq!(
+            parse_virtual_occurrence_id("550e8400-e29b-41d4-a716-446655440000"),
+            None
+        );
+    }
+
+    #[test]
+    fn rejects_a_non_numeric_suffix() {
+        assert_eq!(parse_virtual_occurrence_id("series1:not-a-timestamp"), None);
+    }
+
+    #[test]
+    fn fails_safe_on_a_malformed_id_with_more_than_one_colon() {
+        // Series ids are UUIDs, so a real composite id never has more than one colon —
+        // `split_once` takes the first one, leaving "b:1699999999" as the timestamp half,
+        // which fails to parse as an i64. Worth locking down as a fail-safe (returns None,
+        // not a bogus series id) rather than assumed, since a crafted/malformed id reaches
+        // this function as plain untrusted form input.
+        assert_eq!(parse_virtual_occurrence_id("a:b:1699999999"), None);
     }
 }

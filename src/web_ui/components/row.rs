@@ -202,4 +202,22 @@ pub struct Row {
     /// at the top level) — see `project_tasks::indent_class`'s doc comment for why this can't
     /// just be a computed `pl-{depth}` (Tailwind's compiler needs literal class names).
     pub indent_class: &'static str,
+    /// Opt-in ARIA treegrid semantics (`role="row"`/`aria-level`/`aria-expanded` on the `<li>`,
+    /// `role="gridcell"` on each interactive-control cluster) — see the Tasks-list keyboard-nav
+    /// pilot's own notes. Scoped per-`Row` instance, not baked into `row.html` unconditionally,
+    /// because `Row` is shared across every project-scoped screen (calendar overlays, Events,
+    /// Simple Lists, the item detail page's Sub-items/Linked-tasks panels — see this struct's
+    /// own doc comment) and only a caller whose *container* element actually carries
+    /// `role="treegrid"` may correctly mark its rows this way; an unmarked `role="row"` with no
+    /// treegrid/grid/rowgroup ancestor is an orphaned ARIA relationship. Only the flat Tasks
+    /// list's own row-building (`project_tasks::render_rows_with_virtual`, and
+    /// `render_expandable_children` when called from it) sets this `true`; every other caller
+    /// (including `render_expandable_children`/`render_sibling_rows` when reached from the item
+    /// detail page's Sub-items panel or Events' Linked-tasks panel) leaves the default `false`,
+    /// keeping their markup byte-identical to before this field existed.
+    pub treegrid: bool,
+    /// `aria-level` (1-indexed: a top-level row is level 1) — only meaningful, and only
+    /// rendered, when `treegrid` is `true`. See `project_tasks::render_expandable_children`'s
+    /// `level_base` parameter for how a nested row's level is derived.
+    pub level: u32,
 }

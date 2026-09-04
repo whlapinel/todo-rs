@@ -13,10 +13,26 @@
      inline buttons did. base.html's generic htmx:afterRequest listener closes this popover after
      any of these (or Edit's own boosted navigation) succeeds — no per-button onclick needed. -->
 <div class="divide-y divide-gray-100 dark:divide-white/10">
-    {% if children_html.is_some() %}
-    <!-- Only shown when the name-click was repurposed to toggle in-place expansion (see
-         Row::children_html's doc comment) — everywhere else the name itself already opens
-         this. -->
+    {% if let Some(url) = complete_url %}
+    {% if treegrid %}
+    <!-- Replaces the row's own checkbox (removed for treegrid rows — see components/row.html's
+         doc comment on the expand-arrow slot that took its place): same hx-put/hx-vals the
+         checkbox used to carry, just triggered from here instead. `data-complete-toggle` lets
+         base.html's focus-advance-on-complete listener (mirroring the old checkbox `change`
+         listener) tell "about to complete" apart from "about to un-complete" without re-reading
+         `complete` itself. -->
+    <button type="button" hx-put="{{ url }}"
+        hx-vals='{"complete": "{{ toggle_complete_json }}"{% if show_complete %}, "showComplete": "1"{% endif %}}'
+        hx-target="#item-{{ id }}" hx-select="#item-{{ id }}" hx-swap="outerHTML"
+        data-complete-toggle="{% if complete %}uncomplete{% else %}complete{% endif %}"
+        class="block w-full cursor-pointer px-4 py-3 text-left text-sm text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-white/5">{% if complete %}Mark incomplete{% else %}Mark complete{% endif %}</button>
+    {% endif %}
+    {% endif %}
+    {% if treegrid || children_html.is_some() %}
+    <!-- Shown whenever the name-click doesn't already open this itself — either because it was
+         repurposed to toggle in-place expansion (see Row::children_html's doc comment) or,
+         since the treegrid redesign, because a treegrid row's name is plain (non-interactive)
+         text and its click instead selects the row (see components/row.html's doc comment). -->
     <a href="{{ item_url }}"
         {% if detail_via_dialog %}hx-get="{{ item_url }}" hx-target="#action-dialog" hx-select="#dialog-fragment" hx-swap="innerHTML"{% else %}hx-target="#page" hx-select="#page" hx-swap="innerHTML"{% endif %}
         class="block px-4 py-3 text-sm text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-white/5">Details</a>

@@ -1,23 +1,39 @@
-<li id="task-list-virtual-{{ series_id }}-{{ occurrence_ts }}" class="py-2">
+<!-- `id="item-{{ row_id }}"`, not a `task-list-virtual-...`-prefixed id — see
+     ProjectTaskVirtualRow::row_id's doc comment. This is deliberately the same `item-`-prefix
+     convention a real materialized row's `<li>` uses, so base.html's row-selection JS
+     (activateRow/selectOnly/rangeSelectTo/treegridInit) treats a still-virtual occurrence's row
+     exactly like any other selectable row with zero special-casing — the composite
+     `{series_id}:{occurrence_ts}` id just rides along as this row's own "item id" into
+     `selectedItemIds`, and a batch action submitting it is resolved server-side
+     (handlers::load_batch_items/parse_virtual_occurrence_id), which materializes it on the spot
+     before applying the batch update. -->
+<li id="item-{{ row_id }}" class="py-2" role="row" aria-level="1">
   <div class="flex items-center gap-x-3">
     {% if is_skipped %}
+    <div class="contents" role="gridcell">
     <span class="shrink-0 size-4"></span>
     <span class="min-w-0 flex-1 truncate line-through text-gray-400 dark:text-gray-500">{{ name }}</span>
     <span class="shrink-0 text-[10px] uppercase tracking-wide font-semibold text-gray-400 dark:text-gray-500">Skipped</span>
+    </div>
+    <div class="contents" role="gridcell">
     <button hx-post="{{ unskip_url }}"
       {% if in_list_view %}hx-target="#items-list" hx-select="unset" hx-swap="innerHTML"{% endif %}
       class="shrink-0 cursor-pointer text-xs text-gray-400 hover:text-indigo-500 dark:text-gray-500 dark:hover:text-indigo-400">Unskip</button>
+    </div>
     {% else %}
-    <input type="checkbox" hx-post="{{ complete_url }}"
-      {% if in_list_view %}hx-target="#items-list" hx-select="unset" hx-swap="innerHTML"{% endif %}
-      class="shrink-0 size-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-600 dark:border-white/20 dark:bg-white/5" />
-    <!-- See project_calendar/virtual_row.html's identical doc comment — explicit
-         hx-get/target/select avoids blanking #page (#1 of docs/issues_and_features.md's
-         calendar-view entries; the same bug on this flat list too, just harder to notice since
-         the open dialog visually covers the blanked area underneath it). -->
-    <a href="{{ materialize_url }}" hx-get="{{ materialize_url }}" hx-target="#action-dialog"
-      hx-select="#dialog-fragment" hx-swap="innerHTML"
-      class="min-w-0 flex-1 truncate text-gray-900 dark:text-white">{{ name }}</a>
+    <!-- No checkbox (see components/row.html's identical treegrid change) — this occurrence's
+         row never has children, so this is always just an alignment spacer, never a chevron.
+         Completing now lives in this row's own row-actions menu below, mirroring the
+         materialized-row treatment. -->
+    <div class="contents" role="gridcell">
+    <span class="shrink-0 size-4"></span>
+    </div>
+    <div class="contents" role="gridcell">
+    <!-- Plain text, not a link — matches components/row.html's identical treegrid change (the
+         name no longer opens anything on click since a click now selects the row instead); the
+         materialize dialog is still reachable via this row's own row-actions menu's "Details"
+         entry below, which is the same materialize_url this used to hx-get directly. -->
+    <span class="min-w-0 flex-1 truncate text-gray-900 dark:text-white">{{ name }}</span>
     <!-- Mirrors components/row.html's own series symbol + Current label — see
          Row::series_current's doc comment for why the two can't drift independently. Every row
          built from this struct is a series occurrence by construction, so the symbol is
@@ -26,17 +42,26 @@
     {% if is_current %}
     <span class="shrink-0 text-[10px] uppercase tracking-wide font-semibold text-indigo-600 dark:text-indigo-400">Current</span>
     {% endif %}
+    </div>
+    <div class="contents" role="gridcell">
     <button hx-post="{{ skip_url }}" hx-confirm="Skip this occurrence?"
       {% if in_list_view %}hx-target="#items-list" hx-select="unset" hx-swap="innerHTML"{% endif %}
       class="shrink-0 cursor-pointer text-xs text-gray-400 hover:text-red-500 dark:text-gray-500 dark:hover:text-red-400">Skip</button>
+    </div>
     {% endif %}
+    <div class="contents" role="gridcell">
     <!-- Unconditional (unlike the pre-2026-08-29 version, which only gave the non-skipped
          branch a menu) — docs/issues_and_features.md's "vertical ellipses on ALL" ask covers a
-         skipped occurrence's row too, even though its menu only ever has "Details" to offer. -->
-    <button type="button" onclick="openRowActionsMenu('{{ row_id }}', this)"
+         skipped occurrence's row too, even though its menu only ever has "Details" to offer.
+         `id="row-menu-btn-{{ row_id }}"` mirrors components/row.html's identical convention —
+         base.html's `activateRow` looks a row's own menu button up by this id (falling back to
+         the row itself) when a second activation on an already-sole-selected row opens the
+         menu via keyboard rather than a direct click on this button. -->
+    <button type="button" id="row-menu-btn-{{ row_id }}" onclick="openRowActionsMenu('{{ row_id }}', this)"
       class="shrink-0 cursor-pointer text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300">
       {% include "icons/ellipses.html" %}
     </button>
+    </div>
     <!-- Same pre-rendered/hidden pattern as components/row.html's own menu — see its doc
          comment. Edit/Add sub-item materialize the occurrence as an internal step of their own
          write (see ProjectOccurrence::edit_url/add_task_child_url's doc comments) — everything
@@ -44,6 +69,20 @@
          out of scope here, tracked in docs/issues_and_features.md. -->
     <template id="row-actions-menu-{{ row_id }}">
       <div class="divide-y divide-gray-100 dark:divide-white/10">
+        {% if !is_skipped %}
+        <!-- Materializes the occurrence and completes it in one step (same `complete_url` the
+             old checkbox posted to) — see components/row.html's identical checkbox-to-menu
+             change. Deliberately no `data-complete-toggle` (unlike the materialized-row menu's
+             own Mark complete entry): this action's `hx-target="#items-list"` rebuilds the
+             *whole* list rather than just this row's own `<li>`, so the focus-advance
+             mechanism's "capture the next row before the swap, focus it after" approach
+             (base.html) wouldn't have a still-attached element to focus once the swap lands —
+             this row is now a selectable row (see the `<li>` tag's own doc comment above) but
+             not a safe target for that specific mechanism. -->
+        <button type="button" hx-post="{{ complete_url }}"
+          {% if in_list_view %}hx-target="#items-list" hx-select="unset" hx-swap="innerHTML"{% endif %}
+          class="block w-full cursor-pointer px-4 py-3 text-left text-sm text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-white/5">Mark complete</button>
+        {% endif %}
         <a href="{{ materialize_url }}" hx-get="{{ materialize_url }}" hx-target="#action-dialog"
           hx-select="#dialog-fragment" hx-swap="innerHTML"
           class="block px-4 py-3 text-sm text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-white/5">Details</a>

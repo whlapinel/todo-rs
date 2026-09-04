@@ -9,7 +9,7 @@ use crate::service::teams as team_service;
 use crate::storage::sqlite::{ItemDependencyRepo, ItemRepo, ItemSeriesRepo, TeamRepo, UserRepo};
 use crate::web_ui::list_filters::{ListFilterQuery, ListFilters};
 use crate::web_ui::project_tasks::templates::{
-    ProjectTaskRow, ProjectTaskRowsFragmentTemplate, ProjectTaskSelectRow, ProjectTaskVirtualRow,
+    ProjectTaskRow, ProjectTaskRowsFragmentTemplate, ProjectTaskVirtualRow,
 };
 use askama::Template;
 use async_recursion::async_recursion;
@@ -132,17 +132,26 @@ pub struct RowViewQuery {
     view: Option<String>,
 }
 
-/// Only `"project-calendar"`/`"main-calendar"`/`"all-tasks"`/`"all-events"` are ever forwarded —
-/// anything else (including a hand-crafted query value) normalizes to `None`, mirroring
-/// `OccurrenceRowActionQuery`'s literal-match-or-fall-through convention rather than reflecting
-/// arbitrary input back out. `"all-tasks"`/`"all-events"` were added in
+/// Only `"project-calendar"`/`"main-calendar"`/`"all-tasks"`/`"all-events"`/`"tasks-list"` are
+/// ever forwarded — anything else (including a hand-crafted query value) normalizes to `None`,
+/// mirroring `OccurrenceRowActionQuery`'s literal-match-or-fall-through convention rather than
+/// reflecting arbitrary input back out. `"all-tasks"`/`"all-events"` were added in
 /// `docs/all-projects-landing-plan.md` Stage 4 — `project_events/handlers.rs` reuses this same
 /// function for its own `RowViewQuery`, so both cross-project screens' suffixes are recognized
-/// here rather than via a second, parallel normalizer.
+/// here rather than via a second, parallel normalizer. `"tasks-list"` (the treegrid keyboard-nav
+/// pilot — see `Row::treegrid`'s doc comment) reuses the same string `OccurrenceRowActionQuery`
+/// already recognizes for `#items-list`'s skip/unskip/materialize flows, rather than inventing a
+/// second name for "this row lives in the flat Tasks list" — `update_project_task_form`'s
+/// single-row rebuild (handlers.rs) checks for it here to decide whether the re-rendered row
+/// should keep its `role="row"`/`aria-level` markup.
 pub(crate) fn normalize_row_view(q: RowViewQuery) -> Option<String> {
     if matches!(
         q.view.as_deref(),
-        Some("project-calendar") | Some("main-calendar") | Some("all-tasks") | Some("all-events")
+        Some("project-calendar")
+            | Some("main-calendar")
+            | Some("all-tasks")
+            | Some("all-events")
+            | Some("tasks-list")
     ) {
         q.view
     } else {
@@ -583,6 +592,15 @@ pub(crate) async fn render_expandable_children(
     // `render_sibling_rows` below — the item detail page's Sub-items/Linked-tasks panels)
     // always passes `Some`.
     item_dependencies: Option<&Arc<dyn ItemDependencyRepo>>,
+    // Treegrid keyboard-nav pilot (see `Row::treegrid`'s doc comment) — `true` only when this
+    // whole call tree was reached from the flat Tasks list's own `#items-list` (a real
+    // `role="treegrid"` container); `false` for every other reuse of this function (the item
+    // detail page's Sub-items/Linked-tasks panels, and the calendar/all-projects screens), which
+    // render into plain, non-treegrid containers and must keep their rows' markup unchanged.
+    // `level_base` is the `aria-level` of `parent_item_id`'s own row — ignored when `treegrid` is
+    // `false`.
+    treegrid: bool,
+    level_base: u32,
 ) -> Result<String, ItemError> {
     let children =
         list_project_items_unchecked(repo, project_id, Some(parent_item_id.to_string())).await?;
@@ -615,6 +633,15 @@ pub(crate) async fn render_expandable_children(
             None,
         );
         row.indent_class = indent_class(depth);
+        if treegrid {
+            row.treegrid = true;
+            row.level = level_base + depth as u32;
+            // Round-trips `?view=tasks-list` through the checkbox/edit-form PUT so a saved row
+            // re-rendered by `update_project_task_form`'s single-row path (handlers.rs) knows to
+            // keep this treegrid markup — see `normalize_row_view`'s doc comment.
+            row.complete_url = row.complete_url.map(|url| format!("{url}?view=tasks-list"));
+            row.edit_url = row.edit_url.map(|url| format!("{url}?view=tasks-list"));
+        }
         let (blocked_by_names, blocked_by_label, blocked_by_links_html) =
             render_blocked_by(project_id, blocked_by_names_for(i, &visible, &dep_map))?;
         row.blocked_by_names = blocked_by_names;
@@ -633,6 +660,8 @@ pub(crate) async fn render_expandable_children(
                 is_team_project,
                 depth + 1,
                 item_dependencies,
+                treegrid,
+                level_base,
             )
             .await?;
             // A row's own has_children flag counts every child, including ones the
@@ -705,6 +734,12 @@ pub(crate) async fn render_sibling_rows(
                 is_team_project,
                 1,
                 Some(item_dependencies),
+                // Treegrid keyboard-nav pilot is Tasks-list-only for now — see
+                // `Row::treegrid`'s doc comment. (`render_sibling_rows` itself feeds the item
+                // detail page's Sub-items panel and Events' Linked-tasks panel, neither of
+                // which has a `role="treegrid"` container.)
+                false,
+                0,
             )
             .await?;
             // See render_expandable_children's own call site above: has_children counts
@@ -839,6 +874,16 @@ pub(crate) async fn render_rows_with_virtual(
             i.series_id()
                 .map(|_| current_flags.get(&i.id).copied().unwrap_or(false)),
         );
+        // Treegrid keyboard-nav pilot (see `Row::treegrid`'s doc comment) — `#items-list`
+        // (`templates/project_tasks/list_page.html`) is the one container currently marked
+        // `role="treegrid"`, and every top-level row here is one of its direct rows (level 1).
+        // The `?view=tasks-list` suffix round-trips through the checkbox/edit-form PUT so
+        // `update_project_task_form`'s single-row re-render (handlers.rs) knows to keep this
+        // markup on save — see `normalize_row_view`.
+        row.treegrid = true;
+        row.level = 1;
+        row.complete_url = row.complete_url.map(|url| format!("{url}?view=tasks-list"));
+        row.edit_url = row.edit_url.map(|url| format!("{url}?view=tasks-list"));
         let (blocked_by_names, blocked_by_label, blocked_by_links_html) =
             render_blocked_by(project_id, blocked_by_names_for(i, &visible, &dep_map))?;
         row.blocked_by_names = blocked_by_names;
@@ -862,6 +907,8 @@ pub(crate) async fn render_rows_with_virtual(
                 team_id.is_some(),
                 1,
                 Some(item_dependencies),
+                true,
+                1,
             )
             .await?;
             // See render_expandable_children's own call site above: has_children counts
@@ -986,54 +1033,17 @@ pub(crate) async fn list_task_rows_for_project(
     .await
 }
 
-/// A select-mode row (docs/issues_and_features.md's "Multi-select" item) — see
-/// `templates::ProjectTaskSelectRow`'s doc comment for why this is a wholly separate, minimal
-/// rendering rather than another `ProjectTaskRow`/`Row` variant. Deliberately top-level-only —
-/// no sub-items are rendered or fetched here at all: showing a sub-item's row nested inside its
-/// parent's meant highlighting the parent (the only element a click can actually toggle) looked
-/// like it highlighted the child too, since the parent `<li>`'s own background paints behind
-/// its nested content. Selecting a task's own sub-items is meant to happen from a select mode
-/// scoped to that one task's page instead (not yet built) — this top-level list only ever
-/// selects top-level tasks.
-fn render_select_row(item: &Item, tz: i32) -> Result<String, ItemError> {
-    ProjectTaskSelectRow {
-        id: item.id.clone(),
-        name: item.name.clone(),
-        complete: item.complete(),
-        due_date: item.due_date().map(|d| {
-            crate::web_ui::format_display_date(crate::web_ui::to_local(d, tz), item.has_due_time())
-        }),
-        overdue: item.is_overdue(Utc::now()),
-    }
-    .render()
-    .map_err(ItemError::from)
-}
-
-/// Top-level select-mode rows for `items` (the project's Tasks — same `filters` the normal list
-/// view applies, so a user can still narrow down before selecting; virtual/series occurrences
-/// are excluded entirely, since they have no real item id to select yet).
-pub(crate) fn render_select_rows(
-    items: &[Item],
-    filters: &ListFilters,
-    requester_user_id: &str,
-    is_team_project: bool,
-    tz: i32,
-) -> Result<Vec<String>, ItemError> {
-    let now = Utc::now();
-    items
-        .iter()
-        .filter(|item| filters.matches(item, requester_user_id, is_team_project, now))
-        .map(|item| render_select_row(item, tz))
-        .collect()
-}
-
 /// The `#items-list` placeholder markup (`templates/project_tasks/list_page.html`'s own
 /// `rows.is_empty()` branch) — duplicated here rather than shared via Askama, since this is
 /// only ever swapped in as raw `innerHTML` by `list_task_rows_for_project`'s callers, never
 /// rendered through a `Template` struct of its own.
 pub(crate) fn items_list_inner_html(rows: &[String]) -> String {
     if rows.is_empty() {
-        "<li class=\"py-3 text-sm text-gray-500 dark:text-gray-400\">No tasks yet.</li>".to_string()
+        // `#items-list` is `role="treegrid"` (see `Row::treegrid`'s doc comment) — this empty
+        // state needs the same `role="row"`/`role="gridcell"` treatment `list_page.html`'s own
+        // copy of this message already gets, or an empty grid's one status child is an orphaned
+        // ARIA relationship.
+        "<li class=\"py-3 text-sm text-gray-500 dark:text-gray-400\" role=\"row\"><div class=\"contents\" role=\"gridcell\">No tasks yet.</div></li>".to_string()
     } else {
         rows.concat()
     }

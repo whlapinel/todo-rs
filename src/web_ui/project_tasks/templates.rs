@@ -156,6 +156,11 @@ impl ProjectTaskRow {
             // these at this default and keeps the plain decorative `has_children` arrow.
             children_html: None,
             indent_class: "",
+            // Overridden `true`/with a real `level` only by the flat Tasks list's own row-
+            // building (`project_tasks::render_rows_with_virtual`/`render_expandable_children`)
+            // — see `Row::treegrid`'s doc comment.
+            treegrid: false,
+            level: 1,
             // Set by `blocked_by_names_for`-aware callers only (the flat Tasks list and its
             // in-place-expanded children — see `project_tasks::blocked_by_names_for`'s doc
             // comment); every other caller of `from_item` leaves this empty.
@@ -164,28 +169,6 @@ impl ProjectTaskRow {
             blocked_by_links_html: String::new(),
         }
     }
-}
-
-/// A select-mode row (docs/issues_and_features.md's "Multi-select" item) — rendered only when
-/// the Tasks list is loaded with `?select=1` (`handlers::project_tasks_page`,
-/// `project_tasks::render_select_row`), completely independent of `Row`/`ProjectTaskRow` above.
-/// Deliberately minimal: a single native `<label>` wraps the checkbox and the name, so "click
-/// anywhere on the row toggles selection" is a free native browser behavior rather than
-/// something JS has to reimplement — see base.html's `toggleBatchSelection` doc comment for
-/// why an earlier version of this (disabling the normal row's own checkbox/menu/navigation in
-/// place, via CSS `pointer-events` + a click-delegation listener) didn't work reliably.
-///
-/// Top-level tasks only — no sub-items, no `indent_class`/`children_html` (see
-/// `project_tasks::render_select_row`'s doc comment for why nesting a sub-item's row inside its
-/// parent's made selecting the parent look like it selected the child too).
-#[derive(Template)]
-#[template(path = "project_tasks/select_row.html")]
-pub struct ProjectTaskSelectRow {
-    pub id: String,
-    pub name: String,
-    pub complete: bool,
-    pub due_date: Option<String>,
-    pub overdue: bool,
 }
 
 /// A lightweight date/schedule-only editor, opened from a task row's calendar-icon button —
@@ -470,13 +453,17 @@ impl MoveDialog {
 #[derive(Template)]
 #[template(path = "project_tasks/virtual_row.html")]
 pub struct ProjectTaskVirtualRow {
-    pub series_id: String,
-    pub occurrence_ts: i64,
-    /// `"{series_id}-{occurrence_ts}"` — this row's own id for `openRowActionsMenu()`'s
+    /// `"{series_id}:{occurrence_ts}"` — this row's own id for `openRowActionsMenu()`'s
     /// `#row-actions-menu-{row_id}` lookup (see `components/row.html`'s identical convention,
-    /// keyed there off a real item id instead). Kept as a separate precomputed field rather than
-    /// formatting it inline in the template, matching `list_query`'s own precomputed-in-Rust
-    /// convention below.
+    /// keyed there off a real item id instead), *and* (since the 2026-09-04 always-on-selection
+    /// redesign) this row's own `<li id="item-{row_id}">` — the composite id doubles as this
+    /// still-virtual occurrence's selection id, so `base.html`'s row-selection JS never has to
+    /// know or care that it isn't a real item yet. `:` is deliberate, not `-`: a real item id is
+    /// always a bare UUID and never contains one, so `handlers::parse_virtual_occurrence_id`
+    /// (the one place that actually resolves the difference, materializing on the spot for a
+    /// batch action) can tell the two apart unambiguously. Kept as a separate precomputed field
+    /// rather than formatting it inline in the template, matching `list_query`'s own
+    /// precomputed-in-Rust convention below.
     pub row_id: String,
     pub name: String,
     pub date_label: String,
@@ -548,9 +535,7 @@ impl ProjectTaskVirtualRow {
             String::new()
         };
         Self {
-            series_id: occ.series_id.clone(),
-            occurrence_ts: occ.occurrence_date.timestamp(),
-            row_id: format!("{}-{}", occ.series_id, occ.occurrence_date.timestamp()),
+            row_id: format!("{}:{}", occ.series_id, occ.occurrence_date.timestamp()),
             name: occ.series_name.clone(),
             date_label: format_display_date(local, true),
             is_due_date_basis: occ.is_due_date_basis,
@@ -1403,11 +1388,6 @@ pub struct ProjectTasksListPageTemplate {
     /// `Some("{n} pts")` on a team-backed project (the viewer's own balance — see
     /// `service::teams::member_points`), `None` on a personal project.
     pub points_label: Option<String>,
-    /// `?select=1` (docs/issues_and_features.md's "Multi-select" item) — when set, `rows` holds
-    /// `ProjectTaskSelectRow` markup instead of the normal `ProjectTaskRow`/virtual-occurrence
-    /// mix (see `handlers::project_tasks_page`'s dispatch), and the header shows Cancel/Actions
-    /// instead of Select.
-    pub select_mode: bool,
     pub nav_html: String,
 }
 

@@ -21,29 +21,21 @@
         <span class="absolute -top-1 -right-1 size-2.5 rounded-full bg-indigo-600 dark:bg-indigo-500"></span>
         {% endif %}
       </button>
-      <!-- Multi-select (docs/issues_and_features.md's "Multi-select" item) — select mode is a
-           genuinely different page render (`?select=1`, see templates::ProjectTaskSelectRow's
-           doc comment for why), so Select/Cancel are plain boosted links rather than a
-           client-side toggle; only the Actions button (whose enabled state tracks the current
-           selection) is JS-driven, via base.html's openBatchActionsMenu(). -->
-      {% if select_mode %}
-      <a href="/web/projects/{{ project_id }}/tasks{% if !filters_query.is_empty() %}?{{ filters_query }}{% endif %}"
-        class="inline-flex items-center justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-xs inset-ring inset-ring-gray-300 hover:bg-gray-50 dark:bg-white/10 dark:text-white dark:shadow-none dark:inset-ring-white/5 dark:hover:bg-white/20">
-        Cancel</a>
+      <!-- Multi-select (docs/issues_and_features.md's "Multi-select" item) — always-on now,
+           layered directly on top of the normal treegrid rows (no more separate `?select=1`
+           page render): clicking/tapping a row (or Enter/Space while it's focused) selects it,
+           Shift/Ctrl-click extend the selection, and the Actions button's enabled state tracks
+           the current client-side selection (base.html's `selectedItemIds` Set), same as
+           before — see base.html's `activateRow`/`openBatchActionsMenu` doc comments. -->
       <button type="button" id="batch-actions-btn" onclick="openBatchActionsMenu(this)" disabled
-        class="inline-flex items-center justify-center rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-xs hover:bg-indigo-500 disabled:opacity-50 disabled:hover:bg-indigo-600 dark:bg-indigo-500 dark:shadow-none dark:hover:bg-indigo-400 dark:disabled:hover:bg-indigo-500">
+        class="inline-flex items-center justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-xs inset-ring inset-ring-gray-300 hover:bg-gray-50 disabled:opacity-50 dark:bg-white/10 dark:text-white dark:shadow-none dark:inset-ring-white/5 dark:hover:bg-white/20 dark:disabled:hover:bg-white/10">
         Actions</button>
-      {% else %}
-      <a href="/web/projects/{{ project_id }}/tasks?select=1{% if !filters_query.is_empty() %}&{{ filters_query }}{% endif %}"
-        class="inline-flex items-center justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-xs inset-ring inset-ring-gray-300 hover:bg-gray-50 dark:bg-white/10 dark:text-white dark:shadow-none dark:inset-ring-white/5 dark:hover:bg-white/20">
-        Select</a>
       <button type="button"
         hx-get="/web/projects/{{ project_id }}/tasks/new{% if !filters_query.is_empty() %}?{{ filters_query }}{% endif %}"
         hx-target="#action-dialog" hx-select="#dialog-fragment" hx-swap="innerHTML"
         class="inline-flex items-center justify-center rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-xs hover:bg-indigo-500 dark:bg-indigo-500 dark:shadow-none dark:hover:bg-indigo-400">
         {% include "icons/add.html" %}
       </button>
-      {% endif %}
     </div>
   </div>
 
@@ -71,9 +63,6 @@
         class="relative transform overflow-hidden rounded-lg bg-white dark:bg-gray-800 px-4 pt-5 pb-4 text-left shadow-xl transition-all duration-300 ease-out translate-y-4 opacity-0 scale-95 group-open/dialog:translate-y-0 group-open/dialog:opacity-100 group-open/dialog:scale-100 sm:my-8 sm:w-full sm:max-w-lg sm:p-6 dark:outline dark:-outline-offset-1 dark:outline-white/10">
         <form id="filter-bar" hx-get="/web/projects/{{ project_id }}/tasks" hx-target="#page" hx-select="#page"
           hx-swap="innerHTML" hx-push-url="true">
-          <!-- Preserves select mode across Apply — without it, applying a filter navigates to
-               the plain (no `?select=1`) URL and silently drops out of select mode. -->
-          {% if select_mode %}<input type="hidden" name="select" value="1">{% endif %}
           <h3 class="text-base font-semibold text-gray-900 dark:text-white">Filters</h3>
           <div class="mt-3 flex flex-col gap-3">
             <select name="showComplete"
@@ -146,10 +135,14 @@
         class="block w-full cursor-pointer px-4 py-3 text-left text-sm text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-white/5">Set
         due / schedule dates</button>
       <!-- "Set offset" has no entry here — offset only makes sense for a shared-parent
-           selection of sub-items, and this list only ever selects top-level tasks (see
-           templates::ProjectTaskSelectRow's doc comment). The backend route/handler/dialog
-           shape (batch_set_offset_form, require_same_parent_subitems) stays in place for a
-           future select mode scoped to one task's own sub-items panel. -->
+           selection of sub-items, and this list only ever selects top-level tasks/series
+           occurrences (sub-items aren't shown here at all — see base.html's `activateRow`/
+           `selectOnly` doc comments; a still-virtual occurrence is selectable here too since
+           the 2026-09-04 composite-id materialize-on-batch-apply follow-up, but a series
+           occurrence is always top-level by construction anyway, so `require_same_parent_
+           subitems` would reject it exactly like a real top-level task). The backend route/
+           handler/dialog shape (batch_set_offset_form, require_same_parent_subitems) stays in
+           place for a future selection UI scoped to one task's own sub-items panel. -->
       {% if is_team_project %}
       <button type="button" onclick="openBatchActionDialog('assign')"
         class="block w-full cursor-pointer px-4 py-3 text-left text-sm text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-white/5">Set
@@ -251,18 +244,22 @@
   </template>
   {% endif %}
 
-  {% if select_mode %}
   <div class="rounded-md bg-gray-50 px-4 py-3 text-sm text-gray-600 dark:bg-white/5 dark:text-gray-300">
-    Click a task to select it, then use <strong>Actions</strong> to apply a change to everything
-    selected. Only top-level tasks can be selected here — sub-items aren't shown; open a task's
-    own page to manage its sub-items individually.
+    Click a task (or press Enter/Space while it's focused) to select it — click it again to open
+    its actions menu, including <strong>Mark complete</strong>. Shift-click extends the
+    selection to a range; Ctrl/Cmd-click adds or removes just one row. With anything selected,
+    use <strong>Actions</strong> above to apply a change to everything selected.
   </div>
-  {% endif %}
 
-  <ul id="items-list"
+  <!-- role="treegrid" (see Row::treegrid's doc comment / the Tasks-list keyboard-nav pilot) —
+       every row here is a real role="row" (top-level tasks + their in-place-expanded
+       descendants, plus any still-virtual series occurrence), so arrow-key row/branch
+       navigation and Tab-into-a-row's-own-controls (base.html's treegrid keydown handler) work
+       correctly, matching the WAI-ARIA APG treegrid pattern. -->
+  <ul id="items-list" role="treegrid" aria-label="Tasks" aria-multiselectable="true"
     class="divide-y divide-gray-100 rounded-lg border border-gray-200 bg-white px-4 dark:divide-white/5 dark:border-white/10 dark:bg-gray-800/50">
     {% if rows.is_empty() %}
-    <li class="py-3 text-sm text-gray-500 dark:text-gray-400">No tasks yet.</li>
+    <li class="py-3 text-sm text-gray-500 dark:text-gray-400" role="row"><div class="contents" role="gridcell">No tasks yet.</div></li>
     {% else %}
     {% for row in rows %}
     {{ row|safe }}
@@ -270,14 +267,14 @@
     {% endif %}
   </ul>
 </div>
-{% if select_mode %}
-<!-- Runs once per real (non-fragment) page load, same convention as edit_page.html's own
-     inline script — resets the selection Set/Actions-button state for this fresh select-mode
-     load, since base.html's script itself only runs once per document load and doesn't know
-     when a boosted navigation lands back on this same page in select mode again. -->
+<!-- Runs on every load of this page, boosted or not — htmx re-executes inline <script> tags on
+     swap (same convention as edit_page.html's own inline script), so this resets the selection
+     Set/Actions-button state fresh each time the list itself is (re)loaded, since base.html's
+     own script only runs once per real document load and doesn't otherwise know when a boosted
+     navigation has landed back on this page. -->
 <script>
   selectedItemIds = new Set();
+  selectionAnchorId = null;
   updateBatchActionsUI();
 </script>
-{% endif %}
 {% endblock %}

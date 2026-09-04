@@ -77,7 +77,11 @@ impl ProjectSimpleItemRow {
             // callers that haven't opted in (calendar screens, save-as-template, etc.) keep the
             // plain decorative `has_children` arrow and today's click-to-detail behavior.
             children_html: None,
+            // Simple Lists never opt into the treegrid keyboard-nav pilot (Tasks-list-only for
+            // now — see `Row::treegrid`'s doc comment).
             indent_class: "",
+            treegrid: false,
+            level: 1,
         }
     }
 }

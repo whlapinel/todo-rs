@@ -1,18 +1,44 @@
-<li id="item-{{ id }}" class="py-2 {{ indent_class }}" style="view-transition-name: item-{{ id }}"{% if let Some(ms) = dismiss_after_ms %} data-dismiss-after="{{ ms }}"{% endif %}>
+<li id="item-{{ id }}" class="py-2 {{ indent_class }}" style="view-transition-name: item-{{ id }}"{% if let Some(ms) = dismiss_after_ms %} data-dismiss-after="{{ ms }}"{% endif %}{% if treegrid %} role="row" aria-level="{{ level }}" aria-selected="false"{% if children_html.is_some() %} aria-expanded="false"{% endif %}{% endif %}>
     <div class="flex items-center gap-x-3">
-        {% if let Some(url) = complete_url %}
+        {% if treegrid %}
+        <!-- Replaces the old complete-checkbox slot (see below): a dedicated expand/collapse
+             control, decoupled from selection — clicking/tapping the row itself now selects it
+             (see base.html's `activateRow`), so expand can't be piggybacked onto the name-click
+             the way non-treegrid rows still do below. Completing now lives in the row-actions
+             menu instead (components/row_actions_menu.html's Mark complete/incomplete entry). -->
+        <div class="contents" role="gridcell">
+        {% if children_html.is_some() %}
+        <button type="button" onclick="toggleChildren('{{ id }}')"
+            class="shrink-0 flex size-4 items-center justify-center cursor-pointer text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300">
+            <span id="chevron-{{ id }}">&#9656;</span>
+        </button>
+        {% else %}
+        <span class="shrink-0 size-4"></span>
+        {% endif %}
+        </div>
+        {% else if let Some(url) = complete_url %}
+        <div class="contents">
         <input type="checkbox" {% if complete %}checked{% endif %} hx-put="{{ url }}"
             hx-vals='{"complete": "{{ toggle_complete_json }}"{% if show_complete %}, "showComplete": "1"{% endif %}}'
             hx-target="#item-{{ id }}" hx-select="#item-{{ id }}"
             hx-swap="outerHTML"
             class="shrink-0 size-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-600 dark:border-white/20 dark:bg-white/5" />
+        </div>
         {% endif %}
+        <div class="contents"{% if treegrid %} role="gridcell"{% endif %}>
         {% if let Some(badge) = type_badge %}
         <span
             class="shrink-0 inline-flex size-4 items-center justify-center rounded-full bg-gray-200 text-[10px] font-semibold text-gray-600 dark:bg-white/10 dark:text-gray-300">{{
             badge }}</span>
         {% endif %}
-        {% if let Some(children) = children_html %}
+        {% if treegrid %}
+        <!-- Plain text, not a link/button: a treegrid row's own click/Enter/Space now selects
+             it (base.html's `activateRow`) rather than navigating, so the name can't double as
+             a navigation trigger here the way it does below for non-treegrid screens. Reaching
+             the detail view now goes through the row-actions menu's Details/View full page
+             entry instead (row_actions_menu.html, gated on `treegrid` there too). -->
+        <span class="min-w-0 flex-1 truncate {% if complete %}line-through text-gray-400 dark:text-gray-500{% else %}text-gray-900 dark:text-white{% endif %}">{{ name }}</span>
+        {% else if let Some(children) = children_html %}
         <!-- In-place expansion (see Row::children_html's doc comment): the name-click toggles
              this row's already-inlined descendant subtree instead of opening details — the
              row-actions menu's "Details" entry below is the alternate way in. Pure client-side
@@ -56,17 +82,22 @@
         <span title="Imported from Google Calendar — read-only"
             class="shrink-0 text-xs text-gray-400 dark:text-gray-500">&#128197; Google Calendar</span>
         {% endif %}
+        </div>
         {% if let Some(url) = skip_url %}
+        <div class="contents"{% if treegrid %} role="gridcell"{% endif %}>
         <button hx-post="{{ url }}" hx-confirm="Skip this occurrence?"
             class="shrink-0 cursor-pointer text-xs text-gray-400 hover:text-red-500 dark:text-gray-500 dark:hover:text-red-400">
             Skip
         </button>
+        </div>
         {% endif %}
         {% if edit_url.is_some() || reschedule_url.is_some() || assign_url.is_some() || duplicate_url.is_some() || !is_imported %}
-        <button type="button" onclick="openRowActionsMenu('{{ id }}', this)"
+        <div class="contents"{% if treegrid %} role="gridcell"{% endif %}>
+        <button type="button" id="row-menu-btn-{{ id }}" onclick="openRowActionsMenu('{{ id }}', this)"
             class="shrink-0 cursor-pointer text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300">
             {% include "icons/ellipses.html" %}
         </button>
+        </div>
         <!-- Pre-rendered, hidden — this row already carries every URL the menu needs, so
              openRowActionsMenu() (base.html) copies this markup into #action-dialog and calls
              htmx.process() on it rather than round-tripping to the server just to open a menu
@@ -107,7 +138,7 @@
     {% if let Some(children) = children_html %}
     <!-- Initially hidden (`hidden`, not absent) — the whole subtree is already in the DOM so
          toggleChildren() (base.html) only ever needs to flip this class, never fetch. -->
-    <ul id="item-{{ id }}-children" class="hidden mt-2 ml-2 border-l border-gray-200 dark:border-white/10">
+    <ul id="item-{{ id }}-children" class="hidden mt-2 ml-2 border-l border-gray-200 dark:border-white/10"{% if treegrid %} role="rowgroup"{% endif %}>
         {{ children|safe }}
     </ul>
     {% endif %}

@@ -132,6 +132,10 @@ async fn children_html_for(
             is_team_project,
             1,
             None,
+            // Treegrid keyboard-nav pilot is Tasks-list-only for now (see `Row::treegrid`'s
+            // doc comment) — this calendar row overlay keeps its existing plain markup.
+            false,
+            0,
         )
         .await?,
     ))

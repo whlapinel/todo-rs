@@ -112,7 +112,11 @@ impl ProjectEventRow {
             // An Event never has children (see this impl's own doc comment) — the in-place
             // expand feature never applies here.
             children_html: None,
+            // Events never opt into the treegrid keyboard-nav pilot (Tasks-list-only for now —
+            // see `Row::treegrid`'s doc comment) — an Event can't have children anyway.
             indent_class: "",
+            treegrid: false,
+            level: 1,
         }
     }
 }
