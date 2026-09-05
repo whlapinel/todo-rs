@@ -53,10 +53,6 @@ pub enum SeriesCommand {
         /// date. Both are otherwise task-series-only.
         #[arg(long)]
         basis: Option<String>,
-        /// Item id of a Template item whose children get copied onto every occurrence
-        /// this series materializes — only valid on a task series
-        #[arg(long)]
-        template: Option<String>,
         /// User id to assign every materialized occurrence to — only valid on a task
         /// series on a team-backed project
         #[arg(long)]
@@ -99,10 +95,6 @@ pub enum SeriesCommand {
         /// date. Both are otherwise task-series-only.
         #[arg(long)]
         basis: Option<String>,
-        /// Item id of a Template item whose children get copied onto every occurrence
-        /// this series materializes — only valid on a task series; round-trip to keep it
-        #[arg(long)]
-        template: Option<String>,
         /// User id to assign every materialized occurrence to — only valid on a task
         /// series on a team-backed project; round-trip to keep it, omit to clear it
         #[arg(long)]
@@ -164,7 +156,6 @@ pub async fn cmd_series(client: &Client, cmd: SeriesCommand, _user_id: Option<St
             description,
             item_type,
             basis,
-            template,
             assign,
             points,
             priority,
@@ -194,9 +185,6 @@ pub async fn cmd_series(client: &Client, cmd: SeriesCommand, _user_id: Option<St
             }
             if let Some(basis) = basis.and_then(|b| parse_series_basis_flag(&b)) {
                 req = req.basis(basis);
-            }
-            if let Some(template) = template {
-                req = req.template_item_id(template);
             }
             if let Some(assign) = assign {
                 req = req.assigned_to_user_id(assign);
@@ -235,7 +223,6 @@ pub async fn cmd_series(client: &Client, cmd: SeriesCommand, _user_id: Option<St
             println!("anchor:      {}", crate::helpers::fmt_date(out.anchor_date()));
             println!("item type:   {}", out.item_type());
             println!("basis:       {}", out.basis().unwrap_or("SCHEDULE"));
-            println!("template:    {}", out.template_item_id().unwrap_or("-"));
             println!("assigned to: {}", out.assigned_to_user_id().unwrap_or("-"));
             println!(
                 "points:      {}",
@@ -263,7 +250,6 @@ pub async fn cmd_series(client: &Client, cmd: SeriesCommand, _user_id: Option<St
             description,
             item_type,
             basis,
-            template,
             assign,
             points,
             priority,
@@ -294,9 +280,6 @@ pub async fn cmd_series(client: &Client, cmd: SeriesCommand, _user_id: Option<St
             }
             if let Some(basis) = basis.and_then(|b| parse_series_basis_flag(&b)) {
                 req = req.basis(basis);
-            }
-            if let Some(template) = template {
-                req = req.template_item_id(template);
             }
             if let Some(assign) = assign {
                 req = req.assigned_to_user_id(assign);

@@ -1007,6 +1007,12 @@ pub async fn create_pool(url: &str) -> Result<SqlitePool, sqlx::Error> {
     // docs/recurring-events-virtual-occurrences-rough-plan.md — the old tables are left
     // in place, unread, matching this codebase's precedent of not force-dropping
     // superseded schema (see CLAUDE.md's Storage Layer section on `items.user_id`).
+    //
+    // `template_item_id` is vestigial in the same way, as of the series sub-items work:
+    // nothing reads or writes it any more (the domain field, the Smithy field, and the
+    // `copy_template_children` call it drove are all gone — see `ItemSeriesChild`), but the
+    // column stays declared here so `MigrateLegacyRecurringItems`, which still writes it,
+    // keeps working against a table built from this baseline.
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS item_series (
             id TEXT PRIMARY KEY,

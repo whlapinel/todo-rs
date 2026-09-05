@@ -1408,7 +1408,6 @@ mod tests {
             item_type: ItemKind::Task,
             cursor_date: Some(occurrence_date),
             basis: None,
-            template_item_id: None,
             assigned_to_user_id: Some("member1".to_string()),
             points: Some(15),
             priority: None,

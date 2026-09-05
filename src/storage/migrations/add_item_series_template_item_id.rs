@@ -4,10 +4,16 @@ use sqlx::SqliteConnection;
 
 /// Stage 10 gap 3 of docs/recurring-events-virtual-occurrences-rough-plan.md: adds the
 /// optional link from a Task-typed `item_series` to a `Template` item whose children get
-/// copied onto every materialized occurrence — see
-/// `domain::item_series::ItemSeries::template_item_id`. `CREATE TABLE IF NOT EXISTS
-/// item_series` already includes this column, so this is a no-op against a fresh DB; it
-/// only does work against a DB that predates it.
+/// copied onto every materialized occurrence. `CREATE TABLE IF NOT EXISTS item_series`
+/// already includes this column, so this is a no-op against a fresh DB; it only does work
+/// against a DB that predates it.
+///
+/// That link is **retired** — the series sub-items work removed `ItemSeries::template_item_id`
+/// end to end (see `ItemSeriesChild`, `src/domain/item_series.rs`), and nothing reads or writes
+/// the column any more except `MigrateLegacyRecurringItems` (version 20), which still populates
+/// it for a migrated legacy recurring item. This migration is kept, and the column left in
+/// place, because version 20 runs after it and depends on the column existing; an already-
+/// applied migration is history, not live design.
 pub struct AddItemSeriesTemplateItemId;
 
 #[async_trait]

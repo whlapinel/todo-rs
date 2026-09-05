@@ -52,8 +52,6 @@ structure ItemSeriesSummary {
 
     basis: String
 
-    templateItemId: String
-
     assignedToUserId: String
 
     rotationUserIds: StringList
@@ -106,9 +104,6 @@ operation CreateItemSeries {
 
         @notProperty
         basis: String
-
-        @notProperty
-        templateItemId: String
 
         @notProperty
         assignedToUserId: String
@@ -183,9 +178,6 @@ operation GetItemSeries {
         basis: String
 
         @notProperty
-        templateItemId: String
-
-        @notProperty
         assignedToUserId: String
 
         @notProperty
@@ -240,9 +232,6 @@ operation UpdateItemSeries {
 
         @notProperty
         basis: String
-
-        @notProperty
-        templateItemId: String
 
         @notProperty
         assignedToUserId: String

@@ -597,10 +597,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             enum: ["SCHEDULE", "COMPLETION", "DUE_DATE"],
             description: "Defaults to SCHEDULE. COMPLETION measures the next occurrence from actual completion/skip time instead of the fixed schedule — only valid on a TASK series with an 'every N days/weeks/months/years' recurrence. DUE_DATE materializes each occurrence with the occurrence date written to the item's due date instead of its scheduled date (the cursor still advances on the fixed schedule) — only valid on a TASK series.",
           },
-          templateItemId: {
-            type: "string",
-            description: "Item id of a Template item whose children get copied onto every occurrence this series materializes — only valid on a TASK series.",
-          },
           assignedToUserId: {
             type: "string",
             description: "User id to assign every materialized occurrence to — only valid on a TASK series on a team-backed project. Mutually exclusive with rotationUserIds.",
@@ -656,10 +652,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: "string",
             enum: ["SCHEDULE", "COMPLETION", "DUE_DATE"],
             description: "Defaults to SCHEDULE if omitted. COMPLETION measures the next occurrence from actual completion/skip time instead of the fixed schedule — only valid on a TASK series with an 'every N days/weeks/months/years' recurrence. DUE_DATE materializes each occurrence with the occurrence date written to the item's due date instead of its scheduled date (the cursor still advances on the fixed schedule) — only valid on a TASK series.",
-          },
-          templateItemId: {
-            type: "string",
-            description: "Item id of a Template item whose children get copied onto every occurrence this series materializes — only valid on a TASK series. Round-trip to keep it, omit to clear it.",
           },
           assignedToUserId: {
             type: "string",
@@ -1115,7 +1107,6 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         };
         if (args.description !== undefined) body.description = args.description;
         if (args.basis !== undefined) body.basis = args.basis;
-        if (args.templateItemId !== undefined) body.templateItemId = args.templateItemId;
         if (args.assignedToUserId !== undefined) body.assignedToUserId = args.assignedToUserId;
         if (args.points !== undefined) body.points = args.points;
         if (args.priority !== undefined) body.priority = args.priority;
@@ -1140,7 +1131,6 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         };
         if (args.description !== undefined) body.description = args.description;
         if (args.basis !== undefined) body.basis = args.basis;
-        if (args.templateItemId !== undefined) body.templateItemId = args.templateItemId;
         if (args.assignedToUserId !== undefined) body.assignedToUserId = args.assignedToUserId;
         if (args.points !== undefined) body.points = args.points;
         if (args.priority !== undefined) body.priority = args.priority;

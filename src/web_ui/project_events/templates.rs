@@ -690,7 +690,6 @@ mod tests {
             item_type: crate::domain::item::ItemKind::Event,
             cursor_date: None,
             basis: None,
-            template_item_id: None,
             assigned_to_user_id: None,
             points: None,
             priority: None,

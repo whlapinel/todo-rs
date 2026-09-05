@@ -875,7 +875,6 @@ mod tests {
                 // occurrence was completed/skipped after it.
                 cursor_date: Some(later_cursor),
                 basis: None,
-                template_item_id: None,
                 assigned_to_user_id: None,
                 points: None,
                 priority: None,

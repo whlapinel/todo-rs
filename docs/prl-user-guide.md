@@ -589,19 +589,6 @@ prl series create <project-id> "Pay rent" "every month on the 1st" 2026-09-01 \
   --item-type task --basis due-date
 ```
 
-`--template <item-id>` links the series to an existing Template item — create
-one (and add its children) via the web UI's Templates screen for the
-project, then pass its id here. Every occurrence this series materializes
-copies that template's children onto it — the children definition stays
-stable and independently editable, not tied to any one materialized
-occurrence. Only valid on a task series. There's no CLI command for creating
-templates themselves.
-
-```sh
-prl series create <project-id> "Water plants" "every 3 days" 2026-08-17 \
-  --item-type task --template <template-item-id>
-```
-
 `--assign <user-id>` fixes every materialized occurrence's assignee, and
 `--points <n>` awards that many points to the assignee on completion — both
 only valid on a task series (`--item-type task`) on a team-backed project,
@@ -640,8 +627,8 @@ list of user ids under `rotation:`.
 ### Update an item series
 
 Update is a full replace of `name`/`recurrence`/`anchor`/`description`/
-`item-type`/`basis`/`template`/`assign`/`points`/`priority`/`rotate` — pass
-`--description`/`--basis`/`--template`/`--assign`/`--points`/`--priority`/
+`item-type`/`basis`/`assign`/`points`/`priority`/`rotate` — pass
+`--description`/`--basis`/`--assign`/`--points`/`--priority`/
 `--rotate` again to keep them, or omit to clear them (omitting `--basis`
 resets to `schedule`; omitting both `--assign` and `--rotate` clears
 whichever assignment mode was set). `--item-type` is required on every
