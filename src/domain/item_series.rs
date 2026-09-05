@@ -79,6 +79,50 @@ pub struct ItemSeries {
     pub priority: Option<i32>,
 }
 
+/// One sub-item *definition* on a Task-typed series — "book the venue, 30 days before
+/// every occurrence". Deliberately not an `ItemSeries` of its own (an earlier attempt
+/// modeled it that way and was reverted): a sub-item has no recurrence, anchor, cursor,
+/// or independent current-occurrence, so modeling it as a series meant nullifying or
+/// delegating almost every field on `ItemSeries` and adding a `parent_series_id.is_none()`
+/// exemption to every cursor codepath. It also isn't an `ItemType::Template` child, which
+/// is a project-library artifact with its own lifecycle that could be edited or deleted
+/// out from under the series; these rows are owned by the series and cascade with it.
+///
+/// The set is flat — a definition has no children of its own. A materialized occurrence
+/// can still be given ordinary sub-items by hand afterward.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ItemSeriesChild {
+    pub id: String,
+    pub series_id: String,
+    pub name: String,
+    pub description: Option<String>,
+    /// Non-negative, matching the app-wide "days before due" presentation convention
+    /// (CLAUDE.md's Recurrence section: callers take a non-negative number and negate it).
+    /// Negated into the materialized item's `due_offset_days`, so `Item::validate`'s
+    /// "due offset days cannot be positive" rule holds by construction.
+    pub days_before: i32,
+    /// 1 (highest) through 4 (lowest); carried onto the materialized item. Same range
+    /// `Item::validate` enforces.
+    pub priority: Option<i32>,
+    pub sort_order: i32,
+}
+
+/// One cycle's materialization state for a single `ItemSeriesChild`. Mirrors
+/// `ItemOccurrence` below, with two deliberate differences: no `is_exdate` (a sub-item has
+/// no Skip action, so there is no third state), and therefore a non-optional `item_id` —
+/// a row exists only once the sub-item has actually been materialized. A cycle with no row
+/// is purely virtual, computed on the fly from the definition and the parent's occurrence
+/// date.
+///
+/// `occurrence_date` is the *parent series'* cycle date, not the sub-item's own due date.
+/// That keeps the identity stable when a definition's `days_before` is edited.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SeriesChildOccurrence {
+    pub child_id: String,
+    pub occurrence_date: DateTime<Utc>,
+    pub item_id: String,
+}
+
 /// One occurrence date's materialization state within a series. A date with no row
 /// here at all is purely virtual (computed on the fly from `occurrences_between`,
 /// never persisted); this type only represents dates that have moved past that —

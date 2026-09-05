@@ -19,7 +19,7 @@ use crate::domain::{
         EventItem, Item, ItemKind, ItemType, Recurrence, Schedule, SimpleItem, TaskItem,
         TeamAssignment, TemplateItem,
     },
-    item_series::{ItemOccurrence, ItemSeries},
+    item_series::{ItemOccurrence, ItemSeries, ItemSeriesChild, SeriesChildOccurrence},
     project::Project,
     push_subscription::PushSubscription,
     reminder::{Reminder, ReminderKind},
@@ -592,6 +592,84 @@ pub trait ItemSeriesRepo: Send + Sync {
         series_id: &str,
         user_ids: &[String],
     ) -> Result<(), RepoError>;
+
+    // --- Series sub-items ---
+    //
+    // Deliberately on `ItemSeriesRepo` rather than a trait of their own: every call site
+    // that needs sub-items already holds a `series_repo`, so this adds no `Extension`
+    // plumbing in `main.rs` and no new parameters on shared service functions. The
+    // definition methods mirror plain CRUD; the occurrence methods mirror their
+    // `item_occurrences` counterparts above, minus anything exdate-related (a sub-item has
+    // no Skip action).
+
+    /// A series' sub-item definitions, ordered by `sort_order` then `id` — that order is
+    /// the authored one and is what every screen renders, so callers must not re-sort.
+    /// Empty `Vec` (not an error) for a series with no sub-items, matching
+    /// `list_rotation_members`' not-found-is-empty convention.
+    async fn list_series_children(
+        &self,
+        series_id: &str,
+    ) -> Result<Vec<ItemSeriesChild>, RepoError>;
+    async fn get_series_child(&self, child_id: &str) -> Result<ItemSeriesChild, RepoError>;
+    /// Ignores `child.id` and generates a fresh one server-side, same convention as
+    /// `create_series`/`ItemRepo::create`.
+    async fn create_series_child(&self, child: &ItemSeriesChild) -> Result<String, RepoError>;
+    /// Full-replace of name/description/days_before/priority/sort_order. `child.id` and
+    /// `child.series_id` are ignored — `child_id` is the target and the owning series is
+    /// immutable, mirroring `update_series`' treatment of `project_id`.
+    async fn update_series_child(
+        &self,
+        child_id: &str,
+        child: &ItemSeriesChild,
+    ) -> Result<(), RepoError>;
+    /// Deletes the definition and every `series_child_occurrences` row for it. Never
+    /// touches `items`: an already-materialized sub-item survives as a plain standalone
+    /// child of its occurrence, matching `delete_series`' orphan-not-cascade treatment of
+    /// materialized occurrences.
+    async fn delete_series_child(&self, child_id: &str) -> Result<(), RepoError>;
+    /// The `delete_series` cascade — every definition of `series_id` plus their occurrence
+    /// rows, same orphan-not-cascade treatment of `items` as `delete_series_child`.
+    async fn delete_series_children_for_series(&self, series_id: &str) -> Result<(), RepoError>;
+
+    /// `None` means the sub-item is still virtual for that cycle — the common case, and
+    /// not an error.
+    async fn get_child_occurrence(
+        &self,
+        child_id: &str,
+        occurrence_date: DateTime<Utc>,
+    ) -> Result<Option<SeriesChildOccurrence>, RepoError>;
+    /// Every materialized sub-item occurrence for `series_id`'s definitions whose *parent
+    /// cycle date* falls in the range — one query for the whole series rather than one per
+    /// definition, so a render pass over N cycles × M sub-items still costs a single round
+    /// trip. Same shape as `list_occurrences_between`.
+    async fn list_child_occurrences_for_series(
+        &self,
+        series_id: &str,
+        range_start: DateTime<Utc>,
+        range_end: DateTime<Utc>,
+    ) -> Result<Vec<SeriesChildOccurrence>, RepoError>;
+    async fn record_materialized_child_occurrence(
+        &self,
+        child_id: &str,
+        occurrence_date: DateTime<Utc>,
+        item_id: &str,
+    ) -> Result<(), RepoError>;
+    /// Un-materializes the cycle, returning it to virtual — the sub-item counterpart of
+    /// `delete_occurrence`, and (with no exdate concept) the only way a row is ever
+    /// removed short of deleting the definition. A no-op, not an error, if no row exists.
+    async fn delete_child_occurrence(
+        &self,
+        child_id: &str,
+        occurrence_date: DateTime<Utc>,
+    ) -> Result<(), RepoError>;
+    /// Reverse lookup for `service::item_series::unlink_deleted_child_occurrence`, called
+    /// when an item is deleted to find whether it was a materialized sub-item. `None` for
+    /// anything else — the common case, to be treated as a cheap no-op. Mirrors
+    /// `find_occurrence_by_item_id`.
+    async fn find_child_occurrence_by_item_id(
+        &self,
+        item_id: &str,
+    ) -> Result<Option<SeriesChildOccurrence>, RepoError>;
 }
 
 fn db_err(e: sqlx::Error) -> RepoError {
@@ -983,6 +1061,51 @@ pub async fn create_pool(url: &str) -> Result<SqlitePool, sqlx::Error> {
             user_id TEXT NOT NULL,
             PRIMARY KEY (series_id, user_id)
         )",
+    )
+    .execute(&pool)
+    .await?;
+
+    // Series sub-items: `item_series_children` holds the per-series *definitions* (a flat
+    // set, no nesting), and `series_child_occurrences` their per-cycle materialization
+    // state. See `AddItemSeriesChildren` (migration 35) for the full rationale; briefly,
+    // `series_child_occurrences` mirrors `item_occurrences` minus `is_exdate`, since a
+    // sub-item has no Skip action and therefore only two states — virtual (no row) or
+    // materialized (a row) — which is also why `item_id` is NOT NULL here. Its
+    // `occurrence_date` is the *parent* series' cycle date, the stable identity; the
+    // sub-item's own due date is derived from that plus `days_before` and is never the
+    // lookup key, so editing an offset can't invalidate existing rows.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS item_series_children (
+            id TEXT PRIMARY KEY,
+            series_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            description TEXT,
+            days_before INTEGER NOT NULL DEFAULT 0,
+            priority INTEGER,
+            sort_order INTEGER NOT NULL DEFAULT 0
+        )",
+    )
+    .execute(&pool)
+    .await?;
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_item_series_children_series_id \
+         ON item_series_children (series_id)",
+    )
+    .execute(&pool)
+    .await?;
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS series_child_occurrences (
+            child_id TEXT NOT NULL,
+            occurrence_date INTEGER NOT NULL,
+            item_id TEXT NOT NULL,
+            PRIMARY KEY (child_id, occurrence_date)
+        )",
+    )
+    .execute(&pool)
+    .await?;
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_series_child_occurrences_item_id \
+         ON series_child_occurrences (item_id)",
     )
     .execute(&pool)
     .await?;

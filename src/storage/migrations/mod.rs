@@ -12,6 +12,7 @@ mod add_item_priority;
 mod add_item_series;
 mod add_item_series_assignment;
 mod add_item_series_basis;
+mod add_item_series_children;
 mod add_item_series_cursor_date;
 mod add_item_series_id;
 mod add_item_series_rotation_members;
@@ -47,6 +48,7 @@ use add_item_priority::AddItemPriority;
 use add_item_series::AddItemSeries;
 use add_item_series_assignment::AddItemSeriesAssignment;
 use add_item_series_basis::AddItemSeriesBasis;
+use add_item_series_children::AddItemSeriesChildren;
 use add_item_series_cursor_date::AddItemSeriesCursorDate;
 use add_item_series_id::AddItemSeriesId;
 use add_item_series_rotation_members::AddItemSeriesRotationMembers;
@@ -137,6 +139,7 @@ fn all_migrations() -> Vec<Box<dyn Migration>> {
         Box::new(AddComments),
         Box::new(AddAttachments),
         Box::new(EnsureAttachmentsCommentId),
+        Box::new(AddItemSeriesChildren),
     ]
 }
 
@@ -563,7 +566,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 34);
+        assert_eq!(applied_count, 35);
     }
 
     #[tokio::test]
@@ -576,7 +579,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 34);
+        assert_eq!(applied_count, 35);
     }
 
     #[tokio::test]
@@ -590,6 +593,6 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 34);
+        assert_eq!(applied_count, 35);
     }
 }
