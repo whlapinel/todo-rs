@@ -322,8 +322,8 @@ pub async fn create_team_item(
 /// `create_team_item`/`update_team_item`, delete never writes a row, so there's no
 /// `items.team_id` dual-write concern here.
 /// See `items::delete_item`'s identical doc comment for why every recursively-deleted child
-/// now also gets `item_series::unlink_deleted_item_occurrence` called on it, not just
-/// `item_id` itself.
+/// now also gets `item_series::unlink_deleted_item_occurrence` and
+/// `unlink_deleted_child_occurrence` called on it, not just `item_id` itself.
 pub async fn delete_team_item(
     repo: &Arc<dyn ItemRepo>,
     series: &Arc<dyn ItemSeriesRepo>,
@@ -351,6 +351,7 @@ pub async fn delete_team_item(
             queue.push(child.id.clone());
             repo.delete(&child.id).await?;
             item_series::unlink_deleted_item_occurrence(series, &child.id).await?;
+            item_series::unlink_deleted_child_occurrence(series, &child.id).await?;
             reminders.delete_for_item(&child.id).await?;
             item_dependencies.delete_for_item(&child.id).await?;
         }

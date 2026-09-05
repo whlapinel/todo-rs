@@ -653,6 +653,7 @@ pub async fn delete_project_item(
         }
     }
     item_series::unlink_deleted_item_occurrence(series, item_id).await?;
+    item_series::unlink_deleted_child_occurrence(series, item_id).await?;
     reminders_repo.delete_for_item(item_id).await?;
     // "Depends on" cleanup (docs/issues_and_features.md) for the top-level id itself —
     // `delete_item`/`delete_team_item` above already did this for every recursively-deleted
@@ -678,6 +679,8 @@ mod tests {
     fn no_op_series_repo() -> Arc<dyn ItemSeriesRepo> {
         let mut mock = MockItemSeriesRepo::new();
         mock.expect_find_occurrence_by_item_id()
+            .returning(|_| Ok(None));
+        mock.expect_find_child_occurrence_by_item_id()
             .returning(|_| Ok(None));
         Arc::new(mock)
     }
@@ -1709,6 +1712,9 @@ mod tests {
         series_mock.expect_mark_exdate().times(0);
         series_mock.expect_get_series().times(0);
         series_mock.expect_advance_cursor().times(0);
+        series_mock
+            .expect_find_child_occurrence_by_item_id()
+            .returning(|_| Ok(None));
         let series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let reminders = no_op_reminders_repo();
@@ -1793,6 +1799,11 @@ mod tests {
             .expect_find_occurrence_by_item_id()
             .withf(|item_id: &str| item_id == "i1")
             .times(1)
+            .returning(|_| Ok(None));
+        // Neither id is a materialized series *sub-item* — that's the sibling hook riding the
+        // same loop, exercised on its own in `item_series`' tests.
+        series_mock
+            .expect_find_child_occurrence_by_item_id()
             .returning(|_| Ok(None));
         let series: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 

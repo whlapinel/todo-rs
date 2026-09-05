@@ -1,5 +1,7 @@
 use crate::domain::item::{self, Item, ItemKind};
-use crate::domain::item_series::{ItemOccurrence, ItemSeries};
+use crate::domain::item_series::{
+    ItemOccurrence, ItemSeries, ItemSeriesChild, SeriesChildOccurrence,
+};
 use crate::domain::recurrence;
 use crate::service::error::ItemError;
 use crate::service::project_items::{self, CreateProjectItemParams};
@@ -9,8 +11,8 @@ use crate::service::projects::{
 use crate::storage::sqlite::{
     ItemDependencyRepo, ItemRepo, ItemSeriesRepo, ProjectRepo, ReminderRepo, TeamRepo, UserRepo,
 };
-use chrono::{DateTime, Utc};
-use std::collections::HashMap;
+use chrono::{DateTime, Duration, Utc};
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 /// Stage 3 of docs/recurring-events-virtual-occurrences-rough-plan.md's staged
@@ -136,6 +138,144 @@ pub async fn get_or_materialize_occurrence(
         )
         .await?;
     }
+
+    project_items::get_project_item_unchecked(repo, &series.project_id, &item_id).await
+}
+
+/// The due date a sub-item lands on for one parent cycle — `days_before` days before the
+/// parent occurrence's own date, clamped to end-of-day in the viewer's timezone.
+///
+/// Calls `recurrence::apply_end_of_day` directly rather than `Item::deadline_from_offset`,
+/// which is the same arithmetic but is only reachable through an `Item` that already carries
+/// the offset — at fan-out time no item exists yet, and fabricating one just to call a method
+/// on it would be worse than sharing the primitive underneath. Once the sub-item *is*
+/// materialized it carries `due_offset_days: -days_before`, so `deadline_from_offset` on it
+/// reproduces exactly this value.
+pub fn child_occurrence_date(
+    parent_occurrence_date: DateTime<Utc>,
+    days_before: i32,
+    tz_offset_minutes: i32,
+) -> DateTime<Utc> {
+    recurrence::apply_end_of_day(
+        parent_occurrence_date - Duration::days(days_before as i64),
+        tz_offset_minutes,
+    )
+}
+
+/// The sub-item counterpart of `get_or_materialize_occurrence` — returns the already-
+/// materialized `Item` for `(child_id, occurrence_date)` if there is one, otherwise creates it.
+/// `occurrence_date` is the *parent series' cycle date*, never the sub-item's own due date (see
+/// `SeriesChildOccurrence`'s doc comment for why that is the stable identity).
+///
+/// Simpler than its parent counterpart in one respect: sub-items have no Skip, so there is no
+/// exdate rejection guard to carry, and no `mark_child_exdate`/unskip counterpart anywhere.
+/// More complex in another: a materialized sub-item is a **structural child** of the parent
+/// occurrence's item (decision 3 of the plan), so materializing one materializes the parent
+/// first. That cost was accepted deliberately — it buys `sync_offset_children`,
+/// `has_incomplete_children`, and the existing nested rendering rather than reimplementing all
+/// three — and is coherent because completing the parent occurrence materializes it anyway.
+/// The invariant it produces is load-bearing for rendering: a still-virtual parent occurrence
+/// can only ever have still-virtual sub-items.
+///
+/// The created item deliberately does **not** get `series_id` set. That field means "this item
+/// *is* an occurrence of that series" (it is what `find_occurrence_by_item_id`'s completion/
+/// uncompletion/delete gates key off); a sub-item is a child of an occurrence, not an occurrence,
+/// and its own settlement rules are the ordinary parent/child ones. Its link back to the series
+/// runs through `series_child_occurrences` instead.
+pub async fn get_or_materialize_child_occurrence(
+    repo: &Arc<dyn ItemRepo>,
+    projects: &Arc<dyn ProjectRepo>,
+    teams: &Arc<dyn TeamRepo>,
+    series_repo: &Arc<dyn ItemSeriesRepo>,
+    reminders: &Arc<dyn ReminderRepo>,
+    requester_user_id: &str,
+    child_id: &str,
+    occurrence_date: DateTime<Utc>,
+    tz_offset_minutes: i32,
+) -> Result<Item, ItemError> {
+    let child = series_repo.get_series_child(child_id).await?;
+    let series = series_repo.get_series(&child.series_id).await?;
+
+    if let Some(existing) = series_repo
+        .get_child_occurrence(child_id, occurrence_date)
+        .await?
+    {
+        return project_items::get_project_item(
+            repo,
+            projects,
+            teams,
+            &series.project_id,
+            requester_user_id,
+            &existing.item_id,
+        )
+        .await;
+    }
+
+    // An Event can never have children (`Item::validate`), and `create_project_item` would
+    // reject the nesting outright — but rejecting here names the actual problem instead of
+    // surfacing a generic parent/child error, and it stops the parent occurrence from being
+    // materialized as a side effect of a request that was always going to fail.
+    if series.item_type != ItemKind::Task {
+        return Err(ItemError::Invalid(
+            "only a task series can have sub-items".to_string(),
+        ));
+    }
+
+    let parent = get_or_materialize_occurrence(
+        repo,
+        projects,
+        teams,
+        series_repo,
+        reminders,
+        requester_user_id,
+        &series.id,
+        occurrence_date,
+        tz_offset_minutes,
+    )
+    .await?;
+
+    // `due_offset_days` (negated, so `Item::validate`'s "cannot be positive" rule holds by
+    // construction) is the only date input, with no explicit `due_date` alongside it — exactly
+    // what `create_project_task_series_occurrence_child_form` already passes when someone adds
+    // a sub-item to an occurrence by hand. `create_item` owns the resulting `due_date`: for any
+    // `is_offset_driven()` item it recomputes it from `resolve_offset_anchor`, so passing one
+    // here would be overwritten regardless.
+    //
+    // **Known gap, inherited rather than introduced.** That anchor is `item_anchor` — the
+    // top-level ancestor's `due_date`, never its `scheduled_date`. A scheduled-basis series
+    // (the default) materializes its occurrence onto `scheduled_date`, so the ancestor has no
+    // anchor and the sub-item is created with `due_date: None`. Visibility before
+    // materialization is unaffected — `fan_out_child_occurrences` computes the lead-time date
+    // from the definition and the cycle date with no item involved — but a sub-item that has
+    // been materialized on a scheduled-basis series currently lands undated, and so sorts last
+    // and drops off the calendars. The same is already true of every hand-added sub-item on
+    // such an occurrence today. Closing it means changing shared behavior (what `item_anchor`
+    // reads, or what basis a series with sub-items materializes onto), which is deliberately
+    // not decided here.
+    let params = CreateProjectItemParams {
+        project_id: series.project_id.clone(),
+        name: child.name.clone(),
+        description: child.description.clone(),
+        item_type: Some(ItemKind::Task),
+        parent_item_id: Some(parent.id.clone()),
+        due_offset_days: Some(-child.days_before),
+        priority: child.priority,
+        timezone_offset_minutes: Some(tz_offset_minutes),
+        ..Default::default()
+    };
+    let item_id = project_items::create_project_item(
+        repo,
+        projects,
+        teams,
+        reminders,
+        requester_user_id,
+        params,
+    )
+    .await?;
+
+    series_repo
+        .record_materialized_child_occurrence(child_id, occurrence_date, &item_id)
+        .await?;
 
     project_items::get_project_item_unchecked(repo, &series.project_id, &item_id).await
 }
@@ -379,6 +519,52 @@ pub async fn validate_completable(
             tz_offset_minutes,
         )
         .await?;
+        require_child_occurrences_materialized(series_repo, &series.id, occurrence.occurrence_date)
+            .await?;
+    }
+    Ok(())
+}
+
+/// Decision 4 of the sub-items plan: an occurrence cannot complete while any of its series'
+/// sub-item definitions is still virtual for that cycle. Every sub-item is mandatory — there is
+/// deliberately no Skip, because a general skip would reduce "mandatory" to "mandatory unless
+/// you click skip" and pre-empt the per-sub-item non-blocking flag that is the principled way to
+/// waive one (not in scope here).
+///
+/// This only has to cover the **never-materialized** case. A materialized-but-incomplete
+/// sub-item is an ordinary structural child of the occurrence's item, so
+/// `has_incomplete_children` in `service::items`/`team_items` already blocks on it — which is
+/// why this needs no `ItemRepo` of its own.
+///
+/// The error names the outstanding sub-items rather than returning a bare "cannot complete":
+/// the Tasks-list row checkbox posts straight into
+/// `complete_project_item_series_occurrence_form`, which materializes and completes in one go,
+/// so this rejection is what a user sees after a single click with no other context.
+async fn require_child_occurrences_materialized(
+    series_repo: &Arc<dyn ItemSeriesRepo>,
+    series_id: &str,
+    occurrence_date: DateTime<Utc>,
+) -> Result<(), ItemError> {
+    let children = series_repo.list_series_children(series_id).await?;
+    if children.is_empty() {
+        return Ok(());
+    }
+    // A single-date range rather than one `get_child_occurrence` per definition — `BETWEEN` is
+    // inclusive at both ends, so this is exactly the cycle's own rows.
+    let materialized = series_repo
+        .list_child_occurrences_for_series(series_id, occurrence_date, occurrence_date)
+        .await?;
+    let done: HashSet<&str> = materialized.iter().map(|o| o.child_id.as_str()).collect();
+    let pending: Vec<&str> = children
+        .iter()
+        .filter(|c| !done.contains(c.id.as_str()))
+        .map(|c| c.name.as_str())
+        .collect();
+    if !pending.is_empty() {
+        return Err(ItemError::Invalid(format!(
+            "complete this occurrence's sub-items first: {}",
+            pending.join(", ")
+        )));
     }
     Ok(())
 }
@@ -438,6 +624,35 @@ pub async fn unlink_deleted_item_occurrence(
     if let Some(occurrence) = series_repo.find_occurrence_by_item_id(item_id).await? {
         series_repo
             .delete_occurrence(&occurrence.series_id, occurrence.occurrence_date)
+            .await?;
+    }
+    Ok(())
+}
+
+/// The sub-item counterpart of `unlink_deleted_item_occurrence`, wired into exactly the same
+/// places: `project_items::delete_project_item` for the top-level id, and the recursive
+/// child-delete loops in `items::delete_item`/`team_items::delete_team_item` for every
+/// descendant. That recursive placement is the load-bearing half — a materialized sub-item is
+/// by construction a *child* of its occurrence's item, so deleting or skipping the parent
+/// occurrence reaches it only through those loops, never through the top-level call. Missing it
+/// is the same bug `delete_project_item_unlinks_a_series_materialized_descendant` regression-
+/// tests for at the parent level: a `series_child_occurrences` row left pointing at a deleted
+/// `item_id` forever.
+///
+/// Deleting the item un-materializes the cycle rather than excluding it — the definition still
+/// exists, so the sub-item reappears as virtual on the next render and still blocks its parent's
+/// completion. That mirrors `unlink_deleted_item_occurrence`'s own delete-is-not-skip stance.
+/// The way to be rid of a sub-item is to delete its definition.
+pub async fn unlink_deleted_child_occurrence(
+    series_repo: &Arc<dyn ItemSeriesRepo>,
+    item_id: &str,
+) -> Result<(), ItemError> {
+    if let Some(occurrence) = series_repo
+        .find_child_occurrence_by_item_id(item_id)
+        .await?
+    {
+        series_repo
+            .delete_child_occurrence(&occurrence.child_id, occurrence.occurrence_date)
             .await?;
     }
     Ok(())
@@ -982,12 +1197,24 @@ pub async fn duplicate_series(
             .set_rotation_members(&new_series_id, &rotation)
             .await?;
     }
+    // Definitions copy; their per-cycle materialization state deliberately does not — the copy
+    // is a fresh series with nothing settled, exactly as `item_occurrences` rows aren't copied
+    // above either.
+    for child in item_series.list_series_children(series_id).await? {
+        let copy = ItemSeriesChild {
+            series_id: new_series_id.clone(),
+            ..child
+        };
+        item_series.create_series_child(&copy).await?;
+    }
     Ok(())
 }
 
-/// Orphan, not cascade — deletes the series and its `item_occurrences` rows only, never
-/// touches `items`. Every already-materialized occurrence survives as a plain standalone
-/// item, matching `unlink_source_event_tasks`'s precedent for an independent dependent.
+/// Orphan, not cascade — deletes the series, its `item_occurrences` rows, and its sub-item
+/// definitions plus their `series_child_occurrences` rows, but never touches `items`. Every
+/// already-materialized occurrence (and every already-materialized sub-item nested under one)
+/// survives as a plain standalone item, matching `unlink_source_event_tasks`'s precedent for an
+/// independent dependent.
 /// See item_series.smithy's `DeleteItemSeries` doc comment. Gated by project membership,
 /// same authority level as create/update/list above (a series is project-scoped content
 /// like a template, not a role/points-authority action).
@@ -1000,6 +1227,9 @@ pub async fn delete_series(
 ) -> Result<(), ItemError> {
     let series = series_repo.get_series(series_id).await?;
     require_project_member(projects, teams, &series.project_id, requester_user_id).await?;
+    series_repo
+        .delete_series_children_for_series(series_id)
+        .await?;
     series_repo.delete_series(series_id).await?;
     Ok(())
 }
@@ -1367,6 +1597,117 @@ pub async fn list_occurrence_states_for_project(
                 is_due_date_basis: is_due_date_basis(series),
                 priority: series.priority,
             });
+        }
+    }
+    Ok(result)
+}
+
+/// One sub-item's state for one parent cycle, ready to render.
+///
+/// Deliberately a **separate type** from `ProjectOccurrence` rather than a variant of it. The
+/// reverted first attempt made sub-items child series, which meant a sub-item's `occurrence_date`
+/// was its parent's cycle date while its displayed date was offset-shifted from it — so
+/// `ProjectOccurrence` grew a second `display_date` field and every template reading
+/// `occurrence_date` became ambiguous. Keeping the two dates on their own type with their own
+/// names (`parent_occurrence_date` is the identity, `date` is what's shown) means
+/// `ProjectOccurrence::occurrence_date` still means exactly what it always did.
+///
+/// Two states only, hence a plain `Option<String>` rather than the three-variant
+/// `OccurrenceState`: `None` is virtual, `Some` is materialized. `Skipped` is unreachable for a
+/// sub-item — there is no Skip.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SeriesChildOccurrenceView {
+    pub child_id: String,
+    pub child_name: String,
+    pub description: Option<String>,
+    pub series_id: String,
+    pub series_name: String,
+    /// The parent series' cycle date — the identity/lookup key, never displayed.
+    pub parent_occurrence_date: DateTime<Utc>,
+    /// `days_before` days before `parent_occurrence_date` — what the user sees, what buckets
+    /// this row on a calendar, and what lands on `due_date` at materialization.
+    pub date: DateTime<Utc>,
+    pub priority: Option<i32>,
+    /// The definition's authored position, so callers can render sub-items of one cycle in the
+    /// order they were written rather than by date.
+    pub sort_order: i32,
+    /// `Some` = materialized, `None` = still virtual.
+    pub item_id: Option<String>,
+}
+
+/// Expands already-computed parent occurrences into their sub-item rows — the fan-out that makes
+/// lead-time sub-items visible *without* materializing anything (decision 2 of the plan: virtual
+/// rows render alongside real ones, materialization happens only when a change is persisted).
+///
+/// Takes `&[ProjectOccurrence]` rather than re-deriving occurrences itself, so
+/// `list_occurrence_states_for_project`'s signature and all six of its call sites are untouched
+/// — a caller that wants sub-items makes one extra call with what it already has.
+///
+/// Skipped parent cycles produce nothing: a skipped occurrence never materializes, so its
+/// preparation work is moot. Non-Task series are skipped without even querying — an Event can
+/// never have children, so it can never have sub-item definitions.
+///
+/// Costs one definition query plus one occurrence-state query per distinct series, not per cycle.
+pub async fn fan_out_child_occurrences(
+    series_repo: &Arc<dyn ItemSeriesRepo>,
+    occurrences: &[ProjectOccurrence],
+    tz_offset_minutes: i32,
+) -> Result<Vec<SeriesChildOccurrenceView>, ItemError> {
+    // Grouped in first-appearance order rather than through a `HashMap`'s own iteration order,
+    // so the output is deterministic for a given input.
+    let mut order: Vec<&str> = Vec::new();
+    let mut by_series: HashMap<&str, Vec<&ProjectOccurrence>> = HashMap::new();
+    for occurrence in occurrences {
+        if occurrence.is_skipped() || occurrence.item_type != ItemKind::Task {
+            continue;
+        }
+        let entry = by_series.entry(occurrence.series_id.as_str()).or_default();
+        if entry.is_empty() {
+            order.push(occurrence.series_id.as_str());
+        }
+        entry.push(occurrence);
+    }
+
+    let mut result = Vec::new();
+    for series_id in order {
+        let cycles = &by_series[series_id];
+        let children = series_repo.list_series_children(series_id).await?;
+        if children.is_empty() {
+            continue;
+        }
+        // `cycles` is non-empty by construction — a series id only enters `order` when its
+        // first occurrence is pushed.
+        let range_start = cycles.iter().map(|c| c.occurrence_date).min().unwrap();
+        let range_end = cycles.iter().map(|c| c.occurrence_date).max().unwrap();
+        let materialized = series_repo
+            .list_child_occurrences_for_series(series_id, range_start, range_end)
+            .await?;
+        let by_key: HashMap<(&str, i64), &SeriesChildOccurrence> = materialized
+            .iter()
+            .map(|o| ((o.child_id.as_str(), o.occurrence_date.timestamp()), o))
+            .collect();
+
+        for cycle in cycles {
+            for child in &children {
+                result.push(SeriesChildOccurrenceView {
+                    child_id: child.id.clone(),
+                    child_name: child.name.clone(),
+                    description: child.description.clone(),
+                    series_id: cycle.series_id.clone(),
+                    series_name: cycle.series_name.clone(),
+                    parent_occurrence_date: cycle.occurrence_date,
+                    date: child_occurrence_date(
+                        cycle.occurrence_date,
+                        child.days_before,
+                        tz_offset_minutes,
+                    ),
+                    priority: child.priority,
+                    sort_order: child.sort_order,
+                    item_id: by_key
+                        .get(&(child.id.as_str(), cycle.occurrence_date.timestamp()))
+                        .map(|o| o.item_id.clone()),
+                });
+            }
         }
     }
     Ok(result)
@@ -2131,6 +2472,11 @@ mod tests {
             .expect_delete_occurrence()
             .times(1)
             .returning(|_, _| Ok(()));
+        // `unlink_deleted_child_occurrence`, the sibling hook on the same delete path — the
+        // deleted item is an occurrence, not a sub-item, so this finds nothing.
+        series_mock
+            .expect_find_child_occurrence_by_item_id()
+            .returning(|_| Ok(None));
         let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let mut projects_mock = MockProjectRepo::new();
@@ -2418,6 +2764,9 @@ mod tests {
                 }))
             });
         series_mock
+            .expect_list_series_children()
+            .returning(|_| Ok(vec![]));
+        series_mock
             .expect_advance_cursor()
             .withf(move |series_id: &str, date: &DateTime<Utc>| {
                 series_id == "s1" && *date == stuck_anchor
@@ -2455,6 +2804,9 @@ mod tests {
         series_mock
             .expect_get_occurrence()
             .returning(|_, _| Ok(None));
+        series_mock
+            .expect_list_series_children()
+            .returning(|_| Ok(vec![]));
         let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         validate_completable(&series_repo, "completed-item", 0)
@@ -2480,6 +2832,9 @@ mod tests {
         series_mock
             .expect_get_series()
             .returning(|_| Ok(series("p1")));
+        series_mock
+            .expect_list_series_children()
+            .returning(|_| Ok(vec![]));
         let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         validate_completable(&series_repo, "some-item", 0)
@@ -4000,6 +4355,11 @@ mod tests {
             .withf(|series_id: &str| series_id == "s1")
             .times(1)
             .returning(|_| Ok(()));
+        series_mock
+            .expect_delete_series_children_for_series()
+            .withf(|series_id: &str| series_id == "s1")
+            .times(1)
+            .returning(|_| Ok(()));
         let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let mut projects_mock = MockProjectRepo::new();
@@ -4404,5 +4764,646 @@ mod tests {
         .expect("should materialize with the rotation's computed assignee");
 
         assert_eq!(item.name, "Trash day");
+    }
+
+    // --- Series sub-items (Stage 2) ---
+
+    fn child(id: &str, name: &str, days_before: i32) -> ItemSeriesChild {
+        ItemSeriesChild {
+            id: id.to_string(),
+            series_id: "s1".to_string(),
+            name: name.to_string(),
+            description: None,
+            days_before,
+            priority: Some(2),
+            sort_order: 0,
+        }
+    }
+
+    fn task_series() -> ItemSeries {
+        let mut s = series("p1");
+        s.item_type = ItemKind::Task;
+        s.name = "Party".to_string();
+        s
+    }
+
+    fn parent_cycle(date: DateTime<Utc>, state: OccurrenceState) -> ProjectOccurrence {
+        ProjectOccurrence {
+            series_id: "s1".to_string(),
+            series_name: "Party".to_string(),
+            item_type: ItemKind::Task,
+            event_type: None,
+            occurrence_date: date,
+            is_current: false,
+            assigned_to_user_id: None,
+            assigned_to_user_name: None,
+            state,
+            is_due_date_basis: false,
+            priority: None,
+        }
+    }
+
+    #[test]
+    fn child_occurrence_date_lands_days_before_the_parent_cycle() {
+        let parent = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        let date = child_occurrence_date(parent, 30, 0);
+        assert_eq!(
+            date.date_naive(),
+            (parent - chrono::Duration::days(30)).date_naive()
+        );
+        // End-of-day, like every other offset-derived deadline.
+        assert_eq!(date.time().to_string(), "23:59:59");
+    }
+
+    #[test]
+    fn child_occurrence_date_with_no_lead_time_is_the_parent_cycles_own_day() {
+        let parent = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        assert_eq!(
+            child_occurrence_date(parent, 0, 0).date_naive(),
+            parent.date_naive()
+        );
+    }
+
+    #[tokio::test]
+    async fn fan_out_produces_one_view_per_definition_per_cycle_with_offset_dates() {
+        let cycle_one = occurrence_date();
+        let cycle_two = occurrence_date() + chrono::Duration::days(7);
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock
+            .expect_list_series_children()
+            .withf(|series_id: &str| series_id == "s1")
+            .times(1)
+            .returning(|_| {
+                Ok(vec![
+                    child("c1", "Book venue", 30),
+                    child("c2", "Send invites", 14),
+                ])
+            });
+        // One range query for the whole series, not one per cycle.
+        series_mock
+            .expect_list_child_occurrences_for_series()
+            .times(1)
+            .returning(|_, _, _| Ok(vec![]));
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        let occurrences = vec![
+            parent_cycle(cycle_one, OccurrenceState::Virtual),
+            parent_cycle(cycle_two, OccurrenceState::Virtual),
+        ];
+        let views = fan_out_child_occurrences(&series_repo, &occurrences, 0)
+            .await
+            .expect("fan-out should succeed");
+
+        assert_eq!(views.len(), 4);
+        assert!(views.iter().all(|v| v.item_id.is_none()));
+        let venue = views
+            .iter()
+            .find(|v| v.child_id == "c1" && v.parent_occurrence_date == cycle_one)
+            .expect("first cycle's venue sub-item");
+        assert_eq!(venue.child_name, "Book venue");
+        assert_eq!(venue.series_name, "Party");
+        assert_eq!(venue.priority, Some(2));
+        assert_eq!(
+            venue.date.date_naive(),
+            (cycle_one - chrono::Duration::days(30)).date_naive()
+        );
+        let invites = views
+            .iter()
+            .find(|v| v.child_id == "c2" && v.parent_occurrence_date == cycle_two)
+            .expect("second cycle's invites sub-item");
+        assert_eq!(
+            invites.date.date_naive(),
+            (cycle_two - chrono::Duration::days(14)).date_naive()
+        );
+    }
+
+    #[tokio::test]
+    async fn fan_out_marks_a_materialized_cycle_with_its_item_id() {
+        let cycle = occurrence_date();
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock
+            .expect_list_series_children()
+            .returning(|_| Ok(vec![child("c1", "Book venue", 30)]));
+        series_mock
+            .expect_list_child_occurrences_for_series()
+            .returning(move |_, _, _| {
+                Ok(vec![SeriesChildOccurrence {
+                    child_id: "c1".to_string(),
+                    occurrence_date: cycle,
+                    item_id: "venue-item".to_string(),
+                }])
+            });
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        let occurrences = vec![parent_cycle(cycle, OccurrenceState::Virtual)];
+        let views = fan_out_child_occurrences(&series_repo, &occurrences, 0)
+            .await
+            .expect("fan-out should succeed");
+
+        assert_eq!(views.len(), 1);
+        assert_eq!(views[0].item_id, Some("venue-item".to_string()));
+    }
+
+    #[tokio::test]
+    async fn fan_out_skips_a_skipped_parent_cycle() {
+        let mut series_mock = MockItemSeriesRepo::new();
+        // Never even asks for the definitions — a skipped cycle never materializes, so its
+        // preparation work is moot.
+        series_mock.expect_list_series_children().times(0);
+        series_mock
+            .expect_list_child_occurrences_for_series()
+            .times(0);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        let occurrences = vec![parent_cycle(occurrence_date(), OccurrenceState::Skipped)];
+        let views = fan_out_child_occurrences(&series_repo, &occurrences, 0)
+            .await
+            .expect("fan-out should succeed");
+
+        assert!(views.is_empty());
+    }
+
+    #[tokio::test]
+    async fn fan_out_ignores_event_series_without_querying_them() {
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock.expect_list_series_children().times(0);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        let mut event_cycle = parent_cycle(occurrence_date(), OccurrenceState::Virtual);
+        event_cycle.item_type = ItemKind::Event;
+        let views = fan_out_child_occurrences(&series_repo, &[event_cycle], 0)
+            .await
+            .expect("fan-out should succeed");
+
+        assert!(views.is_empty());
+    }
+
+    #[tokio::test]
+    async fn materializing_a_sub_item_materializes_its_parent_and_nests_under_it() {
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock
+            .expect_get_series_child()
+            .withf(|child_id: &str| child_id == "c1")
+            .returning(|_| Ok(child("c1", "Book venue", 30)));
+        series_mock
+            .expect_get_series()
+            .returning(|_| Ok(task_series()));
+        series_mock
+            .expect_get_child_occurrence()
+            .returning(|_, _| Ok(None));
+        // The parent occurrence is still virtual and gets materialized first.
+        series_mock
+            .expect_get_occurrence()
+            .returning(|_, _| Ok(None));
+        series_mock
+            .expect_list_rotation_members()
+            .returning(|_| Ok(Vec::new()));
+        series_mock
+            .expect_record_materialized_occurrence()
+            .withf(|series_id: &str, _date, item_id: &str| {
+                series_id == "s1" && item_id == "parent-item-id"
+            })
+            .times(1)
+            .returning(|_, _, _| Ok(()));
+        series_mock
+            .expect_record_materialized_child_occurrence()
+            .withf(|child_id: &str, date: &DateTime<Utc>, item_id: &str| {
+                child_id == "c1" && *date == occurrence_date() && item_id == "child-item-id"
+            })
+            .times(1)
+            .returning(|_, _, _| Ok(()));
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        let mut projects_mock = MockProjectRepo::new();
+        projects_mock
+            .expect_get()
+            .returning(|_| Ok(personal_project()));
+        projects_mock
+            .expect_find_personal_project()
+            .returning(|_| Ok(None));
+        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
+
+        let mut items_mock = MockItemRepo::new();
+        items_mock
+            .expect_create()
+            .withf(|item: &Item| item.parent_item_id().is_none())
+            .times(1)
+            .returning(|_| Ok("parent-item-id".to_string()));
+        items_mock
+            .expect_create()
+            .withf(|item: &Item| {
+                item.parent_item_id() == Some("parent-item-id".to_string())
+                    && item.kind() == ItemKind::Task
+                    && item.name == "Book venue"
+                    // Negated at the boundary, so `Item::validate`'s "cannot be positive"
+                    // rule holds by construction.
+                    && item.due_offset_days() == Some(-30)
+                    && item.priority() == Some(2)
+                    && !item.has_due_time()
+                    // Records the known gap documented on `get_or_materialize_child_occurrence`:
+                    // a scheduled-basis series' occurrence carries no `due_date`, so
+                    // `create_item`'s offset recompute has no anchor and the sub-item lands
+                    // undated. Asserted rather than left implicit so that changing it is a
+                    // deliberate act with a failing test attached.
+                    && item.due_date().is_none()
+                    // A sub-item is a child *of* an occurrence, not an occurrence itself.
+                    && item.series_id().is_none()
+            })
+            .times(1)
+            .returning(|_| Ok("child-item-id".to_string()));
+        items_mock.expect_get_by_project().returning(|_, item_id| {
+            let mut item = Item::new_project_item("p1", "Book venue");
+            item.id = item_id.to_string();
+            Ok(item)
+        });
+        // `create_item` resolves the new child's offset anchor by walking up to its top-level
+        // ancestor — the freshly materialized parent occurrence.
+        items_mock.expect_get().returning(|_, item_id| {
+            let mut item = Item::new_project_item("p1", "Party");
+            item.id = item_id.to_string();
+            Ok(item)
+        });
+        items_mock.expect_list_children().returning(|_| Ok(vec![]));
+        let repo: Arc<dyn ItemRepo> = Arc::new(items_mock);
+
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+
+        let item = get_or_materialize_child_occurrence(
+            &repo,
+            &projects,
+            &teams,
+            &series_repo,
+            &no_op_reminders(),
+            "owner1",
+            "c1",
+            occurrence_date(),
+            0,
+        )
+        .await
+        .expect("should materialize the sub-item");
+
+        assert_eq!(item.id, "child-item-id");
+    }
+
+    /// The due-date-basis counterpart of the test above, and the case that actually works
+    /// end to end: the parent occurrence carries a `due_date`, so `create_item`'s offset
+    /// recompute has an anchor and the sub-item lands on its true lead-time date.
+    #[tokio::test]
+    async fn a_due_date_basis_series_sub_item_lands_on_its_lead_time_date() {
+        let mut due_basis = task_series();
+        due_basis.basis = Some("DUE_DATE".to_string());
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock
+            .expect_get_series_child()
+            .returning(|_| Ok(child("c1", "Book venue", 30)));
+        series_mock
+            .expect_get_series()
+            .returning(move |_| Ok(due_basis.clone()));
+        series_mock
+            .expect_get_child_occurrence()
+            .returning(|_, _| Ok(None));
+        series_mock
+            .expect_get_occurrence()
+            .returning(|_, _| Ok(None));
+        series_mock
+            .expect_list_rotation_members()
+            .returning(|_| Ok(Vec::new()));
+        series_mock
+            .expect_record_materialized_occurrence()
+            .returning(|_, _, _| Ok(()));
+        series_mock
+            .expect_record_materialized_child_occurrence()
+            .times(1)
+            .returning(|_, _, _| Ok(()));
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        let mut projects_mock = MockProjectRepo::new();
+        projects_mock
+            .expect_get()
+            .returning(|_| Ok(personal_project()));
+        projects_mock
+            .expect_find_personal_project()
+            .returning(|_| Ok(None));
+        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
+
+        let mut items_mock = MockItemRepo::new();
+        items_mock
+            .expect_create()
+            .withf(|item: &Item| item.parent_item_id().is_none())
+            .times(1)
+            .returning(|_| Ok("parent-item-id".to_string()));
+        items_mock
+            .expect_create()
+            .withf(|item: &Item| {
+                item.parent_item_id() == Some("parent-item-id".to_string())
+                    // Negated at the boundary, so `Item::validate`'s "cannot be positive"
+                    // rule holds by construction.
+                    && item.due_offset_days() == Some(-30)
+                    // `create_item`'s own offset recompute lands on the same date the
+                    // explicit `due_date` carried in — same arithmetic, same anchor.
+                    && item.due_date().map(|d| d.date_naive())
+                        == Some((occurrence_date() - chrono::Duration::days(30)).date_naive())
+            })
+            .times(1)
+            .returning(|_| Ok("child-item-id".to_string()));
+        items_mock.expect_get_by_project().returning(|_, item_id| {
+            let mut item = Item::new_project_item("p1", "Book venue");
+            item.id = item_id.to_string();
+            Ok(item)
+        });
+        // The offset anchor: a due-date-basis occurrence materializes onto `due_date`, which
+        // is what `item_anchor` reads.
+        items_mock.expect_get().returning(|_, item_id| {
+            let mut item = Item::new_project_item("p1", "Party");
+            item.id = item_id.to_string();
+            if let Some(schedule) = item.item_type.schedule_mut() {
+                schedule.due_date = Some(occurrence_date());
+            }
+            Ok(item)
+        });
+        items_mock.expect_list_children().returning(|_| Ok(vec![]));
+        let repo: Arc<dyn ItemRepo> = Arc::new(items_mock);
+
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+
+        get_or_materialize_child_occurrence(
+            &repo,
+            &projects,
+            &teams,
+            &series_repo,
+            &no_op_reminders(),
+            "owner1",
+            "c1",
+            occurrence_date(),
+            0,
+        )
+        .await
+        .expect("should materialize the sub-item");
+    }
+
+    #[tokio::test]
+    async fn returns_the_existing_sub_item_when_already_materialized() {
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock
+            .expect_get_series_child()
+            .returning(|_| Ok(child("c1", "Book venue", 30)));
+        series_mock
+            .expect_get_series()
+            .returning(|_| Ok(task_series()));
+        series_mock
+            .expect_get_child_occurrence()
+            .returning(|_, date| {
+                Ok(Some(SeriesChildOccurrence {
+                    child_id: "c1".to_string(),
+                    occurrence_date: date,
+                    item_id: "existing-child".to_string(),
+                }))
+            });
+        // Nothing is created and the parent occurrence is never touched.
+        series_mock
+            .expect_record_materialized_child_occurrence()
+            .times(0);
+        series_mock.expect_record_materialized_occurrence().times(0);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        let mut projects_mock = MockProjectRepo::new();
+        projects_mock
+            .expect_get()
+            .returning(|_| Ok(personal_project()));
+        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
+
+        let mut items_mock = MockItemRepo::new();
+        items_mock.expect_create().times(0);
+        items_mock
+            .expect_get_by_project()
+            .withf(|project_id: &str, item_id: &str| {
+                project_id == "p1" && item_id == "existing-child"
+            })
+            .returning(|_, _| Ok(Item::new_project_item("p1", "Book venue")));
+        let repo: Arc<dyn ItemRepo> = Arc::new(items_mock);
+
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+
+        let item = get_or_materialize_child_occurrence(
+            &repo,
+            &projects,
+            &teams,
+            &series_repo,
+            &no_op_reminders(),
+            "owner1",
+            "c1",
+            occurrence_date(),
+            0,
+        )
+        .await
+        .expect("should return the existing sub-item");
+
+        assert_eq!(item.name, "Book venue");
+    }
+
+    #[tokio::test]
+    async fn rejects_materializing_a_sub_item_on_an_event_series() {
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock
+            .expect_get_series_child()
+            .returning(|_| Ok(child("c1", "Book venue", 30)));
+        // series("p1") defaults to ItemKind::Event.
+        series_mock
+            .expect_get_series()
+            .returning(|_| Ok(series("p1")));
+        series_mock
+            .expect_get_child_occurrence()
+            .returning(|_, _| Ok(None));
+        // Rejected before the parent occurrence is materialized as a side effect.
+        series_mock.expect_record_materialized_occurrence().times(0);
+        series_mock
+            .expect_record_materialized_child_occurrence()
+            .times(0);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        let projects: Arc<dyn ProjectRepo> = Arc::new(MockProjectRepo::new());
+        let mut items_mock = MockItemRepo::new();
+        items_mock.expect_create().times(0);
+        let repo: Arc<dyn ItemRepo> = Arc::new(items_mock);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+
+        let result = get_or_materialize_child_occurrence(
+            &repo,
+            &projects,
+            &teams,
+            &series_repo,
+            &no_op_reminders(),
+            "owner1",
+            "c1",
+            occurrence_date(),
+            0,
+        )
+        .await;
+
+        assert!(matches!(result, Err(ItemError::Invalid(_))));
+    }
+
+    /// The completion guard's own unit — `validate_completable` reaches it only for an item
+    /// that is itself a materialized occurrence.
+    #[tokio::test]
+    async fn completion_is_blocked_while_a_sub_item_is_still_virtual() {
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock.expect_list_series_children().returning(|_| {
+            Ok(vec![
+                child("c1", "Book venue", 30),
+                child("c2", "Send invites", 14),
+            ])
+        });
+        series_mock
+            .expect_list_child_occurrences_for_series()
+            .returning(move |_, _, _| {
+                Ok(vec![SeriesChildOccurrence {
+                    child_id: "c1".to_string(),
+                    occurrence_date: occurrence_date(),
+                    item_id: "venue-item".to_string(),
+                }])
+            });
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        let result =
+            require_child_occurrences_materialized(&series_repo, "s1", occurrence_date()).await;
+
+        match result {
+            // Names the outstanding sub-item — the row checkbox materializes and completes in
+            // one click, so this message is all the user gets.
+            Err(ItemError::Invalid(message)) => assert!(
+                message.contains("Send invites") && !message.contains("Book venue"),
+                "unexpected message: {message}"
+            ),
+            other => panic!("expected the guard to block, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn completion_is_allowed_once_every_sub_item_is_materialized() {
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock
+            .expect_list_series_children()
+            .returning(|_| Ok(vec![child("c1", "Book venue", 30)]));
+        series_mock
+            .expect_list_child_occurrences_for_series()
+            .returning(move |_, _, _| {
+                Ok(vec![SeriesChildOccurrence {
+                    child_id: "c1".to_string(),
+                    occurrence_date: occurrence_date(),
+                    item_id: "venue-item".to_string(),
+                }])
+            });
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        require_child_occurrences_materialized(&series_repo, "s1", occurrence_date())
+            .await
+            .expect("every definition is materialized for this cycle");
+    }
+
+    /// Materialized-but-*incomplete* is deliberately not this guard's job — that is an ordinary
+    /// structural child, already blocked by `has_incomplete_children` in
+    /// `service::items`/`team_items`, which is why this needs no `ItemRepo`.
+    #[tokio::test]
+    async fn completion_guard_is_a_cheap_no_op_for_a_series_with_no_sub_items() {
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock
+            .expect_list_series_children()
+            .returning(|_| Ok(vec![]));
+        series_mock
+            .expect_list_child_occurrences_for_series()
+            .times(0);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        require_child_occurrences_materialized(&series_repo, "s1", occurrence_date())
+            .await
+            .expect("a series with no sub-items never blocks");
+    }
+
+    #[tokio::test]
+    async fn unlink_deleted_child_occurrence_reverts_the_cycle_to_virtual() {
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock
+            .expect_find_child_occurrence_by_item_id()
+            .withf(|item_id: &str| item_id == "venue-item")
+            .returning(|_| {
+                Ok(Some(SeriesChildOccurrence {
+                    child_id: "c1".to_string(),
+                    occurrence_date: occurrence_date(),
+                    item_id: "venue-item".to_string(),
+                }))
+            });
+        // Un-materializes rather than excluding — the definition survives, so the sub-item
+        // reappears as virtual and still blocks its parent.
+        series_mock
+            .expect_delete_child_occurrence()
+            .withf(|child_id: &str, date: &DateTime<Utc>| {
+                child_id == "c1" && *date == occurrence_date()
+            })
+            .times(1)
+            .returning(|_, _| Ok(()));
+        series_mock.expect_delete_series_child().times(0);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        unlink_deleted_child_occurrence(&series_repo, "venue-item")
+            .await
+            .expect("should un-materialize the sub-item's cycle");
+    }
+
+    #[tokio::test]
+    async fn unlink_deleted_child_occurrence_is_a_no_op_for_an_ordinary_item() {
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock
+            .expect_find_child_occurrence_by_item_id()
+            .returning(|_| Ok(None));
+        series_mock.expect_delete_child_occurrence().times(0);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        unlink_deleted_child_occurrence(&series_repo, "some-task")
+            .await
+            .expect("a plain item is a cheap no-op");
+    }
+
+    #[tokio::test]
+    async fn duplicate_series_copies_sub_item_definitions_onto_the_copy() {
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock
+            .expect_get_series()
+            .returning(|_| Ok(task_series()));
+        series_mock
+            .expect_create_series()
+            .times(1)
+            .returning(|_| Ok("s2".to_string()));
+        series_mock
+            .expect_list_rotation_members()
+            .returning(|_| Ok(Vec::new()));
+        series_mock
+            .expect_list_series_children()
+            .withf(|series_id: &str| series_id == "s1")
+            .returning(|_| Ok(vec![child("c1", "Book venue", 30)]));
+        series_mock
+            .expect_create_series_child()
+            .withf(|c: &ItemSeriesChild| {
+                c.series_id == "s2" && c.name == "Book venue" && c.days_before == 30
+            })
+            .times(1)
+            .returning(|_| Ok("c2".to_string()));
+        // The copy is a fresh series with nothing settled — per-cycle materialization state
+        // is deliberately not carried over, same as `item_occurrences`.
+        series_mock
+            .expect_record_materialized_child_occurrence()
+            .times(0);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        let mut projects_mock = MockProjectRepo::new();
+        projects_mock
+            .expect_get()
+            .returning(|_| Ok(personal_project()));
+        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+
+        duplicate_series(&projects, &teams, &series_repo, "owner1", "s1")
+            .await
+            .expect("owner should be able to duplicate the series");
     }
 }

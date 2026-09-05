@@ -421,6 +421,11 @@ pub async fn update_item(
 /// docs/issues_and_features.md's "materialized occurrences are not properly deleted upon
 /// skipping" item — this is the fix for that (skipping a *different* series' occurrence whose
 /// item happened to have a reparented series-materialized descendant).
+///
+/// `unlink_deleted_child_occurrence` rides along on the same loop, for the same reason but with
+/// the roles reversed: a materialized series *sub-item* is by construction a child of its
+/// occurrence's item, so this loop — not the top-level call in `delete_project_item` — is the
+/// only place a cascading delete ever reaches one.
 pub async fn delete_item(
     repo: &Arc<dyn ItemRepo>,
     series: &Arc<dyn ItemSeriesRepo>,
@@ -444,6 +449,7 @@ pub async fn delete_item(
             queue.push(child.id.clone());
             repo.delete(&child.id).await?;
             item_series::unlink_deleted_item_occurrence(series, &child.id).await?;
+            item_series::unlink_deleted_child_occurrence(series, &child.id).await?;
             reminders.delete_for_item(&child.id).await?;
             item_dependencies.delete_for_item(&child.id).await?;
         }
