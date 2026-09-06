@@ -1,0 +1,86 @@
+<!-- Stage 4 of the series sub-items plan — the definition editor. Lives on the series edit
+     dialog (never the New dialog: a definition is owned by a series, which doesn't exist yet
+     there) and is also what all three sub-item CRUD routes return, so every create/edit/delete
+     re-renders this whole element from storage.
+
+     Deliberately outside the series' own <form> — nested forms are invalid HTML, and each
+     sub-item row is its own form PUTing to its own URL. Every request here sets
+     hx-select="unset" to cancel the body-level hx-select="#page" that hx-boost otherwise
+     inherits down (same idiom as project_item_series/row.html's own buttons). -->
+<div id="series-children" class="mt-4 border-t border-gray-100 pt-3 dark:border-white/5">
+  <h4 class="text-sm/6 font-medium text-gray-900 dark:text-white">Sub-items</h4>
+  <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">Preparation work for every occurrence,
+    each due its own number of days before the occurrence itself. An occurrence can't be completed
+    until all of its sub-items are.</p>
+
+  {% if !children.is_empty() %}
+  <ul class="mt-2 divide-y divide-gray-100 dark:divide-white/5">
+    {% for c in children %}
+    <li id="series-child-{{ c.id }}" class="py-2">
+      <form hx-put="/web/projects/{{ project_id }}/series/{{ series_id }}/children/{{ c.id }}"
+            hx-target="#series-children" hx-select="unset" hx-swap="outerHTML"
+            class="space-y-2">
+        <div class="flex items-center gap-x-2">
+          <input type="text" name="name" value="{{ c.name }}" required maxlength="200"
+                 class="min-w-0 flex-1 rounded-md bg-white px-3 py-1.5 text-sm text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:focus:outline-indigo-500" />
+          <button type="button"
+                  hx-delete="/web/projects/{{ project_id }}/series/{{ series_id }}/children/{{ c.id }}"
+                  hx-confirm="Delete sub-item {{ c.name }}? Copies already created on past occurrences are kept."
+                  hx-target="#series-children" hx-select="unset" hx-swap="outerHTML"
+                  class="shrink-0 cursor-pointer text-red-600 hover:text-red-500 dark:text-red-400 dark:hover:text-red-300">
+            {% include "icons/delete.html" %}
+          </button>
+        </div>
+        <input type="text" name="description" value="{{ c.description }}" placeholder="Description (optional)"
+               class="block w-full rounded-md bg-white px-3 py-1.5 text-sm text-gray-900 outline-1 -outline-offset-1 outline-gray-300 placeholder:text-gray-400 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:placeholder:text-gray-500 dark:focus:outline-indigo-500" />
+        <div class="flex items-center gap-x-2">
+          <label class="inline-flex items-center gap-x-2 text-xs text-gray-500 dark:text-gray-400">
+            <input type="number" name="daysBefore" min="0" value="{{ c.days_before }}" required
+                   class="w-20 rounded-md bg-white px-2 py-1 text-sm text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:focus:outline-indigo-500" />
+            days before
+          </label>
+          <select name="priority"
+                  class="rounded-md bg-white px-2 py-1 text-sm text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:focus:outline-indigo-500">
+            <option value="" {% if c.priority.is_none() %}selected{% endif %}>No priority</option>
+            <option value="1" {% if c.priority == Some(1) %}selected{% endif %}>P1 (highest)</option>
+            <option value="2" {% if c.priority == Some(2) %}selected{% endif %}>P2</option>
+            <option value="3" {% if c.priority == Some(3) %}selected{% endif %}>P3</option>
+            <option value="4" {% if c.priority == Some(4) %}selected{% endif %}>P4 (lowest)</option>
+          </select>
+          <button type="submit"
+                  class="ml-auto cursor-pointer text-xs font-medium text-indigo-600 hover:text-indigo-500 dark:text-indigo-400 dark:hover:text-indigo-300">Save</button>
+        </div>
+      </form>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="mt-2 text-sm text-gray-500 dark:text-gray-400">No sub-items yet.</p>
+  {% endif %}
+
+  <form hx-post="/web/projects/{{ project_id }}/series/{{ series_id }}/children"
+        hx-target="#series-children" hx-select="unset" hx-swap="outerHTML"
+        class="mt-3 space-y-2 border-t border-gray-100 pt-3 dark:border-white/5">
+    <input type="text" name="name" placeholder="Add a sub-item" required maxlength="200"
+           class="block w-full rounded-md bg-white px-3 py-1.5 text-sm text-gray-900 outline-1 -outline-offset-1 outline-gray-300 placeholder:text-gray-400 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:placeholder:text-gray-500 dark:focus:outline-indigo-500" />
+    <input type="text" name="description" placeholder="Description (optional)"
+           class="block w-full rounded-md bg-white px-3 py-1.5 text-sm text-gray-900 outline-1 -outline-offset-1 outline-gray-300 placeholder:text-gray-400 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:placeholder:text-gray-500 dark:focus:outline-indigo-500" />
+    <div class="flex items-center gap-x-2">
+      <label class="inline-flex items-center gap-x-2 text-xs text-gray-500 dark:text-gray-400">
+        <input type="number" name="daysBefore" min="0" value="0" required
+               class="w-20 rounded-md bg-white px-2 py-1 text-sm text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:focus:outline-indigo-500" />
+        days before
+      </label>
+      <select name="priority"
+              class="rounded-md bg-white px-2 py-1 text-sm text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:focus:outline-indigo-500">
+        <option value="" selected>No priority</option>
+        <option value="1">P1 (highest)</option>
+        <option value="2">P2</option>
+        <option value="3">P3</option>
+        <option value="4">P4 (lowest)</option>
+      </select>
+      <button type="submit"
+              class="ml-auto inline-flex items-center justify-center rounded-md bg-white px-2 py-1 text-xs font-semibold text-gray-900 shadow-xs inset-ring-1 inset-ring-gray-300 hover:bg-gray-50 dark:bg-white/10 dark:text-white dark:shadow-none dark:inset-ring-white/5 dark:hover:bg-white/20">Add</button>
+    </div>
+  </form>
+</div>

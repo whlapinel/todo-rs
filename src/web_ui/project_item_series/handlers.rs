@@ -230,8 +230,11 @@ pub async fn project_item_series_page(
         // rotation assignee (open question 4).
         let assignee_id = item_series_service::current_series_assignee(&item_series, s, tz).await?;
         let assignee_name = assignee_id.and_then(|id| member_names.get(&id).cloned());
+        // One extra query per series, alongside `current_series_assignee`'s own — this page has
+        // always been per-series rather than batched.
+        let child_count = item_series.list_series_children(&s.id).await?.len();
         rows.push(
-            ProjectItemSeriesRow::from_series(s, tz, assignee_name)
+            ProjectItemSeriesRow::from_series(s, tz, assignee_name, child_count)
                 .render()
                 .map_err(ItemError::from)?,
         );
@@ -873,6 +876,23 @@ pub async fn edit_project_item_series_page(
     // decides which of the Fixed/Rotate radio buttons starts checked.
     let rotation_user_ids = item_series.list_rotation_members(&series_id).await?;
     let is_rotating = !rotation_user_ids.is_empty();
+    let is_task = series.item_type == ItemKind::Task;
+    // Task-only, and decided here rather than in the template: a series' kind is fixed at
+    // creation, so an Event series can never grow sub-items and there is nothing to render or
+    // to query for one.
+    let children_html = if is_task {
+        render_children_panel_html(
+            &item_series,
+            &project_id,
+            &series_id,
+            &auth_user,
+            &projects,
+            &teams,
+        )
+        .await?
+    } else {
+        String::new()
+    };
     let nav_html = nav::build_nav_html(
         &projects,
         &auth_user.user_id,
@@ -886,7 +906,7 @@ pub async fn edit_project_item_series_page(
         nav_html,
         name: series.name,
         description: series.description.unwrap_or_default(),
-        is_task: series.item_type == ItemKind::Task,
+        is_task,
         recurrence: series.recurrence,
         basis: series.basis.unwrap_or_default(),
         anchor_date: local_anchor.format("%Y-%m-%d").to_string(),
@@ -899,7 +919,152 @@ pub async fn edit_project_item_series_page(
         is_team_admin,
         points: series.points,
         priority: series.priority,
+        children_html,
     })
+}
+
+/// The Sub-items panel, rendered from storage — shared by the edit page above and all three
+/// CRUD handlers below, which each return this same `#series-children` fragment so a mutation
+/// re-renders the whole list rather than patching one row.
+async fn render_children_panel_html(
+    item_series: &Arc<dyn ItemSeriesRepo>,
+    project_id: &str,
+    series_id: &str,
+    auth_user: &AuthUser,
+    projects: &Arc<dyn ProjectRepo>,
+    teams: &Arc<dyn TeamRepo>,
+) -> Result<String, ItemError> {
+    let children = item_series_service::list_series_children(
+        projects,
+        teams,
+        item_series,
+        &auth_user.user_id,
+        series_id,
+    )
+    .await?;
+    Ok(SeriesChildrenPanelTemplate {
+        project_id: project_id.to_string(),
+        series_id: series_id.to_string(),
+        children: children.iter().map(SeriesChildView::from_child).collect(),
+    }
+    .render()?)
+}
+
+/// Shared body of the three sub-item CRUD routes: name/description/daysBefore/priority, a full
+/// replace on update (this module's usual round-trip convention — an omitted `description`/
+/// `priority` clears it rather than preserving what's stored). `daysBefore`/`priority` arrive as
+/// strings so a blank submission is distinguishable from a zero; `daysBefore` falls back to 0
+/// rather than erroring, matching a sub-item due on the occurrence's own date.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SeriesChildForm {
+    name: String,
+    description: Option<String>,
+    days_before: Option<String>,
+    priority: Option<String>,
+}
+
+impl SeriesChildForm {
+    fn into_params(self) -> item_series_service::SeriesChildParams {
+        item_series_service::SeriesChildParams {
+            name: self.name,
+            description: non_empty(&self.description),
+            days_before: non_empty(&self.days_before)
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0),
+            priority: non_empty(&self.priority).and_then(|s| s.parse().ok()),
+        }
+    }
+}
+
+pub async fn create_project_item_series_child_form(
+    Path((project_id, series_id)): Path<(String, String)>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(item_series): Extension<Arc<dyn ItemSeriesRepo>>,
+    Form(form): Form<SeriesChildForm>,
+) -> Result<Html<String>, ItemError> {
+    item_series_service::create_series_child(
+        &projects,
+        &teams,
+        &item_series,
+        &auth_user.user_id,
+        &series_id,
+        form.into_params(),
+    )
+    .await?;
+    Ok(Html(
+        render_children_panel_html(
+            &item_series,
+            &project_id,
+            &series_id,
+            &auth_user,
+            &projects,
+            &teams,
+        )
+        .await?,
+    ))
+}
+
+pub async fn update_project_item_series_child_form(
+    Path((project_id, series_id, child_id)): Path<(String, String, String)>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(item_series): Extension<Arc<dyn ItemSeriesRepo>>,
+    Form(form): Form<SeriesChildForm>,
+) -> Result<Html<String>, ItemError> {
+    item_series_service::update_series_child(
+        &projects,
+        &teams,
+        &item_series,
+        &auth_user.user_id,
+        &series_id,
+        &child_id,
+        form.into_params(),
+    )
+    .await?;
+    Ok(Html(
+        render_children_panel_html(
+            &item_series,
+            &project_id,
+            &series_id,
+            &auth_user,
+            &projects,
+            &teams,
+        )
+        .await?,
+    ))
+}
+
+pub async fn delete_project_item_series_child_form(
+    Path((project_id, series_id, child_id)): Path<(String, String, String)>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(item_series): Extension<Arc<dyn ItemSeriesRepo>>,
+) -> Result<Html<String>, ItemError> {
+    item_series_service::delete_series_child(
+        &projects,
+        &teams,
+        &item_series,
+        &auth_user.user_id,
+        &series_id,
+        &child_id,
+    )
+    .await?;
+    Ok(Html(
+        render_children_panel_html(
+            &item_series,
+            &project_id,
+            &series_id,
+            &auth_user,
+            &projects,
+            &teams,
+        )
+        .await?,
+    ))
 }
 
 pub async fn update_project_item_series_form(

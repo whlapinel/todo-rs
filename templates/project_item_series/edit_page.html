@@ -21,18 +21,19 @@
       </div>
     </label>
     {% call macros::description_field(description) %}{% endcall %}
-    <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Kind <span class="text-red-500" aria-hidden="true">*</span>
-      <span class="mt-2 flex gap-4">
-        <label class="inline-flex items-center gap-1.5 text-sm font-normal text-gray-900 dark:text-white">
-          <input type="radio" name="itemType" value="TASK" {% if is_task %}checked{% endif %}
-                 class="size-4 border-gray-300 text-indigo-600 focus:ring-indigo-600 dark:border-white/20 dark:bg-white/5" /> Task
-        </label>
-        <label class="inline-flex items-center gap-1.5 text-sm font-normal text-gray-900 dark:text-white">
-          <input type="radio" name="itemType" value="EVENT" {% if !is_task %}checked{% endif %}
-                 class="size-4 border-gray-300 text-indigo-600 focus:ring-indigo-600 dark:border-white/20 dark:bg-white/5" /> Event
-        </label>
-      </span>
-    </label>
+    <!-- Kind is read-only here as of 2026-09-05: a series' kind is fixed when it's created.
+         Flipping it left every already-materialized occurrence at the old kind while future
+         ones materialized at the new one, and orphaned whatever kind-specific state the old
+         kind carried (sub-item definitions, cursor, points/assignment). The hidden input still
+         submits it because `itemType` is a required field of the update endpoint; a tampered
+         value is rejected by `service::item_series::update_series`, not silently applied. Every
+         Task-only field group below is now gated server-side by `is_task` instead of by this
+         page's old TASK/EVENT toggle script, which had nothing left to toggle. -->
+    <div>
+      <span class="block text-sm/6 font-medium text-gray-900 dark:text-white">Kind</span>
+      <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">{% if is_task %}Task{% else %}Event{% endif %} — set when the series was created, and can't be changed.</p>
+      <input type="hidden" name="itemType" value="{% if is_task %}TASK{% else %}EVENT{% endif %}" />
+    </div>
     <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Repeat <span class="text-red-500" aria-hidden="true">*</span>
       <div class="mt-2">
         <input type="text" name="recurrence" value="{{ recurrence }}" placeholder="e.g. every monday" required
@@ -43,19 +44,34 @@
          validate_series_event_type in src/service/item_series.rs) — no form field for it
          here, unlike the real Event/Template screens that still use
          macros::event_type_field. -->
-    <div class="completion-basis-field">
+    <!-- The scheduled-date basis (the old blank `<option value="">`) was removed from this
+         form on 2026-09-05: a series' recurrence rule defines a *due date*, and scheduling is
+         a per-instance decision, since the circumstances of one occurrence bear on when you
+         plan to do it. An existing scheduled-basis Task series therefore has no matching
+         option and lands on Due date, converting on the next save — that is intended, and is
+         also what closes the undated-sub-item gap (a scheduled-basis occurrence has no
+         `due_date`, so a sub-item materialized under one had nothing to compute its own
+         deadline from). Task-only: an Event series never renders this field at all, so it still
+         materializes onto `scheduled_date`. The backend half — retiring `is_due_date_basis` and
+         the two-branch materialization in `get_or_materialize_occurrence` — is tracked
+         separately in docs/issues_and_features.md. -->
+    {% if is_task %}
+    <div>
       <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Occurrence basis
         <div class="mt-2">
           <select name="basis"
                   class="block w-full rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:focus:outline-indigo-500">
-            <option value="" {% if basis == "" %}selected{% endif %}>Schedule — next occurrence follows the fixed recurrence</option>
+            <option value="DUE_DATE" {% if basis != "COMPLETION" %}selected{% endif %}>Due date — each occurrence is due on the recurrence date</option>
             <option value="COMPLETION" {% if basis == "COMPLETION" %}selected{% endif %}>Completion — next occurrence is measured from when each one is actually completed</option>
-            <option value="DUE_DATE" {% if basis == "DUE_DATE" %}selected{% endif %}>Due date — materialize occurrences with a due date instead of a scheduled date</option>
           </select>
         </div>
       </label>
+      {% if basis != "COMPLETION" && basis != "DUE_DATE" %}
+      <p class="mt-1 text-xs text-amber-600 dark:text-amber-400">This series currently uses the
+        retired scheduled-date basis. Saving will convert it to Due date.</p>
+      {% endif %}
     </div>
-    <div class="priority-field">
+    <div>
       <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Priority
         <div class="mt-2">
           <select name="priority"
@@ -70,7 +86,7 @@
       </label>
     </div>
     {% if is_team_project %}
-    <div class="assignment-field">
+    <div>
       <span class="mt-2 flex gap-4">
         <label class="inline-flex items-center gap-1.5 text-sm font-normal text-gray-900 dark:text-white">
           <input type="radio" name="assignmentMode" value="fixed" {% if !is_rotating %}checked{% endif %}
@@ -82,7 +98,7 @@
         </label>
       </span>
     </div>
-    <div class="assignment-field assignment-fixed-field flex items-center gap-x-4" {% if is_rotating %}hidden{% endif %}>
+    <div class="assignment-fixed-field flex items-center gap-x-4" {% if is_rotating %}hidden{% endif %}>
       <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Assign to
         <div class="mt-2 grid grid-cols-1">
           <select name="assignedToUserId"
@@ -95,7 +111,7 @@
         </div>
       </label>
     </div>
-    <div class="assignment-field assignment-rotate-field" {% if !is_rotating %}hidden{% endif %}>
+    <div class="assignment-rotate-field" {% if !is_rotating %}hidden{% endif %}>
       <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Rotate among</label>
       <div class="mt-2 space-y-1">
         {% for opt in assignee_options %}
@@ -112,7 +128,7 @@
       <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">Cycles through the checked members, in name order, one per occurrence.</p>
     </div>
     {% if is_team_admin %}
-    <div class="assignment-field">
+    <div>
       <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Points
         <div class="mt-2">
           <input type="number" name="points" min="0" value="{% if let Some(p) = points %}{{ p }}{% endif %}"
@@ -127,10 +143,11 @@
     (function() {
       var form = document.currentScript.closest("form");
       if (!form) return;
-      // Stage 4 of docs/assignment-rotation-plan.md — within the (already Task-gated)
-      // assignment fields, a second toggle between the Fixed <select> and the Rotate
-      // checkbox group, mirroring the outer TASK/EVENT toggle's own show/hide-and-disable
-      // shape so a hidden mode's fields never get submitted.
+      // Stage 4 of docs/assignment-rotation-plan.md — a toggle between the Fixed <select>
+      // and the Rotate checkbox group, hiding *and disabling* the inactive one so its fields
+      // never get submitted. This used to be nested inside an outer TASK/EVENT toggle; that
+      // outer one is gone, since a series' kind is now fixed at creation and every Task-only
+      // group (this one included) is gated server-side by `is_task` instead.
       //
       // The checkbox group itself carries no `name` (see the checkboxes' own comment) —
       // `updateRotationHiddenField` keeps the real `rotationUserIds` hidden input synced
@@ -144,47 +161,34 @@
         hidden.value = ids.join(",");
       }
       function updateAssignmentMode() {
-        var isTask = form.querySelector('input[name="itemType"][value="TASK"]').checked;
         var modeRadio = form.querySelector('input[name="assignmentMode"]:checked');
-        var isRotate = isTask && !!modeRadio && modeRadio.value === "rotate";
+        var isRotate = !!modeRadio && modeRadio.value === "rotate";
         var fixedField = form.querySelector(".assignment-fixed-field");
         var rotateField = form.querySelector(".assignment-rotate-field");
         if (fixedField) {
-          fixedField.hidden = !isTask || isRotate;
+          fixedField.hidden = isRotate;
           fixedField.querySelectorAll("input, select").forEach(function (field) {
-            field.disabled = !isTask || isRotate;
+            field.disabled = isRotate;
           });
         }
         if (rotateField) {
-          rotateField.hidden = !isTask || !isRotate;
+          rotateField.hidden = !isRotate;
           rotateField.querySelectorAll("input, select").forEach(function (field) {
-            field.disabled = !isTask || !isRotate;
+            field.disabled = !isRotate;
           });
         }
         updateRotationHiddenField();
       }
-      function toggle() {
-        var isTask = form.querySelector('input[name="itemType"][value="TASK"]').checked;
-        form.querySelectorAll(".completion-basis-field, .assignment-field, .priority-field").forEach(function (el) {
-          el.hidden = !isTask;
-          el.querySelectorAll("input, select").forEach(function (field) {
-            field.disabled = !isTask;
-          });
-        });
-        updateAssignmentMode();
-      }
       form.querySelectorAll(".rotation-member-checkbox").forEach(function (cb) {
         cb.addEventListener("change", updateRotationHiddenField);
-      });
-      form.querySelectorAll('input[name="itemType"]').forEach(function (radio) {
-        radio.addEventListener("change", toggle);
       });
       form.querySelectorAll('input[name="assignmentMode"]').forEach(function (radio) {
         radio.addEventListener("change", updateAssignmentMode);
       });
-      toggle();
+      updateAssignmentMode();
     })();
     </script>
+    {% endif %}
     <div class="border-t border-gray-100 pt-3 dark:border-white/5">
       <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Anchor date <span class="text-red-500" aria-hidden="true">*</span>
         <div class="mt-2 flex items-end gap-x-2">
@@ -203,6 +207,9 @@
         class="inline-flex items-center justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-xs inset-ring-1 inset-ring-gray-300 hover:bg-gray-50 dark:bg-white/10 dark:text-white dark:shadow-none dark:inset-ring-white/5 dark:hover:bg-white/20">Cancel</button>
     </div>
   </form>
+  <!-- Outside the form above: nested forms are invalid HTML, and each sub-item row PUTs to its
+       own URL. Empty string for an Event series, which can't have sub-items at all. -->
+  {{ children_html|safe }}
   <button hx-delete="/web/projects/{{ project_id }}/series/{{ series_id }}?redirect=1"
           hx-confirm="Delete series {{ name }}? Occurrences already created from it will be kept as standalone items."
           hx-target="this" hx-swap="none"

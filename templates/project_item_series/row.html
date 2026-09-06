@@ -30,5 +30,6 @@
     {% if let Some(a) = assignee_name %}<span>Assigned to: {{ a }}</span>{% endif %}
     {% if let Some(p) = points %}<span>Points: {{ p }}</span>{% endif %}
     {% if let Some(p) = priority %}<span class="text-amber-600 dark:text-amber-400">🚩 P{{ p }}</span>{% endif %}
+    {% if child_count > 0 %}<span>Sub-items: {{ child_count }}</span>{% endif %}
   </div>
 </li>

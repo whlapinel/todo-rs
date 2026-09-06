@@ -1209,6 +1209,21 @@ pub async fn update_series(
     let current = series_repo.get_series(series_id).await?;
     require_project_member(projects, teams, &current.project_id, requester_user_id).await?;
     validate_series_item_type(params.item_type)?;
+    // A series' kind is fixed at creation (2026-09-05). It used to be a plain full-replace
+    // field like `recurrence`, so editing a series could flip Task↔Event — which left every
+    // already-materialized occurrence at the old kind while future ones materialized at the
+    // new one, and silently orphaned whatever kind-specific state the old kind carried
+    // (sub-item definitions, cursor, points/assignment). Rejected rather than silently
+    // carried forward from `current`, so a caller that thinks it's changing the kind finds
+    // out. `item_type` stays on the wire and in `UpdateItemSeriesParams` for now — see
+    // docs/issues_and_features.md for the follow-up that removes it from the Smithy input,
+    // the CLI and MCP, and for the `TaskSeries`/`EventSeries` domain split that would make
+    // this unrepresentable rather than merely rejected.
+    if params.item_type != current.item_type {
+        return Err(ItemError::Invalid(
+            "a series' item type is fixed when it is created and cannot be changed".to_string(),
+        ));
+    }
     validate_series_event_type(&params.event_type)?;
     validate_series_basis(params.item_type, &params.basis, &params.recurrence)?;
     validate_series_priority(params.item_type, params.priority)?;
@@ -1273,6 +1288,152 @@ pub async fn list_series_for_project(
 ) -> Result<Vec<ItemSeries>, ItemError> {
     require_project_member(projects, teams, project_id, requester_user_id).await?;
     Ok(series_repo.list_series_for_project(project_id).await?)
+}
+
+/// The authored fields of one `ItemSeriesChild` — everything except `id`/`series_id` (both
+/// determined by the URL, never the body) and `sort_order` (a position, not a field the
+/// editor exposes; see `create_series_child`/`update_series_child` below).
+#[derive(Debug, Default)]
+pub struct SeriesChildParams {
+    pub name: String,
+    pub description: Option<String>,
+    /// Non-negative — see `ItemSeriesChild::days_before`.
+    pub days_before: i32,
+    pub priority: Option<i32>,
+}
+
+/// Sub-item definitions are gated by project membership *through their series*, the same
+/// authority level as `create_series`/`update_series` — a definition is project-scoped content
+/// like a template, not a role/points-authority action. Every function below therefore resolves
+/// the series first, and the mutating ones additionally check that the named definition actually
+/// belongs to it, so a request naming the wrong series 404s rather than acting across series.
+fn validate_series_child(series: &ItemSeries, params: &SeriesChildParams) -> Result<(), ItemError> {
+    if series.item_type != ItemKind::Task {
+        return Err(ItemError::Invalid(
+            "sub-items are only valid on a TASK series".to_string(),
+        ));
+    }
+    if params.name.trim().is_empty() {
+        return Err(ItemError::Invalid("name is required".to_string()));
+    }
+    if params.days_before < 0 {
+        return Err(ItemError::Invalid(
+            "days before cannot be negative".to_string(),
+        ));
+    }
+    validate_series_priority(series.item_type, params.priority)
+}
+
+pub async fn list_series_children(
+    projects: &Arc<dyn ProjectRepo>,
+    teams: &Arc<dyn TeamRepo>,
+    series_repo: &Arc<dyn ItemSeriesRepo>,
+    requester_user_id: &str,
+    series_id: &str,
+) -> Result<Vec<ItemSeriesChild>, ItemError> {
+    let series = series_repo.get_series(series_id).await?;
+    require_project_member(projects, teams, &series.project_id, requester_user_id).await?;
+    Ok(series_repo.list_series_children(series_id).await?)
+}
+
+/// Appends at the end of the authored order. `sort_order` is a plain append counter, never
+/// derived from `days_before` — the panel lists definitions in the order they were written, and
+/// a later-authored sub-item is free to fall earlier in the lead-time run-up.
+pub async fn create_series_child(
+    projects: &Arc<dyn ProjectRepo>,
+    teams: &Arc<dyn TeamRepo>,
+    series_repo: &Arc<dyn ItemSeriesRepo>,
+    requester_user_id: &str,
+    series_id: &str,
+    params: SeriesChildParams,
+) -> Result<String, ItemError> {
+    let series = series_repo.get_series(series_id).await?;
+    require_project_member(projects, teams, &series.project_id, requester_user_id).await?;
+    validate_series_child(&series, &params)?;
+    let sort_order = series_repo
+        .list_series_children(series_id)
+        .await?
+        .iter()
+        .map(|c| c.sort_order)
+        .max()
+        .map_or(0, |max| max + 1);
+    Ok(series_repo
+        .create_series_child(&ItemSeriesChild {
+            id: String::new(),
+            series_id: series_id.to_string(),
+            name: params.name.trim().to_string(),
+            description: params.description,
+            days_before: params.days_before,
+            priority: params.priority,
+            sort_order,
+        })
+        .await?)
+}
+
+/// Full replace of the authored fields, matching `update_series`' own round-trip convention —
+/// omitting `description`/`priority` clears them rather than preserving what's stored.
+/// `sort_order` is the one exception: it isn't an authored field, so it's carried forward from
+/// the current row and an edit never reorders the panel.
+///
+/// Editing a definition deliberately does **not** touch already-materialized sub-items of past
+/// cycles. Those are plain `items` rows by then, structurally children of their occurrence, and
+/// rewriting history on an edit would be a much larger action than the panel appears to offer.
+pub async fn update_series_child(
+    projects: &Arc<dyn ProjectRepo>,
+    teams: &Arc<dyn TeamRepo>,
+    series_repo: &Arc<dyn ItemSeriesRepo>,
+    requester_user_id: &str,
+    series_id: &str,
+    child_id: &str,
+    params: SeriesChildParams,
+) -> Result<(), ItemError> {
+    let series = series_repo.get_series(series_id).await?;
+    require_project_member(projects, teams, &series.project_id, requester_user_id).await?;
+    let current = series_repo.get_series_child(child_id).await?;
+    if current.series_id != series_id {
+        return Err(ItemError::NotFound);
+    }
+    validate_series_child(&series, &params)?;
+    series_repo
+        .update_series_child(
+            child_id,
+            &ItemSeriesChild {
+                id: child_id.to_string(),
+                series_id: series_id.to_string(),
+                name: params.name.trim().to_string(),
+                description: params.description,
+                days_before: params.days_before,
+                priority: params.priority,
+                sort_order: current.sort_order,
+            },
+        )
+        .await?;
+    Ok(())
+}
+
+/// Orphan, not cascade — `ItemSeriesRepo::delete_series_child` drops the definition and its
+/// `series_child_occurrences` rows but never touches `items`, so an already-materialized
+/// sub-item survives as a plain child of its occurrence. Deliberately *not* gated on the series
+/// still being Task-typed, unlike create/update: a series' kind is immutable as of 2026-09-05,
+/// but a row written before that guard landed could have been flipped to Event with definitions
+/// still attached, and those must stay removable rather than being stranded (they are already
+/// inert — `fan_out_child_occurrences` skips non-Task series).
+pub async fn delete_series_child(
+    projects: &Arc<dyn ProjectRepo>,
+    teams: &Arc<dyn TeamRepo>,
+    series_repo: &Arc<dyn ItemSeriesRepo>,
+    requester_user_id: &str,
+    series_id: &str,
+    child_id: &str,
+) -> Result<(), ItemError> {
+    let series = series_repo.get_series(series_id).await?;
+    require_project_member(projects, teams, &series.project_id, requester_user_id).await?;
+    let current = series_repo.get_series_child(child_id).await?;
+    if current.series_id != series_id {
+        return Err(ItemError::NotFound);
+    }
+    series_repo.delete_series_child(child_id).await?;
+    Ok(())
 }
 
 /// Stage 5 of docs/recurring-events-virtual-occurrences-rough-plan.md, superseded by Stage B
@@ -3742,9 +3903,12 @@ mod tests {
     #[tokio::test]
     async fn update_series_rejects_event_type_on_task_series() {
         let mut series_mock = MockItemSeriesRepo::new();
+        // A Task-typed stored series, so `params.item_type = Task` below isn't also a kind
+        // change — that's rejected on its own now, which would mask the event_type rejection
+        // this test is actually about.
         series_mock
             .expect_get_series()
-            .returning(|_| Ok(series("p1")));
+            .returning(|_| Ok(task_series()));
         series_mock.expect_update_series().times(0);
         let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
@@ -3945,6 +4109,33 @@ mod tests {
         )
         .await
         .expect("owner should be able to update the series");
+    }
+
+    #[tokio::test]
+    async fn update_series_rejects_changing_the_item_type() {
+        let mut series_mock = MockItemSeriesRepo::new();
+        // Stored as an Event series...
+        series_mock
+            .expect_get_series()
+            .returning(|_| Ok(series("p1")));
+        series_mock.expect_update_series().times(0);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        let mut projects_mock = MockProjectRepo::new();
+        projects_mock
+            .expect_get()
+            .returning(|_| Ok(personal_project()));
+        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+
+        // ...and asked to become a Task series. Rejected outright: the kind is fixed at
+        // creation, so already-materialized occurrences can never disagree with it.
+        let mut params = update_params();
+        params.item_type = ItemKind::Task;
+        let err = update_series(&projects, &teams, &series_repo, "owner1", "s1", params)
+            .await
+            .expect_err("a series' kind is immutable");
+        assert!(matches!(err, ItemError::Invalid(msg) if msg.contains("cannot be changed")));
     }
 
     #[tokio::test]
@@ -4902,5 +5093,246 @@ mod tests {
         duplicate_series(&projects, &teams, &series_repo, "owner1", "s1")
             .await
             .expect("owner should be able to duplicate the series");
+    }
+
+    // --- Stage 4: sub-item definition CRUD ---
+
+    /// Every definition CRUD function resolves its series through the project first, so each
+    /// test needs the same personal-project membership pair.
+    fn owner_project_repos() -> (Arc<dyn ProjectRepo>, Arc<dyn TeamRepo>) {
+        let mut projects_mock = MockProjectRepo::new();
+        projects_mock
+            .expect_get()
+            .returning(|_| Ok(personal_project()));
+        (Arc::new(projects_mock), Arc::new(MockTeamRepo::new()))
+    }
+
+    fn child_params(name: &str, days_before: i32) -> SeriesChildParams {
+        SeriesChildParams {
+            name: name.to_string(),
+            description: None,
+            days_before,
+            priority: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn create_series_child_appends_after_the_highest_sort_order() {
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock
+            .expect_get_series()
+            .returning(|_| Ok(task_series()));
+        series_mock.expect_list_series_children().returning(|_| {
+            let mut existing = child("c1", "Book venue", 30);
+            existing.sort_order = 4;
+            Ok(vec![existing])
+        });
+        series_mock
+            .expect_create_series_child()
+            .withf(|c: &ItemSeriesChild| {
+                c.series_id == "s1" && c.name == "Send invites" && c.sort_order == 5
+            })
+            .times(1)
+            .returning(|_| Ok("c2".to_string()));
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let (projects, teams) = owner_project_repos();
+
+        create_series_child(
+            &projects,
+            &teams,
+            &series_repo,
+            "owner1",
+            "s1",
+            // Leading/trailing whitespace is trimmed on the way in, same as `create_series`.
+            child_params("  Send invites  ", 14),
+        )
+        .await
+        .expect("owner should be able to add a sub-item");
+    }
+
+    #[tokio::test]
+    async fn create_series_child_rejects_an_event_series() {
+        let mut series_mock = MockItemSeriesRepo::new();
+        // `series("p1")` is Event-typed — an Event item can never have children at all
+        // (`Item::validate`), so an Event series must never carry sub-item definitions.
+        series_mock
+            .expect_get_series()
+            .returning(|_| Ok(series("p1")));
+        series_mock.expect_create_series_child().times(0);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let (projects, teams) = owner_project_repos();
+
+        let err = create_series_child(
+            &projects,
+            &teams,
+            &series_repo,
+            "owner1",
+            "s1",
+            child_params("Book venue", 30),
+        )
+        .await
+        .expect_err("an Event series has no sub-items");
+        assert!(matches!(err, ItemError::Invalid(msg) if msg.contains("TASK series")));
+    }
+
+    #[tokio::test]
+    async fn create_series_child_rejects_a_negative_days_before() {
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock
+            .expect_get_series()
+            .returning(|_| Ok(task_series()));
+        series_mock.expect_create_series_child().times(0);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let (projects, teams) = owner_project_repos();
+
+        // `days_before` is stored non-negative and negated into `due_offset_days`, which
+        // `Item::validate` rejects when positive — so a negative lead time here would
+        // materialize into an item that can't be written at all.
+        let err = create_series_child(
+            &projects,
+            &teams,
+            &series_repo,
+            "owner1",
+            "s1",
+            child_params("Book venue", -1),
+        )
+        .await
+        .expect_err("a sub-item can't fall after its own occurrence");
+        assert!(matches!(err, ItemError::Invalid(msg) if msg.contains("days before")));
+    }
+
+    #[tokio::test]
+    async fn create_series_child_rejects_an_out_of_range_priority() {
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock
+            .expect_get_series()
+            .returning(|_| Ok(task_series()));
+        series_mock.expect_create_series_child().times(0);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let (projects, teams) = owner_project_repos();
+
+        let mut params = child_params("Book venue", 30);
+        params.priority = Some(9);
+        let err = create_series_child(&projects, &teams, &series_repo, "owner1", "s1", params)
+            .await
+            .expect_err("priority is 1-4, same range Item::validate enforces");
+        assert!(matches!(err, ItemError::Invalid(msg) if msg.contains("between 1 and 4")));
+    }
+
+    #[tokio::test]
+    async fn update_series_child_carries_the_current_sort_order_forward() {
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock
+            .expect_get_series()
+            .returning(|_| Ok(task_series()));
+        series_mock.expect_get_series_child().returning(|_| {
+            let mut existing = child("c1", "Book venue", 30);
+            existing.sort_order = 7;
+            Ok(existing)
+        });
+        series_mock
+            .expect_update_series_child()
+            .withf(|child_id: &str, c: &ItemSeriesChild| {
+                child_id == "c1"
+                    && c.name == "Book the venue"
+                    && c.days_before == 45
+                    // Position isn't an authored field, so an edit never reorders the panel.
+                    && c.sort_order == 7
+                    // Full replace, this module's usual round-trip convention: an omitted
+                    // priority clears the stored one rather than preserving it.
+                    && c.priority.is_none()
+            })
+            .times(1)
+            .returning(|_, _| Ok(()));
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let (projects, teams) = owner_project_repos();
+
+        update_series_child(
+            &projects,
+            &teams,
+            &series_repo,
+            "owner1",
+            "s1",
+            "c1",
+            child_params("Book the venue", 45),
+        )
+        .await
+        .expect("owner should be able to edit a sub-item");
+    }
+
+    #[tokio::test]
+    async fn update_series_child_rejects_a_definition_from_another_series() {
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock
+            .expect_get_series()
+            .returning(|_| Ok(task_series()));
+        series_mock.expect_get_series_child().returning(|_| {
+            let mut other = child("c1", "Book venue", 30);
+            other.series_id = "s2".to_string();
+            Ok(other)
+        });
+        series_mock.expect_update_series_child().times(0);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let (projects, teams) = owner_project_repos();
+
+        let err = update_series_child(
+            &projects,
+            &teams,
+            &series_repo,
+            "owner1",
+            "s1",
+            "c1",
+            child_params("Book the venue", 45),
+        )
+        .await
+        .expect_err("a definition is only editable through its own series");
+        assert!(matches!(err, ItemError::NotFound));
+    }
+
+    #[tokio::test]
+    async fn delete_series_child_rejects_a_definition_from_another_series() {
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock
+            .expect_get_series()
+            .returning(|_| Ok(task_series()));
+        series_mock.expect_get_series_child().returning(|_| {
+            let mut other = child("c1", "Book venue", 30);
+            other.series_id = "s2".to_string();
+            Ok(other)
+        });
+        series_mock.expect_delete_series_child().times(0);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let (projects, teams) = owner_project_repos();
+
+        let err = delete_series_child(&projects, &teams, &series_repo, "owner1", "s1", "c1")
+            .await
+            .expect_err("a definition is only deletable through its own series");
+        assert!(matches!(err, ItemError::NotFound));
+    }
+
+    #[tokio::test]
+    async fn delete_series_child_still_works_on_an_event_series() {
+        // A series' kind is immutable now, so this state is only reachable for a row written
+        // before that guard landed — a Task series flipped to Event with definitions still
+        // attached. They're inert (`fan_out_child_occurrences` skips non-Task series) but must
+        // stay removable, so delete deliberately skips the Task check create/update apply.
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock
+            .expect_get_series()
+            .returning(|_| Ok(series("p1")));
+        series_mock
+            .expect_get_series_child()
+            .returning(|_| Ok(child("c1", "Book venue", 30)));
+        series_mock
+            .expect_delete_series_child()
+            .withf(|child_id: &str| child_id == "c1")
+            .times(1)
+            .returning(|_| Ok(()));
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let (projects, teams) = owner_project_repos();
+
+        delete_series_child(&projects, &teams, &series_repo, "owner1", "s1", "c1")
+            .await
+            .expect("an inert definition must still be removable");
     }
 }

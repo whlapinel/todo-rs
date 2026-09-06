@@ -1,11 +1,16 @@
-use crate::domain::item_series::ItemSeries;
+use crate::domain::item_series::{ItemSeries, ItemSeriesChild};
 use crate::web_ui::{format_display_date, to_local};
 use askama::Template;
 
 pub struct ProjectItemSeriesRow;
 
 impl ProjectItemSeriesRow {
-    pub fn from_series(s: &ItemSeries, tz: i32, assignee_name: Option<String>) -> Row {
+    pub fn from_series(
+        s: &ItemSeries,
+        tz: i32,
+        assignee_name: Option<String>,
+        child_count: usize,
+    ) -> Row {
         Row {
             id: s.id.clone(),
             project_id: s.project_id.clone(),
@@ -21,6 +26,7 @@ impl ProjectItemSeriesRow {
             // to a Task-typed series — see root CLAUDE.md's Priority section), but unlike
             // `points` it's never admin-gated, so it's always carried straight through.
             priority: s.priority,
+            child_count,
             duplicate_url: Some(format!(
                 "/web/projects/{}/series/{}/duplicate",
                 s.project_id, s.id
@@ -44,7 +50,48 @@ pub struct Row {
     pub points: Option<i32>,
     /// See `Row`'s (`components::row::Row`) identical `priority_label` doc comment.
     pub priority: Option<i32>,
+    /// How many sub-item definitions this series carries — `0` renders nothing. Only the
+    /// count, not the sub-items themselves: Stage 4 authors definitions, Stage 5 is what
+    /// renders their occurrences. Without it a series' sub-items would be invisible until
+    /// someone opened the Edit dialog.
+    pub child_count: usize,
     pub duplicate_url: Option<String>,
+}
+
+/// One authored sub-item definition as the panel renders it. Every field is an editable
+/// input in its own right — the panel has no separate read/edit modes, unlike the
+/// item screens' detail-page-then-Edit-link convention (CLAUDE.md's row-editing convention),
+/// because a definition has no detail page of its own to link to: it is a setting on a series,
+/// not an item.
+pub struct SeriesChildView {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub days_before: i32,
+    pub priority: Option<i32>,
+}
+
+impl SeriesChildView {
+    pub fn from_child(c: &ItemSeriesChild) -> Self {
+        Self {
+            id: c.id.clone(),
+            name: c.name.clone(),
+            description: c.description.clone().unwrap_or_default(),
+            days_before: c.days_before,
+            priority: c.priority,
+        }
+    }
+}
+
+/// The Sub-items panel on the series edit dialog, and the fragment all three sub-item CRUD
+/// routes return — each swaps the whole `#series-children` element, so a create/edit/delete
+/// re-renders the list from storage rather than patching a single row client-side.
+#[derive(Template)]
+#[template(path = "project_item_series/children_panel.html")]
+pub struct SeriesChildrenPanelTemplate {
+    pub project_id: String,
+    pub series_id: String,
+    pub children: Vec<SeriesChildView>,
 }
 
 #[derive(Template)]
@@ -99,4 +146,8 @@ pub struct EditProjectItemSeriesPageTemplate {
     /// Task-series-only, but — unlike `points` — not team-project-only and not
     /// admin-gated. See root CLAUDE.md's Priority section.
     pub priority: Option<i32>,
+    /// A pre-rendered `SeriesChildrenPanelTemplate`, embedded with `|safe` the same way
+    /// `nav_html` and the list page's rows are. Rendered to a string rather than nested as a
+    /// sub-template because the three CRUD routes return that same fragment on its own.
+    pub children_html: String,
 }

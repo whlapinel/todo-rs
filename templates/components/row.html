@@ -84,12 +84,17 @@
         {% endif %}
         </div>
         {% if let Some(url) = skip_url %}
-        <div class="contents"{% if treegrid %} role="gridcell"{% endif %}>
+        {% if !treegrid %}
+        <!-- Treegrid rows move this into the row-actions menu instead (see
+             row_actions_menu.html's own Skip entry) — same rationale as Mark complete moving
+             there above. -->
+        <div class="contents">
         <button hx-post="{{ url }}" hx-confirm="Skip this occurrence?"
             class="shrink-0 cursor-pointer text-xs text-gray-400 hover:text-red-500 dark:text-gray-500 dark:hover:text-red-400">
             Skip
         </button>
         </div>
+        {% endif %}
         {% endif %}
         {% if edit_url.is_some() || reschedule_url.is_some() || assign_url.is_some() || duplicate_url.is_some() || !is_imported %}
         <div class="contents"{% if treegrid %} role="gridcell"{% endif %}>

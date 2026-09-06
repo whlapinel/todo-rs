@@ -47,18 +47,25 @@
          validate_series_event_type in src/service/item_series.rs) — no form field for it
          here, unlike the real Event/Template screens that still use
          macros::event_type_field. -->
+    <!-- No scheduled-date basis option — see edit_page.html's fuller comment on why it was
+         retired from this form on 2026-09-05. Due date is the default and the only alternative
+         to Completion for a Task series; an Event series never reaches this field. -->
     <div class="completion-basis-field">
       <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Occurrence basis
         <div class="mt-2">
           <select name="basis"
                   class="block w-full rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:focus:outline-indigo-500">
-            <option value="">Schedule — next occurrence follows the fixed recurrence</option>
+            <option value="DUE_DATE" selected>Due date — each occurrence is due on the recurrence date</option>
             <option value="COMPLETION">Completion — next occurrence is measured from when each one is actually completed</option>
-            <option value="DUE_DATE">Due date — materialize occurrences with a due date instead of a scheduled date</option>
           </select>
         </div>
       </label>
     </div>
+    <!-- The Sub-items panel is edit-only: a definition is owned by a series, and this one
+         doesn't exist yet. Toggled with the other Task-only field groups below. -->
+    <p class="sub-items-field text-xs text-gray-500 dark:text-gray-400">Sub-items — preparation
+      work due a set number of days before each occurrence — can be added once the series exists,
+      from its Edit dialog.</p>
     <div class="priority-field">
       {% call macros::priority_field("") %}{% endcall %}
     </div>
@@ -159,7 +166,7 @@
       }
       function toggle() {
         var isTask = form.querySelector('input[name="itemType"][value="TASK"]').checked;
-        form.querySelectorAll(".completion-basis-field, .assignment-field, .priority-field").forEach(function (el) {
+        form.querySelectorAll(".completion-basis-field, .assignment-field, .priority-field, .sub-items-field").forEach(function (el) {
           el.hidden = !isTask;
           el.querySelectorAll("input, select").forEach(function (field) {
             field.disabled = !isTask;

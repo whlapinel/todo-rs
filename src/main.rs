@@ -338,6 +338,18 @@ fn build_web_router() -> Router {
             "/projects/:project_id/series/:series_id/duplicate",
             post(duplicate_project_item_series_form),
         )
+        // Stage 4 of the series sub-items plan — the definition editor's CRUD. All three
+        // return the same `#series-children` panel fragment, so the edit dialog re-renders
+        // its sub-item list from storage after every mutation.
+        .route(
+            "/projects/:project_id/series/:series_id/children",
+            post(create_project_item_series_child_form),
+        )
+        .route(
+            "/projects/:project_id/series/:series_id/children/:child_id",
+            put(update_project_item_series_child_form)
+                .delete(delete_project_item_series_child_form),
+        )
         .route(
             "/projects/:project_id/series/:series_id/occurrences/:occurrence_ts",
             get(project_item_series_occurrence_detail_page)
