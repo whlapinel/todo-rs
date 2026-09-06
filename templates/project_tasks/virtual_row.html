@@ -73,20 +73,19 @@
              own Skip entry, which lives in the menu now for the same reason: fewer buttons
              fighting for room on the row's own line, all per-row actions collected in one place. -->
         <button type="button" hx-post="{{ unskip_url }}"
-          {% if in_list_view %}hx-target="#items-list" hx-select="unset" hx-swap="innerHTML"{% endif %}
+          {% if in_list_view %}hx-target="#items-list" hx-select="unset" hx-swap="innerHTML transition:true"{% endif %}
           class="block w-full cursor-pointer px-4 py-3 text-left text-sm text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-white/5">Unskip</button>
         {% else %}
         <!-- Materializes the occurrence and completes it in one step (same `complete_url` the
              old checkbox posted to) — see components/row.html's identical checkbox-to-menu
-             change. Deliberately no `data-complete-toggle` (unlike the materialized-row menu's
-             own Mark complete entry): this action's `hx-target="#items-list"` rebuilds the
-             *whole* list rather than just this row's own `<li>`, so the focus-advance
-             mechanism's "capture the next row before the swap, focus it after" approach
-             (base.html) wouldn't have a still-attached element to focus once the swap lands —
-             this row is now a selectable row (see the `<li>` tag's own doc comment above) but
-             not a safe target for that specific mechanism. -->
+             change. `hx-target="#items-list"` rebuilds the *whole* list rather than just this
+             row's own `<li>`, which is unavoidable here: completing a series' current occurrence
+             advances its cursor, so a new row has to appear that a single-row swap could never
+             produce. base.html's row-focus mechanism covers this shape too — it records the row
+             and its fallback as ids before the swap, so a rebuild that replaces every node is no
+             harder for it than a single row's own outerHTML swap. -->
         <button type="button" hx-post="{{ complete_url }}"
-          {% if in_list_view %}hx-target="#items-list" hx-select="unset" hx-swap="innerHTML"{% endif %}
+          {% if in_list_view %}hx-target="#items-list" hx-select="unset" hx-swap="innerHTML transition:true"{% endif %}
           class="block w-full cursor-pointer px-4 py-3 text-left text-sm text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-white/5">Mark complete</button>
         {% endif %}
         <a href="{{ materialize_url }}" hx-get="{{ materialize_url }}" hx-target="#action-dialog"
@@ -103,7 +102,7 @@
              (`service::item_series::skip_occurrence`/`skip_or_delete_series_occurrence`) this
              row's own top-line Skip button used to post to. -->
         <button type="button" hx-post="{{ skip_url }}" hx-confirm="Skip this occurrence?"
-          {% if in_list_view %}hx-target="#items-list" hx-select="unset" hx-swap="innerHTML"{% endif %}
+          {% if in_list_view %}hx-target="#items-list" hx-select="unset" hx-swap="innerHTML transition:true"{% endif %}
           class="block w-full cursor-pointer px-4 py-3 text-left text-sm text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-500/10">Skip</button>
         {% endif %}
       </div>

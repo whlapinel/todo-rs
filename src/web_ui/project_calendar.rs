@@ -111,6 +111,11 @@ async fn names_for(
 /// `skip_urls` map is passed (unlike the flat Tasks list's own batch-built map) — a nested
 /// child's own Skip action, if it's a materialized series occurrence, is a minor, acceptable gap
 /// here since expansion is a secondary affordance, not this screen's primary listing.
+///
+/// `series` *is* passed, unlike `skip_urls`: it drives whether a nested row's Delete reads
+/// "Reset" (`Row::materialized_occurrence`), and a materialized series sub-item is exactly the kind of
+/// child this expansion shows. A row whose destructive action is mislabeled is a different class
+/// of gap from a missing secondary action.
 async fn children_html_for(
     repo: &Arc<dyn ItemRepo>,
     item: &Item,
@@ -118,6 +123,7 @@ async fn children_html_for(
     names: &HashMap<String, String>,
     tz: i32,
     is_team_project: bool,
+    series: &Arc<dyn ItemSeriesRepo>,
 ) -> Result<Option<String>, ItemError> {
     if !item.has_children {
         return Ok(None);
@@ -134,6 +140,7 @@ async fn children_html_for(
             is_team_project,
             1,
             None,
+            Some(series),
             // Treegrid keyboard-nav pilot is Tasks-list-only for now (see `Row::treegrid`'s
             // doc comment) — this calendar row overlay keeps its existing plain markup.
             false,
@@ -168,9 +175,11 @@ pub(crate) fn calendar_row(
     is_team_project: bool,
     tz: i32,
     skip_url: Option<String>,
+    // Whether this row is a materialized series *sub-item* (`Row::series_sub_item`). Resolved
+    // by the caller rather than here, since this function is deliberately sync; the top-level
+    // half is read off `skip_url` below, which the caller already computed.
+    series_sub_item: bool,
     show_complete: bool,
-    confirmation: Option<String>,
-    dismiss_after_ms: Option<u32>,
     children_html: Option<String>,
 ) -> Result<String, ItemError> {
     let mut row = match item.kind() {
@@ -183,8 +192,6 @@ pub(crate) fn calendar_row(
             row.assignee_name = item
                 .assigned_to_user_id()
                 .and_then(|id| names.get(&id).cloned());
-            row.confirmation = confirmation;
-            row.dismiss_after_ms = dismiss_after_ms;
             row
         }
         _ => ProjectTaskRow::from_item(
@@ -196,8 +203,6 @@ pub(crate) fn calendar_row(
             skip_url,
             is_team_project,
             show_complete,
-            confirmation,
-            dismiss_after_ms,
             // This per-project calendar doesn't run the batched occurrence-state query needed
             // to know this row's current/planned status — see `Row::series_current`'s doc
             // comment on this gap.
@@ -206,6 +211,10 @@ pub(crate) fn calendar_row(
     };
     row.type_badge = Some(type_symbol(item.kind()));
     row.parent_name = parent_name;
+    // `from_item` already set `materialized_occurrence` from `skip_url`; this adds the half it
+    // structurally can't see — see `Row::series_sub_item`.
+    row.series_sub_item = series_sub_item;
+    row.materialized_occurrence = row.materialized_occurrence || series_sub_item;
     row.expanded_row = true;
     // #3 of docs/issues_and_features.md's calendar-view entries — same in-place expansion
     // `project_tasks`'s flat list already has (see `Row::children_html`'s doc comment); an
@@ -322,6 +331,8 @@ struct ProjectCalendarVirtualChildRow {
     series_name: String,
     date_label: String,
     overdue: bool,
+    /// See `project_tasks::templates::ProjectTaskVirtualChildRow::offset_label`.
+    offset_label: Option<String>,
     detail_url: String,
     complete_url: String,
 }
@@ -335,6 +346,9 @@ impl ProjectCalendarVirtualChildRow {
             series_name: view.series_name.clone(),
             date_label: format_display_date(to_local(view.date, tz), true),
             overdue: view.date < Utc::now(),
+            offset_label: crate::web_ui::project_tasks::templates::offset_label_for_days(
+                -view.days_before,
+            ),
             detail_url: view.detail_url(project_id),
             complete_url: view.complete_url(project_id),
         }
@@ -435,9 +449,21 @@ async fn day_list_rows(
             .map(|d| d.timestamp())
             .unwrap_or(i64::MAX);
         let skip_url = series_service::skip_url_for_item(series, &di.item, project_id).await?;
+        // A materialized sub-item appears here as a row of its own (list_due_by_project is
+        // parent-agnostic), so both halves of `Row::materialized_occurrence` are live on this
+        // screen — `calendar_row` ORs this with `skip_url` itself.
+        let series_sub_item = series_service::is_materialized_sub_item(series, &di.item).await?;
         let parent_name = (!di.parent_name.is_empty()).then(|| di.parent_name.clone());
-        let children_html =
-            children_html_for(repo, &di.item, project_id, names, tz, is_team_project).await?;
+        let children_html = children_html_for(
+            repo,
+            &di.item,
+            project_id,
+            names,
+            tz,
+            is_team_project,
+            series,
+        )
+        .await?;
         let html = calendar_row(
             &di.item,
             parent_name,
@@ -446,9 +472,8 @@ async fn day_list_rows(
             is_team_project,
             tz,
             skip_url,
+            series_sub_item,
             true,
-            None,
-            None,
             children_html,
         )?;
         entries.push((ts, html));
@@ -1079,6 +1104,8 @@ pub async fn toggle_project_calendar_item_complete(
         Ok(updated) => {
             let skip_url =
                 series_service::skip_url_for_item(&series, &updated, &project_id).await?;
+            let series_sub_item =
+                series_service::is_materialized_sub_item(&series, &updated).await?;
             let children_html = children_html_for(
                 &repo,
                 &updated,
@@ -1086,6 +1113,7 @@ pub async fn toggle_project_calendar_item_complete(
                 &names,
                 tz,
                 project.team_id.is_some(),
+                &series,
             )
             .await?;
             Ok(Html(calendar_row(
@@ -1096,9 +1124,8 @@ pub async fn toggle_project_calendar_item_complete(
                 project.team_id.is_some(),
                 tz,
                 skip_url,
+                series_sub_item,
                 false,
-                None,
-                None,
                 children_html,
             )?))
         }

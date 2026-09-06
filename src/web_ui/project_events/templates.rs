@@ -95,11 +95,15 @@ impl ProjectEventRow {
                 ))
             },
             assign_url: None,
+            // An Event series occurrence is materialized exactly the way a Task one is, so its
+            // delete un-materializes rather than removes — see `Row::materialized_occurrence`. Events have
+            // no sub-items, so `skip_url` is the whole story here.
+            materialized_occurrence: skip_url.is_some(),
+            // An Event structurally cannot be a child, so it can never be a sub-item.
+            series_sub_item: false,
             skip_url,
             toggle_complete_json: String::new(),
             show_complete: false,
-            confirmation: None,
-            dismiss_after_ms: None,
             is_imported: item.google_event_id().is_some(),
             // Calendar-only fields — see `Row`'s doc comments. The calendar screens build a
             // `Row` via this same `from_item` and then override these themselves.

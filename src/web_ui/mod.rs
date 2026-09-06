@@ -172,3 +172,55 @@ fn hx_redirect(location: String) -> Response {
     )
         .into_response()
 }
+
+/// Fires `base.html`'s page-level confirmation banner (`#toast-region`) via htmx's `HX-Trigger`
+/// response header, which dispatches a `prl:toast` event carrying `message` on the element that
+/// made the request.
+///
+/// This replaced the per-row `Row::confirmation` badge (a `.toast-fade` `<span>` rendered inside
+/// the row itself). A row is the wrong place for a confirmation for two reasons that both bit:
+/// the confirmation is only visible for as long as the row is, so an action whose whole point is
+/// to take the row *off* the list had to keep it artificially alive to say anything at all (the
+/// retired `dismiss_after_ms`/`just_completed_item_id` pair); and an action that returns no row —
+/// or rebuilds the whole list — had nowhere to put one. A banner outside `#page` has neither
+/// problem, and it doesn't block clicks (`pointer-events-none`), so nothing has to wait for it.
+pub(crate) fn hx_toast(mut response: Response, message: &str) -> Response {
+    let payload = serde_json::json!({ "prl:toast": { "message": message } }).to_string();
+    if let Ok(value) = axum::http::HeaderValue::from_str(&payload) {
+        response.headers_mut().insert("HX-Trigger", value);
+    }
+    response
+}
+
+/// Overrides the requester's own `hx-swap` with `delete`, wrapped in a View Transition — the
+/// response body is ignored and the target element is removed.
+///
+/// Used for the one case where a successful action means "this row is no longer on this list":
+/// completing an item while the screen is hiding completed ones. The row used to linger for
+/// 1800ms with a fading badge (`Row::dismiss_after_ms`, a `setTimeout` in `base.html`) before a
+/// second, JS-driven removal — which split the removal across two moments and left the keyboard-
+/// focus handling guessing which one it was in. Deleting it here, in the swap itself, makes the
+/// removal a single event that `base.html`'s row-focus mechanism can hang off, and hands the
+/// exit animation to the browser (every row carries a `view-transition-name` — see
+/// `components/row.html`) instead of a hand-rolled opacity transition.
+///
+/// Callers must apply this only when the request actually targeted the row (`HX-Target`), since
+/// `HX-Reswap` applies to the whole response and the same handler also serves the detail dialog's
+/// own complete-toggle and the edit form's save, whose targets must not be deleted.
+pub(crate) fn hx_delete_target(mut response: Response) -> Response {
+    response.headers_mut().insert(
+        "HX-Reswap",
+        axum::http::HeaderValue::from_static("delete transition:true"),
+    );
+    response
+}
+
+/// Whether this request's `hx-target` resolved to `elt_id`'s own row — i.e. the request came
+/// from the row (or its row-actions menu), not from a detail dialog or an edit form that happens
+/// to PUT to the same URL. See `hx_delete_target`.
+pub(crate) fn targets_row(headers: &axum::http::HeaderMap, item_id: &str) -> bool {
+    headers
+        .get("HX-Target")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|t| t == format!("item-{item_id}"))
+}

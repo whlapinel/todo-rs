@@ -772,7 +772,6 @@ async fn rebuild_tasks_list_response(
         requester_user_id,
         filters,
         tz,
-        None,
         item_dependencies,
     )
     .await?;
@@ -805,7 +804,6 @@ async fn rebuild_all_tasks_list_response(
         filters,
         project_filter,
         tz,
-        None,
     )
     .await?;
     Ok(Html(crate::web_ui::project_tasks::items_list_inner_html(&rows)).into_response())

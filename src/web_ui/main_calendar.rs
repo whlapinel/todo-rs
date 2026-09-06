@@ -115,6 +115,7 @@ async fn children_html_for(
     names: &HashMap<String, String>,
     tz: i32,
     is_team_project: bool,
+    series: &Arc<dyn ItemSeriesRepo>,
 ) -> Result<Option<String>, ItemError> {
     if !item.has_children {
         return Ok(None);
@@ -131,6 +132,7 @@ async fn children_html_for(
             is_team_project,
             1,
             None,
+            Some(series),
             // Treegrid keyboard-nav pilot is Tasks-list-only for now — see `Row::treegrid`'s
             // doc comment.
             false,
@@ -155,8 +157,8 @@ pub(crate) fn calendar_row(
     is_team_project: bool,
     tz: i32,
     skip_url: Option<String>,
-    confirmation: Option<String>,
-    dismiss_after_ms: Option<u32>,
+    // See `project_calendar::calendar_row`'s identical parameter.
+    series_sub_item: bool,
     children_html: Option<String>,
 ) -> Result<String, ItemError> {
     let mut row = match item.kind() {
@@ -165,8 +167,6 @@ pub(crate) fn calendar_row(
             row.assignee_name = item
                 .assigned_to_user_id()
                 .and_then(|id| names.get(&id).cloned());
-            row.confirmation = confirmation;
-            row.dismiss_after_ms = dismiss_after_ms;
             row
         }
         _ => ProjectTaskRow::from_item(
@@ -178,8 +178,6 @@ pub(crate) fn calendar_row(
             skip_url,
             is_team_project,
             false,
-            confirmation,
-            dismiss_after_ms,
             // The cross-project calendar doesn't run the batched occurrence-state query
             // needed to know this row's current/planned status — see `Row::series_current`'s
             // doc comment on this gap.
@@ -188,6 +186,9 @@ pub(crate) fn calendar_row(
     };
     row.type_badge = Some(type_symbol(item.kind()));
     row.parent_name = parent_name;
+    // See `project_calendar::calendar_row`'s identical override.
+    row.series_sub_item = series_sub_item;
+    row.materialized_occurrence = row.materialized_occurrence || series_sub_item;
     row.project_name = Some(project_name.to_string());
     row.expanded_row = true;
     // See `project_calendar::calendar_row`'s identical `children_html_for`-built rationale (#3
@@ -497,6 +498,8 @@ struct MainCalendarVirtualChildRow {
     series_name: String,
     date_label: String,
     overdue: bool,
+    /// See `project_tasks::templates::ProjectTaskVirtualChildRow::offset_label`.
+    offset_label: Option<String>,
     detail_url: String,
     complete_url: String,
 }
@@ -516,6 +519,9 @@ impl MainCalendarVirtualChildRow {
             series_name: view.series_name.clone(),
             date_label: format_display_date(to_local(view.date, tz), true),
             overdue: view.date < Utc::now(),
+            offset_label: crate::web_ui::project_tasks::templates::offset_label_for_days(
+                -view.days_before,
+            ),
             detail_url: view.detail_url(project_id),
             complete_url: view.complete_url(project_id),
         }
@@ -559,9 +565,11 @@ async fn day_list_rows(
         let is_team_project = names_by_project.contains_key(project_id);
         let names = names_by_project.get(project_id).unwrap_or(&empty);
         let skip_url = series_service::skip_url_for_item(series, item, project_id).await?;
+        // See `project_calendar::day_list_rows`'s identical computation.
+        let series_sub_item = series_service::is_materialized_sub_item(series, item).await?;
         let parent_name = (!di.parent_name.is_empty()).then(|| di.parent_name.clone());
         let children_html =
-            children_html_for(repo, item, project_id, names, tz, is_team_project).await?;
+            children_html_for(repo, item, project_id, names, tz, is_team_project, series).await?;
         entries.push((
             dt.timestamp(),
             calendar_row(
@@ -573,8 +581,7 @@ async fn day_list_rows(
                 is_team_project,
                 tz,
                 skip_url,
-                None,
-                None,
+                series_sub_item,
                 children_html,
             )?,
         ));
@@ -946,6 +953,8 @@ pub async fn toggle_main_calendar_item_complete(
         Ok(updated) => {
             let skip_url =
                 series_service::skip_url_for_item(&series, &updated, &project_id).await?;
+            let series_sub_item =
+                series_service::is_materialized_sub_item(&series, &updated).await?;
             let children_html = children_html_for(
                 &repo,
                 &updated,
@@ -953,6 +962,7 @@ pub async fn toggle_main_calendar_item_complete(
                 &names,
                 tz,
                 project.team_id.is_some(),
+                &series,
             )
             .await?;
             Ok(Html(calendar_row(
@@ -964,8 +974,7 @@ pub async fn toggle_main_calendar_item_complete(
                 project.team_id.is_some(),
                 tz,
                 skip_url,
-                None,
-                None,
+                series_sub_item,
                 children_html,
             )?))
         }

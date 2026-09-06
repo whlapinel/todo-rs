@@ -1560,6 +1560,31 @@ pub async fn skip_url_for_item(
     }))
 }
 
+/// True when `item` is a materialized *sub-item* of a series occurrence — i.e. a
+/// `series_child_occurrences` row points at it.
+///
+/// Exists for the row/detail Delete affordance, which reads "Reset" rather than "Delete" for
+/// anything a delete would merely un-materialize: the definition survives, so the row is
+/// recomputed as virtual on the next render and reappears (decision 6 of the sub-items plan).
+/// Its top-level counterpart needs no query of its own — `skip_url_for_item` already resolves
+/// exactly the same predicate for a materialized *occurrence*, so callers there read
+/// `skip_url.is_some()` instead of asking twice.
+///
+/// Costs nothing for a top-level item (a series occurrence is always top-level, so a sub-item
+/// always has a parent) and one indexed lookup for a child.
+pub async fn is_materialized_sub_item(
+    series_repo: &Arc<dyn ItemSeriesRepo>,
+    item: &Item,
+) -> Result<bool, ItemError> {
+    if item.parent_item_id().is_none() {
+        return Ok(false);
+    }
+    Ok(series_repo
+        .find_child_occurrence_by_item_id(&item.id)
+        .await?
+        .is_some())
+}
+
 pub async fn list_occurrence_states_for_project(
     series_repo: &Arc<dyn ItemSeriesRepo>,
     users: &Arc<dyn UserRepo>,
@@ -1723,6 +1748,11 @@ pub struct SeriesChildOccurrenceView {
     /// `days_before` days before `parent_occurrence_date` — what the user sees, what buckets
     /// this row on a calendar, and what lands on `due_date` at materialization.
     pub date: DateTime<Utc>,
+    /// The definition's own lead time, non-negative. Carried through (rather than left implicit
+    /// in `date`) so a still-virtual row can render the same "-30d" offset badge its
+    /// materialized counterpart gets from `due_offset_days` — see
+    /// `web_ui::project_tasks::templates::offset_label_for_days`.
+    pub days_before: i32,
     pub priority: Option<i32>,
     /// The definition's authored position, so callers can render sub-items of one cycle in the
     /// order they were written rather than by date.
@@ -1748,9 +1778,10 @@ impl SeriesChildOccurrenceView {
         )
     }
 
-    /// `GET` renders the no-side-effect read-only dialog; `POST` materializes and redirects to
-    /// the now-real item's own page. Same split (and same "the name is about the POST, not the
-    /// GET" caveat) as `ProjectOccurrence::materialize_url`.
+    /// `GET` renders the no-side-effect read-only dialog; `PUT` materializes this sub-item and
+    /// applies the edit in one step (`handlers::update_project_task_series_child_occurrence_form`).
+    /// Neither shape materializes on a plain view — the `POST`-to-materialize this route briefly
+    /// carried in Stage 5 was the feature's one materialize-on-touch and has been removed.
     pub fn detail_url(&self, project_id: &str) -> String {
         format!(
             "/web/projects/{project_id}/series/{}/occurrences/{}/children/{}",
@@ -1758,6 +1789,14 @@ impl SeriesChildOccurrenceView {
             self.parent_occurrence_date.timestamp(),
             self.child_id,
         )
+    }
+
+    /// The edit form for this still-virtual sub-item — prefilled from the definition plus the
+    /// computed lead date, with no item involved, exactly as `ProjectOccurrence::edit_url`'s
+    /// parent-occurrence counterpart is prefilled from the series plus the cycle date. `GET` has
+    /// no side effect; saving goes to `detail_url`'s `PUT`.
+    pub fn edit_url(&self, project_id: &str) -> String {
+        format!("{}/edit", self.detail_url(project_id))
     }
 
     /// Materializes this sub-item (and, as an internal step, its parent occurrence) and
@@ -1865,6 +1904,7 @@ pub async fn fan_out_child_occurrences(
                         child.days_before,
                         tz_offset_minutes,
                     ),
+                    days_before: child.days_before,
                     priority: child.priority,
                     sort_order: child.sort_order,
                     item_id: by_key
@@ -4741,6 +4781,102 @@ mod tests {
                 .await
                 .expect("should succeed"),
             0
+        );
+    }
+
+    /// Builds a bare `Task` `Item` with the given id and optional parent — enough for
+    /// `is_materialized_sub_item`, which only reads `id` and `parent_item_id`.
+    fn task_item(id: &str, parent_item_id: Option<&str>) -> Item {
+        let mut item = Item::new_task("u1", "Book venue");
+        item.id = id.to_string();
+        item.item_type = crate::domain::item::ItemType::Task(crate::domain::item::TaskItem {
+            parent_item_id: parent_item_id.map(str::to_string),
+            ..Default::default()
+        });
+        item
+    }
+
+    #[tokio::test]
+    async fn is_materialized_sub_item_is_true_when_a_child_occurrence_row_points_at_the_item() {
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock
+            .expect_find_child_occurrence_by_item_id()
+            .withf(|item_id: &str| item_id == "child-item-id")
+            .times(1)
+            .returning(|_| {
+                Ok(Some(SeriesChildOccurrence {
+                    child_id: "c1".to_string(),
+                    occurrence_date: occurrence_date(),
+                    item_id: "child-item-id".to_string(),
+                }))
+            });
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        assert!(
+            is_materialized_sub_item(&series_repo, &task_item("child-item-id", Some("parent")))
+                .await
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn is_materialized_sub_item_is_false_for_an_ordinary_hand_added_child() {
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock
+            .expect_find_child_occurrence_by_item_id()
+            .times(1)
+            .returning(|_| Ok(None));
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        assert!(
+            !is_materialized_sub_item(&series_repo, &task_item("some-item", Some("parent")))
+                .await
+                .unwrap()
+        );
+    }
+
+    /// A series occurrence is always top-level, so the top-level half of `Row::materialized_occurrence`
+    /// (`skip_url_for_item`) already covers it — this helper must not spend a query re-asking.
+    #[tokio::test]
+    async fn is_materialized_sub_item_skips_the_query_entirely_for_a_top_level_item() {
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock
+            .expect_find_child_occurrence_by_item_id()
+            .never();
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        assert!(
+            !is_materialized_sub_item(&series_repo, &task_item("top-level-item", None))
+                .await
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn sub_item_occurrence_urls_address_the_definition_and_the_parent_cycle_only() {
+        let view = SeriesChildOccurrenceView {
+            child_id: "c1".to_string(),
+            child_name: "Book venue".to_string(),
+            description: None,
+            series_id: "s1".to_string(),
+            series_name: "Party".to_string(),
+            parent_occurrence_date: occurrence_date(),
+            date: occurrence_date(),
+            days_before: 0,
+            priority: None,
+            sort_order: 0,
+            item_id: None,
+        };
+        let ts = occurrence_date().timestamp();
+        assert_eq!(
+            view.detail_url("p1"),
+            format!("/web/projects/p1/series/s1/occurrences/{ts}/children/c1")
+        );
+        // The edit form hangs off the same address — nothing in either URL names an item,
+        // which is what lets both render (and only the PUT materialize).
+        assert_eq!(
+            view.edit_url("p1"),
+            format!("/web/projects/p1/series/s1/occurrences/{ts}/children/c1/edit")
         );
     }
 

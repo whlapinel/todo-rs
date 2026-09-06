@@ -429,6 +429,7 @@ pub async fn project_event_children_fragment(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(item_dependencies): Extension<Arc<dyn ItemDependencyRepo>>,
+    Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
     TzOffset(tz): TzOffset,
 ) -> Result<Html<String>, ItemError> {
     let project =
@@ -444,6 +445,7 @@ pub async fn project_event_children_fragment(
         &auth_user.user_id,
         tz,
         &item_dependencies,
+        &series,
     )
     .await
 }
@@ -496,6 +498,7 @@ pub async fn create_project_event_child_form(
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
     Extension(item_dependencies): Extension<Arc<dyn ItemDependencyRepo>>,
+    Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
     TzOffset(tz): TzOffset,
     Form(form): Form<ProjectEventChildForm>,
 ) -> Result<Response, ItemError> {
@@ -537,6 +540,7 @@ pub async fn create_project_event_child_form(
         &auth_user.user_id,
         tz,
         &item_dependencies,
+        &series,
     )
     .await?
     .into_response())
@@ -669,6 +673,9 @@ pub async fn update_project_event_form(
         .into_response());
     }
     let skip_url = series_service::skip_url_for_item(&series, &updated, &project_id).await?;
+    // An Event can never be a structural child, so it can never be a materialized *sub-item*;
+    // `calendar_row` derives the top-level half from `skip_url` itself.
+    let series_sub_item = false;
     // See `project_tasks::handlers::update_project_task_form`'s identical rationale — a
     // Reschedule saved from a calendar row (`row_view` set) re-renders via that screen's own
     // `calendar_row` overlay instead of the plain `ProjectEventRow` shape.
@@ -701,8 +708,7 @@ pub async fn update_project_event_form(
                     project.team_id.is_some(),
                     tz,
                     skip_url,
-                    None,
-                    None,
+                    series_sub_item,
                     // An Event can never have structural children — see CLAUDE.md's Events
                     // section — so this is always `None` here, unlike the Task branches of
                     // `calendar_row`'s other callers.
@@ -739,9 +745,8 @@ pub async fn update_project_event_form(
                     project.team_id.is_some(),
                     tz,
                     skip_url,
+                    series_sub_item,
                     false,
-                    None,
-                    None,
                     // See the `main-calendar` branch above's identical rationale — an Event
                     // never has structural children.
                     None,

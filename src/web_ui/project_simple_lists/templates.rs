@@ -56,10 +56,11 @@ impl ProjectSimpleItemRow {
             reschedule_url: None,
             assign_url: None,
             skip_url: None,
+            // Simple items never come from a series.
+            materialized_occurrence: false,
+            series_sub_item: false,
             toggle_complete_json: String::new(),
             show_complete: false,
-            confirmation: None,
-            dismiss_after_ms: None,
             // Simple items are never Google-Calendar-imported (only Events are).
             is_imported: false,
             // Calendar-only fields — see `Row`'s doc comments; Simple items never appear on a

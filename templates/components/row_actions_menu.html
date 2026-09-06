@@ -17,14 +17,13 @@
     {% if let Some(url) = complete_url %}
     <!-- Replaces the row's own checkbox (removed for treegrid rows — see components/row.html's
          doc comment on the expand-arrow slot that took its place): same hx-put/hx-vals the
-         checkbox used to carry, just triggered from here instead. `data-complete-toggle` lets
-         base.html's focus-advance-on-complete listener (mirroring the old checkbox `change`
-         listener) tell "about to complete" apart from "about to un-complete" without re-reading
-         `complete` itself. -->
+         checkbox used to carry, just triggered from here instead. Completing while the screen
+         hides completed items answers with `HX-Reswap: delete transition:true`
+         (`web_ui::hx_delete_target`), so this same swap is what takes the row off the list —
+         which is why `hx-target` has to be the row itself and not some wrapper. -->
     <button type="button" hx-put="{{ url }}"
         hx-vals='{"complete": "{{ toggle_complete_json }}"{% if show_complete %}, "showComplete": "1"{% endif %}}'
         hx-target="#item-{{ id }}" hx-select="#item-{{ id }}" hx-swap="outerHTML"
-        data-complete-toggle="{% if complete %}uncomplete{% else %}complete{% endif %}"
         class="block w-full cursor-pointer px-4 py-3 text-left text-sm text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-white/5">{% if complete %}Mark incomplete{% else %}Mark complete{% endif %}</button>
     {% endif %}
     {% if let Some(url) = skip_url %}
@@ -102,9 +101,30 @@
         class="block w-full cursor-pointer px-4 py-3 text-left text-sm text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-white/5">Duplicate</button>
     {% endif %}
     {% if !is_imported %}
+    <!-- Same route either way — only the wording changes. On a materialized series occurrence
+         (top-level or sub-item) this DELETE un-materializes rather than removes: the series
+         definition and the cycle both survive, so the row comes back as a still-virtual one on
+         the next render. "Delete" would describe neither the operation nor its result, which is
+         exactly the "I deleted it and it came back" reading the sub-items plan flagged as
+         looking like a bug. See `Row::materialized_occurrence`. -->
+    <!-- Deliberately NOT the plain-delete swap below. That one removes this row's own `<li>`,
+         which is right when the item is gone for good — but a reset leaves a still-virtual row
+         in its place (and, for a sub-item, can un-materialize its parent occurrence too), so
+         swapping the row out would show a gap where the recomputed row belongs. Re-fetching the
+         page in place renders whatever now stands there, and `window.location.href` carries the
+         screen's active filters, so nothing is lost. Same mechanism the edit dialog's own save
+         already uses (project_tasks/detail_fields.html). -->
+    {% if materialized_occurrence %}
+    <button type="button" hx-delete="{{ item_url }}"
+        hx-confirm="Reset {{ name }}{% if has_children %} and all its sub-items{% endif %}? This occurrence goes back to being a plan — it stays on the list, with any edits to it discarded."
+        hx-swap="none"
+        hx-on::after-request="if(event.detail.successful) htmx.ajax('GET', window.location.href, {target: '#page', select: '#page', swap: 'innerHTML transition:true'});"
+        class="block w-full cursor-pointer px-4 py-3 text-left text-sm text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-500/10">Reset</button>
+    {% else %}
     <button type="button" hx-delete="{{ item_url }}"
         hx-confirm="Delete {{ name }}{% if has_children %} and all its sub-items{% endif %}?"
         hx-target="#item-{{ id }}" hx-select="unset" hx-swap="outerHTML swap:200ms"
         class="block w-full cursor-pointer px-4 py-3 text-left text-sm text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-500/10">Delete</button>
+    {% endif %}
     {% endif %}
 </div>

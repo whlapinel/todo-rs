@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Edit {{ name }} · Todo{% endblock %}
+{% block content %}
+{{ fields|safe }}
+<!-- See series_occurrence_edit_page.html's identical script for the full rationale. -->
+<script>
+  (function () {
+    var dialog = document.getElementById('action-dialog');
+    var frag = document.getElementById('dialog-fragment');
+    if (dialog && frag && !dialog.open) {
+      dialog.innerHTML = '';
+      while (frag.firstChild) dialog.appendChild(frag.firstChild);
+      frag.remove();
+      htmx.process(dialog);
+      dialog.showModal();
+    }
+  })();
+</script>
+{% endblock %}

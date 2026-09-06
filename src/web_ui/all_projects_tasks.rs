@@ -18,7 +18,8 @@ use crate::web_ui::project_tasks::templates::{ProjectTaskRow, priority_label_for
 use crate::web_ui::{format_display_date, to_local};
 use askama::Template;
 use axum::extract::{Extension, Form, Path, Query};
-use axum::response::Html;
+use axum::http::HeaderMap;
+use axum::response::{Html, IntoResponse, Response};
 use chrono::Utc;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -126,6 +127,8 @@ struct AllProjectsTaskVirtualChildRow {
     name: String,
     date_label: String,
     overdue: bool,
+    /// See `ProjectTaskVirtualChildRow::offset_label`.
+    offset_label: Option<String>,
     priority_label: Option<String>,
     detail_url: String,
     complete_url: String,
@@ -154,6 +157,9 @@ impl AllProjectsTaskVirtualChildRow {
             name: view.child_name.clone(),
             date_label: format_display_date(to_local(view.date, tz), true),
             overdue: view.date < Utc::now(),
+            offset_label: crate::web_ui::project_tasks::templates::offset_label_for_days(
+                -view.days_before,
+            ),
             priority_label: priority_label_for(view.priority),
             detail_url: view.detail_url(project_id),
             complete_url: format!("{}{list_query}", view.complete_url(project_id)),
@@ -209,11 +215,7 @@ fn render_virtual_child_rows(
 /// can re-render via this same function; `reschedule_url`/`assign_url` carry a `?view=all-tasks`
 /// suffix, now recognized by `project_tasks::normalize_row_view`
 /// (`docs/all-projects-landing-plan.md` Stage 4) — `update_project_task_form`'s `"all-tasks"` arm
-/// calls this same function to re-render a Reschedule/Assign save from this screen. `confirmation`/
-/// `dismiss_after_ms` mirror `project_calendar::calendar_row`/`main_calendar::calendar_row`'s own
-/// trailing params, threaded through by `list_all_projects_task_rows`'s `just_completed_item_id`
-/// and by `project_tasks::handlers::complete_project_item_series_occurrence_form`'s `"all-tasks"`
-/// rebuild branch.
+/// calls this same function to re-render a Reschedule/Assign save from this screen.
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn all_projects_task_row(
@@ -224,9 +226,9 @@ pub(crate) fn all_projects_task_row(
     is_team_project: bool,
     tz: i32,
     skip_url: Option<String>,
+    // See `project_calendar::calendar_row`'s identical parameter (`Row::series_sub_item`).
+    series_sub_item: bool,
     show_complete: bool,
-    confirmation: Option<String>,
-    dismiss_after_ms: Option<u32>,
     children_html: Option<String>,
 ) -> Result<String, ItemError> {
     let mut row = ProjectTaskRow::from_item(
@@ -238,14 +240,15 @@ pub(crate) fn all_projects_task_row(
         skip_url,
         is_team_project,
         show_complete,
-        confirmation,
-        dismiss_after_ms,
         // This cross-project screen only ever shows a series' current occurrence (mirroring
         // `project_tasks`'s own flat-list restriction — see `Row::series_current`'s doc
         // comment), but doesn't yet run the batched query needed to confirm that per row.
         None,
     );
     row.expanded_row = true;
+    // See `project_calendar::calendar_row`'s identical override.
+    row.series_sub_item = series_sub_item;
+    row.materialized_occurrence = row.materialized_occurrence || series_sub_item;
     row.project_name = Some(project_name.to_string());
     // #6 of docs/issues_and_features.md — a row with children was falling into the
     // `detail_via_dialog` name-click branch instead of expanding in place, since this function
@@ -342,12 +345,6 @@ impl AllProjectsTasksQuery {
 /// per-project bucketing/filtering/tagging has no real overlap with the single-project function
 /// it otherwise resembles.
 ///
-/// `just_completed_item_id` mirrors `project_tasks::render_rows_with_virtual`'s own parameter —
-/// forces that one item's row to stay visible (with its "Completed" confirm-then-fade badge)
-/// even when the filters would otherwise exclude it, used by `project_tasks::handlers::
-/// complete_project_item_series_occurrence_form`'s `"all-tasks"` rebuild branch. `None` for the
-/// plain page load (`all_projects_tasks_page`).
-///
 /// `filters` is the same screen-agnostic `ListFilters` `project_tasks` uses
 /// (`docs/list-filtering-plan.md`) — every dimension (`showComplete`/`assignedTo`/`dueDate`/
 /// `schedule`/`recurring`) applies per item/occurrence exactly as it does there, gated by each
@@ -366,7 +363,6 @@ pub(crate) async fn list_all_projects_task_rows(
     filters: &ListFilters,
     project_filter: Option<&str>,
     tz: i32,
-    just_completed_item_id: Option<&str>,
 ) -> Result<Vec<String>, ItemError> {
     let user_projects = project_service::list_projects(projects, requester_user_id).await?;
     let now = Utc::now();
@@ -423,15 +419,16 @@ pub(crate) async fn list_all_projects_task_rows(
         };
 
         for item in &items {
-            let just_completed = Some(item.id.as_str()) == just_completed_item_id;
-            if !(filters.matches(item, requester_user_id, is_team_project, now) || just_completed) {
+            if !filters.matches(item, requester_user_id, is_team_project, now) {
                 continue;
             }
             let ts = item.due_date().map(|d| d.timestamp()).unwrap_or(i64::MAX);
             let skip_url =
                 item_series_service::skip_url_for_item(series, item, &project.id).await?;
-            let confirmation = just_completed.then(|| "Completed".to_string());
-            let dismiss_after_ms = (just_completed && !filters.show_complete).then_some(1800u32);
+            // Always false here — a materialized sub-item is nested, so it renders through
+            // `render_expandable_children` instead. The top-level half comes off `skip_url`
+            // inside `all_projects_task_row`. See `Row::series_sub_item`.
+            let series_sub_item = false;
             let children_html = if item.has_children {
                 let descendants = crate::web_ui::project_tasks::render_expandable_children(
                     repo,
@@ -444,6 +441,7 @@ pub(crate) async fn list_all_projects_task_rows(
                     is_team_project,
                     1,
                     None,
+                    Some(series),
                     // Treegrid keyboard-nav pilot is Tasks-list-only for now — see
                     // `Row::treegrid`'s doc comment.
                     false,
@@ -483,9 +481,8 @@ pub(crate) async fn list_all_projects_task_rows(
                 is_team_project,
                 tz,
                 skip_url,
+                series_sub_item,
                 filters.show_complete,
-                confirmation,
-                dismiss_after_ms,
                 children_html,
             )?;
             entries.push((ts, html));
@@ -544,7 +541,6 @@ pub async fn all_projects_tasks_page(
         &filters,
         project_filter,
         tz,
-        None,
     )
     .await?;
     let user_projects = project_service::list_projects(&projects, &auth_user.user_id).await?;
@@ -705,8 +701,11 @@ pub struct ToggleAllProjectsTaskForm {
     /// `show_complete`-gated `showComplete` field) — previously absent from this struct, so
     /// axum's `Form` extractor silently dropped it and `show_complete` below always defaulted
     /// to `false`, the root cause of #7 of docs/issues_and_features.md's calendar/list-view
-    /// entries (completing a task here never showed the "Completed" confirm-then-fade badge
+    /// entries (completing a task here never showed the "Completed" confirmation
     /// `update_project_task_form` already gives the same checkbox on the per-project screen).
+    /// Still load-bearing after that confirmation moved to a page-level banner: it's how this
+    /// handler knows whether a just-completed row still belongs on the list at all — see
+    /// `web_ui::hx_delete_target`.
     show_complete: Option<String>,
 }
 
@@ -725,8 +724,9 @@ pub async fn toggle_all_projects_task_complete(
     Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
     Extension(item_dependencies): Extension<Arc<dyn ItemDependencyRepo>>,
     TzOffset(tz): TzOffset,
+    headers: HeaderMap,
     Form(form): Form<ToggleAllProjectsTaskForm>,
-) -> Result<Html<String>, ItemError> {
+) -> Result<Response, ItemError> {
     let current = project_item_service::get_project_item(
         &repo,
         &projects,
@@ -781,14 +781,16 @@ pub async fn toggle_all_projects_task_complete(
         Ok(updated) => {
             let skip_url =
                 item_series_service::skip_url_for_item(&series, &updated, &project_id).await?;
-            // #7 of docs/issues_and_features.md — mirrors `update_project_task_form`'s identical
-            // confirm-then-fade computation, previously missing here entirely (this handler
-            // always passed `None, None`, so completing a task on this screen never showed the
-            // "Completed" badge the per-project Tasks list already gives the same checkbox).
+            // This single-row swap can re-render a nested sub-item too — see
+            // `project_tasks::handlers::update_project_task_form`'s identical computation.
+            let series_sub_item =
+                item_series_service::is_materialized_sub_item(&series, &updated).await?;
+            // #7 of docs/issues_and_features.md — mirrors `update_project_task_form`'s
+            // identical completion handling, previously missing here entirely (this handler
+            // never signalled a completion at all, so completing a task on this screen was
+            // silent where the per-project Tasks list already confirmed the same checkbox).
             let show_complete = form.show_complete.is_some();
             let just_completed = !current.complete() && updated.complete();
-            let confirmation = just_completed.then(|| "Completed".to_string());
-            let dismiss_after_ms = (just_completed && !show_complete).then_some(1800u32);
             let children_html = if updated.has_children {
                 let descendants = crate::web_ui::project_tasks::render_expandable_children(
                     &repo,
@@ -801,6 +803,7 @@ pub async fn toggle_all_projects_task_complete(
                     project.team_id.is_some(),
                     1,
                     None,
+                    Some(&series),
                     // Treegrid keyboard-nav pilot is Tasks-list-only for now — see
                     // `Row::treegrid`'s doc comment.
                     false,
@@ -813,7 +816,7 @@ pub async fn toggle_all_projects_task_complete(
             } else {
                 None
             };
-            Ok(Html(all_projects_task_row(
+            let mut response = Html(all_projects_task_row(
                 &updated,
                 &project_id,
                 &project.name,
@@ -821,17 +824,25 @@ pub async fn toggle_all_projects_task_complete(
                 project.team_id.is_some(),
                 tz,
                 skip_url,
+                series_sub_item,
                 show_complete,
-                confirmation,
-                dismiss_after_ms,
                 children_html,
-            )?))
+            )?)
+            .into_response();
+            // See `project_tasks::handlers::update_project_task_form`'s identical block.
+            if just_completed {
+                if !show_complete && crate::web_ui::targets_row(&headers, &updated.id) {
+                    response = crate::web_ui::hx_delete_target(response);
+                }
+                response = crate::web_ui::hx_toast(response, "Completed");
+            }
+            Ok(response)
         }
         // Same rationale as `main_calendar::toggle_main_calendar_item_complete`'s identical
         // branch — the item was a recurring legacy item that got replaced by a fresh
         // successor under a new id (item-level recurrence is retired, but a pre-retirement
         // completed item's history can still hit this).
-        Err(ItemError::NotFound) => Ok(Html(String::new())),
+        Err(ItemError::NotFound) => Ok(Html(String::new()).into_response()),
         Err(e) => Err(e),
     }
 }

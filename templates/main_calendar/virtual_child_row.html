@@ -15,6 +15,10 @@
   <div class="mt-1 flex items-center gap-x-3 pl-7 text-xs text-gray-500 dark:text-gray-400">
     <span class="rounded bg-gray-100 px-1.5 py-0.5 text-gray-600 dark:bg-white/10 dark:text-gray-300">{{ project_name }}</span>
     <span class="truncate text-indigo-600 dark:text-indigo-400">for {{ series_name }}</span>
+    <!-- See project_tasks/virtual_child_row.html's identical offset badge. -->
+    {% if let Some(label) = offset_label %}
+    <span>{{ label }}</span>
+    {% endif %}
     <span class="flex-1 {% if overdue %}text-red-600 dark:text-red-400{% endif %}">Due: {{ date_label }}</span>
   </div>
 </li>

@@ -16,6 +16,9 @@
   color-scheme: light dark;
 }
 
+/* The in-form "✓ Saved" badge every detail-fields template shows after an inline save
+   (`just_saved`) — a self-expiring inline confirmation, distinct from the page-level banner
+   below. */
 @keyframes toast-fade {
   0%, 60% { opacity: 1; }
   100% { opacity: 0; }
@@ -25,19 +28,27 @@
   animation: toast-fade 2.5s ease-in forwards;
 }
 
-/* Rows/fragments the server marks with data-dismiss-after="<ms>" (see components/row.html,
-   base.html's htmx:afterSwap listener) fade out just before their own JS-driven removal from
-   the DOM -- e.g. a freshly-completed task row when "Show completed" is off, giving the user
-   a moment to see the success state (checkbox checked, strikethrough, the .toast-fade
-   confirmation badge) before it leaves the list, instead of vanishing the instant the
-   request completes. Reusable by any row/fragment for any successful action, not just
-   completion -- a handler just needs to set the attribute. */
-[data-dismiss-after] {
-  transition: opacity 300ms ease-in;
+/* The page-level confirmation banner (base.html's #toast-region/showToast, raised by
+   web_ui::hx_toast's HX-Trigger header). This replaced a pair of row-scoped mechanisms: a
+   .toast-fade "Completed" badge rendered inside the row (the class above, still used by the
+   in-form saves), and a [data-dismiss-after] opacity
+   transition that removed the row 1800ms later from JS. Both were tied to a row still being on
+   the list, which is exactly what a completion takes away; the row's removal is now the swap
+   itself (web_ui::hx_delete_target, animated by the View Transition its own
+   `view-transition-name` sets up) and the confirmation outlives it up here. */
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(-0.5rem); }
+  to { opacity: 1; transform: none; }
 }
 
-[data-dismiss-after].dismiss-fade-out {
-  opacity: 0;
+.toast-banner {
+  animation: toast-in 150ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toast-banner {
+    animation: none;
+  }
 }
 
 /* Desktop sidebar collapse (base.html's toggleSidebar()/nav.html's #sidebar-desktop).

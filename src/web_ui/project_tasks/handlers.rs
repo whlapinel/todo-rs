@@ -127,7 +127,6 @@ pub async fn project_tasks_page(
         &auth_user.user_id,
         &filters,
         tz,
-        None,
         &item_dependencies,
     )
     .await?;
@@ -284,6 +283,14 @@ pub async fn project_task_detail_page(
     )
     .await?;
     let complete = item.complete();
+    // Same predicate `Row::materialized_occurrence` carries on this item's own row — a materialized
+    // top-level occurrence (exactly what `skip_url_for_item` resolves) or a materialized
+    // sub-item. Both mean this page's Delete only un-materializes; see that field's doc comment.
+    let materialized_occurrence =
+        item_series_service::skip_url_for_item(&series, &item, &project_id)
+            .await?
+            .is_some()
+            || item_series_service::is_materialized_sub_item(&series, &item).await?;
     render(ProjectTaskDetailPageTemplate {
         id: item.id,
         project_id,
@@ -293,6 +300,7 @@ pub async fn project_task_detail_page(
         dialog,
         nav_html,
         parent_link,
+        materialized_occurrence,
     })
 }
 
@@ -1175,11 +1183,13 @@ pub async fn complete_project_item_series_occurrence_form(
             &auth_user.user_id,
             &filters,
             tz,
-            Some(item.id.as_str()),
             &item_dependencies,
         )
         .await?;
-        return Ok(Html(super::items_list_inner_html(&rows)).into_response());
+        return Ok(crate::web_ui::hx_toast(
+            Html(super::items_list_inner_html(&rows)).into_response(),
+            "Completed",
+        ));
     }
     if q.view.as_deref() == Some("all-tasks") {
         let filters = list_filters_from_parts(
@@ -1200,11 +1210,15 @@ pub async fn complete_project_item_series_occurrence_form(
             &filters,
             q.project.as_deref(),
             tz,
-            Some(item.id.as_str()),
         )
         .await?;
-        return Ok(Html(super::items_list_inner_html(&rows)).into_response());
+        return Ok(crate::web_ui::hx_toast(
+            Html(super::items_list_inner_html(&rows)).into_response(),
+            "Completed",
+        ));
     }
+    // Deliberately no `hx_toast` here: this branch answers with `HX-Redirect`, so the whole
+    // page reloads and any banner the trigger raised would be thrown away with it.
     Ok(redirect_to_current_page(&headers, &project_id))
 }
 
@@ -1398,6 +1412,9 @@ pub async fn project_task_series_child_occurrence_detail_page(
     let detail_url = format!(
         "/web/projects/{project_id}/series/{series_id}/occurrences/{occurrence_ts}/children/{child_id}"
     );
+    let edit_url = format!("{detail_url}/edit");
+    let parent_occurrence_url =
+        format!("/web/projects/{project_id}/series/{series_id}/occurrences/{occurrence_ts}");
     let nav_html = nav::build_nav_html(
         &projects,
         &auth_user.user_id,
@@ -1412,35 +1429,115 @@ pub async fn project_task_series_child_occurrence_detail_page(
         priority_label: priority_label_for(child.priority),
         date_label: format_display_date(to_local(date, tz), true),
         overdue: date < Utc::now(),
+        parent_occurrence_label: format!("{} — {parent_label}", series.name),
+        parent_occurrence_url,
         series_name: series.name.clone(),
         series_url: format!("/web/projects/{project_id}/series"),
         complete_url: format!("{detail_url}/complete"),
-        materialize_url: detail_url,
+        edit_url,
         nav_html,
     })?
     .into_response())
 }
 
-/// `POST` on the detail route above — materializes this sub-item (and, as an internal step, its
-/// parent occurrence) and lands on the now-real task's own page. Stands in for an Edit form,
-/// which Stage 5 of the series sub-items plan skipped.
+/// `GET .../children/:child_id/edit` — the occurrence-scoped edit form for a still-virtual
+/// sub-item. **No side effect**: like `render_series_occurrence_edit_page` (its parent-occurrence
+/// counterpart), the form is built entirely from the definition plus the parent's cycle date,
+/// with no `Item` in play. Nothing is written until its `PUT` below.
 ///
-/// **This is the one place the sub-items feature materializes without persisting a change**,
-/// which is the pattern the design is otherwise built to avoid (materialize on persist, never
-/// on view or touch). It should be replaced by a `GET .../edit` form prefilled from the
-/// definition plus the computed lead date — exactly as `render_series_occurrence_edit_page`
-/// prefills a parent occurrence from the series with no item involved — and a `PUT` that
-/// materializes-then-writes, at which point this handler and the dialog's "Open" button both
-/// go away. Tracked in `docs/issues_and_features.md`.
-pub async fn materialize_project_task_series_child_occurrence_form(
+/// This replaced Stage 5's `POST`-to-materialize "Open" button, which was the one place the
+/// sub-items feature materialized without persisting a change — the pattern the design otherwise
+/// exists to avoid (materialize on persist, never on view or touch).
+///
+/// Redirects to the real task's own edit page once the sub-item has been materialized, the same
+/// dispatch the read-only detail route above makes.
+pub async fn project_task_series_child_occurrence_edit_page(
+    Path((project_id, series_id, occurrence_ts, child_id)): Path<(String, String, i64, String)>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(item_series): Extension<Arc<dyn ItemSeriesRepo>>,
+    TzOffset(tz): TzOffset,
+) -> Result<Response, ItemError> {
+    let (_, child, occurrence_date) = resolve_series_child(
+        &projects,
+        &teams,
+        &item_series,
+        &auth_user,
+        &project_id,
+        &series_id,
+        occurrence_ts,
+        &child_id,
+    )
+    .await?;
+    if let Some(existing) = item_series
+        .get_child_occurrence(&child_id, occurrence_date)
+        .await?
+    {
+        return Ok(hx_redirect(format!(
+            "{}/edit",
+            project_task_url(&project_id, &existing.item_id)
+        )));
+    }
+    let project =
+        project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
+    // Points are absent from this form (a child can't carry them — `Item::validate`), so unlike
+    // `render_series_occurrence_edit_page` there's no `is_project_admin` check to make here.
+    let assignee_options = match &project.team_id {
+        Some(team_id) => active_member_options(&teams, team_id, &auth_user.user_id).await?,
+        None => Vec::new(),
+    };
+    let fields = ProjectTaskSeriesChildOccurrenceFields::from_child(
+        &child,
+        occurrence_date,
+        &project_id,
+        &series_id,
+        project.team_id.is_some(),
+        assignee_options,
+        tz,
+    )
+    .render()?;
+    let nav_html = nav::build_nav_html(
+        &projects,
+        &auth_user.user_id,
+        active_context(&project_id),
+        SidebarSection::Tasks,
+    )
+    .await?;
+    Ok(render(ProjectTaskSeriesChildOccurrenceEditPageTemplate {
+        name: child.name.clone(),
+        fields,
+        nav_html,
+    })?
+    .into_response())
+}
+
+/// `PUT` on the detail route — materializes this sub-item (and, as an internal step, its parent
+/// occurrence) and applies the edit in one step. The sub-item counterpart of
+/// `update_project_task_series_occurrence_form`.
+///
+/// Unlike that one, this returns an **empty body, no redirect**: the form re-renders the list it
+/// was opened over in place instead of navigating to the new item's page (see
+/// `series_child_occurrence_fields.html` for why a single-row swap can't do the job — the row's
+/// id changes, and the parent occurrence may materialize alongside it). Nothing here needs to
+/// know which screen that was.
+///
+/// Materializing here is the design working as intended — a persisted change is exactly what is
+/// allowed to create the item (decision 3 of the sub-items plan). What must not happen, and no
+/// longer does, is materializing on a plain view or navigation.
+#[allow(clippy::too_many_arguments)]
+pub async fn update_project_task_series_child_occurrence_form(
     Path((project_id, series_id, occurrence_ts, child_id)): Path<(String, String, i64, String)>,
     Extension(auth_user): Extension<AuthUser>,
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(item_series): Extension<Arc<dyn ItemSeriesRepo>>,
+    Extension(activity_log): Extension<Arc<dyn ActivityLogRepo>>,
     Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
+    Extension(item_dependencies): Extension<Arc<dyn ItemDependencyRepo>>,
     TzOffset(tz): TzOffset,
+    Form(form): Form<ProjectTaskForm>,
 ) -> Result<Response, ItemError> {
     let (_, _, occurrence_date) = resolve_series_child(
         &projects,
@@ -1465,7 +1562,20 @@ pub async fn materialize_project_task_series_child_occurrence_form(
         tz,
     )
     .await?;
-    Ok(hx_redirect(project_task_url(&project_id, &item.id)))
+    let params = update_params_from_form(&project_id, &item.id, &item, &form, tz);
+    project_item_service::update_project_item(
+        &repo,
+        &projects,
+        &teams,
+        &activity_log,
+        &item_series,
+        &reminders,
+        &item_dependencies,
+        &auth_user.user_id,
+        params,
+    )
+    .await?;
+    Ok(Html(String::new()).into_response())
 }
 
 /// Materialize-and-complete in one `POST`, the sub-item counterpart of
@@ -1551,11 +1661,13 @@ pub async fn complete_project_task_series_child_occurrence_form(
             &auth_user.user_id,
             &filters,
             tz,
-            Some(item.id.as_str()),
             &item_dependencies,
         )
         .await?;
-        return Ok(Html(super::items_list_inner_html(&rows)).into_response());
+        return Ok(crate::web_ui::hx_toast(
+            Html(super::items_list_inner_html(&rows)).into_response(),
+            "Completed",
+        ));
     }
     if q.view.as_deref() == Some("all-tasks") {
         let filters = list_filters_from_parts(
@@ -1576,11 +1688,15 @@ pub async fn complete_project_task_series_child_occurrence_form(
             &filters,
             q.project.as_deref(),
             tz,
-            Some(item.id.as_str()),
         )
         .await?;
-        return Ok(Html(super::items_list_inner_html(&rows)).into_response());
+        return Ok(crate::web_ui::hx_toast(
+            Html(super::items_list_inner_html(&rows)).into_response(),
+            "Completed",
+        ));
     }
+    // Deliberately no `hx_toast` here: this branch answers with `HX-Redirect`, so the whole
+    // page reloads and any banner the trigger raised would be thrown away with it.
     Ok(redirect_to_current_page(&headers, &project_id))
 }
 
@@ -1603,6 +1719,9 @@ pub(crate) async fn render_children_fragment(
     requester_user_id: &str,
     tz: i32,
     item_dependencies: &Arc<dyn ItemDependencyRepo>,
+    // Passed through to `render_sibling_rows` — this panel is where a materialized series
+    // sub-item is listed under its parent occurrence, so its Delete has to read "Reset".
+    series: &Arc<dyn ItemSeriesRepo>,
 ) -> Result<Html<String>, ItemError> {
     let children = project_item_service::list_project_items_unchecked(
         repo,
@@ -1624,6 +1743,7 @@ pub(crate) async fn render_children_fragment(
         team_id.is_some(),
         true,
         item_dependencies,
+        series,
     )
     .await?;
     render(ProjectTaskRowsFragmentTemplate {
@@ -1656,6 +1776,8 @@ pub(crate) async fn render_source_event_fragment(
     requester_user_id: &str,
     tz: i32,
     item_dependencies: &Arc<dyn ItemDependencyRepo>,
+    // See `render_children_fragment`'s identical parameter.
+    series: &Arc<dyn ItemSeriesRepo>,
 ) -> Result<Html<String>, ItemError> {
     let tasks =
         project_item_service::list_project_event_children_unchecked(repo, project_id, event_id)
@@ -1674,6 +1796,7 @@ pub(crate) async fn render_source_event_fragment(
         team_id.is_some(),
         true,
         item_dependencies,
+        series,
     )
     .await?;
     render(ProjectTaskRowsFragmentTemplate {
@@ -1689,6 +1812,7 @@ pub async fn project_task_children_fragment(
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(item_dependencies): Extension<Arc<dyn ItemDependencyRepo>>,
+    Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
     TzOffset(tz): TzOffset,
 ) -> Result<Html<String>, ItemError> {
     let project =
@@ -1705,6 +1829,7 @@ pub async fn project_task_children_fragment(
         &auth_user.user_id,
         tz,
         &item_dependencies,
+        &series,
     )
     .await
 }
@@ -1732,6 +1857,7 @@ pub async fn create_project_task_form(
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
     Extension(item_dependencies): Extension<Arc<dyn ItemDependencyRepo>>,
+    Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
     TzOffset(tz): TzOffset,
     Form(form): Form<ProjectTaskForm>,
 ) -> Result<Response, ItemError> {
@@ -1770,6 +1896,7 @@ pub async fn create_project_task_form(
         show_complete,
         tz,
         &item_dependencies,
+        &series,
     )
     .await?
     .into_response())
@@ -1798,6 +1925,7 @@ pub async fn create_project_tasks_batch(
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
     Extension(item_dependencies): Extension<Arc<dyn ItemDependencyRepo>>,
+    Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
     TzOffset(tz): TzOffset,
     Form(form): Form<BatchForm>,
 ) -> Result<Response, ItemError> {
@@ -1848,6 +1976,7 @@ pub async fn create_project_tasks_batch(
         form.show_complete.is_some(),
         tz,
         &item_dependencies,
+        &series,
     )
     .await?
     .into_response())
@@ -2369,6 +2498,7 @@ pub async fn update_project_task_form(
     Extension(attachments): Extension<Arc<dyn AttachmentRepo>>,
     TzOffset(tz): TzOffset,
     Query(view_q): Query<super::RowViewQuery>,
+    headers: HeaderMap,
     Form(form): Form<ProjectTaskForm>,
 ) -> Result<Response, ItemError> {
     let project =
@@ -2449,6 +2579,12 @@ pub async fn update_project_task_form(
                 SidebarSection::Tasks,
             )
             .await?;
+            // See `project_task_detail_page`'s identical computation.
+            let materialized_occurrence =
+                item_series_service::skip_url_for_item(&series, &updated, &project_id)
+                    .await?
+                    .is_some()
+                    || item_series_service::is_materialized_sub_item(&series, &updated).await?;
             Ok(render(ProjectTaskDetailPageTemplate {
                 id: updated.id.clone(),
                 project_id: project_id.clone(),
@@ -2458,6 +2594,7 @@ pub async fn update_project_task_form(
                 dialog,
                 nav_html,
                 parent_link,
+                materialized_occurrence,
             })?
             .into_response())
         }
@@ -2471,16 +2608,20 @@ pub async fn update_project_task_form(
             let siblings_ref: Vec<&Item> = siblings.iter().collect();
             let skip_url =
                 item_series_service::skip_url_for_item(&series, &updated, &project_id).await?;
-            // Confirmation/auto-dismiss only apply to the completing transition (not
-            // un-completing, and not a plain field edit that leaves `complete` unchanged) —
-            // see Row's doc comments. `show_complete` here is whatever the checkbox's own
+            // This single-row swap can be re-rendering a materialized top-level occurrence *or*
+            // a materialized sub-item (the nested row a sub-item's own edit posts from). The
+            // calendar/all-projects row builders take the sub-item half and OR in `skip_url`
+            // themselves; the plain `ProjectTaskRow` branch below needs both set by hand.
+            let series_sub_item =
+                item_series_service::is_materialized_sub_item(&series, &updated).await?;
+            // Only the completing transition confirms anything (not un-completing, and not a
+            // plain field edit that leaves `complete` unchanged) — see the response-building
+            // block at the end of this arm. `show_complete` here is whatever the checkbox's own
             // `hx-vals` last sent (baked in when this row was originally rendered by a list
             // load, per row.html) — the only way the server can know what the requester's
             // current "Show completed" toggle is set to.
             let show_complete = form.show_complete.is_some();
             let just_completed = !current.complete() && updated.complete();
-            let confirmation = just_completed.then(|| "Completed".to_string());
-            let dismiss_after_ms = (just_completed && !show_complete).then_some(1800u32);
             let parent_link = resolve_parent_link(&repo, &project_id, &updated).await?;
             // Reschedule/Assign saved from a calendar row (`view` set) re-render via that
             // screen's own `calendar_row` overlay (type badge/parent name/project name, plus
@@ -2513,6 +2654,7 @@ pub async fn update_project_task_form(
                     project.team_id.is_some(),
                     1,
                     Some(&item_dependencies),
+                    Some(&series),
                     is_tasks_list_view,
                     depth as u32 + 1,
                 )
@@ -2532,9 +2674,8 @@ pub async fn update_project_task_form(
                     project.team_id.is_some(),
                     tz,
                     skip_url,
+                    series_sub_item,
                     show_complete,
-                    confirmation,
-                    dismiss_after_ms,
                     children_html,
                 )?,
                 Some("main-calendar") => crate::web_ui::main_calendar::calendar_row(
@@ -2546,8 +2687,7 @@ pub async fn update_project_task_form(
                     project.team_id.is_some(),
                     tz,
                     skip_url,
-                    confirmation,
-                    dismiss_after_ms,
+                    series_sub_item,
                     children_html,
                 )?,
                 Some("all-tasks") => crate::web_ui::all_projects_tasks::all_projects_task_row(
@@ -2558,9 +2698,8 @@ pub async fn update_project_task_form(
                     project.team_id.is_some(),
                     tz,
                     skip_url,
+                    series_sub_item,
                     show_complete,
-                    confirmation,
-                    dismiss_after_ms,
                     children_html,
                 )?,
                 _ => {
@@ -2573,8 +2712,6 @@ pub async fn update_project_task_form(
                         skip_url,
                         project.team_id.is_some(),
                         show_complete,
-                        confirmation,
-                        dismiss_after_ms,
                         // This single-row rebuild (after an edit/checkbox toggle) has no
                         // batched occurrence-state query on hand the way the full list render
                         // does — see `Row::series_current`'s doc comment on this gap.
@@ -2584,6 +2721,10 @@ pub async fn update_project_task_form(
                     // through to row.html's dialog/navigation name-click branch instead of
                     // toggleChildren() — see `Row::children_html`'s doc comment.
                     row.children_html = children_html;
+                    // `from_item` only sees `skip_url`; the sub-item half needs the lookup —
+                    // see `Row::series_sub_item`.
+                    row.series_sub_item = series_sub_item;
+                    row.materialized_occurrence = row.materialized_occurrence || series_sub_item;
                     // Without this, `from_item`'s default `indent_class: ""` makes a nested
                     // row (a sub-item of a sub-item, say) render as if it were top-level once
                     // its own checkbox/edit swaps it back in — see `depth_of_item`'s doc
@@ -2674,7 +2815,20 @@ pub async fn update_project_task_form(
                 false,
             )
             .render()?;
-            Ok(Html(format!("{row}{fields}{view}")).into_response())
+            let mut response = Html(format!("{row}{fields}{view}")).into_response();
+            if just_completed {
+                // The row-actions menu's "Mark complete" targets this row's own `<li>`; the
+                // detail dialog's toggle and the edit form's save target `#item-{id}-view`/
+                // `-fields` in the same response (see this module's three-fragment convention).
+                // Only the first of those should have its target removed when the screen is
+                // hiding completed items — `HX-Reswap` applies to the whole response, so the
+                // `HX-Target` check is what keeps it off the other two.
+                if !show_complete && crate::web_ui::targets_row(&headers, &updated.id) {
+                    response = crate::web_ui::hx_delete_target(response);
+                }
+                response = crate::web_ui::hx_toast(response, "Completed");
+            }
+            Ok(response)
         }
         Err(e) => Err(e),
     }

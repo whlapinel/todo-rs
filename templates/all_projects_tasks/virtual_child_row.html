@@ -5,7 +5,7 @@
 <li class="py-2">
   <div class="flex items-center gap-x-3">
     <input type="checkbox" hx-post="{{ complete_url }}"
-      hx-target="#items-list" hx-select="unset" hx-swap="innerHTML"
+      hx-target="#items-list" hx-select="unset" hx-swap="innerHTML transition:true"
       class="shrink-0 size-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-600 dark:border-white/20 dark:bg-white/5" />
     <!-- See project_calendar/virtual_row.html's doc comment on why the hx-get/target/select
          are explicit rather than inherited from body's hx-boost. -->
@@ -16,6 +16,10 @@
   </div>
   <div class="mt-1 flex items-center gap-x-3 pl-7 text-xs text-gray-500 dark:text-gray-400">
     <div class="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1">
+      <!-- See project_tasks/virtual_child_row.html's identical offset badge. -->
+      {% if let Some(label) = offset_label %}
+      <span>{{ label }}</span>
+      {% endif %}
       {% if let Some(p) = priority_label %}
       <span class="text-amber-600 dark:text-amber-400">🚩 {{ p }}</span>
       {% endif %}

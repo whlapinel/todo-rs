@@ -25,25 +25,32 @@
     </button>
     </div>
     <!-- Deliberately short: no Skip (there is no sub-item Skip — decision 4 of the sub-items
-         plan), no Duplicate/Move/Delete (all need a real item id). "Open" is the sub-item's
-         answer to Edit — it POSTs to materialize and lands on the now-real item's own page,
-         where the ordinary task form handles every per-occurrence edit, rather than
-         duplicating that form against a definition that has no per-occurrence state yet. -->
+         plan), no Duplicate/Move/Delete (all need a real item id). Details and Edit are both
+         plain GETs of pages built from the definition plus the parent's cycle date — neither
+         materializes anything; only Edit's own Save (a PUT) does. This mirrors the parent
+         occurrence's row menu (project_tasks/virtual_row.html) entry for entry, minus the
+         actions that have no sub-item counterpart. -->
     <template id="row-actions-menu-{{ row_id }}">
       <div class="divide-y divide-gray-100 dark:divide-white/10">
         <button type="button" hx-post="{{ complete_url }}"
-          {% if in_list_view %}hx-target="#items-list" hx-select="unset" hx-swap="innerHTML"{% endif %}
+          {% if in_list_view %}hx-target="#items-list" hx-select="unset" hx-swap="innerHTML transition:true"{% endif %}
           class="block w-full cursor-pointer px-4 py-3 text-left text-sm text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-white/5">Mark complete</button>
         <a href="{{ detail_url }}" hx-get="{{ detail_url }}" hx-target="#action-dialog"
           hx-select="#dialog-fragment" hx-swap="innerHTML"
           class="block px-4 py-3 text-sm text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-white/5">Details</a>
-        <button type="button" hx-post="{{ detail_url }}"
-          class="block w-full cursor-pointer px-4 py-3 text-left text-sm text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-white/5">Open</button>
+        <a href="{{ edit_url }}" hx-get="{{ edit_url }}" hx-target="#action-dialog" hx-select="#dialog-fragment"
+          hx-swap="innerHTML"
+          class="block px-4 py-3 text-sm text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-white/5">Edit</a>
       </div>
     </template>
   </div>
   <div class="mt-1 flex items-center gap-x-3 pl-7 text-xs text-gray-500 dark:text-gray-400">
     <div class="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1">
+      <!-- Same offset badge components/row.html renders for the materialized version of this
+           row, in the same position — see ProjectTaskVirtualChildRow::offset_label. -->
+      {% if let Some(label) = offset_label %}
+      <span>{{ label }}</span>
+      {% endif %}
       {% if let Some(p) = priority_label %}
       <span class="text-amber-600 dark:text-amber-400">🚩 {{ p }}</span>
       {% endif %}

@@ -1,4 +1,9 @@
-<li id="item-{{ id }}" class="py-2 {{ indent_class }}" style="view-transition-name: item-{{ id }}"{% if let Some(ms) = dismiss_after_ms %} data-dismiss-after="{{ ms }}"{% endif %}{% if treegrid %} role="row" aria-level="{{ level }}" aria-selected="false"{% if children_html.is_some() %} aria-expanded="false"{% endif %}{% endif %}>
+<!-- `view-transition-name` is what gives this row its own animated removal when an action takes
+     it off the list (a completion while the screen hides completed items — see
+     `web_ui::hx_delete_target`, which swaps with `delete transition:true`). The `item-` prefix
+     isn't decorative: a view-transition-name is a CSS <custom-ident> and so cannot start with a
+     digit, which a bare uuid sometimes does. -->
+<li id="item-{{ id }}" class="py-2 {{ indent_class }}" style="view-transition-name: item-{{ id }}"{% if treegrid %} role="row" aria-level="{{ level }}" aria-selected="false"{% if children_html.is_some() %} aria-expanded="false"{% endif %}{% endif %}>
     <div class="flex items-center gap-x-3">
         {% if treegrid %}
         <!-- Replaces the old complete-checkbox slot (see below): a dedicated expand/collapse
@@ -65,6 +70,19 @@
             {% if has_children %}<span class="text-gray-400 dark:text-gray-500">&#9656;</span>{% endif %} {{ name }}
         </a>
         {% endif %}
+        {% if series_sub_item %}
+        <!-- The materialized counterpart of project_tasks/virtual_child_row.html's own badge.
+             Without it a sub-item silently lost its label the moment it was materialized — see
+             Row::series_sub_item. -->
+        <span class="shrink-0 text-[10px] uppercase tracking-wide font-semibold text-gray-400 dark:text-gray-500">Sub-item</span>
+        {% endif %}
+        {% if materialized_occurrence %}
+        <!-- The visual counterpart of a still-virtual row having no badge: this occurrence has
+             diverged from what the series alone would produce, and its destructive action reads
+             "Reset" rather than "Delete" for the same reason. See Row::materialized_occurrence. -->
+        <span title="This occurrence has been created from its series and edited — Reset returns it to a plan"
+            class="shrink-0 text-[10px] uppercase tracking-wide font-semibold text-amber-600 dark:text-amber-400">Edited</span>
+        {% endif %}
         {% if let Some(is_current) = series_current %}
         <!-- Mirrors project_tasks/virtual_row.html's own series symbol + Current label — see
              Row::series_current's doc comment for why this can't just be a virtual-row-only
@@ -73,10 +91,6 @@
         {% if is_current %}
         <span class="shrink-0 text-[10px] uppercase tracking-wide font-semibold text-indigo-600 dark:text-indigo-400">Current</span>
         {% endif %}
-        {% endif %}
-        {% if let Some(msg) = confirmation %}
-        <span class="toast-fade shrink-0 text-xs font-medium text-green-600 dark:text-green-400">&#10003; {{ msg
-            }}</span>
         {% endif %}
         {% if is_imported %}
         <span title="Imported from Google Calendar — read-only"

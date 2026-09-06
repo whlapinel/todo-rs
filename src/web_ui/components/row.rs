@@ -136,24 +136,45 @@ pub struct Row {
     /// user never needs to know or care whether a series occurrence is materialized before
     /// skipping it. `None` for any item that never came from a series.
     pub skip_url: Option<String>,
+    /// True when this row is a series occurrence — top-level or sub-item — that has actually
+    /// been materialized, i.e. it began as a plan the series computes and now has a real row of
+    /// its own because something was persisted to it. Drives two things:
+    ///
+    /// - the **"Edited"** badge, the visual counterpart of a still-virtual row's absence of one:
+    ///   this occurrence has diverged from what the series alone would produce;
+    /// - the destructive action reading **"Reset"** rather than "Delete", because deleting one
+    ///   of these un-materializes rather than removes — the definition and the cycle both
+    ///   survive, so the row is recomputed as virtual on the next render and reappears
+    ///   (`delete_occurrence` vs `mark_exdate` at the parent level, and decision 6 of the series
+    ///   sub-items plan for sub-items).
+    ///
+    /// Sourced two ways, neither costing a query beyond what the caller already runs:
+    /// `skip_url.is_some()` for a top-level occurrence (the same predicate
+    /// `service::item_series::skip_url_for_item` resolves, so it's never asked twice), OR'd with
+    /// `series_sub_item` below. `false` wherever a caller has neither — the same
+    /// acceptable-gap convention `skip_url` itself already carries on nested calendar rows (see
+    /// `project_calendar::children_html_for`).
+    pub materialized_occurrence: bool,
+    /// The sub-item half of `materialized_occurrence` on its own: this row is a materialized
+    /// *sub-item* of a series occurrence (`service::item_series::is_materialized_sub_item`),
+    /// not the occurrence itself. Drives the "Sub-item" badge, which its still-virtual
+    /// counterpart (`project_tasks/virtual_child_row.html`) has always carried — without it the
+    /// same sub-item silently lost that label the moment it was materialized, which is exactly
+    /// the virtual-vs-materialized drift this feature exists to avoid.
+    pub series_sub_item: bool,
     pub toggle_complete_json: String,
     /// Whether the screen this row belongs to is currently showing completed items — baked
     /// into the checkbox's own `hx-vals` (as `showComplete`) so a completion PUT round-trips
-    /// the value back to the handler that decides `dismiss_after_ms` below, the same way
-    /// `toggle_complete_json` round-trips the next click's target state. Irrelevant (and
-    /// harmless as `false`) for a row with no `complete_url`.
+    /// the value back to the handler that decides whether the row survives the swap at all
+    /// (`web_ui::hx_delete_target`), the same way `toggle_complete_json` round-trips the next
+    /// click's target state. Irrelevant (and harmless as `false`) for a row with no
+    /// `complete_url`.
+    ///
+    /// This row carries no confirmation/auto-dismiss fields of its own any more: a successful
+    /// action's confirmation is a page-level banner (`web_ui::hx_toast`) and its removal is the
+    /// swap itself (`web_ui::hx_delete_target`). See those two functions for why neither belongs
+    /// on the row.
     pub show_complete: bool,
-    /// Set on the single freshly-rendered row returned by a successful action's response
-    /// (e.g. "Completed") to show a brief, non-blocking `.toast-fade` badge — the reusable
-    /// counterpart to `ProjectTaskDetailFields`' `just_saved` for row-level actions, not
-    /// completion-specific. `None` on every other render (list loads, unrelated updates).
-    pub confirmation: Option<String>,
-    /// Set (in ms) on that same one-shot response when this row should remove itself from
-    /// the list shortly after — e.g. a just-completed task on a list currently hiding
-    /// completed items — rather than vanishing the instant the request completes. Consumed
-    /// by the generic `data-dismiss-after` handling in `base.html`/`styles/input.css`; not
-    /// completion-specific, any action's row response can set it. `None` means "stay put."
-    pub dismiss_after_ms: Option<u32>,
     /// True when this item was imported from a Google Calendar subscription
     /// (`Item::google_event_id().is_some()`) — see CLAUDE.md's read-only-enforcement note.
     /// Only ever `true` for a `ProjectEventRow` (imported items are always Events); every

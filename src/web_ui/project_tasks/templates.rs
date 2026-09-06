@@ -18,11 +18,19 @@ pub fn offset_label_for(item: &Item) -> Option<String> {
     if !item.is_offset_driven() {
         return None;
     }
-    match item.due_offset_days() {
-        Some(0) => Some("on due date".to_string()),
-        Some(n) if n > 0 => Some(format!("+{n}d")),
-        Some(n) => Some(format!("{n}d")),
-        None => None,
+    offset_label_for_days(item.due_offset_days()?)
+}
+
+/// The label half of `offset_label_for`, split out so a *still-virtual* series sub-item can
+/// render the same badge. Its definition carries a non-negative `days_before` and no item to
+/// read `due_offset_days` off, so callers there negate first — see
+/// `ProjectTaskVirtualChildRow::from_view`. Without this the virtual and materialized versions
+/// of one sub-item showed different metadata, which is the drift this feature is meant to avoid.
+pub fn offset_label_for_days(days: i32) -> Option<String> {
+    match days {
+        0 => Some("on due date".to_string()),
+        n if n > 0 => Some(format!("+{n}d")),
+        n => Some(format!("{n}d")),
     }
 }
 
@@ -62,8 +70,6 @@ impl ProjectTaskRow {
         skip_url: Option<String>,
         is_team_project: bool,
         show_complete: bool,
-        confirmation: Option<String>,
-        dismiss_after_ms: Option<u32>,
         // `None` when `item.series_id` is unset; `Some(is_current)` otherwise — see
         // `Row::series_current`'s doc comment. Only `render_rows_with_virtual` (the flat Tasks
         // list's own merge, which already runs the query this comes from) passes a real value;
@@ -130,11 +136,17 @@ impl ProjectTaskRow {
             )),
             assign_url: is_team_project
                 .then(|| format!("/web/projects/{project_id}/tasks/{}/assign", item.id)),
+            // Covers a materialized top-level occurrence with no extra query — see
+            // `Row::materialized_occurrence`. A materialized *sub-item* has no `skip_url` (it isn't an
+            // occurrence of the series in its own right), so callers that can be rendering one
+            // OR `is_materialized_sub_item` in on top of this.
+            materialized_occurrence: skip_url.is_some(),
+            // The sub-item half needs a repo lookup, so it's left to callers that can be
+            // rendering one — see `Row::series_sub_item`.
+            series_sub_item: false,
             skip_url,
             toggle_complete_json: (!item.complete()).to_string(),
             show_complete,
-            confirmation,
-            dismiss_after_ms,
             // Only an Event can ever be Google-Calendar-imported (see CLAUDE.md's Points/
             // Recurrence sections — imported items are always `ItemType::Event`).
             is_imported: false,
@@ -590,10 +602,16 @@ pub struct ProjectTaskVirtualChildRow {
     /// and no schedule of its own, so its lead-time date is a due date whatever basis the
     /// parent series carries.
     pub overdue: bool,
+    /// The same "-30d"/"on due date" badge the materialized version of this row gets from
+    /// `due_offset_days` — see `offset_label_for_days`. Rendered so the two don't differ.
+    pub offset_label: Option<String>,
     pub priority_label: Option<String>,
-    /// Read-only dialog for this still-virtual sub-item (`GET`) — the same route its `POST`
-    /// materializes through. See `SeriesChildOccurrenceView::detail_url`.
+    /// Read-only dialog for this still-virtual sub-item (`GET`, no side effect). See
+    /// `SeriesChildOccurrenceView::detail_url`.
     pub detail_url: String,
+    /// This sub-item's own edit form — mirrors `ProjectTaskVirtualRow::edit_url`. Opening it
+    /// materializes nothing; only its `PUT` does.
+    pub edit_url: String,
     pub complete_url: String,
     /// See `ProjectTaskVirtualRow::in_list_view`'s identical rationale — gates whether this
     /// row's Mark complete targets `#items-list` or falls back to whole-page htmx behavior.
@@ -633,8 +651,12 @@ impl ProjectTaskVirtualChildRow {
             name: view.child_name.clone(),
             date_label: format_display_date(to_local(view.date, tz), true),
             overdue: view.date < Utc::now(),
+            // Negated to match the sign a materialized sub-item stores in `due_offset_days`,
+            // so both render the identical badge.
+            offset_label: offset_label_for_days(-view.days_before),
             priority_label: priority_label_for(view.priority),
             detail_url: view.detail_url(project_id),
+            edit_url: view.edit_url(project_id),
             complete_url: format!("{}{list_query}", view.complete_url(project_id)),
             in_list_view,
             level,
@@ -1292,12 +1314,124 @@ pub struct ProjectTaskSeriesChildOccurrenceDetailPage {
     pub priority_label: Option<String>,
     pub date_label: String,
     pub overdue: bool,
+    /// "Party — Nov 1, 2026" — the parent occurrence this sub-item prepares for, paired with
+    /// `parent_occurrence_url`. Mirrors the real task detail view's own "Parent" row
+    /// (`detail_view.html`'s `parent_link`), which a still-virtual sub-item had no counterpart
+    /// for: a sub-item's parent is addressable whether or not it has been materialized, so
+    /// there was no reason to omit it.
+    pub parent_occurrence_label: String,
+    /// The parent occurrence's own detail dialog. Resolves for either state —
+    /// `project_item_series::handlers::project_item_series_occurrence_detail_page` redirects to
+    /// the real item's page when the parent has already been materialized, and renders the
+    /// virtual dialog when it hasn't.
+    pub parent_occurrence_url: String,
     pub series_name: String,
     pub series_url: String,
     pub complete_url: String,
-    /// `POST`s the same path this dialog was `GET` from — materialize, then land on the now-real
-    /// task's own page. See the template's comment on why this stands in for an Edit form.
-    pub materialize_url: String,
+    /// The occurrence-scoped edit form (`GET`, no side effect) — the sub-item counterpart of the
+    /// parent occurrence dialog's own Edit button. Replaced the Stage 5 "Open" button, which
+    /// materialized purely to navigate.
+    pub edit_url: String,
+    pub nav_html: String,
+}
+
+/// The occurrence-scoped edit form for a still-virtual sub-item — the counterpart of
+/// `ProjectTaskSeriesOccurrenceFields`, prefilled from the `ItemSeriesChild` definition plus the
+/// parent's cycle date rather than a real `Item` (none exists yet). Submitting it materializes
+/// the sub-item (and, as an internal step, its parent occurrence) and applies the edit in one
+/// step — see `handlers::update_project_task_series_child_occurrence_form`.
+///
+/// Shaped after the *materialized sub-item's* own edit form (`ProjectTaskDetailFields`'
+/// `is_offset_driven` branch), not after its parent occurrence's: a sub-item is always a
+/// structural child, so its due date is computed from `due_offset_days` and can't be typed
+/// directly (`create_item`/`update_item` recompute it from the anchor and would overwrite
+/// anything the form submitted — `service::items`). The editable date control is therefore
+/// "days before", exactly as it is once the row is real, and the due date is shown read-only
+/// alongside it. `points` is absent for the same reason it's absent there: a child can't carry
+/// points (`Item::validate`).
+#[derive(Template)]
+#[template(path = "project_tasks/series_child_occurrence_fields.html")]
+pub struct ProjectTaskSeriesChildOccurrenceFields {
+    /// Only used to build this fragment's own wrapper id, which mirrors
+    /// `ProjectTaskSeriesOccurrenceFields`' `series-occurrence-{id}-{ts}-fields` convention.
+    pub child_id: String,
+    pub occurrence_ts: i64,
+    pub name: String,
+    pub description: String,
+    /// The computed lead date, rendered read-only — see the struct doc comment.
+    pub due_date_label: String,
+    pub due_offset_days_input: String,
+    /// The parent occurrence's own cycle date, `YYYY-MM-DD` in the viewer's timezone — feeds
+    /// `macros::due_offset_days_field`'s live preview. This is the anchor the materialized
+    /// sub-item will actually be computed from, so the preview matches what saving produces.
+    pub anchor_date_input: String,
+    pub scheduled_date_input: String,
+    pub scheduled_time_input: String,
+    pub scheduled_end_date_input: String,
+    pub scheduled_end_time_input: String,
+    pub is_team_project: bool,
+    pub assignee_options: Vec<(String, String)>,
+    pub assigned_to_user_id: Option<String>,
+    pub priority_input: String,
+    pub update_url: String,
+}
+
+impl ProjectTaskSeriesChildOccurrenceFields {
+    pub fn from_child(
+        child: &crate::domain::item_series::ItemSeriesChild,
+        parent_occurrence_date: chrono::DateTime<Utc>,
+        project_id: &str,
+        series_id: &str,
+        is_team_project: bool,
+        assignee_options: Vec<(String, String)>,
+        tz: i32,
+    ) -> Self {
+        let occurrence_ts = parent_occurrence_date.timestamp();
+        let date = crate::service::item_series::child_occurrence_date(
+            parent_occurrence_date,
+            child.days_before,
+            tz,
+        );
+        Self {
+            child_id: child.id.clone(),
+            occurrence_ts,
+            name: child.name.clone(),
+            description: child.description.clone().unwrap_or_default(),
+            due_date_label: format_display_date(to_local(date, tz), false),
+            due_offset_days_input: child.days_before.to_string(),
+            anchor_date_input: to_local(parent_occurrence_date, tz)
+                .format("%Y-%m-%d")
+                .to_string(),
+            // A definition carries no schedule of its own, so these start empty — the same
+            // window fields a materialized sub-item's form offers, just unset.
+            scheduled_date_input: String::new(),
+            scheduled_time_input: String::new(),
+            scheduled_end_date_input: String::new(),
+            scheduled_end_time_input: String::new(),
+            is_team_project,
+            // Definitions carry no assignee (unlike a series, which has
+            // `assigned_to_user_id`/rotation) — a sub-item materializes unassigned and is
+            // assigned from here or from its real row afterwards.
+            assignee_options,
+            assigned_to_user_id: None,
+            priority_input: format_points_input(child.priority),
+            update_url: format!(
+                "/web/projects/{project_id}/series/{series_id}/occurrences/{occurrence_ts}/children/{}",
+                child.id,
+            ),
+        }
+    }
+}
+
+/// Wraps `ProjectTaskSeriesChildOccurrenceFields` in a full page, the same way
+/// `ProjectTaskSeriesOccurrenceEditPageTemplate` wraps its own — so a direct/bookmarked URL
+/// renders and auto-opens the dialog, while a row's Edit `hx-get` just plucks
+/// `#dialog-fragment` out.
+#[derive(Template)]
+#[template(path = "project_tasks/series_child_occurrence_edit_page.html")]
+pub struct ProjectTaskSeriesChildOccurrenceEditPageTemplate {
+    pub name: String,
+    pub fields: String,
     pub nav_html: String,
 }
 
@@ -1585,6 +1719,8 @@ pub struct ProjectTaskDetailPageTemplate {
     /// link then reads "Up to {parent_name}" (linking to the parent's own detail page) instead
     /// of the generic "Back to tasks" list link, matching `project_simple_lists/detail_page.html`.
     pub parent_link: Option<(String, String)>,
+    /// See `Row::materialized_occurrence` — the same distinction, on this page's own Delete button.
+    pub materialized_occurrence: bool,
 }
 
 #[derive(Template)]
@@ -1694,6 +1830,101 @@ mod tests {
         let result = resolve_series_link(&series, "p1", &item).await;
 
         assert_eq!(result.unwrap(), None);
+    }
+
+    /// The exact drift the user reported: a virtual sub-item row showed no offset badge while
+    /// the materialized version of the same sub-item did. Both sides are asserted here so the
+    /// two can't diverge again — the definition's non-negative `days_before` has to produce the
+    /// same label as the item's negative `due_offset_days`.
+    #[test]
+    fn a_virtual_sub_item_row_shows_the_same_offset_badge_as_its_materialized_self() {
+        let view = crate::service::item_series::SeriesChildOccurrenceView {
+            child_id: "c1".to_string(),
+            child_name: "Book venue".to_string(),
+            description: None,
+            series_id: "s1".to_string(),
+            series_name: "Party".to_string(),
+            parent_occurrence_date: chrono::DateTime::from_timestamp(1_700_500_000, 0).unwrap(),
+            date: chrono::DateTime::from_timestamp(1_697_908_000, 0).unwrap(),
+            days_before: 30,
+            priority: None,
+            sort_order: 0,
+            item_id: None,
+        };
+        let row = ProjectTaskVirtualChildRow::from_view(
+            &view,
+            "p1",
+            0,
+            &crate::web_ui::list_filters::ListFilters::default(),
+            true,
+            true,
+            2,
+        );
+
+        // What `get_or_materialize_child_occurrence` will create for this same definition:
+        // `due_offset_days: Some(-days_before)`, nested under the parent occurrence.
+        let materialized = Item {
+            item_type: ItemType::Task(TaskItem {
+                parent_item_id: Some("parent-item-id".to_string()),
+                recurrence: crate::domain::item::Recurrence {
+                    due_offset_days: Some(-30),
+                    ..Default::default()
+                },
+                ..TaskItem::default()
+            }),
+            ..Item::default()
+        };
+
+        assert_eq!(row.offset_label.as_deref(), Some("-30d"));
+        assert_eq!(row.offset_label, offset_label_for(&materialized));
+    }
+
+    /// The point of the occurrence-scoped edit form: everything it shows comes from the
+    /// definition plus the parent's cycle date, with no `Item` anywhere — which is what makes
+    /// rendering it free of side effects.
+    #[test]
+    fn child_occurrence_fields_prefill_from_the_definition_and_the_parent_cycle() {
+        let child = crate::domain::item_series::ItemSeriesChild {
+            id: "c1".to_string(),
+            series_id: "s1".to_string(),
+            name: "Book venue".to_string(),
+            description: Some("Call the hall".to_string()),
+            days_before: 30,
+            priority: Some(2),
+            sort_order: 0,
+        };
+        let cycle = chrono::DateTime::from_timestamp(1_700_500_000, 0).unwrap();
+
+        let fields = ProjectTaskSeriesChildOccurrenceFields::from_child(
+            &child,
+            cycle,
+            "p1",
+            "s1",
+            false,
+            Vec::new(),
+            0,
+        );
+
+        assert_eq!(fields.name, "Book venue");
+        assert_eq!(fields.description, "Call the hall");
+        // "Days before", not a due-date input — the due date is derived and read-only, since
+        // `update_item` recomputes it from the offset for any child. See the struct's own doc
+        // comment.
+        assert_eq!(fields.due_offset_days_input, "30");
+        assert_eq!(fields.priority_input, "2");
+        // The anchor fed to the offset field's live preview is the parent's cycle date, which
+        // is the same anchor materialization will actually compute from.
+        assert_eq!(
+            fields.anchor_date_input,
+            to_local(cycle, 0).format("%Y-%m-%d").to_string()
+        );
+        assert_eq!(
+            fields.update_url,
+            format!(
+                "/web/projects/p1/series/s1/occurrences/{}/children/c1",
+                cycle.timestamp()
+            )
+        );
     }
 
     fn series_fixture() -> crate::domain::item_series::ItemSeries {

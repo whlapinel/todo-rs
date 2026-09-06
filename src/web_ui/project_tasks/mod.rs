@@ -595,6 +595,12 @@ pub(crate) async fn render_expandable_children(
     // `render_sibling_rows` below — the item detail page's Sub-items/Linked-tasks panels)
     // always passes `Some`.
     item_dependencies: Option<&Arc<dyn ItemDependencyRepo>>,
+    // Only needed to decide whether a child row's Delete reads "Reset" (see
+    // `Row::materialized_occurrence`) — a materialized sub-item of a series occurrence is a structural
+    // child, so this is the one row-building path that can encounter one. `None` skips the
+    // lookup and leaves every child's action reading "Delete", which is only correct for a
+    // caller that can't be rendering a series sub-item.
+    series: Option<&Arc<dyn ItemSeriesRepo>>,
     // Treegrid keyboard-nav pilot (see `Row::treegrid`'s doc comment) — `true` only when this
     // whole call tree was reached from the flat Tasks list's own `#items-list` (a real
     // `role="treegrid"` container); `false` for every other reuse of this function (the item
@@ -629,8 +635,6 @@ pub(crate) async fn render_expandable_children(
             skip_urls.get(&i.id).cloned(),
             is_team_project,
             show_complete,
-            None,
-            None,
             // In-place expanded children never carry a series badge yet — see
             // `Row::series_current`'s doc comment on the partial-rollout state.
             None,
@@ -644,6 +648,14 @@ pub(crate) async fn render_expandable_children(
             // keep this treegrid markup — see `normalize_row_view`'s doc comment.
             row.complete_url = row.complete_url.map(|url| format!("{url}?view=tasks-list"));
             row.edit_url = row.edit_url.map(|url| format!("{url}?view=tasks-list"));
+        }
+        // `from_item` already covers a materialized top-level occurrence via `skip_url`; a
+        // nested row can't be one (occurrences are always top-level) but *can* be a materialized
+        // sub-item, which carries no `skip_url` of its own. See `Row::materialized_occurrence`.
+        if let Some(series) = series {
+            row.series_sub_item =
+                crate::service::item_series::is_materialized_sub_item(series, i).await?;
+            row.materialized_occurrence = row.materialized_occurrence || row.series_sub_item;
         }
         let (blocked_by_names, blocked_by_label, blocked_by_links_html) =
             render_blocked_by(project_id, blocked_by_names_for(i, &visible, &dep_map))?;
@@ -663,6 +675,7 @@ pub(crate) async fn render_expandable_children(
                 is_team_project,
                 depth + 1,
                 item_dependencies,
+                series,
                 treegrid,
                 level_base,
             )
@@ -700,6 +713,10 @@ pub(crate) async fn render_sibling_rows(
     is_team_project: bool,
     show_complete: bool,
     item_dependencies: &Arc<dyn ItemDependencyRepo>,
+    // See `render_expandable_children`'s identical parameter — this function feeds the item
+    // detail page's Sub-items panel, which is exactly where a materialized series sub-item is
+    // listed under its parent occurrence.
+    series: &Arc<dyn ItemSeriesRepo>,
 ) -> Result<Vec<String>, ItemError> {
     let dep_map = item_dependencies
         .list_for_items(&visible.iter().map(|i| i.id.clone()).collect::<Vec<_>>())
@@ -716,9 +733,12 @@ pub(crate) async fn render_sibling_rows(
             is_team_project,
             show_complete,
             None,
-            None,
-            None,
         );
+        // See `render_expandable_children`'s identical assignment — `None` is passed for
+        // `skip_url` above, so this is the only thing that can set `materialized_occurrence` here.
+        row.series_sub_item =
+            crate::service::item_series::is_materialized_sub_item(series, i).await?;
+        row.materialized_occurrence = row.materialized_occurrence || row.series_sub_item;
         let (blocked_by_names, blocked_by_label, blocked_by_links_html) =
             render_blocked_by(project_id, blocked_by_names_for(i, visible, &dep_map))?;
         row.blocked_by_names = blocked_by_names;
@@ -737,6 +757,7 @@ pub(crate) async fn render_sibling_rows(
                 is_team_project,
                 1,
                 Some(item_dependencies),
+                Some(series),
                 // Treegrid keyboard-nav pilot is Tasks-list-only for now — see
                 // `Row::treegrid`'s doc comment. (`render_sibling_rows` itself feeds the item
                 // detail page's Sub-items panel and Events' Linked-tasks panel, neither of
@@ -782,8 +803,6 @@ pub(crate) fn render_rows(
                 skip_urls.get(&i.id).cloned(),
                 team_id.is_some(),
                 show_complete,
-                None,
-                None,
                 None,
             )
             .render()
@@ -849,12 +868,6 @@ fn render_virtual_child_rows(
 /// three other call sites in this module (children/subordinate task lists) where virtual
 /// occurrences don't apply.
 ///
-/// `just_completed_item_id` (added for the virtual-occurrence confirm-then-fade-away follow-up,
-/// see `handlers::complete_project_item_series_occurrence_form`) forces that one materialized
-/// item's row to stay visible even when `filters` would otherwise exclude it (typically because
-/// it just became complete and `filters.show_complete` is off) — without the force-include, the
-/// row would simply vanish on this fresh render instead of getting a moment to show its
-/// "Completed" badge before `Row`'s own `data-dismiss-after` JS removes it client-side.
 /// `in_list_view` is threaded onto `ProjectTaskVirtualRow` so its checkbox/Skip/Unskip only
 /// target `#items-list` (see `handlers::list_task_rows_for_project`) when this is really the
 /// flat list's own render, not a subordinate/children list render, which has no `#items-list`
@@ -881,9 +894,11 @@ pub(crate) async fn render_rows_with_virtual(
     tz: i32,
     skip_urls: &HashMap<String, String>,
     team_id: Option<&str>,
-    just_completed_item_id: Option<&str>,
     in_list_view: bool,
     item_dependencies: &Arc<dyn ItemDependencyRepo>,
+    // Passed straight through to `render_expandable_children` for its `materialized_occurrence` lookup —
+    // see that parameter's own comment. Nothing at this level reads it.
+    series: &Arc<dyn ItemSeriesRepo>,
     // item_id -> is_current, for every already-materialized series occurrence
     // `list_task_rows_for_project` found in its own (unfiltered) occurrence-state query — see
     // `Row::series_current`'s doc comment. An item with `series_id` set but absent from this map
@@ -906,10 +921,7 @@ pub(crate) async fn render_rows_with_virtual(
     let is_team_project = team_id.is_some();
     let visible: Vec<&Item> = items
         .iter()
-        .filter(|i| {
-            filters.matches(i, requester_user_id, is_team_project, now)
-                || Some(i.id.as_str()) == just_completed_item_id
-        })
+        .filter(|i| filters.matches(i, requester_user_id, is_team_project, now))
         .collect();
     // Top-level items are always siblings of each other (all share `parent_item_id: None`),
     // so one batched query covers every row's "Blocked by ..." badge — see
@@ -919,9 +931,6 @@ pub(crate) async fn render_rows_with_virtual(
         .await?;
     let mut entries: Vec<(i64, String)> = Vec::with_capacity(visible.len());
     for i in &visible {
-        let just_completed = Some(i.id.as_str()) == just_completed_item_id;
-        let confirmation = just_completed.then(|| "Completed".to_string());
-        let dismiss_after_ms = (just_completed && !filters.show_complete).then_some(1800u32);
         let mut row = ProjectTaskRow::from_item(
             i,
             project_id,
@@ -931,8 +940,6 @@ pub(crate) async fn render_rows_with_virtual(
             skip_urls.get(&i.id).cloned(),
             is_team_project,
             filters.show_complete,
-            confirmation,
-            dismiss_after_ms,
             i.series_id()
                 .map(|_| current_flags.get(&i.id).copied().unwrap_or(false)),
         );
@@ -969,6 +976,7 @@ pub(crate) async fn render_rows_with_virtual(
                 team_id.is_some(),
                 1,
                 Some(item_dependencies),
+                Some(series),
                 true,
                 1,
             )
@@ -1036,8 +1044,9 @@ pub(crate) async fn render_rows_with_virtual(
 /// page reload. A whole-list rebuild (not a single-row swap) is deliberate: completing or
 /// skipping a series' current occurrence can advance its cursor to a new current occurrence,
 /// which needs to actually appear in the list — a single `<li>` outerHTML swap could never do
-/// that. See `render_rows_with_virtual`'s `just_completed_item_id` for how the completing row
-/// still gets its own confirm-then-fade-away treatment despite the full rebuild.
+/// that. The completing row simply isn't in the rebuilt list when the screen hides completed
+/// items; its confirmation is the page-level banner (`web_ui::hx_toast`) the calling handler
+/// attaches, which needs no row to live in.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn list_task_rows_for_project(
     repo: &Arc<dyn ItemRepo>,
@@ -1049,7 +1058,6 @@ pub(crate) async fn list_task_rows_for_project(
     requester_user_id: &str,
     filters: &ListFilters,
     tz: i32,
-    just_completed_item_id: Option<&str>,
     item_dependencies: &Arc<dyn ItemDependencyRepo>,
 ) -> Result<Vec<String>, ItemError> {
     let items = list_project_tasks(repo, project_id).await?;
@@ -1147,9 +1155,9 @@ pub(crate) async fn list_task_rows_for_project(
         tz,
         &skip_urls,
         team_id,
-        just_completed_item_id,
         true,
         item_dependencies,
+        series,
         &current_flags,
         &child_occurrences,
         &materialized_cycles,
@@ -1215,6 +1223,8 @@ pub(crate) async fn render_scope_fragment(
     show_complete: bool,
     tz: i32,
     item_dependencies: &Arc<dyn ItemDependencyRepo>,
+    // Passed straight through to `render_sibling_rows` — see its own parameter's comment.
+    series: &Arc<dyn ItemSeriesRepo>,
 ) -> Result<Html<String>, ItemError> {
     let names = match team_id {
         Some(team_id) => names_for(teams, team_id, requester_user_id).await?,
@@ -1240,6 +1250,7 @@ pub(crate) async fn render_scope_fragment(
                 team_id.is_some(),
                 true,
                 item_dependencies,
+                series,
             )
             .await?,
             "No sub-items yet.",
@@ -1297,6 +1308,7 @@ mod tests {
             series_name: "Party".to_string(),
             parent_occurrence_date: DateTime::from_timestamp(parent_ts, 0).unwrap(),
             date: DateTime::from_timestamp(parent_ts - 86_400, 0).unwrap(),
+            days_before: 1,
             priority: None,
             sort_order,
             item_id: item_id.map(str::to_string),
