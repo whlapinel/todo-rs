@@ -3,13 +3,16 @@ pub mod templates;
 
 use crate::domain::item::{Item, ItemKind};
 use crate::service::error::ItemError;
-use crate::service::item_series::{self as item_series_service, ProjectOccurrence};
+use crate::service::item_series::{
+    self as item_series_service, ProjectOccurrence, SeriesChildOccurrenceView,
+};
 use crate::service::project_items::list_project_items_unchecked;
 use crate::service::teams as team_service;
 use crate::storage::sqlite::{ItemDependencyRepo, ItemRepo, ItemSeriesRepo, TeamRepo, UserRepo};
 use crate::web_ui::list_filters::{ListFilterQuery, ListFilters};
 use crate::web_ui::project_tasks::templates::{
-    ProjectTaskRow, ProjectTaskRowsFragmentTemplate, ProjectTaskVirtualRow,
+    ProjectTaskRow, ProjectTaskRowsFragmentTemplate, ProjectTaskVirtualChildRow,
+    ProjectTaskVirtualRow,
 };
 use askama::Template;
 use async_recursion::async_recursion;
@@ -789,6 +792,55 @@ pub(crate) fn render_rows(
         .map_err(ItemError::from)
 }
 
+/// Stage 5 of the series sub-items plan: the still-virtual sub-items of one parent cycle,
+/// rendered as nested rows in the order their definitions were authored (`sort_order`), or
+/// `None` when there are none to show.
+///
+/// Filters to `item_id.is_none()` here rather than at the call sites: a *materialized* sub-item
+/// is an ordinary structural child of the occurrence's item and already renders through
+/// `render_expandable_children`, so including it would double it. Callers therefore pass
+/// `fan_out_child_occurrences`' raw output and can't forget the filter.
+#[allow(clippy::too_many_arguments)]
+fn render_virtual_child_rows(
+    child_occurrences: &[SeriesChildOccurrenceView],
+    series_id: &str,
+    occurrence_ts: i64,
+    project_id: &str,
+    tz: i32,
+    filters: &ListFilters,
+    in_list_view: bool,
+    treegrid: bool,
+    level: u32,
+) -> Result<Option<String>, ItemError> {
+    let mut views: Vec<&SeriesChildOccurrenceView> = child_occurrences
+        .iter()
+        .filter(|v| v.item_id.is_none())
+        .filter(|v| {
+            v.series_id == series_id && v.parent_occurrence_date.timestamp() == occurrence_ts
+        })
+        .collect();
+    if views.is_empty() {
+        return Ok(None);
+    }
+    views.sort_by_key(|v| v.sort_order);
+    let mut html = String::new();
+    for view in views {
+        html.push_str(
+            &ProjectTaskVirtualChildRow::from_view(
+                view,
+                project_id,
+                tz,
+                filters,
+                in_list_view,
+                treegrid,
+                level,
+            )
+            .render()?,
+        );
+    }
+    Ok(Some(html))
+}
+
 /// Stage 10 gap 2: the flat Tasks list's own version of `render_rows`, merging in each
 /// Task-typed series' single current virtual occurrence (if any) alongside real items —
 /// mirrors `project_calendar::render_rows`'s exact merge pattern (render each kind to
@@ -839,6 +891,16 @@ pub(crate) async fn render_rows_with_virtual(
     // historical one surfaced by `show_complete`); it still gets the series symbol, just no
     // Current/Planned label, since "Planned" would misleadingly imply it's upcoming.
     current_flags: &HashMap<String, bool>,
+    // Every sub-item row for every cycle in play, virtual and materialized alike (the
+    // materialized ones are filtered out by `render_virtual_child_rows`) — computed once by the
+    // caller via `fan_out_child_occurrences`, which costs two queries per distinct series
+    // rather than one per row.
+    child_occurrences: &[SeriesChildOccurrenceView],
+    // item_id -> (series_id, occurrence_ts) for every already-materialized occurrence, so a real
+    // item's row can find its own cycle's sub-items. `current_flags` can't serve double duty
+    // here: it keys off the same item ids but carries only `is_current`, and the cycle *date* is
+    // what identifies a sub-item row.
+    materialized_cycles: &HashMap<String, (String, i64)>,
 ) -> Result<Vec<String>, ItemError> {
     let now = Utc::now();
     let is_team_project = team_id.is_some();
@@ -918,15 +980,46 @@ pub(crate) async fn render_rows_with_virtual(
                 row.children_html = Some(descendants);
             }
         }
+        // A materialized occurrence can still have sub-items nobody has touched yet — those
+        // have no item to be found by `render_expandable_children`, so they're appended here.
+        // (The reverse case doesn't exist: materializing a sub-item materializes its parent, so
+        // a still-virtual occurrence never has a materialized sub-item.)
+        if let Some((series_id, occurrence_ts)) = materialized_cycles.get(&i.id) {
+            if let Some(virtual_children) = render_virtual_child_rows(
+                child_occurrences,
+                series_id,
+                *occurrence_ts,
+                project_id,
+                tz,
+                filters,
+                in_list_view,
+                true,
+                row.level + 1,
+            )? {
+                row.children_html = Some(match row.children_html.take() {
+                    Some(existing) => existing + &virtual_children,
+                    None => virtual_children,
+                });
+            }
+        }
         entries.push((sort_key(i), row.render()?));
     }
     if filters.recurring {
         for occ in virtual_occurrences {
-            entries.push((
+            let mut row =
+                ProjectTaskVirtualRow::from_occurrence(occ, project_id, tz, filters, in_list_view);
+            row.children_html = render_virtual_child_rows(
+                child_occurrences,
+                &occ.series_id,
                 occ.occurrence_date.timestamp(),
-                ProjectTaskVirtualRow::from_occurrence(occ, project_id, tz, filters, in_list_view)
-                    .render()?,
-            ));
+                project_id,
+                tz,
+                filters,
+                in_list_view,
+                true,
+                2,
+            )?;
+            entries.push((occ.occurrence_date.timestamp(), row.render()?));
         }
     }
     entries.sort_by_key(|(key, _)| *key);
@@ -974,8 +1067,13 @@ pub(crate) async fn list_task_rows_for_project(
     // unfiltered `list_occurrence_states_for_project` call: `current_flags` keeps every
     // `Materialized` entry's own `is_current` (see `render_rows_with_virtual`'s doc comment on
     // its `current_flags` param) before `virtual_occurrences` filters those entries back out.
-    let (virtual_occurrences, current_flags): (Vec<_>, HashMap<String, bool>) = if filters.recurring
-    {
+    #[allow(clippy::type_complexity)]
+    let (virtual_occurrences, current_flags, child_occurrences, materialized_cycles): (
+        Vec<_>,
+        HashMap<String, bool>,
+        Vec<_>,
+        HashMap<String, (String, i64)>,
+    ) = if filters.recurring {
         let all_occurrences = item_series_service::list_occurrence_states_for_project(
             series, users, project_id, now, now, tz,
         )
@@ -989,6 +1087,25 @@ pub(crate) async fn list_task_rows_for_project(
                 _ => None,
             })
             .collect();
+        // Same `Materialized` entries as `current_flags`, keyed the same way but carrying the
+        // cycle itself — see `render_rows_with_virtual`'s `materialized_cycles` param.
+        let materialized_cycles = all_occurrences
+            .iter()
+            .filter_map(|occ| match &occ.state {
+                item_series_service::OccurrenceState::Materialized { item_id } => Some((
+                    item_id.clone(),
+                    (occ.series_id.clone(), occ.occurrence_date.timestamp()),
+                )),
+                _ => None,
+            })
+            .collect();
+        // Fanned out from the *whole* occurrence set, not just the virtual ones below: a
+        // materialized occurrence can still be carrying sub-items nobody has touched yet, and
+        // those rows have to nest under its real row. `fan_out_child_occurrences` drops skipped
+        // and non-Task cycles itself, and cycles that end up rendering nothing simply never get
+        // matched.
+        let child_occurrences =
+            item_series_service::fan_out_child_occurrences(series, &all_occurrences, tz).await?;
         let virtual_occurrences = all_occurrences
             .into_iter()
             .filter(|occ| occ.item_type == ItemKind::Task && occ.is_current)
@@ -1004,9 +1121,14 @@ pub(crate) async fn list_task_rows_for_project(
             // regardless.
             .filter(|occ| filters.matches_occurrence(occ, requester_user_id, is_team_project, now))
             .collect();
-        (virtual_occurrences, current_flags)
+        (
+            virtual_occurrences,
+            current_flags,
+            child_occurrences,
+            materialized_cycles,
+        )
     } else {
-        (Vec::new(), HashMap::new())
+        (Vec::new(), HashMap::new(), Vec::new(), HashMap::new())
     };
     let mut skip_urls: HashMap<String, String> = HashMap::new();
     for item in &items {
@@ -1029,6 +1151,8 @@ pub(crate) async fn list_task_rows_for_project(
         true,
         item_dependencies,
         &current_flags,
+        &child_occurrences,
+        &materialized_cycles,
     )
     .await
 }
@@ -1156,6 +1280,102 @@ mod tests {
             }),
             ..Item::default()
         }
+    }
+
+    fn child_view(
+        child_id: &str,
+        series_id: &str,
+        parent_ts: i64,
+        sort_order: i32,
+        item_id: Option<&str>,
+    ) -> SeriesChildOccurrenceView {
+        SeriesChildOccurrenceView {
+            child_id: child_id.to_string(),
+            child_name: format!("sub {child_id}"),
+            description: None,
+            series_id: series_id.to_string(),
+            series_name: "Party".to_string(),
+            parent_occurrence_date: DateTime::from_timestamp(parent_ts, 0).unwrap(),
+            date: DateTime::from_timestamp(parent_ts - 86_400, 0).unwrap(),
+            priority: None,
+            sort_order,
+            item_id: item_id.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn virtual_child_rows_render_in_authored_order_not_id_order() {
+        // `sort_order` is the definition's authored position — the whole reason
+        // `SeriesChildOccurrenceView` carries it rather than letting rows fall out by date
+        // (several sub-items commonly share one lead time).
+        let views = vec![
+            child_view("z", "s1", 1_000, 2, None),
+            child_view("a", "s1", 1_000, 1, None),
+        ];
+        let html = render_virtual_child_rows(
+            &views,
+            "s1",
+            1_000,
+            "p1",
+            0,
+            &ListFilters::default(),
+            true,
+            true,
+            2,
+        )
+        .expect("renders")
+        .expect("some rows");
+        assert!(
+            html.find("sub a").unwrap() < html.find("sub z").unwrap(),
+            "expected sort_order 1 before sort_order 2, got: {html}"
+        );
+    }
+
+    #[test]
+    fn virtual_child_rows_omit_already_materialized_sub_items() {
+        // A materialized sub-item is a real structural child and already renders through
+        // `render_expandable_children` — emitting it here too would double it.
+        let views = vec![child_view("a", "s1", 1_000, 1, Some("item-1"))];
+        assert!(
+            render_virtual_child_rows(
+                &views,
+                "s1",
+                1_000,
+                "p1",
+                0,
+                &ListFilters::default(),
+                true,
+                true,
+                2,
+            )
+            .expect("renders")
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn virtual_child_rows_are_scoped_to_one_cycle_of_one_series() {
+        // The fan-out hands every caller every cycle's rows at once, so the (series, cycle)
+        // match is what keeps one occurrence's row from showing another's preparation work.
+        let views = vec![
+            child_view("a", "s1", 2_000, 1, None),
+            child_view("b", "s2", 1_000, 1, None),
+        ];
+        assert!(
+            render_virtual_child_rows(
+                &views,
+                "s1",
+                1_000,
+                "p1",
+                0,
+                &ListFilters::default(),
+                true,
+                true,
+                2,
+            )
+            .expect("renders")
+            .is_none()
+        );
     }
 
     #[test]

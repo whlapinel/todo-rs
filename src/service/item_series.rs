@@ -1731,6 +1731,74 @@ pub struct SeriesChildOccurrenceView {
     pub item_id: Option<String>,
 }
 
+impl SeriesChildOccurrenceView {
+    /// This row's own composite id, mirroring `ProjectTaskVirtualRow::row_id`'s
+    /// `{series_id}:{occurrence_ts}` convention for a still-virtual parent occurrence — with a
+    /// `child:` prefix, because the two share one id space. The Tasks list's row-selection JS
+    /// (`base.html`'s `activateRow`/`selectOnly`) treats every `[role="row"]` alike and feeds
+    /// whatever id it finds into a batch action, so `handlers::parse_virtual_row_id` has to be
+    /// able to tell a virtual sub-item apart from a virtual occurrence and materialize the right
+    /// one. A real item id is a bare UUID and a definition id is too, so the literal prefix (not
+    /// a segment count) is what makes the three unambiguous.
+    pub fn row_id(&self) -> String {
+        format!(
+            "child:{}:{}",
+            self.child_id,
+            self.parent_occurrence_date.timestamp()
+        )
+    }
+
+    /// `GET` renders the no-side-effect read-only dialog; `POST` materializes and redirects to
+    /// the now-real item's own page. Same split (and same "the name is about the POST, not the
+    /// GET" caveat) as `ProjectOccurrence::materialize_url`.
+    pub fn detail_url(&self, project_id: &str) -> String {
+        format!(
+            "/web/projects/{project_id}/series/{}/occurrences/{}/children/{}",
+            self.series_id,
+            self.parent_occurrence_date.timestamp(),
+            self.child_id,
+        )
+    }
+
+    /// Materializes this sub-item (and, as an internal step, its parent occurrence) and
+    /// completes it in one POST — the sub-item counterpart of `ProjectOccurrence::complete_url`.
+    pub fn complete_url(&self, project_id: &str) -> String {
+        format!("{}/complete", self.detail_url(project_id))
+    }
+}
+
+/// The longest lead time any sub-item definition in `project_id` carries, in days (0 when the
+/// project has no sub-items at all).
+///
+/// Exists for the calendar screens, which bucket a sub-item row on the sub-item's *own* date
+/// while `fan_out_child_occurrences` derives it from the parent cycle. A sub-item shown on the
+/// 1st can belong to an occurrence 30 days later, so a calendar that only queried occurrences
+/// inside its own visible range would silently miss exactly the lead-time rows this whole
+/// feature exists to surface. Callers widen their occurrence query by this much; occurrences
+/// that fall outside the visible range then bucket onto days nothing renders, which is harmless.
+///
+/// Costs one query per Task series in the project. Deliberately not folded into
+/// `fan_out_child_occurrences` (which re-reads the same definitions): that function takes
+/// occurrences that have *already* been computed, so by the time it runs the range decision has
+/// been made. A single `MAX(days_before)`-style repo query would collapse both, and is the
+/// obvious optimization if these screens ever show up in a profile — tracked in
+/// `docs/issues_and_features.md` so it doesn't sit only here.
+pub async fn max_child_lead_days(
+    series_repo: &Arc<dyn ItemSeriesRepo>,
+    project_id: &str,
+) -> Result<i32, ItemError> {
+    let mut max = 0;
+    for series in series_repo.list_series_for_project(project_id).await? {
+        if series.item_type != ItemKind::Task {
+            continue;
+        }
+        for child in series_repo.list_series_children(&series.id).await? {
+            max = max.max(child.days_before);
+        }
+    }
+    Ok(max)
+}
+
 /// Expands already-computed parent occurrences into their sub-item rows — the fan-out that makes
 /// lead-time sub-items visible *without* materializing anything (decision 2 of the plan: virtual
 /// rows render alongside real ones, materialization happens only when a change is persisted).
@@ -4624,6 +4692,56 @@ mod tests {
             .expect("fan-out should succeed");
 
         assert!(views.is_empty());
+    }
+
+    #[tokio::test]
+    async fn max_child_lead_days_takes_the_largest_across_every_task_series() {
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock.expect_list_series_for_project().returning(|_| {
+            let mut a = task_series();
+            a.id = "s1".to_string();
+            let mut b = task_series();
+            b.id = "s2".to_string();
+            Ok(vec![a, b])
+        });
+        series_mock
+            .expect_list_series_children()
+            .returning(|series_id: &str| {
+                Ok(match series_id {
+                    "s1" => vec![child("c1", "Book venue", 30)],
+                    _ => vec![child("c2", "Send invites", 90)],
+                })
+            });
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        // The calendars widen their occurrence query by this much — taking anything less than
+        // the true maximum would silently drop exactly the longest lead-time rows.
+        assert_eq!(
+            max_child_lead_days(&series_repo, "p1")
+                .await
+                .expect("should succeed"),
+            90
+        );
+    }
+
+    #[tokio::test]
+    async fn max_child_lead_days_is_zero_with_no_sub_items_and_skips_event_series() {
+        let mut series_mock = MockItemSeriesRepo::new();
+        // `series("p1")` is Event-typed, and an Event series can never carry sub-items — so it
+        // is skipped without a definition query at all, leaving the lookahead at zero and the
+        // calendars' occurrence range exactly what it was before sub-items existed.
+        series_mock
+            .expect_list_series_for_project()
+            .returning(|_| Ok(vec![series("p1")]));
+        series_mock.expect_list_series_children().times(0);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        assert_eq!(
+            max_child_lead_days(&series_repo, "p1")
+                .await
+                .expect("should succeed"),
+            0
+        );
     }
 
     #[tokio::test]

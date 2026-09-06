@@ -17,6 +17,15 @@
     <a href="{{ materialize_url }}" hx-get="{{ materialize_url }}" hx-target="#action-dialog"
       hx-select="#dialog-fragment" hx-swap="innerHTML"
       class="min-w-0 flex-1 truncate text-gray-900 dark:text-white">{{ name }}</a>
+    {% if children_html.is_some() %}
+    <!-- Expand control for this occurrence's still-virtual sub-items. Separate from the name
+         (unlike components/row.html's non-treegrid branch, where the name itself toggles),
+         because the name here still has to open the occurrence's own Details dialog. -->
+    <button type="button" onclick="toggleChildren('{{ toggle_id }}')"
+      class="shrink-0 flex size-4 items-center justify-center cursor-pointer text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300">
+      <span id="chevron-{{ toggle_id }}">&#9656;</span>
+    </button>
+    {% endif %}
     {% if is_current %}
     <span class="shrink-0 text-[10px] uppercase tracking-wide font-semibold text-indigo-600 dark:text-indigo-400">Current</span>
     {% endif %}
@@ -44,4 +53,10 @@
       class="shrink-0 cursor-pointer text-gray-400 hover:text-red-500 dark:text-gray-500 dark:hover:text-red-400">Skip</button>
     {% endif %}
   </div>
+  {% if let Some(children) = children_html %}
+  <!-- Already in the DOM, initially hidden — see components/row.html's identical nested list. -->
+  <ul id="item-{{ toggle_id }}-children" class="hidden mt-2 ml-2 border-l border-gray-200 dark:border-white/10">
+    {{ children|safe }}
+  </ul>
+  {% endif %}
 </li>

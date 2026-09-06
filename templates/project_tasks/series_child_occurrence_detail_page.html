@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block title %}{{ name }} · Todo{% endblock %}
+{% block content %}
+<!-- Read-only view of a still-virtual sub-item of a series occurrence. Unlike
+     series_occurrence_detail_page.html this is one template rather than a page + a separate
+     dialog fragment: nothing else renders this dialog, so the split would only buy indirection.
+     The `#dialog-fragment` wrapper id is still the contract every caller relies on
+     (`hx-select="#dialog-fragment"` into `#action-dialog`), and the script below is the same
+     move-into-#action-dialog bootstrap, which only ever runs on a real full-page load. -->
+<div id="dialog-fragment">
+  <div id="dialog-backdrop"
+    class="fixed inset-0 bg-gray-500/75 dark:bg-gray-900/50 transition-opacity duration-300 ease-out opacity-0 group-open/dialog:opacity-100">
+  </div>
+  <div tabindex="0"
+    class="relative z-10 flex min-h-full items-end justify-center p-4 text-center focus:outline-none sm:items-center sm:p-0">
+    <div class="relative transform overflow-hidden rounded-lg bg-white dark:bg-gray-800 px-4 pt-5 pb-4 text-left shadow-xl transition-all duration-300 ease-out translate-y-4 opacity-0 scale-95 group-open/dialog:translate-y-0 group-open/dialog:opacity-100 group-open/dialog:scale-100 sm:my-8 sm:w-full sm:max-w-lg sm:p-6 dark:outline dark:-outline-offset-1 dark:outline-white/10">
+      <h3 class="mb-1 text-base font-semibold text-gray-900 dark:text-white">{{ name }}</h3>
+      <p class="mb-3 text-sm text-gray-500 dark:text-gray-400">{{ lead_label }}</p>
+      <div
+        class="overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm dark:border-white/10 dark:bg-gray-800/50 dark:shadow-none">
+        <dl class="divide-y divide-gray-100 dark:divide-white/5">
+          {% if let Some(d) = description %}
+          <div class="px-4 py-4 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
+            <dt class="text-sm font-medium text-gray-900 dark:text-gray-100">Description</dt>
+            <dd class="mt-1 text-sm whitespace-pre-wrap text-gray-700 sm:col-span-2 sm:mt-0 dark:text-gray-300">{{ d }}
+            </dd>
+          </div>
+          {% endif %}
+          {% if let Some(p) = priority_label %}
+          <div class="px-4 py-4 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
+            <dt class="text-sm font-medium text-gray-900 dark:text-gray-100">Priority</dt>
+            <dd class="mt-1 text-sm text-amber-600 sm:col-span-2 sm:mt-0 dark:text-amber-400">🚩 {{ p }}</dd>
+          </div>
+          {% endif %}
+          <div class="px-4 py-4 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
+            <dt class="text-sm font-medium text-gray-900 dark:text-gray-100">Due</dt>
+            <dd
+              class="mt-1 text-sm sm:col-span-2 sm:mt-0 {% if overdue %}text-red-600 dark:text-red-400{% else %}text-gray-700 dark:text-gray-300{% endif %}">
+              {{ date_label }}</dd>
+          </div>
+          <div class="px-4 py-4 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
+            <dt class="text-sm font-medium text-gray-900 dark:text-gray-100">Sub-item of</dt>
+            <dd class="mt-1 text-sm sm:col-span-2 sm:mt-0">
+              <a href="{{ series_url }}" hx-target="#page" hx-select="#page" hx-swap="innerHTML"
+                class="text-indigo-600 hover:text-indigo-500 dark:text-indigo-400 dark:hover:text-indigo-300">{{
+                series_name }}</a>
+            </dd>
+          </div>
+        </dl>
+      </div>
+      <!-- "Open" stands in for an Edit button, and materializes this occurrence purely to
+           navigate — the one materialize-on-touch left in the sub-items feature, which the
+           design otherwise avoids. It should become a real Edit button opening a form prefilled
+           from the definition (no item required), saving through a materialize-then-write PUT,
+           the way a parent occurrence's own dialog already works. See
+           materialize_project_task_series_child_occurrence_form and
+           docs/issues_and_features.md. -->
+      <div class="mt-5 sm:mt-6 flex flex-wrap items-center gap-3">
+        <button type="button" hx-post="{{ complete_url }}"
+          class="inline-flex items-center justify-center rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-xs hover:bg-indigo-500 dark:bg-indigo-500 dark:shadow-none dark:hover:bg-indigo-400">Mark
+          complete</button>
+        <button type="button" hx-post="{{ materialize_url }}"
+          class="inline-flex items-center justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-xs inset-ring-1 inset-ring-gray-300 hover:bg-gray-50 dark:bg-white/10 dark:text-white dark:shadow-none dark:inset-ring-white/5 dark:hover:bg-white/20">Open</button>
+        <button type="button" onclick="document.getElementById('action-dialog').close()"
+          class="ml-auto inline-flex items-center justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-xs inset-ring-1 inset-ring-gray-300 hover:bg-gray-50 dark:bg-white/10 dark:text-white dark:shadow-none dark:inset-ring-white/5 dark:hover:bg-white/20">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+<!-- See series_occurrence_detail_page.html's identical script for the full rationale. -->
+<script>
+  (function () {
+    var dialog = document.getElementById('action-dialog');
+    var frag = document.getElementById('dialog-fragment');
+    if (dialog && frag && !dialog.open) {
+      dialog.innerHTML = '';
+      while (frag.firstChild) dialog.appendChild(frag.firstChild);
+      frag.remove();
+      htmx.process(dialog);
+      dialog.showModal();
+    }
+  })();
+</script>
+{% endblock %}

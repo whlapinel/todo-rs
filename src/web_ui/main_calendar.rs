@@ -5,7 +5,9 @@ use super::{TzOffset, format_display_date, format_display_naive_date, to_local};
 use crate::auth::AuthUser;
 use crate::domain::item::{Item, ItemKind};
 use crate::service::error::ItemError;
-use crate::service::item_series::{self as series_service, OccurrenceState, ProjectOccurrence};
+use crate::service::item_series::{
+    self as series_service, OccurrenceState, ProjectOccurrence, SeriesChildOccurrenceView,
+};
 use crate::service::project_items::{self as project_item_service, UpdateProjectItemParams};
 use crate::service::projects::{self as project_service};
 use crate::service::teams as team_service;
@@ -442,6 +444,7 @@ fn build_calendar_days(
     month: u32,
     due_items: &[(DueItem, String, String)],
     virtual_occurrences: &[(ProjectOccurrence, String, String)],
+    child_views: &[(SeriesChildOccurrenceView, String, String)],
     tz: i32,
     today: NaiveDate,
     selected_date: Option<NaiveDate>,
@@ -457,6 +460,13 @@ fn build_calendar_days(
     for (occ, _, _) in virtual_occurrences {
         let local = to_local(occ.occurrence_date, tz);
         *counts.entry(local.date_naive()).or_default() += 1;
+    }
+    // Counted on the sub-item's own lead-time date — see
+    // `project_calendar::build_calendar_days`'s identical loop.
+    for (view, _, _) in child_views {
+        *counts
+            .entry(to_local(view.date, tz).date_naive())
+            .or_default() += 1;
     }
 
     let mut days = Vec::with_capacity(42);
@@ -474,6 +484,44 @@ fn build_calendar_days(
     days
 }
 
+/// Cross-project counterpart to `project_calendar::ProjectCalendarVirtualChildRow` — a
+/// still-virtual sub-item on its own lead-time date, tagged with the project it came from.
+/// Duplicated rather than shared for the same reason `MainCalendarVirtualRow` is.
+#[derive(Template)]
+#[template(path = "main_calendar/virtual_child_row.html")]
+struct MainCalendarVirtualChildRow {
+    child_id: String,
+    occurrence_ts: i64,
+    project_name: String,
+    name: String,
+    series_name: String,
+    date_label: String,
+    overdue: bool,
+    detail_url: String,
+    complete_url: String,
+}
+
+impl MainCalendarVirtualChildRow {
+    fn from_view(
+        view: &SeriesChildOccurrenceView,
+        project_id: &str,
+        project_name: &str,
+        tz: i32,
+    ) -> Self {
+        Self {
+            child_id: view.child_id.clone(),
+            occurrence_ts: view.parent_occurrence_date.timestamp(),
+            project_name: project_name.to_string(),
+            name: view.child_name.clone(),
+            series_name: view.series_name.clone(),
+            date_label: format_display_date(to_local(view.date, tz), true),
+            overdue: view.date < Utc::now(),
+            detail_url: view.detail_url(project_id),
+            complete_url: view.complete_url(project_id),
+        }
+    }
+}
+
 /// The calendar's per-day panel — see `project_tasks::day_list_rows`'s identical rationale.
 /// `due_items`/`virtual_occurrences` are the same pre-tagged, `is_included`-filtered buckets
 /// `build_calendar_days` takes, just narrowed to `date`. `type_filter` is Stage 4's All/Tasks/
@@ -485,6 +533,7 @@ async fn day_list_rows(
     repo: &Arc<dyn ItemRepo>,
     due_items: &[(DueItem, String, String)],
     virtual_occurrences: &[(ProjectOccurrence, String, String)],
+    child_views: &[(SeriesChildOccurrenceView, String, String)],
     names_by_project: &HashMap<String, HashMap<String, String>>,
     date: NaiveDate,
     tz: i32,
@@ -542,6 +591,19 @@ async fn day_list_rows(
             MainCalendarVirtualRow::from_occurrence(occ, project_id, project_name, tz).render()?,
         ));
     }
+    // A sub-item is always a Task, so the Events tab excludes them like any other Task.
+    for (view, project_id, project_name) in child_views {
+        if type_filter.is_some_and(|k| k != ItemKind::Task) {
+            continue;
+        }
+        if to_local(view.date, tz).date_naive() != date {
+            continue;
+        }
+        entries.push((
+            view.date.timestamp(),
+            MainCalendarVirtualChildRow::from_view(view, project_id, project_name, tz).render()?,
+        ));
+    }
     entries.sort_by_key(|(ts, _)| *ts);
     Ok(entries.into_iter().map(|(_, html)| html).collect())
 }
@@ -579,6 +641,7 @@ async fn gather_calendar_data(
     (
         Vec<(DueItem, String, String)>,
         Vec<(ProjectOccurrence, String, String)>,
+        Vec<(SeriesChildOccurrenceView, String, String)>,
         HashMap<String, HashMap<String, String>>,
     ),
     ItemError,
@@ -587,6 +650,7 @@ async fn gather_calendar_data(
 
     let mut due_bucket: Vec<(DueItem, String, String)> = Vec::new();
     let mut occ_bucket: Vec<(ProjectOccurrence, String, String)> = Vec::new();
+    let mut child_bucket: Vec<(SeriesChildOccurrenceView, String, String)> = Vec::new();
     let mut names_by_project: HashMap<String, HashMap<String, String>> = HashMap::new();
 
     for project in &user_projects {
@@ -611,17 +675,21 @@ async fn gather_calendar_data(
                 due_bucket.push((di, project.id.clone(), project.name.clone()));
             }
         }
-        let occurrences = series_service::list_occurrence_states_for_project(
+        // Queried past `range_end` by this project's longest sub-item lead time, so a
+        // lead-time row reaching back into the visible grid from an occurrence beyond it isn't
+        // missed — see `service::item_series::max_child_lead_days`. Occurrences past the grid
+        // bucket onto days nothing renders.
+        let lead = series_service::max_child_lead_days(series, &project.id).await?;
+        let all_occurrences = series_service::list_occurrence_states_for_project(
             series,
             users,
             &project.id,
             range_start,
-            range_end,
+            range_end + Duration::days(lead as i64),
             tz,
         )
         .await?
         .into_iter()
-        .filter(|occ| !matches!(occ.state, OccurrenceState::Materialized { .. }))
         .filter(|occ| {
             is_included(
                 occ.item_type,
@@ -630,12 +698,26 @@ async fn gather_calendar_data(
                 requester_user_id,
                 assigned_to_any,
             )
-        });
-        for occ in occurrences {
+        })
+        .collect::<Vec<_>>();
+        // Fanned out before the `Materialized` filter below: a materialized occurrence can
+        // still be carrying sub-items nobody has touched. Materialized *sub-items* are dropped
+        // here instead, since those already arrive as ordinary `due_items`.
+        for view in series_service::fan_out_child_occurrences(series, &all_occurrences, tz)
+            .await?
+            .into_iter()
+            .filter(|view| view.item_id.is_none())
+        {
+            child_bucket.push((view, project.id.clone(), project.name.clone()));
+        }
+        for occ in all_occurrences
+            .into_iter()
+            .filter(|occ| !matches!(occ.state, OccurrenceState::Materialized { .. }))
+        {
             occ_bucket.push((occ, project.id.clone(), project.name.clone()));
         }
     }
-    Ok((due_bucket, occ_bucket, names_by_project))
+    Ok((due_bucket, occ_bucket, child_bucket, names_by_project))
 }
 
 pub async fn main_calendar_page(
@@ -665,7 +747,7 @@ pub async fn main_calendar_page(
     let range_start = local_date_to_utc(grid_start, start_of_day(), tz);
     let range_end = local_date_to_utc(grid_start + Duration::days(41), end_of_day(), tz);
 
-    let (due_bucket, occ_bucket, names_by_project) = gather_calendar_data(
+    let (due_bucket, occ_bucket, child_bucket, names_by_project) = gather_calendar_data(
         &repo,
         &projects,
         &teams,
@@ -684,6 +766,7 @@ pub async fn main_calendar_page(
         month,
         &due_bucket,
         &occ_bucket,
+        &child_bucket,
         tz,
         today,
         selected_date,
@@ -703,6 +786,7 @@ pub async fn main_calendar_page(
                 &repo,
                 &due_bucket,
                 &occ_bucket,
+                &child_bucket,
                 &names_by_project,
                 date,
                 tz,
@@ -756,7 +840,7 @@ pub async fn main_calendar_day_fragment(
     let type_filter = parse_type_filter(q.r#type.as_deref());
     let range_start = local_date_to_utc(date, start_of_day(), tz);
     let range_end = local_date_to_utc(date, end_of_day(), tz);
-    let (due_bucket, occ_bucket, names_by_project) = gather_calendar_data(
+    let (due_bucket, occ_bucket, child_bucket, names_by_project) = gather_calendar_data(
         &repo,
         &projects,
         &teams,
@@ -773,6 +857,7 @@ pub async fn main_calendar_day_fragment(
         &repo,
         &due_bucket,
         &occ_bucket,
+        &child_bucket,
         &names_by_project,
         date,
         tz,

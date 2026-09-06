@@ -372,6 +372,19 @@ fn build_web_router() -> Router {
             get(get_project_task_series_occurrence_add_child_dialog)
                 .post(create_project_task_series_occurrence_child_form),
         )
+        // Stage 5 of the series sub-items plan — a still-virtual sub-item's own occurrence-
+        // scoped actions. `GET` renders its read-only dialog, `POST` materializes it (and its
+        // parent occurrence) and lands on the resulting real task; there is deliberately no
+        // skip/unskip counterpart, since sub-items have no Skip.
+        .route(
+            "/projects/:project_id/series/:series_id/occurrences/:occurrence_ts/children/:child_id",
+            get(project_task_series_child_occurrence_detail_page)
+                .post(materialize_project_task_series_child_occurrence_form),
+        )
+        .route(
+            "/projects/:project_id/series/:series_id/occurrences/:occurrence_ts/children/:child_id/complete",
+            post(complete_project_task_series_child_occurrence_form),
+        )
         .route(
             "/projects/:project_id/series/:series_id/occurrences/:occurrence_ts/event",
             put(update_project_event_series_occurrence_form),

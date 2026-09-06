@@ -5,7 +5,9 @@ use super::{TzOffset, format_display_date, format_display_naive_date, to_local};
 use crate::auth::AuthUser;
 use crate::domain::item::{Item, ItemKind};
 use crate::service::error::ItemError;
-use crate::service::item_series::{self as series_service, OccurrenceState, ProjectOccurrence};
+use crate::service::item_series::{
+    self as series_service, OccurrenceState, ProjectOccurrence, SeriesChildOccurrenceView,
+};
 use crate::service::project_items::{self as project_item_service, UpdateProjectItemParams};
 use crate::service::projects::{self as project_service};
 use crate::service::teams as team_service;
@@ -306,6 +308,81 @@ impl ProjectCalendarVirtualRow {
     }
 }
 
+/// Stage 5 of the series sub-items plan — a still-virtual sub-item of a series occurrence,
+/// bucketed on its own lead-time date. This is the surface the whole feature exists for: a
+/// sub-item due 30 days before its occurrence shows up 30 days early here, with nothing
+/// materialized. A *materialized* sub-item is an ordinary item with a real due date and already
+/// arrives through `due_items`, so only the virtual ones are rendered from here.
+#[derive(Template)]
+#[template(path = "project_calendar/virtual_child_row.html")]
+struct ProjectCalendarVirtualChildRow {
+    child_id: String,
+    occurrence_ts: i64,
+    name: String,
+    series_name: String,
+    date_label: String,
+    overdue: bool,
+    detail_url: String,
+    complete_url: String,
+}
+
+impl ProjectCalendarVirtualChildRow {
+    fn from_view(view: &SeriesChildOccurrenceView, project_id: &str, tz: i32) -> Self {
+        Self {
+            child_id: view.child_id.clone(),
+            occurrence_ts: view.parent_occurrence_date.timestamp(),
+            name: view.child_name.clone(),
+            series_name: view.series_name.clone(),
+            date_label: format_display_date(to_local(view.date, tz), true),
+            overdue: view.date < Utc::now(),
+            detail_url: view.detail_url(project_id),
+            complete_url: view.complete_url(project_id),
+        }
+    }
+}
+
+/// The occurrence range a calendar has to query for its sub-item fan-out to be complete — the
+/// visible range, pushed out by the project's longest lead time. See
+/// `series_service::max_child_lead_days`.
+async fn fan_out_range_end(
+    series: &Arc<dyn ItemSeriesRepo>,
+    project_id: &str,
+    range_end: DateTime<Utc>,
+) -> Result<DateTime<Utc>, ItemError> {
+    let lead = series_service::max_child_lead_days(series, project_id).await?;
+    Ok(range_end + Duration::days(lead as i64))
+}
+
+/// Every still-virtual sub-item row for `occurrences`, filtered the same way their parent
+/// occurrences are: an occurrence the viewer has filtered away shouldn't leave its preparation
+/// work behind on the calendar. Materialized sub-items are dropped here because they already
+/// arrive as ordinary `due_items`.
+async fn virtual_child_views(
+    series: &Arc<dyn ItemSeriesRepo>,
+    occurrences: &[ProjectOccurrence],
+    tz: i32,
+    is_team_project: bool,
+    assigned_to_any: bool,
+    user_id: &str,
+) -> Result<Vec<SeriesChildOccurrenceView>, ItemError> {
+    let visible: Vec<ProjectOccurrence> = occurrences
+        .iter()
+        .filter(|occ| {
+            !is_team_project
+                || assigned_to_any
+                || occ.assigned_to_user_id.as_deref() == Some(user_id)
+        })
+        .cloned()
+        .collect();
+    Ok(
+        series_service::fan_out_child_occurrences(series, &visible, tz)
+            .await?
+            .into_iter()
+            .filter(|view| view.item_id.is_none())
+            .collect(),
+    )
+}
+
 /// The calendar's per-day panel — see `project_tasks::day_list_rows`'s identical rationale.
 /// Unlike `render_rows` above (the flat calendar page's preset-filtered view), this shows
 /// every item/occurrence on `date`, optionally narrowed by the drawer's own All/Tasks/Events
@@ -337,6 +414,9 @@ async fn day_list_rows(
     assigned_to_any: bool,
     type_filter: Option<ItemKind>,
     series: &Arc<dyn ItemSeriesRepo>,
+    // Already filtered to still-virtual rows whose parent occurrence passed the same
+    // assigned-to-me gate as everything else here — see `virtual_child_views`.
+    child_views: &[SeriesChildOccurrenceView],
 ) -> Result<Vec<String>, ItemError> {
     let mine = |assigned: Option<String>| {
         !is_team_project || assigned_to_any || assigned == Some(user_id.to_string())
@@ -384,6 +464,19 @@ async fn day_list_rows(
         entries.push((
             occ.occurrence_date.timestamp(),
             ProjectCalendarVirtualRow::from_occurrence(occ, project_id, tz).render()?,
+        ));
+    }
+    // Bucketed on the sub-item's own lead-time date, not its parent cycle's — that difference
+    // is the entire point of the row. A sub-item is always a Task, so the drawer's Events tab
+    // excludes them the same way it excludes every other Task.
+    for view in child_views
+        .iter()
+        .filter(|_| type_filter.is_none_or(|k| k == ItemKind::Task))
+        .filter(|view| to_local(view.date, tz).date_naive() == date)
+    {
+        entries.push((
+            view.date.timestamp(),
+            ProjectCalendarVirtualChildRow::from_view(view, project_id, tz).render()?,
         ));
     }
     entries.sort_by_key(|(ts, _)| *ts);
@@ -611,6 +704,7 @@ fn build_calendar_days(
     user_id: &str,
     assigned_to_any: bool,
     is_team_project: bool,
+    child_views: &[SeriesChildOccurrenceView],
 ) -> Vec<ProjectCalendarDay> {
     let grid_start = grid_start_for(year, month);
     let mine = |assigned: Option<String>| {
@@ -641,6 +735,15 @@ fn build_calendar_days(
         }
         let local = to_local(occ.occurrence_date, tz);
         *counts.entry(local.date_naive()).or_default() += 1;
+    }
+    // Counted on the sub-item's own date. `child_views` is pre-filtered for assignment (see
+    // `virtual_child_views`), and entries whose date falls outside the visible grid — the price
+    // of querying occurrences past `range_end` so lead-time rows aren't missed — simply land on
+    // days this loop never reads back.
+    for view in child_views {
+        *counts
+            .entry(to_local(view.date, tz).date_naive())
+            .or_default() += 1;
     }
 
     let mut days = Vec::with_capacity(42);
@@ -715,18 +818,31 @@ pub async fn project_calendar_page(
     // identical rationale above — `Materialized` entries are filtered out here (those already
     // render via `due_items`, fed into `build_calendar_days` separately), leaving Virtual and
     // Skipped visible.
-    let virtual_occurrences = series_service::list_occurrence_states_for_project(
+    // Queried past `range_end` so a sub-item whose lead time reaches back into this grid from
+    // an occurrence beyond it still appears — see `fan_out_range_end`. The extra occurrences
+    // bucket onto days outside the grid and are never read back, so nothing filters them out.
+    let all_occurrences = series_service::list_occurrence_states_for_project(
         &series,
         &users,
         &project_id,
         range_start,
-        range_end,
+        fan_out_range_end(&series, &project_id, range_end).await?,
         tz,
     )
-    .await?
-    .into_iter()
-    .filter(|occ| !matches!(occ.state, OccurrenceState::Materialized { .. }))
-    .collect::<Vec<_>>();
+    .await?;
+    let child_views = virtual_child_views(
+        &series,
+        &all_occurrences,
+        tz,
+        project.team_id.is_some(),
+        assigned_to_any,
+        &auth_user.user_id,
+    )
+    .await?;
+    let virtual_occurrences = all_occurrences
+        .into_iter()
+        .filter(|occ| !matches!(occ.state, OccurrenceState::Materialized { .. }))
+        .collect::<Vec<_>>();
     let days = build_calendar_days(
         year,
         month,
@@ -738,6 +854,7 @@ pub async fn project_calendar_page(
         &auth_user.user_id,
         assigned_to_any,
         project.team_id.is_some(),
+        &child_views,
     );
     let (prev_year, prev_month) = prev_month(year, month);
     let (next_year, next_month) = next_month(year, month);
@@ -767,6 +884,7 @@ pub async fn project_calendar_page(
                 assigned_to_any,
                 type_filter,
                 &series,
+                &child_views,
             )
             .await?
         }
@@ -835,18 +953,30 @@ pub async fn project_calendar_day_fragment(
     .await?;
     let range_start = local_date_to_utc(date, start_of_day(), tz);
     let range_end = local_date_to_utc(date, end_of_day(), tz);
-    let virtual_occurrences = series_service::list_occurrence_states_for_project(
+    // Same lookahead as the full page — without it this one-day query could never see the
+    // occurrence a sub-item shown on this day is preparing for. See `fan_out_range_end`.
+    let all_occurrences = series_service::list_occurrence_states_for_project(
         &series,
         &users,
         &project_id,
         range_start,
-        range_end,
+        fan_out_range_end(&series, &project_id, range_end).await?,
         tz,
     )
-    .await?
-    .into_iter()
-    .filter(|occ| !matches!(occ.state, OccurrenceState::Materialized { .. }))
-    .collect::<Vec<_>>();
+    .await?;
+    let child_views = virtual_child_views(
+        &series,
+        &all_occurrences,
+        tz,
+        project.team_id.is_some(),
+        assigned_to_any,
+        &auth_user.user_id,
+    )
+    .await?;
+    let virtual_occurrences = all_occurrences
+        .into_iter()
+        .filter(|occ| !matches!(occ.state, OccurrenceState::Materialized { .. }))
+        .collect::<Vec<_>>();
     let names = match &project.team_id {
         Some(team_id) => names_for(&teams, team_id, &auth_user.user_id).await?,
         None => HashMap::new(),
@@ -864,6 +994,7 @@ pub async fn project_calendar_day_fragment(
         assigned_to_any,
         type_filter,
         &series,
+        &child_views,
     )
     .await?;
     Ok(Html(render_day_drawer(

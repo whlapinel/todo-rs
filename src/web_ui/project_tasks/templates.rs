@@ -506,6 +506,14 @@ pub struct ProjectTaskVirtualRow {
     /// silently targeting an id that doesn't exist. See the archived "extend confirm-then-fade
     /// to virtual occurrences" entry (2026-08-21) for why only the flat list got this treatment.
     pub in_list_view: bool,
+    /// Stage 5 of the series sub-items plan: this occurrence's own sub-item rows, already
+    /// rendered, inlined and initially hidden exactly the way `Row::children_html` does it
+    /// (same `toggleChildren`/`item-{id}-children` contract in `base.html`). Every entry here
+    /// is a *virtual* sub-item by construction — materializing a sub-item materializes its
+    /// parent first (`service::item_series::get_or_materialize_child_occurrence`), so a still-
+    /// virtual occurrence can only ever have still-virtual sub-items. `None` when the series
+    /// has no sub-item definitions, which is what leaves the expand control an inert spacer.
+    pub children_html: Option<String>,
 }
 
 impl ProjectTaskVirtualRow {
@@ -551,6 +559,86 @@ impl ProjectTaskVirtualRow {
             assignee_name: occ.assigned_to_user_name.clone(),
             priority_label: priority_label_for(occ.priority),
             in_list_view,
+            // Filled in by the caller that actually has the fan-out
+            // (`super::render_rows_with_virtual`) — `ProjectOccurrence` alone doesn't carry
+            // sub-items, and re-querying for them per row would defeat the point of
+            // `fan_out_child_occurrences` batching by series.
+            children_html: None,
+        }
+    }
+}
+
+/// One still-virtual sub-item of a series occurrence, rendered nested under that occurrence's
+/// own row (decision 5 of the sub-items plan: sub-items nest like any other child, with no
+/// exception for being virtual). The materialized counterpart is an ordinary `Row` — a
+/// materialized sub-item is a real structural child and needs nothing special here.
+///
+/// Much smaller than `ProjectTaskVirtualRow` because a sub-item has far fewer affordances: no
+/// Skip/Unskip (there is deliberately no sub-item Skip), no series badge (the parent row above
+/// it already carries one), and no assignee of its own (it inherits the occurrence's, shown on
+/// the parent row).
+#[derive(Template)]
+#[template(path = "project_tasks/virtual_child_row.html")]
+pub struct ProjectTaskVirtualChildRow {
+    /// `"child:{child_id}:{parent_occurrence_ts}"` — see
+    /// `SeriesChildOccurrenceView::row_id`'s doc comment for why the prefix is load-bearing.
+    pub row_id: String,
+    pub name: String,
+    pub date_label: String,
+    /// Always a deadline, never a scheduled date — unlike the parent occurrence's own row,
+    /// which switches on `is_due_date_basis`. A sub-item materializes with `due_offset_days`
+    /// and no schedule of its own, so its lead-time date is a due date whatever basis the
+    /// parent series carries.
+    pub overdue: bool,
+    pub priority_label: Option<String>,
+    /// Read-only dialog for this still-virtual sub-item (`GET`) — the same route its `POST`
+    /// materializes through. See `SeriesChildOccurrenceView::detail_url`.
+    pub detail_url: String,
+    pub complete_url: String,
+    /// See `ProjectTaskVirtualRow::in_list_view`'s identical rationale — gates whether this
+    /// row's Mark complete targets `#items-list` or falls back to whole-page htmx behavior.
+    pub in_list_view: bool,
+    /// `aria-level` for the treegrid, one below the parent occurrence's row. Ignored when
+    /// `treegrid` is false.
+    pub level: u32,
+    /// See `Row::treegrid` — `true` only inside the flat Tasks list's own `role="treegrid"`
+    /// container.
+    pub treegrid: bool,
+}
+
+impl ProjectTaskVirtualChildRow {
+    pub fn from_view(
+        view: &crate::service::item_series::SeriesChildOccurrenceView,
+        project_id: &str,
+        tz: i32,
+        filters: &crate::web_ui::list_filters::ListFilters,
+        in_list_view: bool,
+        treegrid: bool,
+        level: u32,
+    ) -> Self {
+        // Same `?view=tasks-list&<filters>` round-trip `ProjectTaskVirtualRow::from_occurrence`
+        // bakes into its own action URLs — see that function's comment.
+        let list_query = if in_list_view {
+            let suffix = filters.query_string();
+            if suffix.is_empty() {
+                "?view=tasks-list".to_string()
+            } else {
+                format!("?view=tasks-list&{suffix}")
+            }
+        } else {
+            String::new()
+        };
+        Self {
+            row_id: view.row_id(),
+            name: view.child_name.clone(),
+            date_label: format_display_date(to_local(view.date, tz), true),
+            overdue: view.date < Utc::now(),
+            priority_label: priority_label_for(view.priority),
+            detail_url: view.detail_url(project_id),
+            complete_url: format!("{}{list_query}", view.complete_url(project_id)),
+            in_list_view,
+            level,
+            treegrid,
         }
     }
 }
@@ -1187,6 +1275,29 @@ impl ProjectTaskSeriesOccurrenceDetailDialog {
 pub struct ProjectTaskSeriesOccurrenceDetailPageTemplate {
     pub name: String,
     pub dialog: String,
+    pub nav_html: String,
+}
+
+/// Stage 5 of the series sub-items plan — the read-only dialog for a still-virtual sub-item of
+/// a series occurrence. One template rather than the page/dialog pair its parent-occurrence
+/// counterpart uses (see the template's own comment), since nothing else renders it.
+#[derive(Template)]
+#[template(path = "project_tasks/series_child_occurrence_detail_page.html")]
+pub struct ProjectTaskSeriesChildOccurrenceDetailPage {
+    pub name: String,
+    /// "30 days before Party on Nov 1" — spells out both halves of the lead time, since the
+    /// sub-item's own due date alone doesn't say what it's preparing for.
+    pub lead_label: String,
+    pub description: Option<String>,
+    pub priority_label: Option<String>,
+    pub date_label: String,
+    pub overdue: bool,
+    pub series_name: String,
+    pub series_url: String,
+    pub complete_url: String,
+    /// `POST`s the same path this dialog was `GET` from — materialize, then land on the now-real
+    /// task's own page. See the template's comment on why this stands in for an Edit form.
+    pub materialize_url: String,
     pub nav_html: String,
 }
 

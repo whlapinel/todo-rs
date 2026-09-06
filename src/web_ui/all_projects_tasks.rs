@@ -2,7 +2,7 @@ use crate::auth::AuthUser;
 use crate::domain::item::{Item, ItemKind};
 use crate::service::error::ItemError;
 use crate::service::item_series::{
-    self as item_series_service, OccurrenceState, ProjectOccurrence,
+    self as item_series_service, OccurrenceState, ProjectOccurrence, SeriesChildOccurrenceView,
 };
 use crate::service::project_items::{self as project_item_service, UpdateProjectItemParams};
 use crate::service::projects as project_service;
@@ -14,7 +14,7 @@ use crate::web_ui::TzOffset;
 use crate::web_ui::list_filters::{ListFilterQuery, ListFilters};
 use crate::web_ui::nav::{self, ActiveContext, SidebarSection};
 use crate::web_ui::project_tasks::names_for;
-use crate::web_ui::project_tasks::templates::ProjectTaskRow;
+use crate::web_ui::project_tasks::templates::{ProjectTaskRow, priority_label_for};
 use crate::web_ui::{format_display_date, to_local};
 use askama::Template;
 use axum::extract::{Extension, Form, Path, Query};
@@ -48,6 +48,15 @@ struct AllProjectsTaskVirtualRow {
     assignee_name: Option<String>,
     is_skipped: bool,
     unskip_url: String,
+    /// Stage 5 of the series sub-items plan — this occurrence's still-virtual sub-items,
+    /// already rendered and inlined hidden. See `ProjectTaskVirtualRow::children_html`; the
+    /// only difference here is that this screen isn't a treegrid, so the toggle hangs off the
+    /// name the way `components/row.html`'s own non-treegrid branch does.
+    children_html: Option<String>,
+    /// `base.html`'s `toggleChildren` addresses elements as `item-{id}-children`/`chevron-{id}`,
+    /// and this screen's `<li>` carries an `all-tasks-virtual-…` id rather than an `item-…` one
+    /// — so the toggle gets its own id rather than reusing the row's.
+    toggle_id: String,
 }
 
 impl AllProjectsTaskVirtualRow {
@@ -95,8 +104,100 @@ impl AllProjectsTaskVirtualRow {
             assignee_name: occ.assigned_to_user_name.clone(),
             is_skipped: occ.is_skipped(),
             unskip_url: format!("{}{list_query}", occ.unskip_url(project_id)),
+            // Filled in by `list_all_projects_task_rows`, which holds the fan-out.
+            children_html: None,
+            toggle_id: format!(
+                "all-tasks-{}-{}",
+                occ.series_id,
+                occ.occurrence_date.timestamp()
+            ),
         }
     }
+}
+
+/// Cross-project counterpart to `project_tasks::templates::ProjectTaskVirtualChildRow` — one
+/// still-virtual sub-item, nested under its occurrence's row. Duplicated rather than shared
+/// with that type for the same reason `AllProjectsTaskVirtualRow` is: this screen's rows carry
+/// a project tag and no treegrid/selection markup at all (see this module's own doc comment on
+/// the duplicate-small-per-screen-helpers precedent).
+#[derive(Template)]
+#[template(path = "all_projects_tasks/virtual_child_row.html")]
+struct AllProjectsTaskVirtualChildRow {
+    name: String,
+    date_label: String,
+    overdue: bool,
+    priority_label: Option<String>,
+    detail_url: String,
+    complete_url: String,
+}
+
+impl AllProjectsTaskVirtualChildRow {
+    fn from_view(
+        view: &SeriesChildOccurrenceView,
+        project_id: &str,
+        tz: i32,
+        filters: &ListFilters,
+        project_filter: Option<&str>,
+    ) -> Self {
+        // Same `?view=all-tasks&…` round-trip `AllProjectsTaskVirtualRow::from_occurrence`
+        // builds — see its doc comment.
+        let mut parts = vec!["view=all-tasks".to_string()];
+        let filters_suffix = filters.query_string();
+        if !filters_suffix.is_empty() {
+            parts.push(filters_suffix);
+        }
+        if let Some(pid) = project_filter {
+            parts.push(format!("project={pid}"));
+        }
+        let list_query = format!("?{}", parts.join("&"));
+        Self {
+            name: view.child_name.clone(),
+            date_label: format_display_date(to_local(view.date, tz), true),
+            overdue: view.date < Utc::now(),
+            priority_label: priority_label_for(view.priority),
+            detail_url: view.detail_url(project_id),
+            complete_url: format!("{}{list_query}", view.complete_url(project_id)),
+        }
+    }
+}
+
+/// The still-virtual sub-items of one parent cycle, in authored order — this screen's own copy
+/// of `project_tasks::render_virtual_child_rows` (see that function for why materialized ones
+/// are filtered out here rather than at the call site).
+fn render_virtual_child_rows(
+    child_occurrences: &[SeriesChildOccurrenceView],
+    series_id: &str,
+    occurrence_ts: i64,
+    project_id: &str,
+    tz: i32,
+    filters: &ListFilters,
+    project_filter: Option<&str>,
+) -> Result<Option<String>, ItemError> {
+    let mut views: Vec<&SeriesChildOccurrenceView> = child_occurrences
+        .iter()
+        .filter(|v| v.item_id.is_none())
+        .filter(|v| {
+            v.series_id == series_id && v.parent_occurrence_date.timestamp() == occurrence_ts
+        })
+        .collect();
+    if views.is_empty() {
+        return Ok(None);
+    }
+    views.sort_by_key(|v| v.sort_order);
+    let mut html = String::new();
+    for view in views {
+        html.push_str(
+            &AllProjectsTaskVirtualChildRow::from_view(
+                view,
+                project_id,
+                tz,
+                filters,
+                project_filter,
+            )
+            .render()?,
+        );
+    }
+    Ok(Some(html))
 }
 
 /// Builds a real Task item's row for this screen — `ProjectTaskRow::from_item` plus the same
@@ -285,6 +386,42 @@ pub(crate) async fn list_all_projects_task_rows(
             project_item_service::list_project_items_unchecked(repo, &project.id, None).await?;
         items.retain(|i| i.kind() == ItemKind::Task);
 
+        // Fetched before the item loop (not alongside the virtual rows below) because a
+        // *materialized* occurrence's own row needs its cycle's still-virtual sub-items nested
+        // under it — see `project_tasks::render_rows_with_virtual`'s identical handling.
+        #[allow(clippy::type_complexity)]
+        let (all_occurrences, child_occurrences, materialized_cycles): (
+            Vec<ProjectOccurrence>,
+            Vec<SeriesChildOccurrenceView>,
+            HashMap<String, (String, i64)>,
+        ) = if filters.recurring {
+            let all_occurrences = item_series_service::list_occurrence_states_for_project(
+                series,
+                users,
+                &project.id,
+                now,
+                now,
+                tz,
+            )
+            .await?;
+            let materialized_cycles = all_occurrences
+                .iter()
+                .filter_map(|occ| match &occ.state {
+                    OccurrenceState::Materialized { item_id } => Some((
+                        item_id.clone(),
+                        (occ.series_id.clone(), occ.occurrence_date.timestamp()),
+                    )),
+                    _ => None,
+                })
+                .collect();
+            let child_occurrences =
+                item_series_service::fan_out_child_occurrences(series, &all_occurrences, tz)
+                    .await?;
+            (all_occurrences, child_occurrences, materialized_cycles)
+        } else {
+            (Vec::new(), Vec::new(), HashMap::new())
+        };
+
         for item in &items {
             let just_completed = Some(item.id.as_str()) == just_completed_item_id;
             if !(filters.matches(item, requester_user_id, is_team_project, now) || just_completed) {
@@ -319,6 +456,25 @@ pub(crate) async fn list_all_projects_task_rows(
             } else {
                 None
             };
+            // Sub-items nobody has materialized yet have no item for the walk above to find.
+            let children_html = match materialized_cycles.get(&item.id) {
+                Some((series_id, occurrence_ts)) => match render_virtual_child_rows(
+                    &child_occurrences,
+                    series_id,
+                    *occurrence_ts,
+                    &project.id,
+                    tz,
+                    filters,
+                    project_filter,
+                )? {
+                    Some(virtual_children) => Some(match children_html {
+                        Some(existing) => existing + &virtual_children,
+                        None => virtual_children,
+                    }),
+                    None => children_html,
+                },
+                None => children_html,
+            };
             let html = all_projects_task_row(
                 item,
                 &project.id,
@@ -335,34 +491,30 @@ pub(crate) async fn list_all_projects_task_rows(
             entries.push((ts, html));
         }
 
-        if filters.recurring {
-            let occurrences = item_series_service::list_occurrence_states_for_project(
-                series,
-                users,
-                &project.id,
-                Utc::now(),
-                Utc::now(),
-                tz,
-            )
-            .await?
-            .into_iter()
+        let occurrences = all_occurrences
+            .iter()
             .filter(|occ| occ.item_type == ItemKind::Task && occ.is_current)
             .filter(|occ| !matches!(occ.state, OccurrenceState::Materialized { .. }))
             .filter(|occ| filters.matches_occurrence(occ, requester_user_id, is_team_project, now));
-            for occ in occurrences {
-                entries.push((
-                    occ.occurrence_date.timestamp(),
-                    AllProjectsTaskVirtualRow::from_occurrence(
-                        &occ,
-                        &project.id,
-                        &project.name,
-                        tz,
-                        filters,
-                        project_filter,
-                    )
-                    .render()?,
-                ));
-            }
+        for occ in occurrences {
+            let mut row = AllProjectsTaskVirtualRow::from_occurrence(
+                occ,
+                &project.id,
+                &project.name,
+                tz,
+                filters,
+                project_filter,
+            );
+            row.children_html = render_virtual_child_rows(
+                &child_occurrences,
+                &occ.series_id,
+                occ.occurrence_date.timestamp(),
+                &project.id,
+                tz,
+                filters,
+                project_filter,
+            )?;
+            entries.push((occ.occurrence_date.timestamp(), row.render()?));
         }
     }
 

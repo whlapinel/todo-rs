@@ -1,5 +1,6 @@
 use crate::auth::AuthUser;
 use crate::domain::item::{Item, ItemKind};
+use crate::domain::item_series::{ItemSeries, ItemSeriesChild};
 use crate::domain::project::Project;
 use crate::service::attachments as attachments_service;
 use crate::service::comments as comments_service;
@@ -15,7 +16,6 @@ use crate::storage::sqlite::{
     ActivityLogRepo, AttachmentRepo, CommentRepo, ItemDependencyRepo, ItemRepo, ItemSeriesRepo,
     ProjectRepo, ReminderRepo, TeamRepo, UserRepo,
 };
-use crate::web_ui::TzOffset;
 use crate::web_ui::list_filters::{ListFilterQuery, ListFilters};
 use crate::web_ui::nav::{self, ActiveContext, SidebarSection};
 use crate::web_ui::project_tasks::templates::*;
@@ -25,6 +25,7 @@ use crate::web_ui::project_tasks::{
     overlay_scheduled_end_date, parse_days_before_due, render, render_scope_fragment, require_task,
     sibling_group, update_params_from_form,
 };
+use crate::web_ui::{TzOffset, format_display_date, to_local};
 use askama::Template;
 use axum::extract::{Extension, Form, Multipart, Path, Query};
 use axum::http::HeaderMap;
@@ -1313,6 +1314,276 @@ pub async fn create_project_task_series_occurrence_child_form(
     Ok(hx_redirect(project_task_url(&project_id, &item.id)))
 }
 
+/// Resolves and membership-checks the `(series, definition, cycle)` triple every sub-item
+/// occurrence route below is addressed by, in one place so the three can't drift.
+///
+/// The `child.series_id != series_id` check is what stops a crafted URL from acting on a
+/// definition through a series that doesn't own it: without it, a caller who is a member of
+/// series A's project could name series A in the path (passing the membership check) and a
+/// definition belonging to series B in the last segment. It 404s rather than reporting the
+/// mismatch, matching `service::item_series::update_series_child`'s own treatment.
+async fn resolve_series_child(
+    projects: &Arc<dyn ProjectRepo>,
+    teams: &Arc<dyn TeamRepo>,
+    item_series: &Arc<dyn ItemSeriesRepo>,
+    auth_user: &AuthUser,
+    project_id: &str,
+    series_id: &str,
+    occurrence_ts: i64,
+    child_id: &str,
+) -> Result<(ItemSeries, ItemSeriesChild, DateTime<Utc>), ItemError> {
+    let series = item_series_service::get_series(
+        projects,
+        teams,
+        item_series,
+        &auth_user.user_id,
+        series_id,
+    )
+    .await?;
+    if series.project_id != project_id || series.item_type != ItemKind::Task {
+        return Err(ItemError::NotFound);
+    }
+    let child = item_series.get_series_child(child_id).await?;
+    if child.series_id != series_id {
+        return Err(ItemError::NotFound);
+    }
+    let occurrence_date = DateTime::<Utc>::from_timestamp(occurrence_ts, 0)
+        .ok_or_else(|| ItemError::Invalid("invalid occurrence timestamp".to_string()))?;
+    Ok((series, child, occurrence_date))
+}
+
+/// Stage 5 of the series sub-items plan — the read-only dialog for a still-virtual sub-item,
+/// reached from its nested row's "Details" entry. No side effect: like
+/// `render_series_occurrence_detail_page`, a plain `GET` here never materializes anything.
+///
+/// An already-materialized sub-item has a real item of its own with a real detail page, so this
+/// redirects there rather than rendering a second, poorer view of the same thing — mirroring
+/// `project_item_series::handlers::occurrence_detail_page`'s identical dispatch for a
+/// materialized parent occurrence.
+pub async fn project_task_series_child_occurrence_detail_page(
+    Path((project_id, series_id, occurrence_ts, child_id)): Path<(String, String, i64, String)>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(item_series): Extension<Arc<dyn ItemSeriesRepo>>,
+    TzOffset(tz): TzOffset,
+) -> Result<Response, ItemError> {
+    let (series, child, occurrence_date) = resolve_series_child(
+        &projects,
+        &teams,
+        &item_series,
+        &auth_user,
+        &project_id,
+        &series_id,
+        occurrence_ts,
+        &child_id,
+    )
+    .await?;
+    if let Some(existing) = item_series
+        .get_child_occurrence(&child_id, occurrence_date)
+        .await?
+    {
+        return Ok(hx_redirect(project_task_url(
+            &project_id,
+            &existing.item_id,
+        )));
+    }
+    let date = item_series_service::child_occurrence_date(occurrence_date, child.days_before, tz);
+    let parent_label = format_display_date(to_local(occurrence_date, tz), false);
+    let lead_label = match child.days_before {
+        0 => format!("Due the day of {} on {parent_label}", series.name),
+        1 => format!("Due 1 day before {} on {parent_label}", series.name),
+        n => format!("Due {n} days before {} on {parent_label}", series.name),
+    };
+    let detail_url = format!(
+        "/web/projects/{project_id}/series/{series_id}/occurrences/{occurrence_ts}/children/{child_id}"
+    );
+    let nav_html = nav::build_nav_html(
+        &projects,
+        &auth_user.user_id,
+        active_context(&project_id),
+        SidebarSection::Tasks,
+    )
+    .await?;
+    Ok(render(ProjectTaskSeriesChildOccurrenceDetailPage {
+        name: child.name.clone(),
+        lead_label,
+        description: child.description.clone(),
+        priority_label: priority_label_for(child.priority),
+        date_label: format_display_date(to_local(date, tz), true),
+        overdue: date < Utc::now(),
+        series_name: series.name.clone(),
+        series_url: format!("/web/projects/{project_id}/series"),
+        complete_url: format!("{detail_url}/complete"),
+        materialize_url: detail_url,
+        nav_html,
+    })?
+    .into_response())
+}
+
+/// `POST` on the detail route above — materializes this sub-item (and, as an internal step, its
+/// parent occurrence) and lands on the now-real task's own page. Stands in for an Edit form,
+/// which Stage 5 of the series sub-items plan skipped.
+///
+/// **This is the one place the sub-items feature materializes without persisting a change**,
+/// which is the pattern the design is otherwise built to avoid (materialize on persist, never
+/// on view or touch). It should be replaced by a `GET .../edit` form prefilled from the
+/// definition plus the computed lead date — exactly as `render_series_occurrence_edit_page`
+/// prefills a parent occurrence from the series with no item involved — and a `PUT` that
+/// materializes-then-writes, at which point this handler and the dialog's "Open" button both
+/// go away. Tracked in `docs/issues_and_features.md`.
+pub async fn materialize_project_task_series_child_occurrence_form(
+    Path((project_id, series_id, occurrence_ts, child_id)): Path<(String, String, i64, String)>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(item_series): Extension<Arc<dyn ItemSeriesRepo>>,
+    Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
+    TzOffset(tz): TzOffset,
+) -> Result<Response, ItemError> {
+    let (_, _, occurrence_date) = resolve_series_child(
+        &projects,
+        &teams,
+        &item_series,
+        &auth_user,
+        &project_id,
+        &series_id,
+        occurrence_ts,
+        &child_id,
+    )
+    .await?;
+    let item = item_series_service::get_or_materialize_child_occurrence(
+        &repo,
+        &projects,
+        &teams,
+        &item_series,
+        &reminders,
+        &auth_user.user_id,
+        &child_id,
+        occurrence_date,
+        tz,
+    )
+    .await?;
+    Ok(hx_redirect(project_task_url(&project_id, &item.id)))
+}
+
+/// Materialize-and-complete in one `POST`, the sub-item counterpart of
+/// `complete_project_item_series_occurrence_form` — including its whole-list rebuild for the
+/// two flat-list screens, since completing a sub-item changes what its parent row shows (one
+/// fewer outstanding sub-item, and the parent becomes completable once the last one lands).
+#[allow(clippy::too_many_arguments)]
+pub async fn complete_project_task_series_child_occurrence_form(
+    Path((project_id, series_id, occurrence_ts, child_id)): Path<(String, String, i64, String)>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(users): Extension<Arc<dyn UserRepo>>,
+    Extension(item_series): Extension<Arc<dyn ItemSeriesRepo>>,
+    Extension(activity_log): Extension<Arc<dyn ActivityLogRepo>>,
+    Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
+    Extension(item_dependencies): Extension<Arc<dyn ItemDependencyRepo>>,
+    TzOffset(tz): TzOffset,
+    Query(q): Query<OccurrenceRowActionQuery>,
+    headers: HeaderMap,
+) -> Result<Response, ItemError> {
+    let (_, _, occurrence_date) = resolve_series_child(
+        &projects,
+        &teams,
+        &item_series,
+        &auth_user,
+        &project_id,
+        &series_id,
+        occurrence_ts,
+        &child_id,
+    )
+    .await?;
+    let item = item_series_service::get_or_materialize_child_occurrence(
+        &repo,
+        &projects,
+        &teams,
+        &item_series,
+        &reminders,
+        &auth_user.user_id,
+        &child_id,
+        occurrence_date,
+        tz,
+    )
+    .await?;
+    let form = ProjectTaskForm {
+        complete: Some("true".to_string()),
+        ..Default::default()
+    };
+    let params = update_params_from_form(&project_id, &item.id, &item, &form, tz);
+    project_item_service::update_project_item(
+        &repo,
+        &projects,
+        &teams,
+        &activity_log,
+        &item_series,
+        &reminders,
+        &item_dependencies,
+        &auth_user.user_id,
+        params,
+    )
+    .await?;
+
+    if q.view.as_deref() == Some("tasks-list") {
+        let project =
+            project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id)
+                .await?;
+        let filters = list_filters_from_parts(
+            &q.show_complete,
+            &q.assigned_to,
+            &q.due_date,
+            &q.schedule,
+            &q.recurring,
+            &q.priority,
+        );
+        let rows = super::list_task_rows_for_project(
+            &repo,
+            &teams,
+            &users,
+            &item_series,
+            &project_id,
+            project.team_id.as_deref(),
+            &auth_user.user_id,
+            &filters,
+            tz,
+            Some(item.id.as_str()),
+            &item_dependencies,
+        )
+        .await?;
+        return Ok(Html(super::items_list_inner_html(&rows)).into_response());
+    }
+    if q.view.as_deref() == Some("all-tasks") {
+        let filters = list_filters_from_parts(
+            &q.show_complete,
+            &q.assigned_to,
+            &q.due_date,
+            &q.schedule,
+            &q.recurring,
+            &q.priority,
+        );
+        let rows = crate::web_ui::all_projects_tasks::list_all_projects_task_rows(
+            &repo,
+            &projects,
+            &users,
+            &teams,
+            &item_series,
+            &auth_user.user_id,
+            &filters,
+            q.project.as_deref(),
+            tz,
+            Some(item.id.as_str()),
+        )
+        .await?;
+        return Ok(Html(super::items_list_inner_html(&rows)).into_response());
+    }
+    Ok(redirect_to_current_page(&headers, &project_id))
+}
+
 /// Renders a parent item's children as `Row`s — see `tasks::render_children_fragment`'s
 /// identical rationale, project-scoped. Callers are responsible for their own membership gate
 /// before calling this (see `project_task_children_fragment`).
@@ -1601,17 +1872,35 @@ fn parse_item_ids(raw: &str) -> Vec<String> {
         .collect()
 }
 
-/// Splits a batch-selection id into `(series_id, occurrence_ts)` when it's a still-virtual
-/// series occurrence's composite selection id rather than a real item id. A real item id is
-/// always a bare UUID (`storage::sqlite::items`' own id generation) and never contains `:`, so
-/// this is unambiguous without any extra marker prefix. `ProjectTaskVirtualRow::row_id` (see its
-/// own doc comment) is built as this exact `"{series_id}:{occurrence_ts}"` shape specifically so
-/// `base.html`'s row-selection JS never has to know or care which kind of row it's looking at —
-/// see `load_batch_items`, the one place that actually resolves the difference.
-fn parse_virtual_occurrence_id(id: &str) -> Option<(&str, i64)> {
+/// What a batch-selection id turns out to be. A real item id is always a bare UUID
+/// (`storage::sqlite::items`' own id generation) and never contains `:`, so the presence of a
+/// separator is what distinguishes a virtual row's composite id from a real one; the `child:`
+/// prefix then distinguishes the two *kinds* of virtual row, whose ids are otherwise the same
+/// `{uuid}:{timestamp}` shape. See `ProjectTaskVirtualRow::row_id` and
+/// `SeriesChildOccurrenceView::row_id`, which build them, and `load_batch_items`, the one place
+/// that resolves the difference — `base.html`'s row-selection JS never has to know which kind of
+/// row it is looking at.
+#[derive(Debug, PartialEq)]
+enum VirtualRowId<'a> {
+    /// A still-virtual series occurrence: `"{series_id}:{occurrence_ts}"`.
+    Occurrence { series_id: &'a str, ts: i64 },
+    /// A still-virtual sub-item of one: `"child:{child_id}:{parent_occurrence_ts}"`.
+    Child { child_id: &'a str, ts: i64 },
+}
+
+fn parse_virtual_row_id(id: &str) -> Option<VirtualRowId<'_>> {
+    if let Some(rest) = id.strip_prefix("child:") {
+        let (child_id, ts) = rest.split_once(':')?;
+        return Some(VirtualRowId::Child {
+            child_id,
+            ts: ts.parse().ok()?,
+        });
+    }
     let (series_id, ts) = id.split_once(':')?;
-    let occurrence_ts = ts.parse().ok()?;
-    Some((series_id, occurrence_ts))
+    Some(VirtualRowId::Occurrence {
+        series_id,
+        ts: ts.parse().ok()?,
+    })
 }
 
 /// Loads and membership-checks every selected item, rejecting up front on an empty selection or
@@ -1643,42 +1932,78 @@ async fn load_batch_items(
     }
     let mut items = Vec::with_capacity(item_ids.len());
     for id in item_ids {
-        let item = if let Some((series_id, occurrence_ts)) = parse_virtual_occurrence_id(id) {
-            let series = item_series_service::get_series(
-                projects,
-                teams,
-                series_repo,
-                requester_user_id,
-                series_id,
-            )
-            .await?;
-            if series.project_id != project_id || series.item_type != ItemKind::Task {
-                return Err(ItemError::NotFound);
+        let item = match parse_virtual_row_id(id) {
+            Some(VirtualRowId::Occurrence { series_id, ts }) => {
+                let series = item_series_service::get_series(
+                    projects,
+                    teams,
+                    series_repo,
+                    requester_user_id,
+                    series_id,
+                )
+                .await?;
+                if series.project_id != project_id || series.item_type != ItemKind::Task {
+                    return Err(ItemError::NotFound);
+                }
+                let occurrence_date = DateTime::<Utc>::from_timestamp(ts, 0).ok_or_else(|| {
+                    ItemError::Invalid("invalid occurrence timestamp".to_string())
+                })?;
+                item_series_service::get_or_materialize_occurrence(
+                    repo,
+                    projects,
+                    teams,
+                    series_repo,
+                    reminders,
+                    requester_user_id,
+                    series_id,
+                    occurrence_date,
+                    tz,
+                )
+                .await?
             }
-            let occurrence_date = DateTime::<Utc>::from_timestamp(occurrence_ts, 0)
-                .ok_or_else(|| ItemError::Invalid("invalid occurrence timestamp".to_string()))?;
-            item_series_service::get_or_materialize_occurrence(
-                repo,
-                projects,
-                teams,
-                series_repo,
-                reminders,
-                requester_user_id,
-                series_id,
-                occurrence_date,
-                tz,
-            )
-            .await?
-        } else {
-            project_item_service::get_project_item(
-                repo,
-                projects,
-                teams,
-                project_id,
-                requester_user_id,
-                id,
-            )
-            .await?
+            // A virtual sub-item resolves through its *definition*, and the project/kind check
+            // runs against the series that owns it — a crafted `child:` id must not be able to
+            // reach a definition from another project any more than a crafted occurrence id can.
+            Some(VirtualRowId::Child { child_id, ts }) => {
+                let child = series_repo.get_series_child(child_id).await?;
+                let series = item_series_service::get_series(
+                    projects,
+                    teams,
+                    series_repo,
+                    requester_user_id,
+                    &child.series_id,
+                )
+                .await?;
+                if series.project_id != project_id || series.item_type != ItemKind::Task {
+                    return Err(ItemError::NotFound);
+                }
+                let occurrence_date = DateTime::<Utc>::from_timestamp(ts, 0).ok_or_else(|| {
+                    ItemError::Invalid("invalid occurrence timestamp".to_string())
+                })?;
+                item_series_service::get_or_materialize_child_occurrence(
+                    repo,
+                    projects,
+                    teams,
+                    series_repo,
+                    reminders,
+                    requester_user_id,
+                    child_id,
+                    occurrence_date,
+                    tz,
+                )
+                .await?
+            }
+            None => {
+                project_item_service::get_project_item(
+                    repo,
+                    projects,
+                    teams,
+                    project_id,
+                    requester_user_id,
+                    id,
+                )
+                .await?
+            }
         };
         items.push(require_task(item)?);
     }
@@ -2861,14 +3186,28 @@ mod resolve_task_anchor_date_tests {
 }
 
 #[cfg(test)]
-mod parse_virtual_occurrence_id_tests {
+mod parse_virtual_row_id_tests {
     use super::*;
 
     #[test]
     fn recognizes_a_series_occurrence_composite_id() {
         assert_eq!(
-            parse_virtual_occurrence_id("series1:1699999999"),
-            Some(("series1", 1_699_999_999))
+            parse_virtual_row_id("series1:1699999999"),
+            Some(VirtualRowId::Occurrence {
+                series_id: "series1",
+                ts: 1_699_999_999
+            })
+        );
+    }
+
+    #[test]
+    fn recognizes_a_virtual_sub_item_composite_id() {
+        assert_eq!(
+            parse_virtual_row_id("child:def1:1699999999"),
+            Some(VirtualRowId::Child {
+                child_id: "def1",
+                ts: 1_699_999_999
+            })
         );
     }
 
@@ -2877,23 +3216,26 @@ mod parse_virtual_occurrence_id_tests {
         // A real item id is always a UUID (storage::sqlite::items' own id generation) — no
         // colon, so this must not be misread as a composite id.
         assert_eq!(
-            parse_virtual_occurrence_id("550e8400-e29b-41d4-a716-446655440000"),
+            parse_virtual_row_id("550e8400-e29b-41d4-a716-446655440000"),
             None
         );
     }
 
     #[test]
     fn rejects_a_non_numeric_suffix() {
-        assert_eq!(parse_virtual_occurrence_id("series1:not-a-timestamp"), None);
+        assert_eq!(parse_virtual_row_id("series1:not-a-timestamp"), None);
+        assert_eq!(parse_virtual_row_id("child:def1:not-a-timestamp"), None);
     }
 
     #[test]
     fn fails_safe_on_a_malformed_id_with_more_than_one_colon() {
-        // Series ids are UUIDs, so a real composite id never has more than one colon —
-        // `split_once` takes the first one, leaving "b:1699999999" as the timestamp half,
-        // which fails to parse as an i64. Worth locking down as a fail-safe (returns None,
-        // not a bogus series id) rather than assumed, since a crafted/malformed id reaches
-        // this function as plain untrusted form input.
-        assert_eq!(parse_virtual_occurrence_id("a:b:1699999999"), None);
+        // `child:` is the one prefix that makes a second colon meaningful. Any other id with
+        // two colons is malformed: `split_once` takes the first, leaving "b:1699999999" as the
+        // timestamp half, which fails to parse as an i64. Worth locking down as a fail-safe
+        // (returns None, not a bogus series id) rather than assumed, since a crafted/malformed
+        // id reaches this function as plain untrusted form input.
+        assert_eq!(parse_virtual_row_id("a:b:1699999999"), None);
+        // And a `child:` id still needs a real timestamp in its own last segment.
+        assert_eq!(parse_virtual_row_id("child:1699999999"), None);
     }
 }

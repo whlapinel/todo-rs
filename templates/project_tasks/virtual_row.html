@@ -7,7 +7,7 @@
      `selectedItemIds`, and a batch action submitting it is resolved server-side
      (handlers::load_batch_items/parse_virtual_occurrence_id), which materializes it on the spot
      before applying the batch update. -->
-<li id="item-{{ row_id }}" class="py-2" role="row" aria-level="1">
+<li id="item-{{ row_id }}" class="py-2" role="row" aria-level="1"{% if children_html.is_some() %} aria-expanded="false"{% endif %}>
   <div class="flex items-center gap-x-3">
     {% if is_skipped %}
     <div class="contents" role="gridcell">
@@ -16,12 +16,20 @@
     <span class="shrink-0 text-[10px] uppercase tracking-wide font-semibold text-gray-400 dark:text-gray-500">Skipped</span>
     </div>
     {% else %}
-    <!-- No checkbox (see components/row.html's identical treegrid change) — this occurrence's
-         row never has children, so this is always just an alignment spacer, never a chevron.
-         Completing now lives in this row's own row-actions menu below, mirroring the
-         materialized-row treatment. -->
+    <!-- No checkbox (see components/row.html's identical treegrid change) — completing lives
+         in this row's own row-actions menu below, mirroring the materialized-row treatment.
+         This slot is a chevron once the series has sub-item definitions (whose still-virtual
+         rows are inlined below) and an alignment spacer otherwise, exactly as
+         components/row.html's own treegrid slot works. -->
     <div class="contents" role="gridcell">
+    {% if children_html.is_some() %}
+    <button type="button" onclick="toggleChildren('{{ row_id }}')"
+      class="shrink-0 flex size-4 items-center justify-center cursor-pointer text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300">
+      <span id="chevron-{{ row_id }}">&#9656;</span>
+    </button>
+    {% else %}
     <span class="shrink-0 size-4"></span>
+    {% endif %}
     </div>
     <div class="contents" role="gridcell">
     <!-- Plain text, not a link — matches components/row.html's identical treegrid change (the
@@ -116,4 +124,11 @@
       {% endif %}
     </div>
   </div>
+  {% if let Some(children) = children_html %}
+  <!-- Same already-in-the-DOM/initially-hidden contract as components/row.html's own nested
+       list — toggleChildren() (base.html) only flips the class, never fetches. -->
+  <ul id="item-{{ row_id }}-children" class="hidden mt-2 ml-2 border-l border-gray-200 dark:border-white/10" role="rowgroup">
+    {{ children|safe }}
+  </ul>
+  {% endif %}
 </li>
