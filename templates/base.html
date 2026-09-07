@@ -437,10 +437,21 @@
       });
     }
 
+    // Both colors are solid, not alpha-translucent, deliberately (`dark:bg-indigo-950`, not the
+    // more natural-looking `dark:bg-indigo-500/10`) — every row's `<li>` carries its own
+    // permanent `view-transition-name` (see components/row.html), and several actions on this
+    // screen rebuild `#items-list` under htmx's `transition:true` (document.startViewTransition),
+    // which pulls every row still on the page into its own isolated transition snapshot even
+    // when that row itself didn't change. A translucent background composited into that
+    // per-element snapshot has nothing of the row's real backdrop behind it once isolated, so a
+    // selected row's tint rendered as whatever near-white the browser filled the snapshot with
+    // instead of the intended dark tint on mobile Safari — reported as "can't see the text while
+    // selected." An opaque color can't be affected by that: it paints the same color regardless
+    // of what, if anything, is behind it.
     function setRowSelected(row, selected) {
       row.setAttribute('aria-selected', selected ? 'true' : 'false');
       row.classList.toggle('bg-indigo-50', selected);
-      row.classList.toggle('dark:bg-indigo-500/10', selected);
+      row.classList.toggle('dark:bg-indigo-950', selected);
     }
 
     // Plain click/Enter/Space on a row when it's not already the sole selection: replaces

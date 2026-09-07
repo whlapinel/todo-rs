@@ -2,11 +2,10 @@
 
 Open issues and feature requests, merged from the former `docs/issues.md` and `docs/features.md` (2026-08-20) into a single sorted list. Completed or superseded items — including ones from the old files that were already resolved but hadn't been moved out yet — live in `docs/archived/archived_issues_and_features.md`.
 
-- styling for selected items on mobile shows as white or near-white instead of how it shows on desktop. can't see the text while selected.
-- List UI change: Enter/Space to select, 'a' for action. Enter/Space on selected row: deselect the row (same as ctrl+enter/space).
-- On mobile, make the row actions menu a dialog rather than a popover. (it doesn't fit on the screen)  
-- Clicking cancel on edit task button doesn't work (have to hit escape, and not sure what can be done on mobile)
 - Persist expanded rows somehow. I believe it was mentioned that local storage might be an option, persisting the set of expanded ids.
+- List UI change: Enter/Space to select, 'a' for action. Enter/Space on selected row: deselect the row (same as ctrl+enter/space).
+- On mobile, make the row actions menu a dialog rather than a popover. (it doesn't fit on the screen when it's the longer one)  
+- Clicking cancel on edit task button doesn't work (have to hit escape, and not sure what can be done on mobile)
 - I'd like to allow editing a task series straight from a virtual occurrence row on the project tasks list page, instead of requiring user to navigate to the project series list and then click edit on the series. So new row action 'edit series' (which sends the same dialog returned by clicking on edit on a series from the project series page) and change the existing 'edit' to 'edit occurrence'. Editing the series from this view should re-render the task list.
 - disable text selection on holding shift (I don't want to disable "normal" text selection in general, we should try to preserve tap/click+hold/drag-across text functionality, but currently when a row is selected, and user holds shift and selects another row, all text between them is selected, highlighting the text and looking weird.)
 - arrow-up or arrow-down still scrolls page while popover row actions menu is in focus. should disable arrow-key scrolling while open.
