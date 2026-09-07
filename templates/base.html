@@ -301,7 +301,26 @@
       }
     }
 
+    // Below the `sm` breakpoint (matching Tailwind's own 640px cutoff — the same one every
+    // dialog fragment's `items-end sm:items-center` wrapper already uses to become a bottom
+    // sheet on mobile, see reschedule_dialog.html) the popover below has no room: it has no
+    // scroll affordance of its own (`overflow-hidden`, sized to its content, positioned next to
+    // the ⋮ button rather than clamped to the viewport), so a row with a long menu — a
+    // materialized series occurrence's menu alone can carry ten-plus entries, see the "vertical
+    // ellipses on ALL" issue-tracker entry — simply ran off the bottom of a phone screen with no
+    // way to reach the rest. Checked live at click time (not baked into markup) so it tracks the
+    // current viewport rather than whatever it was at page load.
+    function isMobileMenuViewport() {
+      return window.matchMedia('(max-width: 639px)').matches;
+    }
+
     function openRowActionsMenu(rowId, btn) {
+      const tpl = document.getElementById('row-actions-menu-' + rowId);
+      if (!tpl) return;
+      if (isMobileMenuViewport()) {
+        openRowActionsMenuDialog(tpl);
+        return;
+      }
       const popover = document.getElementById('action-menu-popover');
       if (!popover) return;
       if (lastPopoverCloseInfo && lastPopoverCloseInfo.rowId === rowId &&
@@ -309,8 +328,6 @@
         lastPopoverCloseInfo = null;
         return;
       }
-      const tpl = document.getElementById('row-actions-menu-' + rowId);
-      if (!tpl) return;
       // #5 of docs/issues_and_features.md's calendar-view entries: a native modal <dialog>
       // (e.g. #day-drawer) makes everything outside its own subtree inert, and #action-menu-
       // popover normally lives as a direct child of <body> (see its own doc comment) — so
@@ -356,6 +373,51 @@
       }
       popover.style.left = left + 'px';
       popover.style.top = top + 'px';
+    }
+
+    // isMobileMenuViewport()'s counterpart to openRowActionsMenu: the same per-row
+    // <template id="row-actions-menu-{id}"> markup (unchanged — every hx-get/hx-post/hx-delete
+    // URL on it already works from anywhere), shown inside #action-dialog instead of the
+    // popover so it gets a real viewport-clamped, scrollable modal rather than a fixed-size
+    // panel with nowhere to put overflow. Wrapped in the same backdrop/`items-end`/panel shape
+    // every other #action-dialog fragment already uses (reschedule_dialog.html etc.) — that
+    // convention is what makes this a bottom sheet — plus an explicit Cancel footer, since a
+    // menu (unlike those forms) has no natural terminal action of its own and a modal <dialog>
+    // has no light-dismiss-on-outside-click the way the popover did (matching every other
+    // #action-dialog fragment in this app: Escape and an explicit Cancel button are the only
+    // close affordances anywhere in it, so this doesn't invent a new pattern).
+    //
+    // `data-row-actions-menu` marks the panel so the htmx:afterRequest listener below knows to
+    // close #action-dialog after one of the menu's own terminal actions (Duplicate, Delete,
+    // Details, ...) succeeds — but not after Reschedule/Assign/Edit/Add sub-item/Move, which
+    // hx-target #action-dialog itself to replace this menu with a form in place, the same way
+    // clicking Edit from inside the read-only detail dialog already does. That swap removes this
+    // marker along with the rest of the menu markup, so nothing further needs to untag it.
+    //
+    // The title bar (the popover has none — it already opens right next to the row it's for, so
+    // naming it again would be redundant) reads the item's name from the <template>'s own
+    // `data-name` (components/row.html) via `.textContent`, not string-concatenated into the
+    // innerHTML assignment below like the rest of this markup — an item name is user-authored
+    // text, and going through `.textContent` is what keeps something like `<img onerror=...>` as
+    // a literal task name instead of markup.
+    function openRowActionsMenuDialog(tpl) {
+      const dialog = document.getElementById('action-dialog');
+      if (!dialog) return;
+      dialog.innerHTML =
+        '<div class="fixed inset-0 bg-gray-500/75 dark:bg-gray-900/50 transition-opacity duration-300 ease-out opacity-0 group-open/dialog:opacity-100"></div>' +
+        '<div class="relative z-10 flex min-h-full items-end justify-center focus:outline-none">' +
+        '<div data-row-actions-menu class="relative w-full max-h-[85vh] overflow-y-auto transform rounded-t-lg bg-white text-left shadow-xl transition-all duration-300 ease-out translate-y-4 opacity-0 group-open/dialog:translate-y-0 group-open/dialog:opacity-100 dark:bg-gray-800 dark:outline dark:-outline-offset-1 dark:outline-white/10">' +
+        '<div data-menu-title class="truncate border-b border-gray-100 px-4 py-3 text-sm font-semibold text-gray-900 dark:border-white/10 dark:text-white"></div>' +
+        tpl.innerHTML +
+        '<div class="border-t border-gray-100 dark:border-white/10">' +
+        '<button type="button" onclick="document.getElementById(\'action-dialog\').close()" class="block w-full cursor-pointer px-4 py-3 text-center text-sm font-semibold text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-white/5">Cancel</button>' +
+        '</div>' +
+        '</div>' +
+        '</div>';
+      const title = dialog.querySelector('[data-menu-title]');
+      if (title) title.textContent = tpl.dataset.name || '';
+      htmx.process(dialog);
+      dialog.showModal();
     }
 
     // Arrow-key navigation among #action-menu-popover's own items (row-actions and batch-
@@ -588,12 +650,27 @@
     // would otherwise just sit open over whatever's underneath. Scoped to "successful request
     // whose triggering element lives inside the open popover" rather than per-button markup, so
     // it covers all four actions (plus Edit's own boosted navigation) with one listener.
+    //
+    // openRowActionsMenuDialog's mobile counterpart needs the same "close after a terminal
+    // action" treatment, but can't reuse the popover check above — it's not a popover, and
+    // unlike the popover, #action-dialog is also the target Reschedule/Assign/Edit/Add
+    // sub-item/Move swap fresh content into, which must NOT close the dialog. `evt.detail.target
+    // !== dialog` is what tells the two apart: those swap the dialog itself (so `target` IS
+    // `dialog`), while every terminal action targets some other element (#page, #item-{id}, or
+    // none at all) and leaves openRowActionsMenuDialog's `[data-row-actions-menu]` marker
+    // untouched right up to this check — a swap that removes it (Reschedule et al.) is exactly
+    // the `target === dialog` case this already skips.
     document.body.addEventListener('htmx:afterRequest', function (evt) {
-      var popover = document.getElementById('action-menu-popover');
       var elt = evt.detail.elt;
-      if (evt.detail.successful && popover && popover.matches(':popover-open') && elt &&
-        popover.contains(elt)) {
+      if (!evt.detail.successful || !elt) return;
+      var popover = document.getElementById('action-menu-popover');
+      if (popover && popover.matches(':popover-open') && popover.contains(elt)) {
         popover.hidePopover();
+      }
+      var dialog = document.getElementById('action-dialog');
+      if (dialog && dialog.open && evt.detail.target !== dialog &&
+        elt.closest('[data-row-actions-menu]')) {
+        dialog.close();
       }
     });
 
@@ -955,7 +1032,11 @@
        than swapping it in from the server. `popover` (no value = "auto") gets native light-dismiss
        (outside click/Escape) and top-layer stacking for free; `m-0 p-0 border-0 fixed inset-auto`
        strip the UA popover default styling (centered, bordered, padded) so openRowActionsMenu()'s
-       own top/left positioning is what actually places it next to the clicked button. -->
+       own top/left positioning is what actually places it next to the clicked button. Below the
+       `sm` breakpoint openRowActionsMenu() shows the same per-row menu in #action-dialog instead
+       (see isMobileMenuViewport()/openRowActionsMenuDialog() above) — this element is unused for
+       row actions there, but openBatchActionsMenu() still always uses it regardless of viewport
+       width; its own menu is short enough that the mobile overflow problem doesn't apply. -->
   <div id="action-menu-popover" popover
     class="m-0 max-h-none w-56 fixed inset-auto overflow-hidden rounded-md border-0 bg-white p-0 shadow-lg outline-1 outline-black/5 dark:bg-gray-800 dark:-outline-offset-1 dark:outline-white/10">
   </div>

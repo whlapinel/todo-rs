@@ -129,8 +129,11 @@
              openRowActionsMenu() (base.html) copies this markup into #action-dialog and calls
              htmx.process() on it rather than round-tripping to the server just to open a menu
              built entirely from data already on the page. Reschedule/Assign inside the menu
-             still hx-get into #action-dialog itself, same as the old per-icon buttons did. -->
-        <template id="row-actions-menu-{{ id }}">
+             still hx-get into #action-dialog itself, same as the old per-icon buttons did.
+             `data-name` is read by openRowActionsMenuDialog() for the mobile sheet's title bar
+             only — the popover has no equivalent, since it already opens right next to the row
+             its name is on. -->
+        <template id="row-actions-menu-{{ id }}" data-name="{{ name }}">
             {% include "components/row_actions_menu.html" %}
         </template>
         {% endif %}
