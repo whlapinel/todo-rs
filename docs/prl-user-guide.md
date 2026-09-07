@@ -545,8 +545,9 @@ An **item series** is how a recurring Task or Event is modeled: a
 recurrence rule plus an anchor date and a set of static fields (name,
 description, item type). Individual occurrence dates aren't items at all
 until something actually materializes one, via the web UI's calendar/
-dashboard/Tasks-list views (`prl series` itself only covers the series:
-create, read, update, list — there's no CLI browse/materialize command).
+dashboard/Tasks-list views (`prl series` only covers the series itself:
+create, read, update, list, plus the sub-item definitions below — there's no
+CLI browse/materialize command for individual occurrences).
 A series's `recurrence` field uses the exact same English-phrase syntax as
 the table above. Every series has an `--item-type` of either
 `task` or `event`, controlling whether it materializes Task or Event
@@ -647,6 +648,59 @@ already materialized from it are kept as plain standalone items, untouched.
 ```sh
 prl series delete <project-id> <series-id>
 ```
+
+### Sub-items
+
+A **sub-item** is lead-time preparation work that every occurrence of a task
+series carries: a "Party, every Nov 1" series can own "book venue" 30 days
+before and "send invites" 14 days before. You author each one once, on the
+series, and it shows up on every cycle at its own lead-time date — on the
+calendar and nested under the occurrence in the Tasks list — without anything
+being created in advance. It only becomes a real item when someone actually
+persists a change to it, which also materializes the occurrence it belongs to.
+
+Sub-items are **task-series-only** (`--item-type task`): a sub-item is a
+structural child of its occurrence, and an Event can't have children. Every
+sub-item **blocks its occurrence's completion** until it's complete too;
+there's no skip.
+
+```sh
+prl series children list <project-id> <series-id>
+prl series children create <project-id> <series-id> "Book venue" 30
+prl series children create <project-id> <series-id> "Send invites" 14 \
+  --description "Evite, plus paper for the grandparents" --priority 2
+```
+
+`<days-before>` is the lead time in days before the occurrence's own date,
+non-negative — the same "days before due" convention `prl items add
+--days-before-due` uses. `0` means due alongside the occurrence itself. New
+definitions are appended at the end of the authored order, which is the order
+`list` prints them in; that order is independent of lead time, so a
+later-authored sub-item is free to fall earlier in the run-up.
+
+Update is a full replace of `name`/`days-before`/`description`/`priority` —
+pass `--description`/`--priority` again to keep them, or omit to clear them:
+
+```sh
+prl series children update <project-id> <series-id> <child-id> "Book venue" 45
+```
+
+Editing a definition deliberately does **not** rewrite sub-items already
+materialized from past cycles. Those are plain items by then, structurally
+children of their occurrence, and rewriting history isn't what this edit
+offers.
+
+```sh
+prl series children delete <project-id> <series-id> <child-id>
+```
+
+Delete is orphan, not cascade, the same as deleting a series: the definition
+and its occurrence records go away, but a sub-item already materialized from
+it survives as a plain child of the occurrence it was created under. Note the
+reverse, too: **deleting a materialized sub-item's item reverts that
+occurrence to virtual — it comes back**, because the definition still exists
+and the row is recomputed on the next render. The way to be rid of a sub-item
+for good is `prl series children delete`.
 
 ---
 

@@ -293,3 +293,186 @@ operation ListItemSeriesForProject {
         PeoplesRepublicOfListsError
     ]
 }
+
+// Series sub-items — the `item_series_children` definition rows a Task series owns. A
+// sub-item is lead-time preparation work for every occurrence of its series ("book venue,
+// 30 days before"), authored once on the series and fanned out onto each cycle; it is not an
+// item and has no id in the `items` table until something materializes it.
+//
+// Scoped under the series that owns them, mirroring comment.smithy's
+// /projects/{projectId}/items/{itemId}/comments shape — a definition belongs to exactly one
+// series and is reachable only through it, so every operation below resolves the series first
+// and 404s a childId that belongs to a different one. Gated by project membership, the same
+// authority level as Create/UpdateItemSeries above: a definition is project-scoped content
+// like a template, not a role/points action.
+//
+// Task-only: sub-items are structural children of a materialized occurrence, and an Event
+// item can never have children (`Item::validate`), so Create/Update reject a non-Task series.
+// Delete deliberately does not, so a legacy Event-typed series that acquired definitions
+// before that guard landed stays cleanable.
+//
+// `daysBefore` is non-negative here and everywhere else a "days before due" number is
+// presented (CLAUDE.md's Recurrence section) — it is negated into `dueOffsetDays` only at
+// materialization, which is what keeps `Item::validate`'s "due offset days cannot be
+// positive" rule satisfied by construction.
+//
+// No `sortOrder` on the wire: it is an append counter maintained server-side, not an authored
+// field, and ListItemSeriesChildren already returns definitions in it. There is also no
+// GetItemSeriesChild — a series' definition set is small and always read whole, so List is
+// the only read shape any caller has wanted.
+structure ItemSeriesChildSummary {
+    @required
+    childId: String
+
+    @required
+    seriesId: String
+
+    @required
+    name: String
+
+    description: String
+
+    @required
+    daysBefore: Integer
+
+    priority: Integer
+}
+
+list ItemSeriesChildList {
+    member: ItemSeriesChildSummary
+}
+
+@readonly
+@http(method: "GET", uri: "/projects/{projectId}/series/{seriesId}/children")
+operation ListItemSeriesChildren {
+    input := {
+        @required
+        @httpLabel
+        projectId: String
+
+        @required
+        @httpLabel
+        @notProperty
+        seriesId: String
+    }
+
+    output := {
+        @required
+        @notProperty
+        children: ItemSeriesChildList
+    }
+
+    errors: [
+        PeoplesRepublicOfListsError
+    ]
+}
+
+@http(method: "POST", uri: "/projects/{projectId}/series/{seriesId}/children")
+operation CreateItemSeriesChild {
+    input := {
+        @required
+        @httpLabel
+        projectId: String
+
+        @required
+        @httpLabel
+        @notProperty
+        seriesId: String
+
+        @required
+        @notProperty
+        name: String
+
+        @notProperty
+        description: String
+
+        @required
+        @notProperty
+        daysBefore: Integer
+
+        @notProperty
+        priority: Integer
+    }
+
+    output := {
+        @required
+        @notProperty
+        childId: String
+    }
+
+    errors: [
+        PeoplesRepublicOfListsError
+    ]
+}
+
+// Full replace of the authored fields, matching UpdateItemSeries' own convention — omitting
+// description/priority clears them rather than preserving what's stored. Editing a definition
+// never rewrites already-materialized sub-items of past cycles: those are plain items by then.
+@idempotent
+@http(method: "PUT", uri: "/projects/{projectId}/series/{seriesId}/children/{childId}")
+operation UpdateItemSeriesChild {
+    input := {
+        @required
+        @httpLabel
+        projectId: String
+
+        @required
+        @httpLabel
+        @notProperty
+        seriesId: String
+
+        @required
+        @httpLabel
+        @notProperty
+        childId: String
+
+        @required
+        @notProperty
+        name: String
+
+        @notProperty
+        description: String
+
+        @required
+        @notProperty
+        daysBefore: Integer
+
+        @notProperty
+        priority: Integer
+    }
+
+    output := {}
+
+    errors: [
+        PeoplesRepublicOfListsError
+    ]
+}
+
+// Orphan, not cascade — the same treatment DeleteItemSeries gives a materialized occurrence:
+// this drops the definition and its `series_child_occurrences` records, but an already-
+// materialized sub-item survives as a plain child of the occurrence it was created under.
+@idempotent
+@http(method: "DELETE", uri: "/projects/{projectId}/series/{seriesId}/children/{childId}")
+operation DeleteItemSeriesChild {
+    input := {
+        @required
+        @httpLabel
+        projectId: String
+
+        @required
+        @httpLabel
+        @notProperty
+        seriesId: String
+
+        @required
+        @httpLabel
+        @notProperty
+        childId: String
+    }
+
+    output := {}
+
+    errors: [
+        PeoplesRepublicOfListsError
+    ]
+}

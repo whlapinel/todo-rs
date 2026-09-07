@@ -120,6 +120,65 @@ pub enum SeriesCommand {
         project_id: String,
         series_id: String,
     },
+    /// Manage a task series' sub-items — the lead-time preparation work every occurrence
+    /// carries ("book venue, 30 days before")
+    Children {
+        #[command(subcommand)]
+        command: SeriesChildCommand,
+    },
+}
+
+/// Sub-item definitions live on the series, not on any one occurrence: each one fans out onto
+/// every cycle at its own lead-time date, and only becomes a real item when something persists
+/// a change to it. Editing or removing a definition therefore never rewrites already-
+/// materialized sub-items of past cycles — those are plain items by then, structurally children
+/// of the occurrence they were created under.
+///
+/// Task-series-only, since a sub-item is a structural child and an Event item can never have
+/// children. `delete` is the one exception: it works whatever the series' kind, so a legacy
+/// Event-typed series that acquired definitions before that guard landed stays cleanable.
+#[derive(Subcommand)]
+pub enum SeriesChildCommand {
+    /// List a series' sub-item definitions, in authored order
+    List {
+        project_id: String,
+        series_id: String,
+    },
+    /// Create a sub-item definition, appended at the end of the authored order
+    Create {
+        project_id: String,
+        series_id: String,
+        name: String,
+        /// Lead time in days before each occurrence's own date — non-negative (0 means due
+        /// alongside the occurrence itself)
+        days_before: i32,
+        #[arg(long)]
+        description: Option<String>,
+        /// 1 (highest) through 4 (lowest)
+        #[arg(long)]
+        priority: Option<i32>,
+    },
+    /// Update a sub-item definition (full replace — round-trip description/priority to keep them)
+    Update {
+        project_id: String,
+        series_id: String,
+        child_id: String,
+        name: String,
+        /// Lead time in days before each occurrence's own date — non-negative
+        days_before: i32,
+        #[arg(long)]
+        description: Option<String>,
+        /// 1 (highest) through 4 (lowest); round-trip to keep it, omit to clear it
+        #[arg(long)]
+        priority: Option<i32>,
+    },
+    /// Delete a sub-item definition. Orphan, not cascade: sub-items already materialized from
+    /// it stay as plain children of their occurrence.
+    Delete {
+        project_id: String,
+        series_id: String,
+        child_id: String,
+    },
 }
 
 pub async fn cmd_series(client: &Client, cmd: SeriesCommand, _user_id: Option<String>) {
@@ -137,7 +196,10 @@ pub async fn cmd_series(client: &Client, cmd: SeriesCommand, _user_id: Option<St
                 println!("(no item series)");
                 return;
             }
-            println!("{:<36}  {:<24}  {:<6}  {}", "ID", "RECURRENCE", "TYPE", "NAME");
+            println!(
+                "{:<36}  {:<24}  {:<6}  {}",
+                "ID", "RECURRENCE", "TYPE", "NAME"
+            );
             for s in out.series() {
                 println!(
                     "{:<36}  {:<24}  {:<6}  {}",
@@ -220,17 +282,24 @@ pub async fn cmd_series(client: &Client, cmd: SeriesCommand, _user_id: Option<St
             println!("description: {}", out.description().unwrap_or("-"));
             println!("event type:  {}", out.event_type().unwrap_or("-"));
             println!("recurrence:  {}", out.recurrence());
-            println!("anchor:      {}", crate::helpers::fmt_date(out.anchor_date()));
+            println!(
+                "anchor:      {}",
+                crate::helpers::fmt_date(out.anchor_date())
+            );
             println!("item type:   {}", out.item_type());
             println!("basis:       {}", out.basis().unwrap_or("SCHEDULE"));
             println!("assigned to: {}", out.assigned_to_user_id().unwrap_or("-"));
             println!(
                 "points:      {}",
-                out.points().map(|p| p.to_string()).unwrap_or_else(|| "-".to_string())
+                out.points()
+                    .map(|p| p.to_string())
+                    .unwrap_or_else(|| "-".to_string())
             );
             println!(
                 "priority:    {}",
-                out.priority().map(|p| p.to_string()).unwrap_or_else(|| "-".to_string())
+                out.priority()
+                    .map(|p| p.to_string())
+                    .unwrap_or_else(|| "-".to_string())
             );
             println!(
                 "rotation:    {}",
@@ -310,6 +379,110 @@ pub async fn cmd_series(client: &Client, cmd: SeriesCommand, _user_id: Option<St
                 "delete item series",
             );
             println!("deleted item series {series_id}");
+        }
+        SeriesCommand::Children { command } => cmd_series_children(client, command).await,
+    }
+}
+
+async fn cmd_series_children(client: &Client, cmd: SeriesChildCommand) {
+    match cmd {
+        SeriesChildCommand::List {
+            project_id,
+            series_id,
+        } => {
+            let out = unwrap_or_exit(
+                client
+                    .list_item_series_children()
+                    .project_id(&project_id)
+                    .series_id(&series_id)
+                    .send()
+                    .await,
+                "list series sub-items",
+            );
+            if out.children().is_empty() {
+                println!("(no sub-items)");
+                return;
+            }
+            println!(
+                "{:<36}  {:>12}  {:>8}  {}",
+                "ID", "DAYS BEFORE", "PRIORITY", "NAME"
+            );
+            for c in out.children() {
+                println!(
+                    "{:<36}  {:>12}  {:>8}  {}",
+                    c.child_id(),
+                    c.days_before(),
+                    c.priority()
+                        .map(|p| p.to_string())
+                        .unwrap_or_else(|| "-".to_string()),
+                    c.name()
+                );
+            }
+        }
+        SeriesChildCommand::Create {
+            project_id,
+            series_id,
+            name,
+            days_before,
+            description,
+            priority,
+        } => {
+            let mut req = client
+                .create_item_series_child()
+                .project_id(&project_id)
+                .series_id(&series_id)
+                .name(name)
+                .days_before(days_before);
+            if let Some(description) = description {
+                req = req.description(description);
+            }
+            if let Some(priority) = priority {
+                req = req.priority(priority);
+            }
+            let out = unwrap_or_exit(req.send().await, "create series sub-item");
+            println!("created sub-item {}", out.child_id());
+        }
+        SeriesChildCommand::Update {
+            project_id,
+            series_id,
+            child_id,
+            name,
+            days_before,
+            description,
+            priority,
+        } => {
+            let mut req = client
+                .update_item_series_child()
+                .project_id(&project_id)
+                .series_id(&series_id)
+                .child_id(&child_id)
+                .name(name)
+                .days_before(days_before);
+            if let Some(description) = description {
+                req = req.description(description);
+            }
+            if let Some(priority) = priority {
+                req = req.priority(priority);
+            }
+            unwrap_or_exit(req.send().await, "update series sub-item");
+            println!("updated sub-item {child_id}");
+        }
+        SeriesChildCommand::Delete {
+            project_id,
+            series_id,
+            child_id,
+        } => {
+            unwrap_or_exit(
+                client
+                    .delete_item_series_child()
+                    .project_id(&project_id)
+                    .series_id(&series_id)
+                    .child_id(&child_id)
+                    .send()
+                    .await,
+                "delete series sub-item",
+            );
+            println!("deleted sub-item {child_id}");
         }
     }
 }

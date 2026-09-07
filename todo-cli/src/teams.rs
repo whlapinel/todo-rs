@@ -49,7 +49,13 @@ pub async fn cmd_teams(client: &Client, cmd: TeamsCommand, user_id: Option<Strin
                     .invited_by_name()
                     .map(|n| format!("  (invited by {n})"))
                     .unwrap_or_default();
-                println!("{:<36}  {:<8}  {}{}", t.team_id(), t.status(), t.name(), suffix);
+                println!(
+                    "{:<36}  {:<8}  {}{}",
+                    t.team_id(),
+                    t.status(),
+                    t.name(),
+                    suffix
+                );
             }
         }
         TeamsCommand::Create { name } => {

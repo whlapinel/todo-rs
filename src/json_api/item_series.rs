@@ -1,8 +1,10 @@
 use super::{internal, not_found, to_domain_item_type, to_sdk_item_type};
 use crate::auth::AuthUser;
-use crate::domain::item_series::ItemSeries;
+use crate::domain::item_series::{ItemSeries, ItemSeriesChild};
 use crate::service::item_series as item_series_service;
-use crate::service::item_series::{CreateItemSeriesParams, UpdateItemSeriesParams};
+use crate::service::item_series::{
+    CreateItemSeriesParams, SeriesChildParams, UpdateItemSeriesParams,
+};
 use crate::service::items::ItemError;
 use crate::storage::sqlite::{ItemSeriesRepo, ProjectRepo, TeamRepo};
 use std::sync::Arc;
@@ -182,4 +184,110 @@ pub async fn list_item_series_for_project(
         series.push(to_summary(s, rotation_user_ids));
     }
     Ok(output::ListItemSeriesForProjectOutput { series })
+}
+
+/// `sort_order` deliberately doesn't cross the wire — it's an append counter the service
+/// maintains, not an authored field, and `list_series_children` already returns definitions in
+/// it (see `ItemSeriesChildSummary` in item_series.smithy).
+fn to_child_summary(child: ItemSeriesChild) -> model::ItemSeriesChildSummary {
+    model::ItemSeriesChildSummary {
+        child_id: child.id,
+        series_id: child.series_id,
+        name: child.name,
+        description: child.description,
+        days_before: child.days_before,
+        priority: child.priority,
+    }
+}
+
+pub async fn list_item_series_children(
+    input: input::ListItemSeriesChildrenInput,
+    server::Extension(projects): server::Extension<Arc<dyn ProjectRepo>>,
+    server::Extension(teams): server::Extension<Arc<dyn TeamRepo>>,
+    server::Extension(item_series): server::Extension<Arc<dyn ItemSeriesRepo>>,
+    server::Extension(auth): server::Extension<AuthUser>,
+) -> Result<output::ListItemSeriesChildrenOutput, error::ListItemSeriesChildrenError> {
+    let children = item_series_service::list_series_children(
+        &projects,
+        &teams,
+        &item_series,
+        &auth.user_id,
+        &input.series_id,
+    )
+    .await
+    .map_err(|e| error::ListItemSeriesChildrenError::from(to_msg(e)))?;
+    Ok(output::ListItemSeriesChildrenOutput {
+        children: children.into_iter().map(to_child_summary).collect(),
+    })
+}
+
+pub async fn create_item_series_child(
+    input: input::CreateItemSeriesChildInput,
+    server::Extension(projects): server::Extension<Arc<dyn ProjectRepo>>,
+    server::Extension(teams): server::Extension<Arc<dyn TeamRepo>>,
+    server::Extension(item_series): server::Extension<Arc<dyn ItemSeriesRepo>>,
+    server::Extension(auth): server::Extension<AuthUser>,
+) -> Result<output::CreateItemSeriesChildOutput, error::CreateItemSeriesChildError> {
+    let child_id = item_series_service::create_series_child(
+        &projects,
+        &teams,
+        &item_series,
+        &auth.user_id,
+        &input.series_id,
+        SeriesChildParams {
+            name: input.name,
+            description: input.description,
+            days_before: input.days_before,
+            priority: input.priority,
+        },
+    )
+    .await
+    .map_err(|e| error::CreateItemSeriesChildError::from(to_msg(e)))?;
+    Ok(output::CreateItemSeriesChildOutput { child_id })
+}
+
+pub async fn update_item_series_child(
+    input: input::UpdateItemSeriesChildInput,
+    server::Extension(projects): server::Extension<Arc<dyn ProjectRepo>>,
+    server::Extension(teams): server::Extension<Arc<dyn TeamRepo>>,
+    server::Extension(item_series): server::Extension<Arc<dyn ItemSeriesRepo>>,
+    server::Extension(auth): server::Extension<AuthUser>,
+) -> Result<output::UpdateItemSeriesChildOutput, error::UpdateItemSeriesChildError> {
+    item_series_service::update_series_child(
+        &projects,
+        &teams,
+        &item_series,
+        &auth.user_id,
+        &input.series_id,
+        &input.child_id,
+        SeriesChildParams {
+            name: input.name,
+            description: input.description,
+            days_before: input.days_before,
+            priority: input.priority,
+        },
+    )
+    .await
+    .map_err(|e| error::UpdateItemSeriesChildError::from(to_msg(e)))?;
+    Ok(output::UpdateItemSeriesChildOutput {})
+}
+
+pub async fn delete_item_series_child(
+    input: input::DeleteItemSeriesChildInput,
+    server::Extension(projects): server::Extension<Arc<dyn ProjectRepo>>,
+    server::Extension(teams): server::Extension<Arc<dyn TeamRepo>>,
+    server::Extension(item_series): server::Extension<Arc<dyn ItemSeriesRepo>>,
+    server::Extension(auth): server::Extension<AuthUser>,
+) -> Result<output::DeleteItemSeriesChildOutput, error::DeleteItemSeriesChildError> {
+    item_series_service::delete_series_child(
+        &projects,
+        &teams,
+        &item_series,
+        &auth.user_id,
+        &input.series_id,
+        &input.child_id,
+    )
+    .await
+    .map_err(|e| error::DeleteItemSeriesChildError::from(to_msg(e)))?;
+    Ok(output::DeleteItemSeriesChildOutput {})
 }

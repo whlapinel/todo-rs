@@ -688,6 +688,80 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: "list_item_series_children",
+      description:
+        "List a task series' sub-item definitions — the lead-time preparation work every occurrence of that series carries (e.g. 'book venue' 30 days before each 'Party'). A sub-item is authored once on the series and fans out onto every cycle at its own lead-time date; it is not an item and has no item id until something persists a change to it. Returned in authored order. The caller must be a project member.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          projectId: { type: "string" },
+          seriesId: { type: "string" },
+        },
+        required: ["projectId", "seriesId"],
+      },
+    },
+    {
+      name: "create_item_series_child",
+      description:
+        "Add a sub-item definition to a TASK series, appended at the end of the authored order. Only valid on a TASK series — a sub-item is a structural child of a materialized occurrence, and an Event item can never have children. Every sub-item blocks its occurrence's completion until it too is complete; there is no skip. The caller must be a project member.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          projectId: { type: "string" },
+          seriesId: { type: "string" },
+          name: { type: "string" },
+          description: { type: "string" },
+          daysBefore: {
+            type: "number",
+            description: "Lead time in days before the occurrence's own date — non-negative (0 means due alongside the occurrence itself). Negated into the item's dueOffsetDays at materialization.",
+          },
+          priority: {
+            type: "number",
+            description: "1 (highest) to 4 (lowest) for the materialized sub-item.",
+          },
+        },
+        required: ["projectId", "seriesId", "name", "daysBefore"],
+      },
+    },
+    {
+      name: "update_item_series_child",
+      description:
+        "Update a sub-item definition (full replace of name/daysBefore/description/priority — round-trip description/priority to keep them, omitting clears them). Deliberately does not rewrite sub-items already materialized from past cycles: those are plain items by then. Only valid on a TASK series. The caller must be a project member.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          projectId: { type: "string" },
+          seriesId: { type: "string" },
+          childId: { type: "string" },
+          name: { type: "string" },
+          description: { type: "string" },
+          daysBefore: {
+            type: "number",
+            description: "Lead time in days before the occurrence's own date — non-negative.",
+          },
+          priority: {
+            type: "number",
+            description: "1 (highest) to 4 (lowest). Round-trip to keep it, omit to clear it.",
+          },
+        },
+        required: ["projectId", "seriesId", "childId", "name", "daysBefore"],
+      },
+    },
+    {
+      name: "delete_item_series_child",
+      description:
+        "Remove a sub-item definition from a series. Orphan, not cascade: this drops the definition and its occurrence records, but a sub-item already materialized from it survives as a plain child of the occurrence it was created under. The caller must be a project member.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          projectId: { type: "string" },
+          seriesId: { type: "string" },
+          childId: { type: "string" },
+        },
+        required: ["projectId", "seriesId", "childId"],
+      },
+    },
+    {
       name: "list_teams",
       description:
         "List the teams a user belongs to, including pending invites awaiting their acceptance (status PENDING or ACTIVE).",
@@ -1147,6 +1221,50 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         result = await api(
           "DELETE",
           `/projects/${args.projectId}/series/${args.seriesId}`
+        );
+        break;
+
+      case "list_item_series_children":
+        result = await api(
+          "GET",
+          `/projects/${args.projectId}/series/${args.seriesId}/children`
+        );
+        break;
+
+      case "create_item_series_child": {
+        const body: Record<string, unknown> = {
+          name: args.name,
+          daysBefore: args.daysBefore,
+        };
+        if (args.description !== undefined) body.description = args.description;
+        if (args.priority !== undefined) body.priority = args.priority;
+        result = await api(
+          "POST",
+          `/projects/${args.projectId}/series/${args.seriesId}/children`,
+          body
+        );
+        break;
+      }
+
+      case "update_item_series_child": {
+        const body: Record<string, unknown> = {
+          name: args.name,
+          daysBefore: args.daysBefore,
+        };
+        if (args.description !== undefined) body.description = args.description;
+        if (args.priority !== undefined) body.priority = args.priority;
+        result = await api(
+          "PUT",
+          `/projects/${args.projectId}/series/${args.seriesId}/children/${args.childId}`,
+          body
+        );
+        break;
+      }
+
+      case "delete_item_series_child":
+        result = await api(
+          "DELETE",
+          `/projects/${args.projectId}/series/${args.seriesId}/children/${args.childId}`
         );
         break;
 

@@ -36,8 +36,9 @@ use json_api::comments::{
 use json_api::invites::send_app_invite;
 use json_api::item_import::{get_item_import_template, import_project_items};
 use json_api::item_series::{
-    create_item_series, delete_item_series, get_item_series, list_item_series_for_project,
-    update_item_series,
+    create_item_series, create_item_series_child, delete_item_series, delete_item_series_child,
+    get_item_series, list_item_series_children, list_item_series_for_project, update_item_series,
+    update_item_series_child,
 };
 use json_api::items::{list_assigned_items, list_items_due};
 use json_api::project_items::{
@@ -633,6 +634,10 @@ async fn main() {
         .update_item_series(update_item_series)
         .delete_item_series(delete_item_series)
         .list_item_series_for_project(list_item_series_for_project)
+        .list_item_series_children(list_item_series_children)
+        .create_item_series_child(create_item_series_child)
+        .update_item_series_child(update_item_series_child)
+        .delete_item_series_child(delete_item_series_child)
         .create_project_item(create_project_item)
         .get_project_item(get_project_item)
         .update_project_item(update_project_item)

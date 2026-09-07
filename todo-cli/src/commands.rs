@@ -1,9 +1,9 @@
+use crate::config::ConfigCommand;
 use crate::items::ItemsCommand;
 use crate::projects::ProjectsCommand;
 use crate::series::SeriesCommand;
 use crate::teams::TeamsCommand;
 use crate::users::UsersCommand;
-use crate::config::ConfigCommand;
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
