@@ -1,10 +1,11 @@
-use crate::domain::item::{Item, ItemKind};
+use crate::domain::item::{Item, ItemKind, Schedule, TeamAssignment};
 use crate::domain::item_series::{
     ItemOccurrence, ItemSeries, ItemSeriesChild, SeriesChildOccurrence,
 };
 use crate::domain::recurrence;
 use crate::service::error::ItemError;
-use crate::service::project_items::{self, CreateProjectItemParams};
+use crate::service::item_input::{NewEvent, NewItem, NewItemKind, NewTask, TaskAnchor};
+use crate::service::project_items;
 use crate::service::projects::{
     require_project_admin, require_project_member, resolve_project_assignee,
 };
@@ -84,44 +85,67 @@ pub async fn get_or_materialize_occurrence(
     // Due-date-basis materializes onto due_date instead of scheduled_date (see
     // ItemSeries::basis's doc comment) — everything else about the created item is
     // identical between the two branches.
-    let params = if is_due_date_basis(&series) {
-        CreateProjectItemParams {
-            project_id: series.project_id.clone(),
-            name: series.name.clone(),
-            description: series.description.clone(),
-            item_type: Some(series.item_type),
-            event_type: series.event_type.clone(),
+    let schedule = if is_due_date_basis(&series) {
+        Schedule {
             due_date: Some(occurrence_date),
-            has_due_time: Some(true),
-            assigned_to_user_id: occurrence_assignee,
-            points: series.points,
-            priority: series.priority,
-            series_id: Some(series.id.clone()),
+            has_due_time: true,
             ..Default::default()
         }
     } else {
-        CreateProjectItemParams {
-            project_id: series.project_id.clone(),
-            name: series.name.clone(),
-            description: series.description.clone(),
-            item_type: Some(series.item_type),
-            event_type: series.event_type.clone(),
+        Schedule {
             scheduled_date: Some(occurrence_date),
-            has_scheduled_time: Some(true),
-            assigned_to_user_id: occurrence_assignee,
-            points: series.points,
-            priority: series.priority,
-            series_id: Some(series.id.clone()),
+            has_scheduled_time: true,
             ..Default::default()
         }
     };
-    let item_id = project_items::create_project_item(
+    // The kind comes from the series rather than from this call site, which is what makes this
+    // (with `import`) the shape the wire boundary will need in Stage 7 of
+    // docs/typed-item-params-plan.md. `ItemSeries::item_type` is restricted to Task/Event and
+    // immutable after creation, so the two arms below are exhaustive in practice; a third kind
+    // would be a series this module cannot materialize at all, which is what the `Err` says.
+    //
+    // Each arm carries only what its kind can hold, and every field that disappears was
+    // already being dropped by `build_item_type` one layer down — `resolve_series_assignment`
+    // and `validate_series_priority` reject assignment/points/priority on an Event series at
+    // the input boundary, so those are structurally `None` here, and `validate_series_event_type`
+    // has rejected `event_type` on *any* series since 2026-08-15 (a legacy Event-typed row
+    // predating that is the only way it is still `Some`, and the Event arm still carries it).
+    let kind = match series.item_type {
+        ItemKind::Task => NewItemKind::Task(NewTask {
+            schedule,
+            priority: series.priority,
+            assignment: TeamAssignment {
+                assigned_to_user_id: occurrence_assignee,
+                points: series.points,
+            },
+            series_id: Some(series.id.clone()),
+            ..Default::default()
+        }),
+        ItemKind::Event => NewItemKind::Event(NewEvent {
+            schedule,
+            event_type: series.event_type.clone(),
+            due_offset_days: None,
+            series_id: Some(series.id.clone()),
+        }),
+        other => {
+            return Err(ItemError::Invalid(format!(
+                "cannot materialize an occurrence of a {other:?} series"
+            )));
+        }
+    };
+    let item_id = project_items::create_item_typed(
         repo,
         projects,
         teams,
         reminders,
         requester_user_id,
-        params,
+        NewItem {
+            project_id: series.project_id.clone(),
+            name: series.name.clone(),
+            description: series.description.clone(),
+            timezone_offset_minutes: None,
+            kind,
+        },
     )
     .await?;
 
@@ -242,24 +266,24 @@ pub async fn get_or_materialize_child_occurrence(
     // such an occurrence today. Closing it means changing shared behavior (what `item_anchor`
     // reads, or what basis a series with sub-items materializes onto), which is deliberately
     // not decided here.
-    let params = CreateProjectItemParams {
-        project_id: series.project_id.clone(),
-        name: child.name.clone(),
-        description: child.description.clone(),
-        item_type: Some(ItemKind::Task),
-        parent_item_id: Some(parent.id.clone()),
-        due_offset_days: Some(-child.days_before),
-        priority: child.priority,
-        timezone_offset_minutes: Some(tz_offset_minutes),
-        ..Default::default()
-    };
-    let item_id = project_items::create_project_item(
+    let item_id = project_items::create_item_typed(
         repo,
         projects,
         teams,
         reminders,
         requester_user_id,
-        params,
+        NewItem {
+            project_id: series.project_id.clone(),
+            name: child.name.clone(),
+            description: child.description.clone(),
+            timezone_offset_minutes: Some(tz_offset_minutes),
+            kind: NewItemKind::Task(NewTask {
+                anchor: TaskAnchor::Parent(parent.id.clone()),
+                due_offset_days: Some(-child.days_before),
+                priority: child.priority,
+                ..Default::default()
+            }),
+        },
     )
     .await?;
 
@@ -2180,6 +2204,53 @@ mod tests {
         .expect("should materialize a new occurrence");
 
         assert_eq!(item.name, "Standup");
+    }
+
+    /// The `other` arm of the kind dispatch Stage 6 of docs/typed-item-params-plan.md
+    /// introduced. `validate_series_item_type` restricts a series to Task/Event and the kind is
+    /// immutable after creation, so this is only reachable from a corrupt row — but a typed
+    /// input has to decide *something* for the other two kinds, and an error naming the problem
+    /// beats defaulting to Task and silently materializing the wrong kind of item.
+    #[tokio::test]
+    async fn refuses_to_materialize_an_occurrence_of_a_non_task_non_event_series() {
+        let mut simple_series = series("p1");
+        simple_series.item_type = ItemKind::Simple;
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock
+            .expect_get_series()
+            .returning(move |_| Ok(simple_series.clone()));
+        series_mock
+            .expect_get_occurrence()
+            .returning(|_, _| Ok(None));
+        series_mock
+            .expect_list_rotation_members()
+            .returning(|_| Ok(Vec::new()));
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        let mut projects_mock = MockProjectRepo::new();
+        projects_mock
+            .expect_get()
+            .returning(|_| Ok(personal_project()));
+        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
+
+        // Nothing is created — the rejection happens before the repo is touched.
+        let repo: Arc<dyn ItemRepo> = Arc::new(MockItemRepo::new());
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+
+        let err = get_or_materialize_occurrence(
+            &repo,
+            &projects,
+            &teams,
+            &series_repo,
+            &no_op_reminders(),
+            "owner1",
+            "s1",
+            occurrence_date(),
+            0,
+        )
+        .await
+        .expect_err("a Simple series has no occurrence shape to materialize");
+        assert!(matches!(err, ItemError::Invalid(msg) if msg.contains("cannot materialize")));
     }
 
     #[tokio::test]

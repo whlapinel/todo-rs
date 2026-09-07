@@ -322,6 +322,47 @@ per this repo's convention (`docs/archived/team-id-removal-plan.md`,
 6. **Internal service callers.** `service/item_series.rs` (3 sites, Task-or-Event from
    `series.item_type`) and `service/import.rs` (kind from a CSV column). Both are the
    "dynamic kind" shape the wire boundary will also need, so doing them here de-risks Stage 7.
+   **Done** (675 tests passing, up from Stage 5's 671).
+
+   **Four files still name the flat structs**, and only one of them still *builds* one as
+   input: `json_api/project_items.rs`, which is Stage 7 and is the single caller the Context
+   section's table identified as genuinely untyped. The other three are the structs' own
+   definitions and conversions (`service/project_items.rs`, `service/item_input.rs`) and two
+   Stage 5 test assertions on what a conversion produces. The migration's premise held — 20 of
+   21 create sites and 25 of 26 update sites knew their kind statically.
+
+   The stage line above said "3 sites" for `item_series`; it is 2 — the occurrence and the
+   sub-item. The third, `create_project_task_series_occurrence_child_form`, lives in
+   `web_ui/project_tasks/` and went with Stage 5.
+
+   Three deviations from the design above:
+
+   - **The kind dispatch needed a fourth arm neither dynamic site can reach.**
+     `get_or_materialize_occurrence` matches on `series.item_type`, which
+     `validate_series_item_type` restricts to Task/Event and which is immutable after creation
+     — but a `match` on `ItemKind` still has to answer for Simple and Template. It returns
+     `Invalid("cannot materialize an occurrence of a {kind} series")` rather than defaulting to
+     Task, so a corrupt row fails loudly instead of silently materializing the wrong kind.
+     Tested.
+   - **Two more rejections relocated, both with byte-identical text.** `ItemError::Invalid` is
+     `#[error("{0}")]`, so a per-row import failure already reported the bare message, which is
+     what made this checkable. (1) A CSV row carrying both `parentItemId` and `sourceEventId` —
+     `TaskAnchor` cannot hold both, so the rejection moves up from `Item::validate()`, exactly
+     as it did for `reparent_edit` in Stage 5. (2) A root `TEMPLATE` row — `NewTemplate`'s
+     parent is a non-optional `String`, so the unparented case is unconstructable and
+     `require_template_has_template_parent`'s wording is raised in the builder instead. Root
+     CLAUDE.md's CSV import section already documented both outcomes; only the layer moved.
+   - **Cross-kind CSV columns still drop silently, deliberately, and this is now pinned by a
+     test.** `points` on an `EVENT` row, `eventType` on a `TASK` row: each has no field on its
+     variant and vanishes exactly as it vanished in `build_item_type` one layer down. Rejecting
+     instead is the better contract, and import's per-row error channel is the natural place
+     for it — but that is precisely the Stage 7 decision below, and making it unilaterally for
+     CSV while the JSON API still drops would be worse than either answer consistently applied.
+     `import_project_items_still_drops_cross_kind_columns` exists so Stage 7 changes it
+     deliberately rather than by accident.
+
+   **No root CLAUDE.md edit**, as in Stage 5: no stated invariant changed, and the CSV import
+   section's account of what a `TEMPLATE` row may do is still accurate.
 7. **The wire boundary.** `json_api/project_items.rs` gets an explicit
    `try_into_new_item()`/`try_into_edit_item()`. **Behavior change to decide before writing it:**
    today a cross-kind field on the wire (`points` on an Event) is silently dropped; the natural
