@@ -5,16 +5,18 @@ use super::{TzOffset, format_display_date, format_display_naive_date, to_local};
 use crate::auth::AuthUser;
 use crate::domain::item::{Item, ItemKind};
 use crate::service::error::ItemError;
+use crate::service::item_input::{EditItem, EditItemKind, EditTask};
 use crate::service::item_series::{
     self as series_service, OccurrenceState, ProjectOccurrence, SeriesChildOccurrenceView,
 };
-use crate::service::project_items::{self as project_item_service, UpdateProjectItemParams};
+use crate::service::project_items::{self as project_item_service};
 use crate::service::projects::{self as project_service};
 use crate::service::teams as team_service;
 use crate::storage::sqlite::{
     ActivityLogRepo, DueItem, ItemDependencyRepo, ItemRepo, ItemSeriesRepo, ProjectRepo,
     ReminderRepo, TeamRepo, UserRepo,
 };
+use crate::web_ui::project_tasks::require_task;
 use askama::Template;
 use axum::extract::{Extension, Form, Path, Query, RawQuery};
 use axum::response::{Html, Redirect};
@@ -908,30 +910,24 @@ pub async fn toggle_main_calendar_item_complete(
         &item_id,
     )
     .await?;
-    let params = UpdateProjectItemParams {
+    // Only a Task can be completed, and only a Task row renders a checkbox pointing here
+    // (`calendar_row` leaves an Event's `complete_url` as `None`) — but the old flat params
+    // passed `item_type: Some(current.kind())`, so a crafted POST naming an Event fell through
+    // to `Item::validate()`. `EditTask` cannot express a non-Task, and defaulting to Task would
+    // silently *rewrite* the row's kind, so the check moves up front.
+    let current = require_task(current)?;
+    let mut task = EditTask::from_item(&current);
+    task.complete = form.complete.as_deref() == Some("true");
+    let edit = EditItem {
         project_id: project_id.clone(),
         item_id: item_id.clone(),
         name: current.name.clone(),
         description: current.description.clone(),
-        due_date: current.due_date(),
-        scheduled_date: current.scheduled_date(),
-        scheduled_end_date: current.scheduled_end_date(),
-        complete: form.complete.as_deref() == Some("true"),
-        has_due_time: Some(current.has_due_time()),
-        has_scheduled_time: Some(current.has_scheduled_time()),
-        has_end_time: Some(current.has_end_time()),
-        parent_item_id: current.parent_item_id(),
-        item_type: Some(current.kind()),
-        event_type: current.event_type(),
-        due_offset_days: current.due_offset_days(),
-        assigned_to_user_id: current.assigned_to_user_id(),
-        source_event_id: current.source_event_id(),
         timezone_offset_minutes: Some(tz),
-        points: current.points(),
-        priority: current.priority(),
         depends_on_item_ids: None,
+        kind: EditItemKind::Task(task),
     };
-    project_item_service::update_project_item(
+    project_item_service::update_item_typed(
         &repo,
         &projects,
         &teams,
@@ -940,7 +936,7 @@ pub async fn toggle_main_calendar_item_complete(
         &reminders,
         &item_dependencies,
         &auth_user.user_id,
-        params,
+        edit,
     )
     .await?;
 

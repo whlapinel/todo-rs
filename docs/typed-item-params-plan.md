@@ -272,7 +272,53 @@ per this repo's convention (`docs/archived/team-id-removal-plan.md`,
    `NewItemKind::Template`/`EditItemKind::Template` is gone; `TaskAnchor::Parent` and
    `EditItemKind::Task` still carry theirs until Stage 5.
 5. **Task.** The largest: `web_ui/project_tasks/` (6 create, 6 update), both calendars,
-   `all_projects_tasks.rs`, `service/activity_log.rs`.
+   `all_projects_tasks.rs`, `service/activity_log.rs`. **Done** (671 tests passing, up from
+   Stage 4's 665 — the six new ones cover the shared round-trip constructor and the one
+   rejection this stage had to relocate; the call-site rewrites themselves add no behavior).
+
+   The three remaining `#[allow(dead_code)]` predictions held: `TaskAnchor::Parent` and
+   `EditItemKind::Task` both gained real constructors here, and `src/service/item_input.rs`
+   now carries none at all, exactly as Stage 2 said it would by this point.
+
+   Four deviations from the design above:
+
+   - **A shared `EditTask::from_item(&Item)`, which the design never called for.** Five of this
+     stage's sites are "change one field, round-trip the other eighteen": the three completion
+     toggles (both calendars and `all_projects_tasks`), `identity_params` behind the four batch
+     actions, `reparent_params`, and `activity_log`'s undo-reopen. Each had its own hand-written
+     nineteen-line transcription of the same `Item`, which is the exact silent-drop hazard in
+     this plan's Context section reproduced *inside* a single screen. One constructor on
+     `EditTask` (plus `TaskAnchor::from_item`) replaces all of them. It reads through `Item`'s
+     `Option`-returning delegation, so it is only correct for an already-`require_task`'d item —
+     stated on the function, since the type can't say it.
+   - **`reparent_edit` became fallible.** `TaskAnchor` cannot express "parent *and* source
+     event", which the old flat helper could build and hand to `Item::validate()` to reject one
+     layer down. It is genuinely reachable: an event-linked task is top-level (the anchors are
+     mutually exclusive), so it appears in the Move dialog's sibling list and can be
+     subordinated. The choice was to re-raise the same rejection where the request is built or
+     to silently unlink the event; rejecting is what the code already did, so only the layer
+     moved. Message and behavior are unchanged, with a regression test for each of the three
+     move shapes.
+   - **The two calendar toggles gained a `require_task` guard.** Their flat params passed
+     `item_type: Some(current.kind())`, which read as kind-agnostic but never saw anything but a
+     Task — `calendar_row` leaves an Event's `complete_url` as `None`, so no Event checkbox
+     points at these routes. A crafted `POST` naming an Event did reach them and fell through to
+     `Item::validate()`'s "events cannot be marked complete". Under typed params, defaulting to
+     the Task variant would instead have silently *rewritten* the row's kind — the Stage 4
+     defect class again — so the check moved to the front of the handler. A crafted request now
+     gets `NotFound` instead of `Invalid`; nothing reachable through the UI changes.
+     `all_projects_tasks`' toggle got the same guard, where its own doc comment already claimed
+     it was Task-only.
+   - **`event_type` round-tripping disappeared from four sites.** Each passed
+     `event_type: current.event_type()` to honor the direct-overwrite convention, on an item
+     that structurally cannot have one — the call always returned `None`. `EditTask` has no such
+     field, so the lines are gone rather than defaulted.
+
+   **No root CLAUDE.md edit**, unlike Stage 4. Nothing here changes a stated invariant: the
+   parent/source-event exclusion is still `Item::validate()`'s rule and still enforced there for
+   every other writer; the calendar guard is a hardening of an undocumented handler. Two stale
+   references to the long-collapsed `tasks`/`team_tasks` modules were fixed in passing, since
+   the comments carrying them were being rewritten anyway.
 6. **Internal service callers.** `service/item_series.rs` (3 sites, Task-or-Event from
    `series.item_type`) and `service/import.rs` (kind from a CSV column). Both are the
    "dynamic kind" shape the wire boundary will also need, so doing them here de-risks Stage 7.

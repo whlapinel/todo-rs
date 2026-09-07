@@ -489,7 +489,7 @@ pub async fn delete_project_simple_item_form(
 }
 
 /// Reparent-only update, every other field round-tripped from `current` — see
-/// `project_tasks::reparent_params` for the general shape (no offset recompute needed here:
+/// `project_tasks::reparent_edit` for the general shape (no offset recompute needed here:
 /// `Item::validate` rejects `dueOffsetDays`/any date field outright for `ItemType::Simple`,
 /// so a Simple item can never have one to begin with).
 fn reparent_params(

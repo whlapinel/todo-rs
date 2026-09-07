@@ -6,8 +6,11 @@ use crate::service::attachments as attachments_service;
 use crate::service::comments as comments_service;
 use crate::service::error::ItemError;
 use crate::service::item_dependencies::{self as item_dependencies_service};
+use crate::service::item_input::{
+    EditItem, EditItemKind, EditTask, NewItem, NewItemKind, NewTask, TaskAnchor,
+};
 use crate::service::item_series::{self as item_series_service};
-use crate::service::project_items::{self as project_item_service, UpdateProjectItemParams};
+use crate::service::project_items::{self as project_item_service};
 use crate::service::projects::{self as project_service};
 use crate::service::teams as team_service;
 use crate::service::templates::{self as template_service, CreateProjectTemplateParams};
@@ -1034,8 +1037,8 @@ pub async fn update_project_task_series_occurrence_form(
         tz,
     )
     .await?;
-    let params = update_params_from_form(&project_id, &item.id, &item, &form, tz);
-    project_item_service::update_project_item(
+    let edit = update_params_from_form(&project_id, &item.id, &item, &form, tz);
+    project_item_service::update_item_typed(
         &repo,
         &projects,
         &teams,
@@ -1044,7 +1047,7 @@ pub async fn update_project_task_series_occurrence_form(
         &reminders,
         &item_dependencies,
         &auth_user.user_id,
-        params,
+        edit,
     )
     .await?;
     Ok(hx_redirect(project_task_url(&project_id, &item.id)))
@@ -1147,8 +1150,8 @@ pub async fn complete_project_item_series_occurrence_form(
         complete: Some("true".to_string()),
         ..Default::default()
     };
-    let params = update_params_from_form(&project_id, &item.id, &item, &form, tz);
-    project_item_service::update_project_item(
+    let edit = update_params_from_form(&project_id, &item.id, &item, &form, tz);
+    project_item_service::update_item_typed(
         &repo,
         &projects,
         &teams,
@@ -1157,7 +1160,7 @@ pub async fn complete_project_item_series_occurrence_form(
         &reminders,
         &item_dependencies,
         &auth_user.user_id,
-        params,
+        edit,
     )
     .await?;
 
@@ -1302,27 +1305,29 @@ pub async fn create_project_task_series_occurrence_child_form(
         tz,
     )
     .await?;
-    let params = crate::service::project_items::CreateProjectItemParams {
+    let new = NewItem {
         project_id: project_id.clone(),
         name: form.name,
-        parent_item_id: Some(item.id.clone()),
-        item_type: Some(ItemKind::Task),
-        due_offset_days: form
-            .due_offset_days
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .and_then(parse_days_before_due),
+        description: None,
         timezone_offset_minutes: Some(tz),
-        ..Default::default()
+        kind: NewItemKind::Task(NewTask {
+            anchor: TaskAnchor::Parent(item.id.clone()),
+            due_offset_days: form
+                .due_offset_days
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .and_then(parse_days_before_due),
+            ..Default::default()
+        }),
     };
-    project_item_service::create_project_item(
+    project_item_service::create_item_typed(
         &repo,
         &projects,
         &teams,
         &reminders,
         &auth_user.user_id,
-        params,
+        new,
     )
     .await?;
     Ok(hx_redirect(project_task_url(&project_id, &item.id)))
@@ -1562,8 +1567,8 @@ pub async fn update_project_task_series_child_occurrence_form(
         tz,
     )
     .await?;
-    let params = update_params_from_form(&project_id, &item.id, &item, &form, tz);
-    project_item_service::update_project_item(
+    let edit = update_params_from_form(&project_id, &item.id, &item, &form, tz);
+    project_item_service::update_item_typed(
         &repo,
         &projects,
         &teams,
@@ -1572,7 +1577,7 @@ pub async fn update_project_task_series_child_occurrence_form(
         &reminders,
         &item_dependencies,
         &auth_user.user_id,
-        params,
+        edit,
     )
     .await?;
     Ok(Html(String::new()).into_response())
@@ -1625,8 +1630,8 @@ pub async fn complete_project_task_series_child_occurrence_form(
         complete: Some("true".to_string()),
         ..Default::default()
     };
-    let params = update_params_from_form(&project_id, &item.id, &item, &form, tz);
-    project_item_service::update_project_item(
+    let edit = update_params_from_form(&project_id, &item.id, &item, &form, tz);
+    project_item_service::update_item_typed(
         &repo,
         &projects,
         &teams,
@@ -1635,7 +1640,7 @@ pub async fn complete_project_task_series_child_occurrence_form(
         &reminders,
         &item_dependencies,
         &auth_user.user_id,
-        params,
+        edit,
     )
     .await?;
 
@@ -1867,15 +1872,18 @@ pub async fn create_project_task_form(
     let redirect = form.redirect.is_some();
     let filters_query = form.filters_query.clone().unwrap_or_default();
     let return_to = form.return_to.clone();
-    let params = create_params_from_form(&project_id, &form, tz);
-    let parent_item_id = params.parent_item_id.clone();
-    project_item_service::create_project_item(
+    // Read straight off the form rather than back out of the built input — a `NewItem`'s
+    // parent lives inside its kind payload, and this is the same expression the builder itself
+    // uses (see Stage 2's note in docs/typed-item-params-plan.md).
+    let parent_item_id = non_empty(&form.parent_item_id);
+    let new = create_params_from_form(&project_id, &form, tz);
+    project_item_service::create_item_typed(
         &repo,
         &projects,
         &teams,
         &reminders,
         &auth_user.user_id,
-        params,
+        new,
     )
     .await?;
     if redirect {
@@ -1937,21 +1945,26 @@ pub async fn create_project_tasks_batch(
         if name.is_empty() {
             continue;
         }
-        let params = crate::service::project_items::CreateProjectItemParams {
+        let new = NewItem {
             project_id: project_id.clone(),
             name: name.to_string(),
-            parent_item_id: parent_item_id.clone(),
-            item_type: Some(ItemKind::Task),
+            description: None,
             timezone_offset_minutes: Some(tz),
-            ..Default::default()
+            kind: NewItemKind::Task(NewTask {
+                anchor: match parent_item_id.clone() {
+                    Some(parent) => TaskAnchor::Parent(parent),
+                    None => TaskAnchor::None,
+                },
+                ..Default::default()
+            }),
         };
-        project_item_service::create_project_item(
+        project_item_service::create_item_typed(
             &repo,
             &projects,
             &teams,
             &reminders,
             &auth_user.user_id,
-            params,
+            new,
         )
         .await?;
     }
@@ -2172,32 +2185,22 @@ fn require_same_parent_subitems(items: &[Item]) -> Result<(), ItemError> {
     Ok(())
 }
 
-/// Round-trips every `UpdateProjectItemParams` field from `item` unchanged — the batch-actions
-/// counterpart of `reparent_params` below, used as a base each batch handler overlays just its
-/// own field(s) onto.
-fn identity_params(project_id: &str, item: &Item, tz: i32) -> UpdateProjectItemParams {
-    UpdateProjectItemParams {
+/// Wraps a `task` — normally `EditTask::from_item(item)` with the one field this batch action
+/// owns overlaid — in the envelope, round-tripped from `item` unchanged. The batch-actions
+/// counterpart of `reparent_edit` below.
+///
+/// The `Task` variant is right here because `load_batch_items` `require_task`s every item it
+/// returns; the old flat version passed `item_type: Some(item.kind())`, which looked
+/// kind-agnostic but never saw anything else.
+fn identity_edit(project_id: &str, item: &Item, tz: i32, task: EditTask) -> EditItem {
+    EditItem {
         project_id: project_id.to_string(),
         item_id: item.id.clone(),
         name: item.name.clone(),
         description: item.description.clone(),
-        due_date: item.due_date(),
-        scheduled_date: item.scheduled_date(),
-        scheduled_end_date: item.scheduled_end_date(),
-        complete: item.complete(),
-        has_due_time: Some(item.has_due_time()),
-        has_scheduled_time: Some(item.has_scheduled_time()),
-        has_end_time: Some(item.has_end_time()),
-        parent_item_id: item.parent_item_id(),
-        item_type: Some(item.kind()),
-        event_type: item.event_type(),
-        due_offset_days: item.due_offset_days(),
-        assigned_to_user_id: item.assigned_to_user_id(),
-        source_event_id: item.source_event_id(),
         timezone_offset_minutes: Some(tz),
-        points: item.points(),
-        priority: item.priority(),
         depends_on_item_ids: None,
+        kind: EditItemKind::Task(task),
     }
 }
 
@@ -2239,9 +2242,10 @@ pub async fn batch_set_priority_form(
     .await?;
     let new_priority = non_empty(&form.priority).and_then(|s| s.parse::<i32>().ok());
     for item in &items {
-        let mut params = identity_params(&project_id, item, tz);
-        params.priority = new_priority;
-        project_item_service::update_project_item(
+        let mut task = EditTask::from_item(item);
+        task.priority = new_priority;
+        let edit = identity_edit(&project_id, item, tz, task);
+        project_item_service::update_item_typed(
             &repo,
             &projects,
             &teams,
@@ -2250,7 +2254,7 @@ pub async fn batch_set_priority_form(
             &reminders,
             &item_dependencies,
             &auth_user.user_id,
-            params,
+            edit,
         )
         .await?;
     }
@@ -2308,36 +2312,34 @@ pub async fn batch_set_dates_form(
     let scheduled_date_field = non_empty(&form.scheduled_date);
     let scheduled_end_date_field = non_empty(&form.scheduled_end_date);
     for item in &items {
-        let mut params = identity_params(&project_id, item, tz);
+        let mut task = EditTask::from_item(item);
         if let Some(date) = due_date_field.clone() {
-            params.due_date = overlay_due_date(&Some(date), &form.due_time, tz, item.due_date());
-            params.has_due_time = Some(overlay_has_due_time(&form.due_time, item.has_due_time()));
+            task.schedule.due_date =
+                overlay_due_date(&Some(date), &form.due_time, tz, item.due_date());
+            task.schedule.has_due_time = overlay_has_due_time(&form.due_time, item.has_due_time());
         }
         if let Some(date) = scheduled_date_field.clone() {
-            params.scheduled_date = overlay_scheduled_date(
+            task.schedule.scheduled_date = overlay_scheduled_date(
                 &Some(date),
                 &form.scheduled_time,
                 tz,
                 item.scheduled_date(),
             );
-            params.has_scheduled_time = Some(overlay_has_due_time(
-                &form.scheduled_time,
-                item.has_scheduled_time(),
-            ));
+            task.schedule.has_scheduled_time =
+                overlay_has_due_time(&form.scheduled_time, item.has_scheduled_time());
         }
         if let Some(date) = scheduled_end_date_field.clone() {
-            params.scheduled_end_date = overlay_scheduled_end_date(
+            task.schedule.scheduled_end_date = overlay_scheduled_end_date(
                 &Some(date),
                 &form.scheduled_end_time,
                 tz,
                 item.scheduled_end_date(),
             );
-            params.has_end_time = Some(overlay_has_due_time(
-                &form.scheduled_end_time,
-                item.has_end_time(),
-            ));
+            task.schedule.has_end_time =
+                overlay_has_due_time(&form.scheduled_end_time, item.has_end_time());
         }
-        project_item_service::update_project_item(
+        let edit = identity_edit(&project_id, item, tz, task);
+        project_item_service::update_item_typed(
             &repo,
             &projects,
             &teams,
@@ -2346,7 +2348,7 @@ pub async fn batch_set_dates_form(
             &reminders,
             &item_dependencies,
             &auth_user.user_id,
-            params,
+            edit,
         )
         .await?;
     }
@@ -2395,9 +2397,10 @@ pub async fn batch_set_offset_form(
     require_same_parent_subitems(&items)?;
     let new_offset = non_empty(&form.due_offset_days).and_then(|s| parse_days_before_due(&s));
     for item in &items {
-        let mut params = identity_params(&project_id, item, tz);
-        params.due_offset_days = new_offset;
-        project_item_service::update_project_item(
+        let mut task = EditTask::from_item(item);
+        task.due_offset_days = new_offset;
+        let edit = identity_edit(&project_id, item, tz, task);
+        project_item_service::update_item_typed(
             &repo,
             &projects,
             &teams,
@@ -2406,7 +2409,7 @@ pub async fn batch_set_offset_form(
             &reminders,
             &item_dependencies,
             &auth_user.user_id,
-            params,
+            edit,
         )
         .await?;
     }
@@ -2463,9 +2466,10 @@ pub async fn batch_set_assignee_form(
     .await?;
     let new_assignee = non_empty(&form.assigned_to_user_id);
     for item in &items {
-        let mut params = identity_params(&project_id, item, tz);
-        params.assigned_to_user_id = new_assignee.clone();
-        project_item_service::update_project_item(
+        let mut task = EditTask::from_item(item);
+        task.assignment.assigned_to_user_id = new_assignee.clone();
+        let edit = identity_edit(&project_id, item, tz, task);
+        project_item_service::update_item_typed(
             &repo,
             &projects,
             &teams,
@@ -2474,7 +2478,7 @@ pub async fn batch_set_assignee_form(
             &reminders,
             &item_dependencies,
             &auth_user.user_id,
-            params,
+            edit,
         )
         .await?;
     }
@@ -2508,8 +2512,8 @@ pub async fn update_project_task_form(
     let current = require_task(current)?;
     let close = form.redirect.is_some();
     let row_view = super::normalize_row_view(view_q);
-    let params = update_params_from_form(&project_id, &item_id, &current, &form, tz);
-    project_item_service::update_project_item(
+    let edit = update_params_from_form(&project_id, &item_id, &current, &form, tz);
+    project_item_service::update_item_typed(
         &repo,
         &projects,
         &teams,
@@ -2518,7 +2522,7 @@ pub async fn update_project_task_form(
         &reminders,
         &item_dependencies,
         &auth_user.user_id,
-        params,
+        edit,
     )
     .await?;
 
@@ -2920,17 +2924,24 @@ pub async fn duplicate_project_task_form(
     Ok(hx_redirect(location))
 }
 
-/// Reparent-only update, every other field round-tripped from `current` — see
-/// `tasks::reparent_params`/`team_tasks::reparent_params` for the full offset-recompute
-/// rationale (identical here, just against `UpdateProjectItemParams`).
-fn reparent_params(
+/// Reparent-only update, every other field round-tripped from `current`.
+/// `project_simple_lists::reparent_params` is the sibling one kind over — it needs no offset
+/// recompute, since a Simple item can never carry an offset. (This comment used to point at
+/// `tasks`/`team_tasks`, two modules the Project abstraction already collapsed away — a stale
+/// reference fixed while rewriting the rest of it rather than carried forward.)
+///
+/// Fallible where the flat version was infallible, and for a reason `TaskAnchor` is what
+/// surfaced: moving an *event-linked* task under a parent would set both anchors, which
+/// `Item::validate()` has always rejected one layer down. `TaskAnchor` cannot express it at
+/// all, so the choice was to raise the same rejection here or to silently unlink the event.
+/// Rejecting is what the code already did; only the layer moved.
+fn reparent_edit(
     project_id: &str,
-    item_id: &str,
     current: &Item,
     new_parent_item_id: Option<String>,
     offset_anchor: Option<DateTime<Utc>>,
     tz: i32,
-) -> UpdateProjectItemParams {
+) -> Result<EditItem, ItemError> {
     let (due_date, due_offset_days) = match (current.due_offset_days(), &new_parent_item_id) {
         (None, _) => (current.due_date(), None),
         (Some(_), Some(_)) => (
@@ -2939,29 +2950,21 @@ fn reparent_params(
         ),
         (Some(_), None) => (current.due_date(), None),
     };
-    UpdateProjectItemParams {
-        project_id: project_id.to_string(),
-        item_id: item_id.to_string(),
-        name: current.name.clone(),
-        description: current.description.clone(),
-        due_date,
-        scheduled_date: current.scheduled_date(),
-        scheduled_end_date: current.scheduled_end_date(),
-        complete: current.complete(),
-        has_due_time: Some(current.has_due_time()),
-        has_scheduled_time: Some(current.has_scheduled_time()),
-        has_end_time: Some(current.has_end_time()),
-        parent_item_id: new_parent_item_id,
-        item_type: Some(current.kind()),
-        event_type: current.event_type(),
-        due_offset_days,
-        assigned_to_user_id: current.assigned_to_user_id(),
-        source_event_id: current.source_event_id(),
-        timezone_offset_minutes: Some(tz),
-        points: current.points(),
-        priority: current.priority(),
-        depends_on_item_ids: None,
-    }
+    let anchor = match (new_parent_item_id, current.source_event_id()) {
+        (Some(_), Some(_)) => {
+            return Err(ItemError::Invalid(
+                "an item cannot both have a parent and reference an event".to_string(),
+            ));
+        }
+        (Some(parent), None) => TaskAnchor::Parent(parent),
+        (None, Some(event)) => TaskAnchor::SourceEvent(event),
+        (None, None) => TaskAnchor::None,
+    };
+    let mut task = EditTask::from_item(current);
+    task.anchor = anchor;
+    task.schedule.due_date = due_date;
+    task.due_offset_days = due_offset_days;
+    Ok(identity_edit(project_id, current, tz, task))
 }
 
 fn hx_redirect(location: String) -> Response {
@@ -3067,15 +3070,8 @@ pub async fn move_project_task_form(
             target.offset_anchor,
         )
     };
-    let params = reparent_params(
-        &project_id,
-        &item_id,
-        &current,
-        new_parent_item_id,
-        offset_anchor,
-        tz,
-    );
-    project_item_service::update_project_item(
+    let edit = reparent_edit(&project_id, &current, new_parent_item_id, offset_anchor, tz)?;
+    project_item_service::update_item_typed(
         &repo,
         &projects,
         &teams,
@@ -3084,7 +3080,7 @@ pub async fn move_project_task_form(
         &reminders,
         &item_dependencies,
         &auth_user.user_id,
-        params,
+        edit,
     )
     .await?;
     Ok(hx_redirect(project_tasks_list_url(&project_id)))
@@ -3391,5 +3387,72 @@ mod parse_virtual_row_id_tests {
         assert_eq!(parse_virtual_row_id("a:b:1699999999"), None);
         // And a `child:` id still needs a real timestamp in its own last segment.
         assert_eq!(parse_virtual_row_id("child:1699999999"), None);
+    }
+}
+
+#[cfg(test)]
+mod reparent_edit_tests {
+    use super::*;
+    use crate::domain::item::{ItemType, TaskItem};
+
+    fn task(f: impl FnOnce(&mut TaskItem)) -> Item {
+        let mut t = TaskItem::default();
+        f(&mut t);
+        Item {
+            id: "i1".to_string(),
+            project_id: Some("proj1".to_string()),
+            name: "n".to_string(),
+            item_type: ItemType::Task(t),
+            ..Item::default()
+        }
+    }
+
+    #[test]
+    fn subordinating_a_plain_task_sets_its_new_parent() {
+        let edit = reparent_edit(
+            "proj1",
+            &task(|_| {}),
+            Some("newparent".to_string()),
+            None,
+            0,
+        )
+        .expect("a plain task has no event link to conflict with");
+        let p: crate::service::project_items::UpdateProjectItemParams = edit.into();
+        assert_eq!(p.parent_item_id.as_deref(), Some("newparent"));
+        assert_eq!(p.source_event_id, None);
+    }
+
+    /// Promoting an event-linked task to top level keeps the link — `TaskAnchor` carries the
+    /// source event forward exactly as the two separate flat fields used to.
+    #[test]
+    fn promoting_an_event_linked_task_keeps_its_source_event() {
+        let edit = reparent_edit(
+            "proj1",
+            &task(|t| t.source_event_id = Some("ev1".to_string())),
+            None,
+            None,
+            0,
+        )
+        .expect("promotion to top level conflicts with nothing");
+        let p: crate::service::project_items::UpdateProjectItemParams = edit.into();
+        assert_eq!(p.parent_item_id, None);
+        assert_eq!(p.source_event_id.as_deref(), Some("ev1"));
+    }
+
+    /// The rejection `Item::validate()` used to raise one layer down, now raised where the
+    /// impossible request would have been built. An event-linked task is top-level (the two
+    /// anchors are mutually exclusive), so it appears in the Move dialog's sibling list and
+    /// this is genuinely reachable, not a theoretical guard.
+    #[test]
+    fn subordinating_an_event_linked_task_is_rejected() {
+        let err = reparent_edit(
+            "proj1",
+            &task(|t| t.source_event_id = Some("ev1".to_string())),
+            Some("newparent".to_string()),
+            None,
+            0,
+        )
+        .expect_err("a task cannot both have a parent and reference an event");
+        assert!(matches!(err, ItemError::Invalid(msg) if msg.contains("reference an event")));
     }
 }

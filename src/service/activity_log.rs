@@ -1,7 +1,8 @@
 use crate::domain::activity_log::ActivityLogEntry;
+use crate::service::item_input::{EditItem, EditItemKind, EditTask};
 use crate::service::item_series;
 use crate::service::items::ItemError;
-use crate::service::project_items::{self, UpdateProjectItemParams};
+use crate::service::project_items;
 use crate::service::projects::require_project_member;
 use crate::service::team_items::require_active_member;
 use crate::storage::sqlite::{
@@ -104,7 +105,7 @@ async fn reopen_item_if_still_complete(
     if !item.complete() {
         return Ok(());
     }
-    project_items::update_project_item(
+    project_items::update_item_typed(
         repo,
         projects,
         teams,
@@ -113,28 +114,20 @@ async fn reopen_item_if_still_complete(
         reminders,
         item_dependencies,
         requester_user_id,
-        UpdateProjectItemParams {
+        EditItem {
             project_id: project_id.to_string(),
             item_id: item_id.to_string(),
             name: item.name.clone(),
             description: item.description.clone(),
-            due_date: item.due_date(),
-            scheduled_date: item.scheduled_date(),
-            scheduled_end_date: item.scheduled_end_date(),
-            complete: false,
-            has_due_time: Some(item.has_due_time()),
-            has_scheduled_time: Some(item.has_scheduled_time()),
-            has_end_time: Some(item.has_end_time()),
-            parent_item_id: item.parent_item_id(),
-            item_type: Some(item.kind()),
-            event_type: item.event_type(),
-            due_offset_days: item.due_offset_days(),
-            assigned_to_user_id: item.assigned_to_user_id(),
-            source_event_id: item.source_event_id(),
             timezone_offset_minutes: Some(tz_offset_minutes),
-            points: item.points(),
-            priority: item.priority(),
             depends_on_item_ids: None,
+            // The `complete()` check above is what establishes this is a Task: `Item::complete()`
+            // reads through `ItemType::Task(t) => t.complete` and returns `false` for every
+            // other kind, so nothing else can reach here.
+            kind: EditItemKind::Task(EditTask {
+                complete: false,
+                ..EditTask::from_item(&item)
+            }),
         },
     )
     .await

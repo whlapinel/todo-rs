@@ -1,8 +1,11 @@
 pub mod handlers;
 pub mod templates;
 
-use crate::domain::item::{Item, ItemKind};
+use crate::domain::item::{Item, ItemKind, Schedule, TeamAssignment};
 use crate::service::error::ItemError;
+use crate::service::item_input::{
+    EditItem, EditItemKind, EditTask, NewItem, NewItemKind, NewTask, TaskAnchor,
+};
 use crate::service::item_series::{
     self as item_series_service, ProjectOccurrence, SeriesChildOccurrenceView,
 };
@@ -326,115 +329,147 @@ fn overlay_scheduled_end_date(
     }
 }
 
+/// Every field a Task cannot carry — `event_type` above all — used to be an explicit `None`
+/// here. `NewTask` has nowhere to put them, so they are gone rather than defaulted (see
+/// `docs/typed-item-params-plan.md`).
 pub(crate) fn create_params_from_form(
     project_id: &str,
     form: &ProjectTaskForm,
     tz: i32,
-) -> crate::service::project_items::CreateProjectItemParams {
-    crate::service::project_items::CreateProjectItemParams {
+) -> NewItem {
+    NewItem {
         project_id: project_id.to_string(),
         name: form.name.clone().unwrap_or_default(),
         description: non_empty(&form.description),
-        due_date: overlay_due_date(&form.due_date, &form.due_time, tz, None),
-        scheduled_date: overlay_scheduled_date(
-            &form.scheduled_date,
-            &form.scheduled_time,
-            tz,
-            None,
-        ),
-        scheduled_end_date: overlay_scheduled_end_date(
-            &form.scheduled_end_date,
-            &form.scheduled_end_time,
-            tz,
-            None,
-        ),
-        complete: form.complete.as_deref().map(|s| s == "true"),
-        has_due_time: form.due_time.as_deref().map(|t| !t.trim().is_empty()),
-        has_scheduled_time: form.scheduled_time.as_deref().map(|t| !t.trim().is_empty()),
-        has_end_time: form
-            .scheduled_end_time
-            .as_deref()
-            .map(|t| !t.trim().is_empty()),
-        parent_item_id: non_empty(&form.parent_item_id),
-        item_type: Some(ItemKind::Task),
-        due_offset_days: form
-            .due_offset_days
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .and_then(parse_days_before_due),
-        assigned_to_user_id: non_empty(&form.assigned_to_user_id),
-        points: form
-            .points
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .and_then(|s| s.parse().ok()),
-        priority: form
-            .priority
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .and_then(|s| s.parse().ok()),
         timezone_offset_minutes: Some(tz),
-        ..Default::default()
+        kind: NewItemKind::Task(NewTask {
+            anchor: match non_empty(&form.parent_item_id) {
+                Some(parent) => TaskAnchor::Parent(parent),
+                None => TaskAnchor::None,
+            },
+            schedule: Schedule {
+                due_date: overlay_due_date(&form.due_date, &form.due_time, tz, None),
+                has_due_time: has_time(&form.due_time),
+                scheduled_date: overlay_scheduled_date(
+                    &form.scheduled_date,
+                    &form.scheduled_time,
+                    tz,
+                    None,
+                ),
+                has_scheduled_time: has_time(&form.scheduled_time),
+                scheduled_end_date: overlay_scheduled_end_date(
+                    &form.scheduled_end_date,
+                    &form.scheduled_end_time,
+                    tz,
+                    None,
+                ),
+                has_end_time: has_time(&form.scheduled_end_time),
+            },
+            due_offset_days: form
+                .due_offset_days
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .and_then(parse_days_before_due),
+            priority: form
+                .priority
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .and_then(|s| s.parse().ok()),
+            complete: form.complete.as_deref() == Some("true"),
+            assignment: TeamAssignment {
+                assigned_to_user_id: non_empty(&form.assigned_to_user_id),
+                points: form
+                    .points
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .and_then(|s| s.parse().ok()),
+            },
+            series_id: None,
+        }),
     }
 }
 
+/// `Some(false)` and `None` are the same thing to every `has_*_time` consumer (each reads it
+/// through `unwrap_or(false)` in `service::items`/`team_items`), so collapsing the old
+/// `Option<bool>` into `Schedule`'s plain `bool` loses no state — see
+/// `project_events::has_time`, which this mirrors. The same holds for `complete` on the create
+/// path, whose `Option<bool>` was read through the identical `unwrap_or(false)`.
+fn has_time(form_time: &Option<String>) -> bool {
+    form_time.as_deref().is_some_and(|t| !t.trim().is_empty())
+}
+
+/// `event_type: current.event_type()` used to be round-tripped here to satisfy the
+/// direct-overwrite convention. A Task has no `event_type` slot to round-trip *from* — the
+/// call always returned `None` — so `EditTask` has no such field and the line is gone.
 pub(crate) fn update_params_from_form(
     project_id: &str,
     item_id: &str,
     current: &Item,
     form: &ProjectTaskForm,
     tz: i32,
-) -> crate::service::project_items::UpdateProjectItemParams {
-    crate::service::project_items::UpdateProjectItemParams {
+) -> EditItem {
+    EditItem {
         project_id: project_id.to_string(),
         item_id: item_id.to_string(),
         name: overlay_required_str(&form.name, &current.name),
         description: overlay_str(&form.description, current.description.clone()),
-        due_date: overlay_due_date(&form.due_date, &form.due_time, tz, current.due_date()),
-        scheduled_date: overlay_scheduled_date(
-            &form.scheduled_date,
-            &form.scheduled_time,
-            tz,
-            current.scheduled_date(),
-        ),
-        scheduled_end_date: overlay_scheduled_end_date(
-            &form.scheduled_end_date,
-            &form.scheduled_end_time,
-            tz,
-            current.scheduled_end_date(),
-        ),
-        complete: overlay_bool(&form.complete, current.complete()),
-        has_due_time: Some(overlay_has_due_time(&form.due_time, current.has_due_time())),
-        has_scheduled_time: Some(overlay_has_due_time(
-            &form.scheduled_time,
-            current.has_scheduled_time(),
-        )),
-        has_end_time: Some(overlay_has_due_time(
-            &form.scheduled_end_time,
-            current.has_end_time(),
-        )),
-        parent_item_id: current.parent_item_id(),
-        item_type: Some(ItemKind::Task),
-        due_offset_days: overlay_days_before_due(&form.due_offset_days, current.due_offset_days()),
-        assigned_to_user_id: overlay_str(&form.assigned_to_user_id, current.assigned_to_user_id()),
-        source_event_id: current.source_event_id(),
         timezone_offset_minutes: Some(tz),
-        // No points input renders on a non-admin's/personal-project's form — `overlay_i32`
-        // falls back to `current.points` when absent, mirroring `team_tasks.rs`'s identical
-        // comment: a plain edit here can't silently wipe it, and the service layer's own
-        // admin gate is what actually decides whether a *changed* value is honored.
-        points: overlay_i32(&form.points, current.points()),
-        priority: overlay_i32(&form.priority, current.priority()),
-        event_type: current.event_type(),
         depends_on_item_ids: form.depends_on_item_ids.as_deref().map(|s| {
             s.split(',')
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
                 .map(str::to_string)
                 .collect()
+        }),
+        kind: EditItemKind::Task(EditTask {
+            // Neither the parent nor the source event is editable through this form — both are
+            // simply carried forward, which `TaskAnchor::from_item` does in one step where the
+            // two fields used to be round-tripped separately and could disagree.
+            anchor: TaskAnchor::from_item(current),
+            schedule: Schedule {
+                due_date: overlay_due_date(&form.due_date, &form.due_time, tz, current.due_date()),
+                has_due_time: overlay_has_due_time(&form.due_time, current.has_due_time()),
+                scheduled_date: overlay_scheduled_date(
+                    &form.scheduled_date,
+                    &form.scheduled_time,
+                    tz,
+                    current.scheduled_date(),
+                ),
+                has_scheduled_time: overlay_has_due_time(
+                    &form.scheduled_time,
+                    current.has_scheduled_time(),
+                ),
+                scheduled_end_date: overlay_scheduled_end_date(
+                    &form.scheduled_end_date,
+                    &form.scheduled_end_time,
+                    tz,
+                    current.scheduled_end_date(),
+                ),
+                has_end_time: overlay_has_due_time(
+                    &form.scheduled_end_time,
+                    current.has_end_time(),
+                ),
+            },
+            due_offset_days: overlay_days_before_due(
+                &form.due_offset_days,
+                current.due_offset_days(),
+            ),
+            priority: overlay_i32(&form.priority, current.priority()),
+            complete: overlay_bool(&form.complete, current.complete()),
+            assignment: TeamAssignment {
+                assigned_to_user_id: overlay_str(
+                    &form.assigned_to_user_id,
+                    current.assigned_to_user_id(),
+                ),
+                // No points input renders on a non-admin's/personal-project's form — `overlay_i32`
+                // falls back to `current.points` when absent, mirroring `team_tasks.rs`'s identical
+                // comment: a plain edit here can't silently wipe it, and the service layer's own
+                // admin gate is what actually decides whether a *changed* value is honored.
+                points: overlay_i32(&form.points, current.points()),
+            },
         }),
     }
 }

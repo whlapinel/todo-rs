@@ -20,7 +20,7 @@
 //! `Item` directly rather than going through this funnel, and `items::build_item_type`
 //! already hardcodes both to `None`.
 
-use crate::domain::item::{ItemKind, Schedule, TeamAssignment};
+use crate::domain::item::{Item, ItemKind, Schedule, TeamAssignment};
 use crate::service::project_items::{CreateProjectItemParams, UpdateProjectItemParams};
 
 /// A Task's anchor for offset-driven scheduling. Exactly one source by construction —
@@ -30,14 +30,22 @@ use crate::service::project_items::{CreateProjectItemParams, UpdateProjectItemPa
 pub enum TaskAnchor {
     #[default]
     None,
-    /// Transient `allow`: the Task screens (Stage 5 of docs/typed-item-params-plan.md) are the
-    /// only non-test constructors of this variant. Remove the attribute with that stage.
-    #[allow(dead_code)]
     Parent(String),
     SourceEvent(String),
 }
 
 impl TaskAnchor {
+    /// Reads an existing item's anchor back off it. `Item::validate()` guarantees at most one
+    /// of the two is set, so the `parent_item_id` arm winning here is a tiebreak that cannot
+    /// fire — it is the type, not this ordering, that makes "both" unrepresentable.
+    pub fn from_item(item: &Item) -> Self {
+        match (item.parent_item_id(), item.source_event_id()) {
+            (Some(parent), _) => TaskAnchor::Parent(parent),
+            (None, Some(event)) => TaskAnchor::SourceEvent(event),
+            (None, None) => TaskAnchor::None,
+        }
+    }
+
     fn parent_item_id(&self) -> Option<String> {
         match self {
             TaskAnchor::Parent(id) => Some(id.clone()),
@@ -206,6 +214,41 @@ pub struct EditTask {
     pub assignment: TeamAssignment,
 }
 
+impl EditTask {
+    /// Every Task-carried field read straight back off an existing item.
+    ///
+    /// This is the direct-overwrite convention (root CLAUDE.md's Events section: `priority`,
+    /// `event_type` and `due_offset_days` are *cleared* by omission, so a caller must
+    /// round-trip whatever it did not mean to touch) written once, for the handlers that only
+    /// mean to change one field — a completion toggle, a batch priority set, a reparent. Each
+    /// of those used to re-transcribe nineteen fields by hand, where forgetting one is a silent
+    /// data loss rather than a compile error.
+    ///
+    /// Callers must have established the item is a Task first (`require_task`, or an already
+    /// checked `complete()`): every field here reads through `Item`'s `Option`-returning
+    /// delegation, so a non-Task would come back blank rather than erroring.
+    pub fn from_item(item: &Item) -> Self {
+        EditTask {
+            anchor: TaskAnchor::from_item(item),
+            schedule: Schedule {
+                due_date: item.due_date(),
+                has_due_time: item.has_due_time(),
+                scheduled_date: item.scheduled_date(),
+                has_scheduled_time: item.has_scheduled_time(),
+                scheduled_end_date: item.scheduled_end_date(),
+                has_end_time: item.has_end_time(),
+            },
+            due_offset_days: item.due_offset_days(),
+            priority: item.priority(),
+            complete: item.complete(),
+            assignment: TeamAssignment {
+                assigned_to_user_id: item.assigned_to_user_id(),
+                points: item.points(),
+            },
+        }
+    }
+}
+
 /// No `complete` field — `Item::validate()`'s "events cannot be marked complete" rule,
 /// made unrepresentable. Same for `EditSimple`/`EditTemplate` below.
 #[derive(Debug, Default)]
@@ -231,9 +274,6 @@ pub struct EditTemplate {
 
 #[derive(Debug)]
 pub enum EditItemKind {
-    /// Transient `allow`: Stage 5 (Task) of docs/typed-item-params-plan.md is what gives
-    /// this variant a non-test constructor. Remove the attribute with that stage.
-    #[allow(dead_code)]
     Task(EditTask),
     Event(EditEvent),
     Simple(EditSimple),
@@ -330,6 +370,7 @@ impl From<EditItem> for UpdateProjectItemParams {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::item::{ItemType, Recurrence, TaskItem};
     use chrono::TimeZone;
 
     fn dt(secs: i64) -> chrono::DateTime<chrono::Utc> {
@@ -547,5 +588,91 @@ mod tests {
         edit.depends_on_item_ids = Some(vec![]);
         let p: UpdateProjectItemParams = edit.into();
         assert_eq!(p.depends_on_item_ids, Some(vec![]));
+    }
+
+    fn task_item(f: impl FnOnce(&mut TaskItem)) -> Item {
+        let mut task = TaskItem {
+            schedule: schedule(),
+            recurrence: Recurrence::default(),
+            ..Default::default()
+        };
+        f(&mut task);
+        Item {
+            id: "i1".into(),
+            name: "n".into(),
+            description: Some("d".into()),
+            item_type: ItemType::Task(task),
+            ..Item::default()
+        }
+    }
+
+    #[test]
+    fn task_anchor_from_item_reads_back_whichever_anchor_is_set() {
+        assert_eq!(
+            TaskAnchor::from_item(&task_item(|t| t.parent_item_id = Some("p".into()))),
+            TaskAnchor::Parent("p".into())
+        );
+        assert_eq!(
+            TaskAnchor::from_item(&task_item(|t| t.source_event_id = Some("ev".into()))),
+            TaskAnchor::SourceEvent("ev".into())
+        );
+        assert_eq!(TaskAnchor::from_item(&task_item(|_| {})), TaskAnchor::None);
+    }
+
+    /// The round-trip the completion toggles, the batch actions and the reparent all depend on:
+    /// every field a plain edit did not mean to touch must survive, since omission *clears*
+    /// (root CLAUDE.md's Events section).
+    #[test]
+    fn edit_task_from_item_round_trips_every_task_field() {
+        let item = task_item(|t| {
+            t.parent_item_id = Some("p".into());
+            t.priority = Some(2);
+            t.complete = true;
+            t.recurrence.due_offset_days = Some(-3);
+            t.team_assignment = Some(TeamAssignment {
+                assigned_to_user_id: Some("u1".into()),
+                points: Some(5),
+            });
+        });
+
+        let p: UpdateProjectItemParams = EditItem {
+            project_id: "p1".into(),
+            item_id: "i1".into(),
+            name: item.name.clone(),
+            description: item.description.clone(),
+            timezone_offset_minutes: Some(-300),
+            depends_on_item_ids: None,
+            kind: EditItemKind::Task(EditTask::from_item(&item)),
+        }
+        .into();
+
+        assert_eq!(p.item_type, Some(ItemKind::Task));
+        assert_eq!(p.parent_item_id.as_deref(), Some("p"));
+        assert_eq!(p.source_event_id, None);
+        assert_eq!(p.priority, Some(2));
+        assert!(p.complete);
+        assert_eq!(p.due_offset_days, Some(-3));
+        assert_eq!(p.assigned_to_user_id.as_deref(), Some("u1"));
+        assert_eq!(p.points, Some(5));
+        assert_eq!(p.due_date, Some(dt(1_000)));
+        assert_eq!(p.has_due_time, Some(true));
+        assert_eq!(p.scheduled_date, Some(dt(500)));
+        assert_eq!(p.has_scheduled_time, Some(true));
+        assert_eq!(p.scheduled_end_date, Some(dt(900)));
+        assert_eq!(p.has_end_time, Some(false));
+    }
+
+    /// A completion toggle is `from_item` plus one overlaid field — nothing else may move.
+    #[test]
+    fn overlaying_one_field_leaves_the_rest_of_the_round_trip_intact() {
+        let item = task_item(|t| {
+            t.complete = false;
+            t.priority = Some(4);
+        });
+        let mut task = EditTask::from_item(&item);
+        task.complete = true;
+        assert!(task.complete);
+        assert_eq!(task.priority, Some(4));
+        assert_eq!(task.schedule.due_date, Some(dt(1_000)));
     }
 }
