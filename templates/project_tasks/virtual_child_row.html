@@ -12,7 +12,9 @@
     <div class="contents"{% if treegrid %} role="gridcell"{% endif %}>
     <span class="shrink-0 size-4"></span>
     </div>
-    <div class="contents"{% if treegrid %} role="gridcell"{% endif %}>
+    <!-- Real nested flex, not `display: contents` — see components/row.html's identical
+         comment on its own name+badges cell. -->
+    <div class="flex min-w-0 flex-1 items-center gap-x-3"{% if treegrid %} role="gridcell"{% endif %}>
     <!-- Plain text, not a link — same treegrid rule the parent row follows (a click selects
          the row; Details lives in the row-actions menu). -->
     <span class="min-w-0 flex-1 truncate text-gray-900 dark:text-white">{{ name }}</span>

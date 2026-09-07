@@ -30,7 +30,15 @@
             class="shrink-0 size-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-600 dark:border-white/20 dark:bg-white/5" />
         </div>
         {% endif %}
-        <div class="contents"{% if treegrid %} role="gridcell"{% endif %}>
+        <!-- A real nested flex container, not `display: contents` — this cell mixes a
+             flex-growing/truncating child (the name) with several shrink-0 badges, and some
+             mobile browsers mis-size a `display: contents` box's children in that situation
+             (the growing child renders at its content width instead of filling the row,
+             leaving the "⋮" button stranded right after the name instead of at the row's end
+             — see the mobile row-actions-button alignment entry in
+             docs/issues_and_features.md). `display: contents` is safe for the single-child
+             wrappers elsewhere in this file since there's no sizing to get wrong there. -->
+        <div class="flex min-w-0 flex-1 items-center gap-x-3"{% if treegrid %} role="gridcell"{% endif %}>
         {% if let Some(badge) = type_badge %}
         <span
             class="shrink-0 inline-flex size-4 items-center justify-center rounded-full bg-gray-200 text-[10px] font-semibold text-gray-600 dark:bg-white/10 dark:text-gray-300">{{

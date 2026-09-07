@@ -10,7 +10,10 @@
 <li id="item-{{ row_id }}" class="py-2" role="row" aria-level="1"{% if children_html.is_some() %} aria-expanded="false"{% endif %}>
   <div class="flex items-center gap-x-3">
     {% if is_skipped %}
-    <div class="contents" role="gridcell">
+    <!-- Real nested flex, not `display: contents` — see components/row.html's identical
+         comment on its own name+badges cell for why a mixed flex-growing/shrink-0 cell can't
+         safely rely on `display: contents` for sizing. -->
+    <div class="flex min-w-0 flex-1 items-center gap-x-3" role="gridcell">
     <span class="shrink-0 size-4"></span>
     <span class="min-w-0 flex-1 truncate line-through text-gray-400 dark:text-gray-500">{{ name }}</span>
     <span class="shrink-0 text-[10px] uppercase tracking-wide font-semibold text-gray-400 dark:text-gray-500">Skipped</span>
@@ -31,7 +34,9 @@
     <span class="shrink-0 size-4"></span>
     {% endif %}
     </div>
-    <div class="contents" role="gridcell">
+    <!-- Real nested flex, not `display: contents` — see components/row.html's identical
+         comment on its own name+badges cell. -->
+    <div class="flex min-w-0 flex-1 items-center gap-x-3" role="gridcell">
     <!-- Plain text, not a link — matches components/row.html's identical treegrid change (the
          name no longer opens anything on click since a click now selects the row instead); the
          materialize dialog is still reachable via this row's own row-actions menu's "Details"
