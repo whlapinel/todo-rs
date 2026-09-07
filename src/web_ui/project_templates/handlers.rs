@@ -388,7 +388,7 @@ pub async fn create_project_template_child_form(
             due_offset_days: parse_offset(&form.due_offset_days),
         }),
     };
-    project_item_service::create_item_typed(
+    project_item_service::create_project_item(
         &repo,
         &projects,
         &teams,
@@ -517,7 +517,7 @@ pub async fn update_project_template_child_form(
             due_offset_days: parse_offset(&form.due_offset_days),
         }),
     };
-    project_item_service::update_item_typed(
+    project_item_service::update_project_item(
         &repo,
         &projects,
         &teams,
@@ -628,9 +628,9 @@ pub async fn use_project_template_form(
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| template.name.clone());
 
-    // Dropped by `create_project_item` on the personal branch (`CreateItemParams` has no
-    // slot for it) — harmless to always pass through, same as `project_tasks`'s own
-    // create/update paths do for `assignedToUserId`/`points`.
+    // Dropped by `items::create_item` on the personal branch, which passes `None` for the
+    // assignment rather than reading `NewTask::assignment` — harmless to always pass through,
+    // same as `project_tasks`'s own create/update paths do for `assignedToUserId`/`points`.
     let assigned_to_user_id = form.assigned_to_user_id.filter(|s| !s.is_empty());
 
     let new = NewItem {
@@ -650,7 +650,7 @@ pub async fn use_project_template_form(
             ..Default::default()
         }),
     };
-    let new_item_id = project_item_service::create_item_typed(
+    let new_item_id = project_item_service::create_project_item(
         &repo,
         &projects,
         &teams,

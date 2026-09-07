@@ -1,28 +1,34 @@
 //! Kind-typed inputs for the item create/update funnel.
 //!
 //! These are the input counterpart of `domain::item::ItemType` — one variant per
-//! `ItemKind`, each carrying only the fields that kind can legitimately have. They exist
-//! because `CreateProjectItemParams`/`UpdateProjectItemParams` are flat, kind-agnostic
-//! property bags, and only *one* of their 21/26 construction sites
-//! (`json_api::project_items`) actually receives untyped input. Every other caller knows
-//! the kind statically and was spelling out fields that its kind can never carry — where
-//! a wrong one is silently dropped rather than rejected. See
-//! `docs/typed-item-params-plan.md` for the full rationale and staging.
+//! `ItemKind`, each carrying only the fields that kind can legitimately have. Until Stage 8
+//! of `docs/typed-item-params-plan.md` they sat in front of a flat, kind-agnostic
+//! `CreateProjectItemParams`/`UpdateProjectItemParams` pair and converted into it; those
+//! structs are gone now, and these are what `service::project_items`, `service::items` and
+//! `service::team_items` actually take.
+//!
+//! The problem they exist to close: only *one* of the funnel's ~21 construction sites
+//! (`json_api::project_items`) ever receives untyped input. Every other caller knows its kind
+//! statically and was spelling out fields that kind can never carry — where a wrong one was
+//! silently dropped rather than rejected. Now there is nowhere to put it, and at the two
+//! places where the kind genuinely is data, it is rejected (see "the untyped boundary" below).
 //!
 //! Deliberately reuses the domain's own `Schedule` and `TeamAssignment` structs rather
 //! than defining input twins: the shapes are identical, and mirroring them exactly is the
-//! point. `Schedule`'s `has_*_time` flags are plain `bool` here where the flat params use
+//! point. `Schedule`'s `has_*_time` flags are plain `bool` here where the flat params used
 //! `Option<bool>` — the flat params only ever `unwrap_or(false)` them, so there was never
 //! a third state to represent.
 //!
 //! `google_event_id`/`calendar_subscription_id` deliberately have no input field on
 //! `NewEvent`, matching today: `service::calendar_sync` writes them by constructing an
-//! `Item` directly rather than going through this funnel, and `items::build_item_type`
-//! already hardcodes both to `None`.
+//! `Item` directly rather than going through this funnel, and `build_item_type` below
+//! hardcodes both to `None`.
 
-use crate::domain::item::{Item, ItemKind, Schedule, TeamAssignment};
+use crate::domain::item::{
+    EventItem, Item, ItemKind, ItemType, Recurrence, Schedule, SimpleItem, TaskItem,
+    TeamAssignment, TemplateItem,
+};
 use crate::service::error::ItemError;
-use crate::service::project_items::{CreateProjectItemParams, UpdateProjectItemParams};
 
 /// A Task's anchor for offset-driven scheduling. Exactly one source by construction —
 /// this is `Item::validate()`'s "an item cannot both have a parent and reference an event"
@@ -130,6 +136,65 @@ impl NewItemKind {
             NewItemKind::Template(_) => ItemKind::Template,
         }
     }
+
+    /// The would-be parent, wherever this kind keeps one. An Event has none structurally,
+    /// and a Task keeps its parent inside `TaskAnchor` alongside the `sourceEventId` it is
+    /// mutually exclusive with — so "read the parent" is a per-variant question rather than
+    /// one shared field, and the create/update paths ask it here to resolve the parent's own
+    /// kind before building anything.
+    pub(crate) fn parent_item_id(&self) -> Option<String> {
+        match self {
+            NewItemKind::Task(t) => t.anchor.parent_item_id(),
+            NewItemKind::Event(_) => None,
+            NewItemKind::Simple(s) => s.parent_item_id.clone(),
+            NewItemKind::Template(t) => Some(t.parent_item_id.clone()),
+        }
+    }
+
+    /// Mirrors `Item::complete()`, which reads `false` for every kind but `Task` for the
+    /// same structural reason: no other payload has the field.
+    pub(crate) fn complete(&self) -> bool {
+        match self {
+            NewItemKind::Task(t) => t.complete,
+            _ => false,
+        }
+    }
+
+    /// `None` for `Simple`, which has no dates at all — which is also why the
+    /// scheduled-window ordering check its callers run can never fire on one.
+    pub(crate) fn schedule(&self) -> Option<&Schedule> {
+        match self {
+            NewItemKind::Task(t) => Some(&t.schedule),
+            NewItemKind::Event(e) => Some(&e.schedule),
+            NewItemKind::Simple(_) => None,
+            NewItemKind::Template(t) => Some(&t.schedule),
+        }
+    }
+
+    /// A template's child subtree is itself Template-typed (root CLAUDE.md's Domain Models
+    /// section), so any child of a Template is rewritten to `Template` regardless of what was
+    /// asked for. `parent_item_id` is taken as an argument rather than read back off `self`
+    /// because this only ever fires when the caller has already resolved a parent's kind, so
+    /// the id is known to exist — which is what lets `NewTemplate` keep a non-optional parent.
+    ///
+    /// Everything a `TemplateItem` has no slot for is dropped here — a Task's
+    /// `priority`/`complete`/`assignment`/`sourceEventId`/`series_id`. That is unchanged from
+    /// the flat path, where the coercion produced an `ItemKind::Template` and the old
+    /// `build_item_type`'s `Template` arm simply never read those fields.
+    pub(crate) fn coerce_to_template(self, parent_item_id: String) -> Self {
+        let (schedule, event_type, due_offset_days) = match self {
+            NewItemKind::Task(t) => (t.schedule, None, t.due_offset_days),
+            NewItemKind::Event(e) => (e.schedule, e.event_type, e.due_offset_days),
+            NewItemKind::Simple(_) => (Schedule::default(), None, None),
+            NewItemKind::Template(t) => (t.schedule, t.event_type, t.due_offset_days),
+        };
+        NewItemKind::Template(NewTemplate {
+            parent_item_id,
+            schedule,
+            event_type,
+            due_offset_days,
+        })
+    }
 }
 
 /// The envelope every kind carries, mirroring `domain::item::Item`'s own.
@@ -142,63 +207,63 @@ pub struct NewItem {
     pub kind: NewItemKind,
 }
 
-impl From<NewItem> for CreateProjectItemParams {
-    fn from(new: NewItem) -> Self {
-        let base = CreateProjectItemParams {
-            project_id: new.project_id,
-            name: new.name,
-            description: new.description,
-            timezone_offset_minutes: new.timezone_offset_minutes,
-            item_type: Some(new.kind.kind()),
-            ..Default::default()
-        };
-        match new.kind {
-            NewItemKind::Task(t) => CreateProjectItemParams {
-                due_date: t.schedule.due_date,
-                has_due_time: Some(t.schedule.has_due_time),
-                scheduled_date: t.schedule.scheduled_date,
-                has_scheduled_time: Some(t.schedule.has_scheduled_time),
-                scheduled_end_date: t.schedule.scheduled_end_date,
-                has_end_time: Some(t.schedule.has_end_time),
-                parent_item_id: t.anchor.parent_item_id(),
-                source_event_id: t.anchor.source_event_id(),
-                due_offset_days: t.due_offset_days,
-                priority: t.priority,
-                complete: Some(t.complete),
-                assigned_to_user_id: t.assignment.assigned_to_user_id,
-                points: t.assignment.points,
-                series_id: t.series_id,
-                ..base
-            },
-            NewItemKind::Event(e) => CreateProjectItemParams {
-                due_date: e.schedule.due_date,
-                has_due_time: Some(e.schedule.has_due_time),
-                scheduled_date: e.schedule.scheduled_date,
-                has_scheduled_time: Some(e.schedule.has_scheduled_time),
-                scheduled_end_date: e.schedule.scheduled_end_date,
-                has_end_time: Some(e.schedule.has_end_time),
-                event_type: e.event_type,
-                due_offset_days: e.due_offset_days,
-                series_id: e.series_id,
-                ..base
-            },
-            NewItemKind::Simple(s) => CreateProjectItemParams {
-                parent_item_id: s.parent_item_id,
-                ..base
-            },
-            NewItemKind::Template(t) => CreateProjectItemParams {
-                due_date: t.schedule.due_date,
-                has_due_time: Some(t.schedule.has_due_time),
-                scheduled_date: t.schedule.scheduled_date,
-                has_scheduled_time: Some(t.schedule.has_scheduled_time),
-                scheduled_end_date: t.schedule.scheduled_end_date,
-                has_end_time: Some(t.schedule.has_end_time),
-                parent_item_id: Some(t.parent_item_id),
-                event_type: t.event_type,
-                due_offset_days: t.due_offset_days,
-                ..base
-            },
+/// The one place that decides which of `Schedule`/`Recurrence`/`event_type` a kind actually
+/// gets to carry, replacing the near-identical `build_item_type` pair that used to sit in
+/// `service::items` and `service::team_items` (Stage 8 of docs/typed-item-params-plan.md).
+/// Merging them is the point of the whole plan: there is now exactly one answer to "what does
+/// a Task store", and it is reached by matching the input's own variant rather than by
+/// re-deriving a kind from a flat bag of `Option`s.
+///
+/// `team_assignment` is a parameter rather than being read off `NewTask::assignment` because
+/// the stored value is not the requested one: `team_items` resolves the assignee and gates
+/// points on project-admin authority first, and `items` (the personal branch) never stores an
+/// assignment at all, so it passes `None`. See root CLAUDE.md's Points section.
+pub(crate) fn build_item_type(
+    kind: NewItemKind,
+    team_assignment: Option<TeamAssignment>,
+) -> ItemType {
+    // Item-level recurrence is retired (Stage 10 core) — nothing can ever set
+    // `pattern`/`basis` again, only `due_offset_days` survives here.
+    fn recurrence(due_offset_days: Option<i32>) -> Recurrence {
+        Recurrence {
+            pattern: None,
+            basis: None,
+            due_offset_days,
         }
+    }
+    match kind {
+        NewItemKind::Simple(s) => ItemType::Simple(SimpleItem {
+            parent_item_id: s.parent_item_id,
+        }),
+        NewItemKind::Task(t) => ItemType::Task(TaskItem {
+            parent_item_id: t.anchor.parent_item_id(),
+            schedule: t.schedule,
+            recurrence: recurrence(t.due_offset_days),
+            team_assignment,
+            source_event_id: t.anchor.source_event_id(),
+            priority: t.priority,
+            complete: t.complete,
+            series_id: t.series_id,
+        }),
+        NewItemKind::Event(e) => ItemType::Event(EventItem {
+            schedule: e.schedule,
+            recurrence: recurrence(e.due_offset_days),
+            event_type: e.event_type,
+            series_id: e.series_id,
+            // No input field carries these (see `NewEvent`'s own note and
+            // `EventItem::google_event_id`'s doc comment) — only `service::calendar_sync`
+            // writes them, directly onto an `Item` it builds itself rather than through this
+            // funnel. `update_item`/`update_team_item`'s `current.google_event_id().is_some()`
+            // guard means this is never even reached for an already-imported item's update.
+            google_event_id: None,
+            calendar_subscription_id: None,
+        }),
+        NewItemKind::Template(t) => ItemType::Template(TemplateItem {
+            parent_item_id: Some(t.parent_item_id),
+            schedule: t.schedule,
+            recurrence: recurrence(t.due_offset_days),
+            event_type: t.event_type,
+        }),
     }
 }
 
@@ -282,12 +347,26 @@ pub enum EditItemKind {
 }
 
 impl EditItemKind {
-    pub fn kind(&self) -> ItemKind {
+    // No `kind()` counterpart to `NewItemKind`'s: every update path calls `into_new_kind`
+    // before it needs a discriminant, and an accessor nothing calls is an accessor that
+    // rots. `NewItemKind::kind()` is what the four create/update paths actually ask.
+
+    /// `NewItemKind::complete`'s counterpart, and false for the same structural reason.
+    pub(crate) fn complete(&self) -> bool {
         match self {
-            EditItemKind::Task(_) => ItemKind::Task,
-            EditItemKind::Event(_) => ItemKind::Event,
-            EditItemKind::Simple(_) => ItemKind::Simple,
-            EditItemKind::Template(_) => ItemKind::Template,
+            EditItemKind::Task(t) => t.complete,
+            _ => false,
+        }
+    }
+
+    /// `NewItemKind::schedule`'s counterpart, needed before the stored item has been read —
+    /// which is what `into_new_kind` waits on.
+    pub(crate) fn schedule(&self) -> Option<&Schedule> {
+        match self {
+            EditItemKind::Task(t) => Some(&t.schedule),
+            EditItemKind::Event(e) => Some(&e.schedule),
+            EditItemKind::Simple(_) => None,
+            EditItemKind::Template(t) => Some(&t.schedule),
         }
     }
 }
@@ -308,62 +387,40 @@ pub struct EditItem {
     pub kind: EditItemKind,
 }
 
-impl From<EditItem> for UpdateProjectItemParams {
-    fn from(edit: EditItem) -> Self {
-        let base = UpdateProjectItemParams {
-            project_id: edit.project_id,
-            item_id: edit.item_id,
-            name: edit.name,
-            description: edit.description,
-            timezone_offset_minutes: edit.timezone_offset_minutes,
-            depends_on_item_ids: edit.depends_on_item_ids,
-            item_type: Some(edit.kind.kind()),
-            ..Default::default()
-        };
-        match edit.kind {
-            EditItemKind::Task(t) => UpdateProjectItemParams {
-                due_date: t.schedule.due_date,
-                has_due_time: Some(t.schedule.has_due_time),
-                scheduled_date: t.schedule.scheduled_date,
-                has_scheduled_time: Some(t.schedule.has_scheduled_time),
-                scheduled_end_date: t.schedule.scheduled_end_date,
-                has_end_time: Some(t.schedule.has_end_time),
-                parent_item_id: t.anchor.parent_item_id(),
-                source_event_id: t.anchor.source_event_id(),
+impl EditItemKind {
+    /// An edit is a create plus the one field a create's caller supplies and an edit's
+    /// caller cannot: `series_id`. An item's series membership is set once at
+    /// materialization and carried forward from the stored item (root CLAUDE.md's Item
+    /// series section), which is exactly what `series_id` is here — so rather than a second
+    /// near-identical `build_item_type`, the update paths fold that carried-forward value
+    /// back in and reuse the create one. The `Simple` and `Template` arms drop it, as their
+    /// payloads have no such field.
+    pub(crate) fn into_new_kind(self, series_id: Option<String>) -> NewItemKind {
+        match self {
+            EditItemKind::Task(t) => NewItemKind::Task(NewTask {
+                anchor: t.anchor,
+                schedule: t.schedule,
                 due_offset_days: t.due_offset_days,
                 priority: t.priority,
                 complete: t.complete,
-                assigned_to_user_id: t.assignment.assigned_to_user_id,
-                points: t.assignment.points,
-                ..base
-            },
-            EditItemKind::Event(e) => UpdateProjectItemParams {
-                due_date: e.schedule.due_date,
-                has_due_time: Some(e.schedule.has_due_time),
-                scheduled_date: e.schedule.scheduled_date,
-                has_scheduled_time: Some(e.schedule.has_scheduled_time),
-                scheduled_end_date: e.schedule.scheduled_end_date,
-                has_end_time: Some(e.schedule.has_end_time),
+                assignment: t.assignment,
+                series_id,
+            }),
+            EditItemKind::Event(e) => NewItemKind::Event(NewEvent {
+                schedule: e.schedule,
                 event_type: e.event_type,
                 due_offset_days: e.due_offset_days,
-                ..base
-            },
-            EditItemKind::Simple(s) => UpdateProjectItemParams {
+                series_id,
+            }),
+            EditItemKind::Simple(s) => NewItemKind::Simple(NewSimple {
                 parent_item_id: s.parent_item_id,
-                ..base
-            },
-            EditItemKind::Template(t) => UpdateProjectItemParams {
-                due_date: t.schedule.due_date,
-                has_due_time: Some(t.schedule.has_due_time),
-                scheduled_date: t.schedule.scheduled_date,
-                has_scheduled_time: Some(t.schedule.has_scheduled_time),
-                scheduled_end_date: t.schedule.scheduled_end_date,
-                has_end_time: Some(t.schedule.has_end_time),
-                parent_item_id: Some(t.parent_item_id),
+            }),
+            EditItemKind::Template(t) => NewItemKind::Template(NewTemplate {
+                parent_item_id: t.parent_item_id,
+                schedule: t.schedule,
                 event_type: t.event_type,
                 due_offset_days: t.due_offset_days,
-                ..base
-            },
+            }),
         }
     }
 }
@@ -535,130 +592,154 @@ mod tests {
         }
     }
 
+    /// Builds the payload the personal branch would store — `items::create_item` passes
+    /// `None` for the assignment, so this is that call with the mock repos left out.
+    fn built(kind: NewItemKind) -> ItemType {
+        build_item_type(kind, None)
+    }
+
     #[test]
     fn new_task_carries_every_task_only_field_through() {
-        let p: CreateProjectItemParams = new_item(NewItemKind::Task(NewTask {
-            anchor: TaskAnchor::Parent("parent".into()),
-            schedule: schedule(),
-            due_offset_days: Some(-3),
-            priority: Some(2),
-            complete: true,
-            assignment: TeamAssignment {
+        let built = build_item_type(
+            NewItemKind::Task(NewTask {
+                anchor: TaskAnchor::Parent("parent".into()),
+                schedule: schedule(),
+                due_offset_days: Some(-3),
+                priority: Some(2),
+                complete: true,
+                // Ignored by `build_item_type` — `team_items` resolves and gates the stored
+                // assignment and passes it separately, which is what the argument below is.
+                assignment: TeamAssignment::default(),
+                series_id: Some("s1".into()),
+            }),
+            Some(TeamAssignment {
                 assigned_to_user_id: Some("u1".into()),
                 points: Some(5),
-            },
-            series_id: Some("s1".into()),
-        }))
-        .into();
+            }),
+        );
 
-        assert_eq!(p.item_type, Some(ItemKind::Task));
-        assert_eq!(p.parent_item_id.as_deref(), Some("parent"));
-        assert_eq!(p.source_event_id, None);
-        assert_eq!(p.due_offset_days, Some(-3));
-        assert_eq!(p.priority, Some(2));
-        assert_eq!(p.complete, Some(true));
-        assert_eq!(p.assigned_to_user_id.as_deref(), Some("u1"));
-        assert_eq!(p.points, Some(5));
-        assert_eq!(p.series_id.as_deref(), Some("s1"));
-        assert_eq!(p.due_date, Some(dt(1_000)));
-        assert_eq!(p.has_due_time, Some(true));
-        assert_eq!(p.has_end_time, Some(false));
-        // A Task has no `event_type` slot to fill.
-        assert_eq!(p.event_type, None);
-        // Envelope.
-        assert_eq!(p.project_id, "p1");
-        assert_eq!(p.description.as_deref(), Some("d"));
-        assert_eq!(p.timezone_offset_minutes, Some(-300));
+        let ItemType::Task(task) = built else {
+            panic!("expected a Task payload");
+        };
+        assert_eq!(task.parent_item_id.as_deref(), Some("parent"));
+        assert_eq!(task.source_event_id, None);
+        assert_eq!(task.recurrence.due_offset_days, Some(-3));
+        assert_eq!(task.priority, Some(2));
+        assert!(task.complete);
+        assert_eq!(
+            task.team_assignment
+                .as_ref()
+                .unwrap()
+                .assigned_to_user_id
+                .as_deref(),
+            Some("u1")
+        );
+        assert_eq!(task.team_assignment.as_ref().unwrap().points, Some(5));
+        assert_eq!(task.series_id.as_deref(), Some("s1"));
+        assert_eq!(task.schedule.due_date, Some(dt(1_000)));
+        assert!(task.schedule.has_due_time);
+        assert!(!task.schedule.has_end_time);
+        // Item-level recurrence is retired — nothing can set these again.
+        assert_eq!(task.recurrence.pattern, None);
+        assert_eq!(task.recurrence.basis, None);
+    }
+
+    /// The envelope is the caller's business, not `build_item_type`'s — these are the
+    /// fields every kind shares, which is why they sit on `NewItem` rather than in any
+    /// variant.
+    #[test]
+    fn the_envelope_carries_the_kind_agnostic_fields() {
+        let new = new_item(NewItemKind::Task(NewTask::default()));
+        assert_eq!(new.project_id, "p1");
+        assert_eq!(new.name, "n");
+        assert_eq!(new.description.as_deref(), Some("d"));
+        assert_eq!(new.timezone_offset_minutes, Some(-300));
+        assert_eq!(new.kind.kind(), ItemKind::Task);
     }
 
     /// `TaskAnchor` is what makes `Item::validate()`'s "cannot both have a parent and
     /// reference an event" rule unrepresentable rather than merely rejected.
     #[test]
     fn task_anchor_sets_exactly_one_of_parent_or_source_event() {
-        let parent: CreateProjectItemParams = new_item(NewItemKind::Task(NewTask {
-            anchor: TaskAnchor::Parent("parent".into()),
-            ..Default::default()
-        }))
-        .into();
-        assert_eq!(parent.parent_item_id.as_deref(), Some("parent"));
-        assert_eq!(parent.source_event_id, None);
+        fn anchor_of(anchor: TaskAnchor) -> (Option<String>, Option<String>) {
+            let ItemType::Task(task) = built(NewItemKind::Task(NewTask {
+                anchor,
+                ..Default::default()
+            })) else {
+                panic!("expected a Task payload");
+            };
+            (task.parent_item_id, task.source_event_id)
+        }
 
-        let event: CreateProjectItemParams = new_item(NewItemKind::Task(NewTask {
-            anchor: TaskAnchor::SourceEvent("ev".into()),
-            ..Default::default()
-        }))
-        .into();
-        assert_eq!(event.parent_item_id, None);
-        assert_eq!(event.source_event_id.as_deref(), Some("ev"));
-
-        let none: CreateProjectItemParams = new_item(NewItemKind::Task(NewTask::default())).into();
-        assert_eq!(none.parent_item_id, None);
-        assert_eq!(none.source_event_id, None);
+        assert_eq!(
+            anchor_of(TaskAnchor::Parent("parent".into())),
+            (Some("parent".to_string()), None)
+        );
+        assert_eq!(
+            anchor_of(TaskAnchor::SourceEvent("ev".into())),
+            (None, Some("ev".to_string()))
+        );
+        assert_eq!(anchor_of(TaskAnchor::None), (None, None));
     }
 
     #[test]
     fn new_event_leaves_every_task_only_field_unset() {
-        let p: CreateProjectItemParams = new_item(NewItemKind::Event(NewEvent {
+        let built = built(NewItemKind::Event(NewEvent {
             schedule: schedule(),
             event_type: Some("rain".into()),
             due_offset_days: None,
             series_id: Some("s1".into()),
-        }))
-        .into();
+        }));
 
-        assert_eq!(p.item_type, Some(ItemKind::Event));
-        assert_eq!(p.event_type.as_deref(), Some("rain"));
-        assert_eq!(p.scheduled_date, Some(dt(500)));
-        assert_eq!(p.series_id.as_deref(), Some("s1"));
-        // None of these have a field on `NewEvent` to come from.
-        assert_eq!(p.complete, None);
-        assert_eq!(p.priority, None);
-        assert_eq!(p.points, None);
-        assert_eq!(p.assigned_to_user_id, None);
-        assert_eq!(p.parent_item_id, None);
-        assert_eq!(p.source_event_id, None);
+        let ItemType::Event(event) = built else {
+            panic!("expected an Event payload");
+        };
+        assert_eq!(event.event_type.as_deref(), Some("rain"));
+        assert_eq!(event.schedule.scheduled_date, Some(dt(500)));
+        assert_eq!(event.series_id.as_deref(), Some("s1"));
+        // Only `service::calendar_sync` writes these, and it builds its `Item` directly.
+        assert_eq!(event.google_event_id, None);
+        assert_eq!(event.calendar_subscription_id, None);
+        // `EventItem` has no field for completion, priority, points, an assignee, a parent
+        // or a source event — which is the whole point, so there is nothing to assert
+        // `None` on. `Item`'s own delegation is what reports them absent.
     }
 
     #[test]
     fn new_simple_carries_nothing_but_its_parent() {
-        let p: CreateProjectItemParams = new_item(NewItemKind::Simple(NewSimple {
+        let built = built(NewItemKind::Simple(NewSimple {
             parent_item_id: Some("parent".into()),
-        }))
-        .into();
+        }));
 
-        assert_eq!(p.item_type, Some(ItemKind::Simple));
-        assert_eq!(p.parent_item_id.as_deref(), Some("parent"));
-        assert_eq!(p.complete, None);
-        assert_eq!(p.due_date, None);
-        assert_eq!(p.scheduled_date, None);
-        assert_eq!(p.event_type, None);
-        assert_eq!(p.due_offset_days, None);
-        assert_eq!(p.priority, None);
-        assert_eq!(p.series_id, None);
+        let ItemType::Simple(simple) = built else {
+            panic!("expected a Simple payload");
+        };
+        assert_eq!(simple.parent_item_id.as_deref(), Some("parent"));
     }
 
     #[test]
     fn new_template_carries_its_event_type_and_parent() {
-        let p: CreateProjectItemParams = new_item(NewItemKind::Template(NewTemplate {
+        let built = built(NewItemKind::Template(NewTemplate {
             parent_item_id: "root".into(),
             schedule: schedule(),
             event_type: Some("rain".into()),
             due_offset_days: Some(-7),
-        }))
-        .into();
+        }));
 
-        assert_eq!(p.item_type, Some(ItemKind::Template));
-        assert_eq!(p.parent_item_id.as_deref(), Some("root"));
-        assert_eq!(p.event_type.as_deref(), Some("rain"));
-        assert_eq!(p.due_offset_days, Some(-7));
-        assert_eq!(p.complete, None);
-        assert_eq!(p.priority, None);
-        assert_eq!(p.series_id, None);
+        let ItemType::Template(template) = built else {
+            panic!("expected a Template payload");
+        };
+        assert_eq!(template.parent_item_id.as_deref(), Some("root"));
+        assert_eq!(template.event_type.as_deref(), Some("rain"));
+        assert_eq!(template.recurrence.due_offset_days, Some(-7));
+        assert_eq!(template.schedule.due_date, Some(dt(1_000)));
     }
 
+    /// An edit is a create plus the carried-forward `series_id`, which is what lets both
+    /// sides share one `build_item_type`.
     #[test]
     fn edit_task_round_trips_completion_and_assignment() {
-        let p: UpdateProjectItemParams = edit_item(EditItemKind::Task(EditTask {
+        let edit = edit_item(EditItemKind::Task(EditTask {
             anchor: TaskAnchor::None,
             schedule: schedule(),
             due_offset_days: None,
@@ -668,41 +749,67 @@ mod tests {
                 assigned_to_user_id: Some("u1".into()),
                 points: Some(3),
             },
-        }))
-        .into();
+        }));
+        assert_eq!(edit.item_id, "i1");
 
-        assert_eq!(p.item_id, "i1");
-        assert!(p.complete);
-        assert_eq!(p.priority, Some(1));
-        assert_eq!(p.points, Some(3));
-        assert_eq!(p.assigned_to_user_id.as_deref(), Some("u1"));
+        let kind = edit.kind.into_new_kind(Some("s1".into()));
+        assert!(kind.complete());
+        let NewItemKind::Task(ref task) = kind else {
+            panic!("expected a Task input");
+        };
+        // The requested assignment survives the conversion; `team_items` is what decides
+        // whether it survives *authority* (root CLAUDE.md's Points section).
+        assert_eq!(task.assignment.points, Some(3));
+        assert_eq!(task.assignment.assigned_to_user_id.as_deref(), Some("u1"));
+
+        let ItemType::Task(task) = built(kind) else {
+            panic!("expected a Task payload");
+        };
+        assert!(task.complete);
+        assert_eq!(task.priority, Some(1));
+        assert_eq!(task.series_id.as_deref(), Some("s1"));
     }
 
     /// The update side of "events cannot be marked complete" / "simple items cannot be
-    /// marked complete": neither variant has a `complete` field, so the conversion can
-    /// only ever produce `false`.
+    /// marked complete": no variant but `Task` has a `complete` field, so an edit of any
+    /// other kind can only ever report `false`.
     #[test]
     fn non_task_edits_can_never_be_complete() {
-        let event: UpdateProjectItemParams = edit_item(EditItemKind::Event(EditEvent {
-            schedule: schedule(),
-            event_type: Some("rain".into()),
-            due_offset_days: None,
-        }))
-        .into();
-        assert!(!event.complete);
+        assert!(
+            !EditItemKind::Event(EditEvent {
+                schedule: schedule(),
+                event_type: Some("rain".into()),
+                due_offset_days: None,
+            })
+            .complete()
+        );
+        assert!(!EditItemKind::Simple(EditSimple::default()).complete());
+        assert!(
+            !EditItemKind::Template(EditTemplate {
+                parent_item_id: "root".into(),
+                schedule: Schedule::default(),
+                event_type: None,
+                due_offset_days: None,
+            })
+            .complete()
+        );
+    }
 
-        let simple: UpdateProjectItemParams =
-            edit_item(EditItemKind::Simple(EditSimple::default())).into();
-        assert!(!simple.complete);
+    /// A `Simple` edit drops the carried-forward `series_id` rather than smuggling it —
+    /// `SimpleItem` has no such field, and neither does `TemplateItem`.
+    #[test]
+    fn kinds_without_a_series_field_drop_the_carried_forward_id() {
+        let kind = EditItemKind::Simple(EditSimple::default()).into_new_kind(Some("s1".into()));
+        assert!(matches!(built(kind), ItemType::Simple(_)));
 
-        let template: UpdateProjectItemParams = edit_item(EditItemKind::Template(EditTemplate {
+        let kind = EditItemKind::Template(EditTemplate {
             parent_item_id: "root".into(),
             schedule: Schedule::default(),
             event_type: None,
             due_offset_days: None,
-        }))
-        .into();
-        assert!(!template.complete);
+        })
+        .into_new_kind(Some("s1".into()));
+        assert!(matches!(built(kind), ItemType::Template(_)));
     }
 
     /// Dependencies live on the envelope, not on `EditTask`, because clearing them must
@@ -711,8 +818,140 @@ mod tests {
     fn depends_on_rides_the_envelope_for_every_kind() {
         let mut edit = edit_item(EditItemKind::Simple(EditSimple::default()));
         edit.depends_on_item_ids = Some(vec![]);
-        let p: UpdateProjectItemParams = edit.into();
-        assert_eq!(p.depends_on_item_ids, Some(vec![]));
+        assert_eq!(edit.depends_on_item_ids, Some(vec![]));
+    }
+
+    /// A child of a Template is Template-typed whatever it asked to be, and everything a
+    /// `TemplateItem` has no slot for is dropped in the rewrite.
+    #[test]
+    fn coercing_a_task_to_a_template_keeps_only_what_a_template_can_hold() {
+        let coerced = NewItemKind::Task(NewTask {
+            anchor: TaskAnchor::Parent("root".into()),
+            schedule: schedule(),
+            due_offset_days: Some(-7),
+            priority: Some(2),
+            complete: true,
+            assignment: TeamAssignment {
+                assigned_to_user_id: Some("u1".into()),
+                points: Some(5),
+            },
+            series_id: Some("s1".into()),
+        })
+        .coerce_to_template("root".into());
+
+        let ItemType::Template(template) = built(coerced) else {
+            panic!("expected a Template payload");
+        };
+        assert_eq!(template.parent_item_id.as_deref(), Some("root"));
+        assert_eq!(template.schedule.due_date, Some(dt(1_000)));
+        assert_eq!(template.recurrence.due_offset_days, Some(-7));
+        // A Task carries no `event_type`, so there is nothing to carry over.
+        assert_eq!(template.event_type, None);
+    }
+
+    /// An Event's `event_type` does survive the coercion — both kinds have the field, and
+    /// on a Template it means "fire me when a matching item is created" (root CLAUDE.md's
+    /// Events section).
+    #[test]
+    fn coercing_an_event_to_a_template_keeps_its_event_type() {
+        let coerced = NewItemKind::Event(NewEvent {
+            schedule: schedule(),
+            event_type: Some("rain".into()),
+            due_offset_days: None,
+            series_id: Some("s1".into()),
+        })
+        .coerce_to_template("root".into());
+
+        let ItemType::Template(template) = built(coerced) else {
+            panic!("expected a Template payload");
+        };
+        assert_eq!(template.event_type.as_deref(), Some("rain"));
+    }
+
+    /// A `Simple` has no dates at all, so the coercion has nothing to carry and must not
+    /// invent any.
+    #[test]
+    fn coercing_a_simple_to_a_template_leaves_it_dateless() {
+        let coerced = NewItemKind::Simple(NewSimple {
+            parent_item_id: Some("root".into()),
+        })
+        .coerce_to_template("root".into());
+
+        let ItemType::Template(template) = built(coerced) else {
+            panic!("expected a Template payload");
+        };
+        assert_eq!(template.schedule, Schedule::default());
+        assert_eq!(template.recurrence.due_offset_days, None);
+        assert_eq!(template.event_type, None);
+    }
+
+    /// `parent_item_id` is a per-variant question, not one shared field — an Event has
+    /// none structurally, and a Task keeps its parent inside `TaskAnchor`.
+    #[test]
+    fn parent_item_id_reads_through_whichever_variant_holds_one() {
+        assert_eq!(
+            NewItemKind::Task(NewTask {
+                anchor: TaskAnchor::Parent("p".into()),
+                ..Default::default()
+            })
+            .parent_item_id()
+            .as_deref(),
+            Some("p")
+        );
+        assert_eq!(
+            NewItemKind::Task(NewTask {
+                anchor: TaskAnchor::SourceEvent("ev".into()),
+                ..Default::default()
+            })
+            .parent_item_id(),
+            None
+        );
+        assert_eq!(
+            NewItemKind::Event(NewEvent::default()).parent_item_id(),
+            None
+        );
+        assert_eq!(
+            NewItemKind::Simple(NewSimple {
+                parent_item_id: Some("p".into()),
+            })
+            .parent_item_id()
+            .as_deref(),
+            Some("p")
+        );
+        assert_eq!(
+            NewItemKind::Template(NewTemplate {
+                parent_item_id: "p".into(),
+                schedule: Schedule::default(),
+                event_type: None,
+                due_offset_days: None,
+            })
+            .parent_item_id()
+            .as_deref(),
+            Some("p")
+        );
+    }
+
+    /// A `Simple` has no `Schedule`, which is why its callers' scheduled-window ordering
+    /// check can never fire on one.
+    #[test]
+    fn only_simple_has_no_schedule() {
+        assert!(NewItemKind::Task(NewTask::default()).schedule().is_some());
+        assert!(NewItemKind::Event(NewEvent::default()).schedule().is_some());
+        assert!(
+            NewItemKind::Simple(NewSimple::default())
+                .schedule()
+                .is_none()
+        );
+        assert!(
+            NewItemKind::Template(NewTemplate {
+                parent_item_id: "p".into(),
+                schedule: Schedule::default(),
+                event_type: None,
+                due_offset_days: None,
+            })
+            .schedule()
+            .is_some()
+        );
     }
 
     fn task_item(f: impl FnOnce(&mut TaskItem)) -> Item {
@@ -760,7 +999,7 @@ mod tests {
             });
         });
 
-        let p: UpdateProjectItemParams = EditItem {
+        let edit = EditItem {
             project_id: "p1".into(),
             item_id: "i1".into(),
             name: item.name.clone(),
@@ -768,23 +1007,31 @@ mod tests {
             timezone_offset_minutes: Some(-300),
             depends_on_item_ids: None,
             kind: EditItemKind::Task(EditTask::from_item(&item)),
-        }
-        .into();
+        };
 
-        assert_eq!(p.item_type, Some(ItemKind::Task));
-        assert_eq!(p.parent_item_id.as_deref(), Some("p"));
-        assert_eq!(p.source_event_id, None);
-        assert_eq!(p.priority, Some(2));
-        assert!(p.complete);
-        assert_eq!(p.due_offset_days, Some(-3));
-        assert_eq!(p.assigned_to_user_id.as_deref(), Some("u1"));
-        assert_eq!(p.points, Some(5));
-        assert_eq!(p.due_date, Some(dt(1_000)));
-        assert_eq!(p.has_due_time, Some(true));
-        assert_eq!(p.scheduled_date, Some(dt(500)));
-        assert_eq!(p.has_scheduled_time, Some(true));
-        assert_eq!(p.scheduled_end_date, Some(dt(900)));
-        assert_eq!(p.has_end_time, Some(false));
+        let ItemType::Task(task) = build_item_type(
+            edit.kind.into_new_kind(None),
+            Some(TeamAssignment {
+                assigned_to_user_id: item.assigned_to_user_id(),
+                points: item.points(),
+            }),
+        ) else {
+            panic!("expected a Task payload");
+        };
+        assert_eq!(task.parent_item_id.as_deref(), Some("p"));
+        assert_eq!(task.source_event_id, None);
+        assert_eq!(task.priority, Some(2));
+        assert!(task.complete);
+        assert_eq!(task.recurrence.due_offset_days, Some(-3));
+        let assignment = task.team_assignment.as_ref().unwrap();
+        assert_eq!(assignment.assigned_to_user_id.as_deref(), Some("u1"));
+        assert_eq!(assignment.points, Some(5));
+        assert_eq!(task.schedule.due_date, Some(dt(1_000)));
+        assert!(task.schedule.has_due_time);
+        assert_eq!(task.schedule.scheduled_date, Some(dt(500)));
+        assert!(task.schedule.has_scheduled_time);
+        assert_eq!(task.schedule.scheduled_end_date, Some(dt(900)));
+        assert!(!task.schedule.has_end_time);
     }
 
     /// A completion toggle is `from_item` plus one overlaid field — nothing else may move.

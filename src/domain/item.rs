@@ -4,9 +4,9 @@ use std::fmt;
 use std::str::FromStr;
 
 /// Plain, `Copy`, data-free discriminant for "what kind of thing is this" — used
-/// everywhere only the *kind* is needed: DTOs (`CreateItemParams`/`UpdateItemParams`),
-/// SDK conversion (`to_domain_item_type`/`to_sdk_item_type`), web_ui type-guards, badge
-/// labels, the CLI's `--item-type` flag. See `ItemType` below for the data-carrying
+/// everywhere only the *kind* is needed: SDK conversion
+/// (`to_domain_item_type`/`to_sdk_item_type`), the input enums' own `kind()` accessors
+/// (`service::item_input`), web_ui type-guards, badge labels, the CLI's `--item-type` flag. See `ItemType` below for the data-carrying
 /// counterpart that actually lives on `Item`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ItemKind {

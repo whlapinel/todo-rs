@@ -1,8 +1,6 @@
-use crate::domain::item::{
-    EventItem, Item, ItemKind, ItemType, Recurrence, Schedule, SimpleItem, TaskItem,
-    TeamAssignment, TemplateItem,
-};
+use crate::domain::item::{Item, ItemKind, TeamAssignment};
 use crate::service::activity_log::reverse_entry;
+use crate::service::item_input::{EditItem, NewItem, NewItemKind, build_item_type};
 use crate::service::item_series;
 use crate::service::items::{
     ItemError, copy_template_children_to_event, event_anchor, has_incomplete_children,
@@ -30,88 +28,6 @@ pub struct UpdateTeamItemContext {
     pub teams: Arc<dyn TeamRepo>,
     pub projects: Arc<dyn ProjectRepo>,
     pub activity_log: Arc<dyn ActivityLogRepo>,
-}
-
-#[derive(Debug, Default)]
-pub struct CreateTeamItemParams {
-    pub project_id: String,
-    pub name: String,
-    pub description: Option<String>,
-    pub due_date: Option<DateTime<Utc>>,
-    pub scheduled_date: Option<DateTime<Utc>>,
-    pub scheduled_end_date: Option<DateTime<Utc>>,
-    pub complete: Option<bool>,
-    pub has_due_time: Option<bool>,
-    pub has_scheduled_time: Option<bool>,
-    pub has_end_time: Option<bool>,
-    pub parent_item_id: Option<String>,
-    pub item_type: Option<ItemKind>,
-    pub event_type: Option<String>,
-    pub due_offset_days: Option<i32>,
-    pub assigned_to_user_id: Option<String>,
-    pub source_event_id: Option<String>,
-    pub timezone_offset_minutes: Option<i32>,
-    pub points: Option<i32>,
-    /// Task-only, ungated — see root CLAUDE.md's Priority section. Unlike
-    /// `points`/`assigned_to_user_id` above, not restricted to a team-backed
-    /// project and not admin-gated.
-    pub priority: Option<i32>,
-    /// Internal-only — never exposed via Smithy/CLI/MCP. Set exclusively by
-    /// `service::item_series::get_or_materialize_occurrence`.
-    pub series_id: Option<String>,
-}
-
-/// Builds the `ItemType` payload for a team item. `team_assignment` is only ever
-/// `Some` for `Task` — points/assignment are Task-only (see issues.md); requesting
-/// them on any other kind is silently dropped, the same shape as the existing
-/// non-admin-points-request handling below, rather than rejecting the rest of an
-/// otherwise-valid request. `priority` follows the same Task-only drop, but —
-/// unlike `team_assignment` — is never gated on admin/team-backed status.
-#[allow(clippy::too_many_arguments)]
-fn build_item_type(
-    kind: ItemKind,
-    parent_item_id: Option<String>,
-    schedule: Schedule,
-    recurrence: Recurrence,
-    event_type: Option<String>,
-    team_assignment: Option<TeamAssignment>,
-    source_event_id: Option<String>,
-    priority: Option<i32>,
-    complete: bool,
-    series_id: Option<String>,
-) -> ItemType {
-    match kind {
-        ItemKind::Simple => ItemType::Simple(SimpleItem { parent_item_id }),
-        ItemKind::Task => ItemType::Task(TaskItem {
-            parent_item_id,
-            schedule,
-            recurrence,
-            team_assignment,
-            source_event_id,
-            priority,
-            complete,
-            series_id,
-        }),
-        ItemKind::Event => ItemType::Event(EventItem {
-            schedule,
-            recurrence,
-            event_type,
-            series_id,
-            // See `service::items::build_item_type`'s identical arm — never settable
-            // via `CreateTeamItemParams`/`UpdateTeamItemParams`, only
-            // `service::calendar_sync` writes these, and `update_team_item`'s
-            // `current.google_event_id().is_some()` guard means this function is
-            // never reached for an already-imported item's update.
-            google_event_id: None,
-            calendar_subscription_id: None,
-        }),
-        ItemKind::Template => ItemType::Template(TemplateItem {
-            parent_item_id,
-            schedule,
-            recurrence,
-            event_type,
-        }),
-    }
 }
 
 /// Project-scoped mirror of `service::items::top_level_anchor` — walks `item`'s
@@ -167,7 +83,7 @@ async fn parent_kind_of(
 
 /// Moved from `json_api::team_items::create_team_item`; rewritten in Stage 4 of
 /// docs/team-id-removal-plan.md to be `project_id`-primary — every repo/membership
-/// lookup below goes through `params.project_id`, not a `team_id`. Stage 6 dropped
+/// lookup below goes through `new.project_id`, not a `team_id`. Stage 6 dropped
 /// the `items.team_id` dual-write this function used to need (the read sites that
 /// justified it — `list_items_due`'s/`list_assigned_items`' `teamId` fields, and
 /// `ItemRepo::list_team_templates` — are all migrated off that column now, and the
@@ -177,10 +93,12 @@ pub async fn create_team_item(
     teams: &Arc<dyn TeamRepo>,
     projects: &Arc<dyn ProjectRepo>,
     requester_user_id: &str,
-    params: CreateTeamItemParams,
+    new: NewItem,
 ) -> Result<String, ItemError> {
-    require_project_member(projects, teams, &params.project_id, requester_user_id).await?;
-    if let (Some(start), Some(end)) = (params.scheduled_date, params.scheduled_end_date)
+    let project_id = new.project_id.clone();
+    require_project_member(projects, teams, &project_id, requester_user_id).await?;
+    if let Some(schedule) = new.kind.schedule()
+        && let (Some(start), Some(end)) = (schedule.scheduled_date, schedule.scheduled_end_date)
         && end < start
     {
         return Err(ItemError::Invalid(
@@ -190,97 +108,75 @@ pub async fn create_team_item(
 
     // Events can never have children (a task references an event via
     // sourceEventId instead of nesting under it).
-    let parent_kind = parent_kind_of(repo, &params.project_id, &params.parent_item_id).await;
+    let parent_item_id = new.kind.parent_item_id();
+    let parent_kind = parent_kind_of(repo, &project_id, &parent_item_id).await;
     if parent_kind == Some(ItemKind::Event) {
         return Err(ItemError::Invalid(
             "Events cannot have children; link a task to it via sourceEventId instead".to_string(),
         ));
     }
-    require_template_has_template_parent(params.item_type, parent_kind)?;
+    require_template_has_template_parent(Some(new.kind.kind()), parent_kind)?;
 
-    let mut kind = params.item_type.unwrap_or_default();
     // A template's child subtree is itself Template-typed (root CLAUDE.md's Domain Models
     // section). `items::create_item` has always coerced this; `team_items` never did, so a
     // template child on a team-backed project was created as a plain Task instead.
-    if parent_kind == Some(ItemKind::Template) {
-        kind = ItemKind::Template;
-    }
-
-    let schedule = Schedule {
-        due_date: params.due_date,
-        has_due_time: params.has_due_time.unwrap_or(false),
-        scheduled_date: params.scheduled_date,
-        has_scheduled_time: params.has_scheduled_time.unwrap_or(false),
-        scheduled_end_date: params.scheduled_end_date,
-        has_end_time: params.has_end_time.unwrap_or(false),
-    };
-    // Item-level recurrence is retired (Stage 10 core) — nothing can ever set
-    // `pattern`/`basis` again, only `due_offset_days` survives here.
-    let recurrence_data = Recurrence {
-        pattern: None,
-        basis: None,
-        due_offset_days: params.due_offset_days,
+    let kind = match (parent_kind, parent_item_id) {
+        (Some(ItemKind::Template), Some(parent_id)) => new.kind.coerce_to_template(parent_id),
+        _ => new.kind,
     };
 
-    let team_assignment = if kind == ItemKind::Task {
-        let assigned_to_user_id = resolve_project_assignee(
-            projects,
-            &params.project_id,
-            params.assigned_to_user_id.clone(),
-        )
-        .await?;
-        // Points authority is project-admin-only as of stage C1
-        // (docs/project-abstraction-plan.md) — moved off `team_members.role` onto
-        // `project_members.role`. A non-admin's requested value is silently
-        // dropped rather than rejecting the whole create — the rest of the
-        // request (name, dates, etc.) is still perfectly valid.
-        //
-        // Exception: `params.series_id.is_some()` means `params.points` isn't a
-        // fresh user-supplied value at all — it's `get_or_materialize_occurrence`
-        // carrying forward `series.points`, which `resolve_series_assignment`
-        // already gated on admin authority at series create/update time. Re-checking
-        // admin authority here against `requester_user_id` (whoever happens to be
-        // the one viewing/completing the occurrence — often the assignee, not the
-        // admin who authorized the points) would silently zero out already-valid
-        // points on every materialization triggered by a non-admin. See
-        // docs/archived/archived_issues_and_features.md's virtual-occurrence-completion-doesn't-award-points bug.
-        let points = if params.series_id.is_some() {
-            params.points
-        } else if params.points.is_some()
-            && require_project_admin(projects, teams, &params.project_id, requester_user_id)
-                .await
-                .is_ok()
-        {
-            params.points
-        } else {
-            None
-        };
-        Some(TeamAssignment {
-            assigned_to_user_id,
-            points,
-        })
-    } else {
-        None
+    // Read off the *coerced* kind, so a Task that just became a template child gets no
+    // assignment — matching the flat path, which computed this from the post-coercion
+    // `ItemKind` too.
+    let team_assignment = match &kind {
+        NewItemKind::Task(t) => {
+            let assigned_to_user_id = resolve_project_assignee(
+                projects,
+                &project_id,
+                t.assignment.assigned_to_user_id.clone(),
+            )
+            .await?;
+            // Points authority is project-admin-only as of stage C1
+            // (docs/project-abstraction-plan.md) — moved off `team_members.role` onto
+            // `project_members.role`. A non-admin's requested value is silently
+            // dropped rather than rejecting the whole create — the rest of the
+            // request (name, dates, etc.) is still perfectly valid.
+            //
+            // Exception: `t.series_id.is_some()` means `t.assignment.points` isn't a
+            // fresh user-supplied value at all — it's `get_or_materialize_occurrence`
+            // carrying forward `series.points`, which `resolve_series_assignment`
+            // already gated on admin authority at series create/update time. Re-checking
+            // admin authority here against `requester_user_id` (whoever happens to be
+            // the one viewing/completing the occurrence — often the assignee, not the
+            // admin who authorized the points) would silently zero out already-valid
+            // points on every materialization triggered by a non-admin. See
+            // docs/archived/archived_issues_and_features.md's virtual-occurrence-completion-doesn't-award-points bug.
+            let points = if t.series_id.is_some() {
+                t.assignment.points
+            } else if t.assignment.points.is_some()
+                && require_project_admin(projects, teams, &project_id, requester_user_id)
+                    .await
+                    .is_ok()
+            {
+                t.assignment.points
+            } else {
+                None
+            };
+            Some(TeamAssignment {
+                assigned_to_user_id,
+                points,
+            })
+        }
+        _ => None,
     };
 
-    let mut item = Item::new_project_item(&params.project_id, &params.name);
-    item.item_type = build_item_type(
-        kind,
-        params.parent_item_id.clone(),
-        schedule,
-        recurrence_data,
-        params.event_type.clone(),
-        team_assignment,
-        params.source_event_id.clone(),
-        params.priority,
-        params.complete.unwrap_or(false),
-        params.series_id.clone(),
-    );
-    item.description = params.description.clone();
+    let mut item = Item::new_project_item(&project_id, &new.name);
+    item.item_type = build_item_type(kind, team_assignment);
+    item.description = new.description.clone();
 
-    let tz_offset = params.timezone_offset_minutes.unwrap_or(0);
+    let tz_offset = new.timezone_offset_minutes.unwrap_or(0);
     if item.is_offset_driven() {
-        let anchor = resolve_offset_anchor_project(repo, &params.project_id, &item).await?;
+        let anchor = resolve_offset_anchor_project(repo, &project_id, &item).await?;
         let new_due_date = anchor.and_then(|a| item.deadline_from_offset(a, tz_offset));
         if let Some(schedule) = item.item_type.schedule_mut() {
             schedule.due_date = new_due_date;
@@ -303,7 +199,7 @@ pub async fn create_team_item(
             assignee,
             requester_user_id.to_string(),
             item.name.clone(),
-            push::detail_url(&item, &params.project_id),
+            push::detail_url(&item, &project_id),
         );
     }
 
@@ -315,12 +211,11 @@ pub async fn create_team_item(
     // of docs/team-id-removal-plan.md) rather than the old `team_id`-keyed
     // `list_team_templates`.
     if let Some(event_type) = item.event_type() {
-        let tz_offset = params.timezone_offset_minutes.unwrap_or(0);
         // `item` here is always the just-created Event — its anchor is `event_anchor`
         // (scheduled_date), never `item_anchor` (due_date). See `event_anchor`'s doc comment.
         let root_date = event_anchor(&item);
         let mut templates = repo.list_templates(requester_user_id).await?;
-        templates.extend(repo.list_templates_by_project(&params.project_id).await?);
+        templates.extend(repo.list_templates_by_project(&project_id).await?);
         for tpl in templates
             .iter()
             .filter(|t| t.event_type().as_deref() == Some(event_type.as_str()))
@@ -409,38 +304,12 @@ pub(crate) async fn require_active_member(
     }
 }
 
-#[derive(Debug, Default)]
-pub struct UpdateTeamItemParams {
-    pub project_id: String,
-    pub item_id: String,
-    pub name: String,
-    pub description: Option<String>,
-    pub due_date: Option<DateTime<Utc>>,
-    pub scheduled_date: Option<DateTime<Utc>>,
-    pub scheduled_end_date: Option<DateTime<Utc>>,
-    pub complete: bool,
-    pub has_due_time: Option<bool>,
-    pub has_scheduled_time: Option<bool>,
-    pub has_end_time: Option<bool>,
-    pub parent_item_id: Option<String>,
-    pub item_type: Option<ItemKind>,
-    pub event_type: Option<String>,
-    pub due_offset_days: Option<i32>,
-    pub assigned_to_user_id: Option<String>,
-    pub source_event_id: Option<String>,
-    pub timezone_offset_minutes: Option<i32>,
-    pub points: Option<i32>,
-    /// Task-only, ungated — see root CLAUDE.md's Priority section. Direct-overwrite,
-    /// same convention as `event_type`: omitting it clears it.
-    pub priority: Option<i32>,
-}
-
 /// Moved from `json_api::team_items::update_team_item`; rewritten in Stage 4 of
 /// docs/team-id-removal-plan.md to be `project_id`-primary — every repo/membership
-/// lookup below goes through `params.project_id`, not a `team_id`.
+/// lookup below goes through `edit.project_id`, not a `team_id`.
 ///
-/// `team_id` is threaded in as a plain parameter (not an `UpdateTeamItemParams`
-/// field) for one narrow reason, unrelated to repo scoping: `activity_log.log_activity`'s
+/// `team_id` is threaded in as a plain parameter (not an `EditItem` field) for one narrow
+/// reason, unrelated to repo scoping: `activity_log.log_activity`'s
 /// `team_id` column is `NOT NULL` and permanently out of this plan's scope (see Stage 6
 /// of docs/team-id-removal-plan.md — `activity_log.team_id` is a separate column from
 /// the now-removed `items.team_id`, still read by the legacy `ListTeamActivityLog`/
@@ -452,22 +321,22 @@ pub async fn update_team_item(
     ctx: &UpdateTeamItemContext,
     requester_user_id: &str,
     team_id: &str,
-    params: UpdateTeamItemParams,
+    edit: EditItem,
 ) -> Result<(), ItemError> {
     let teams = &ctx.teams;
     let projects = &ctx.projects;
     let activity_log = &ctx.activity_log;
-    require_project_member(projects, teams, &params.project_id, requester_user_id).await?;
-    if let (Some(start), Some(end)) = (params.scheduled_date, params.scheduled_end_date)
+    let project_id = edit.project_id.clone();
+    require_project_member(projects, teams, &project_id, requester_user_id).await?;
+    if let Some(schedule) = edit.kind.schedule()
+        && let (Some(start), Some(end)) = (schedule.scheduled_date, schedule.scheduled_end_date)
         && end < start
     {
         return Err(ItemError::Invalid(
             "scheduledEndDate cannot be before scheduledDate".to_string(),
         ));
     }
-    let current = repo
-        .get_by_project(&params.project_id, &params.item_id)
-        .await?;
+    let current = repo.get_by_project(&project_id, &edit.item_id).await?;
 
     if current.google_event_id().is_some() {
         return Err(ItemError::Invalid(
@@ -475,10 +344,12 @@ pub async fn update_team_item(
         ));
     }
 
-    if params.complete
-        && !current.complete()
-        && has_incomplete_children(repo, &params.item_id).await?
-    {
+    // Series membership is set once at materialization and never re-resolved from an edit
+    // — see `items::update_item`'s identical carry-forward.
+    let kind = edit.kind.into_new_kind(current.series_id());
+    let complete = kind.complete();
+
+    if complete && !current.complete() && has_incomplete_children(repo, &edit.item_id).await? {
         return Err(ItemError::Invalid(
             "cannot complete an item with incomplete sub-items".to_string(),
         ));
@@ -486,94 +357,63 @@ pub async fn update_team_item(
 
     // Events can never have children (a task references an event via
     // sourceEventId instead of nesting under it).
-    let parent_kind = parent_kind_of(repo, &params.project_id, &params.parent_item_id).await;
+    let parent_item_id = kind.parent_item_id();
+    let parent_kind = parent_kind_of(repo, &project_id, &parent_item_id).await;
     if parent_kind == Some(ItemKind::Event) {
         return Err(ItemError::Invalid(
             "Events cannot have children; link a task to it via sourceEventId instead".to_string(),
         ));
     }
-    require_template_has_template_parent(params.item_type, parent_kind)?;
+    require_template_has_template_parent(Some(kind.kind()), parent_kind)?;
 
-    let mut kind = params.item_type.unwrap_or(current.kind());
     // A template's child subtree is itself Template-typed (root CLAUDE.md's Domain Models
     // section). `items::create_item` has always coerced this; `team_items` never did, so a
     // template child on a team-backed project was created as a plain Task instead.
-    if parent_kind == Some(ItemKind::Template) {
-        kind = ItemKind::Template;
-    }
-    let schedule = Schedule {
-        due_date: params.due_date,
-        has_due_time: params.has_due_time.unwrap_or(false),
-        scheduled_date: params.scheduled_date,
-        has_scheduled_time: params.has_scheduled_time.unwrap_or(false),
-        scheduled_end_date: params.scheduled_end_date,
-        has_end_time: params.has_end_time.unwrap_or(false),
-    };
-    // Item-level recurrence is retired (Stage 10 core) — nothing can ever set
-    // `pattern`/`basis` again, only `due_offset_days` survives here.
-    let recurrence_data = Recurrence {
-        pattern: None,
-        basis: None,
-        due_offset_days: params.due_offset_days,
+    let kind = match (parent_kind, parent_item_id) {
+        (Some(ItemKind::Template), Some(parent_id)) => kind.coerce_to_template(parent_id),
+        _ => kind,
     };
 
-    let team_assignment = if kind == ItemKind::Task {
-        let assigned_to_user_id = if params.assigned_to_user_id == current.assigned_to_user_id() {
-            current.assigned_to_user_id()
-        } else {
-            resolve_project_assignee(
-                projects,
-                &params.project_id,
-                params.assigned_to_user_id.clone(),
-            )
-            .await?
-        };
-        // Points authority is project-admin-only as of stage C1
-        // (docs/project-abstraction-plan.md) — moved off `team_members.role` onto
-        // `project_members.role`. A non-admin's request simply can't change the
-        // existing value — it's preserved as-is rather than erroring the rest of
-        // the (otherwise valid) update. Unlike the old `current.project_id.as_deref()`
-        // check this replaced, `params.project_id` is always known (it's the
-        // primary key this whole update is scoped by), so there's no longer an
-        // "unresolvable backing project" case to fall back on.
-        let points =
-            if require_project_admin(projects, teams, &params.project_id, requester_user_id)
+    let team_assignment = match &kind {
+        NewItemKind::Task(t) => {
+            let requested_assignee = t.assignment.assigned_to_user_id.clone();
+            let assigned_to_user_id = if requested_assignee == current.assigned_to_user_id() {
+                current.assigned_to_user_id()
+            } else {
+                resolve_project_assignee(projects, &project_id, requested_assignee).await?
+            };
+            // Points authority is project-admin-only as of stage C1
+            // (docs/project-abstraction-plan.md) — moved off `team_members.role` onto
+            // `project_members.role`. A non-admin's request simply can't change the
+            // existing value — it's preserved as-is rather than erroring the rest of
+            // the (otherwise valid) update. Unlike the old `current.project_id.as_deref()`
+            // check this replaced, `project_id` is always known (it's the
+            // primary key this whole update is scoped by), so there's no longer an
+            // "unresolvable backing project" case to fall back on.
+            let points = if require_project_admin(projects, teams, &project_id, requester_user_id)
                 .await
                 .is_ok()
             {
-                params.points
+                t.assignment.points
             } else {
                 current.points()
             };
-        Some(TeamAssignment {
-            assigned_to_user_id,
-            points,
-        })
-    } else {
-        None
+            Some(TeamAssignment {
+                assigned_to_user_id,
+                points,
+            })
+        }
+        _ => None,
     };
 
-    let mut item = Item::new_project_item(&params.project_id, &params.name);
-    item.id = params.item_id.clone();
-    item.description = params.description.clone();
-    item.item_type = build_item_type(
-        kind,
-        params.parent_item_id.clone(),
-        schedule,
-        recurrence_data,
-        params.event_type.clone(),
-        team_assignment,
-        params.source_event_id.clone(),
-        params.priority,
-        params.complete,
-        // Same reasoning as `items::update_item`'s project_id carry-forward — series
-        // membership is set once at materialization and never re-resolved from params.
-        current.series_id(),
-    );
+    let mut item = Item::new_project_item(&project_id, &edit.name);
+    item.id = edit.item_id.clone();
+    item.description = edit.description.clone();
+    item.item_type = build_item_type(kind, team_assignment);
 
-    let tz_offset = params.timezone_offset_minutes.unwrap_or(0);
+    let tz_offset = edit.timezone_offset_minutes.unwrap_or(0);
     if item.is_offset_driven() {
-        let anchor = resolve_offset_anchor_project(repo, &params.project_id, &item).await?;
+        let anchor = resolve_offset_anchor_project(repo, &project_id, &item).await?;
         let new_due_date = anchor.and_then(|a| item.deadline_from_offset(a, tz_offset));
         if let Some(schedule) = item.item_type.schedule_mut() {
             schedule.due_date = new_due_date;
@@ -628,13 +468,13 @@ pub async fn update_team_item(
         if points != 0 {
             // Points authority lives on `project_members` as of stage C1
             // (docs/project-abstraction-plan.md). As of Stage 4 of
-            // docs/team-id-removal-plan.md, `params.project_id` is this update's own
+            // docs/team-id-removal-plan.md, `project_id` is this update's own
             // primary key — always known, no `get_by_team` fallback needed (this is
             // the very bug docs/team-id-removal-plan.md exists to close: awarding
             // against a project id that can never go stale when a team is
             // attached/detached).
             projects
-                .add_project_points(&params.project_id, &assignee, points)
+                .add_project_points(&project_id, &assignee, points)
                 .await?;
         }
     }
@@ -656,9 +496,9 @@ pub async fn update_team_item(
     if just_completed || just_uncompleted {
         push::notify_completion_change(
             projects.clone(),
-            params.project_id.clone(),
+            project_id.clone(),
             item.name.clone(),
-            push::detail_url(&item, &params.project_id),
+            push::detail_url(&item, &project_id),
             requester_user_id.to_string(),
             just_completed,
         );
@@ -675,7 +515,7 @@ pub async fn update_team_item(
             assignee,
             requester_user_id.to_string(),
             item.name.clone(),
-            push::detail_url(&item, &params.project_id),
+            push::detail_url(&item, &project_id),
         );
     }
 
@@ -683,8 +523,8 @@ pub async fn update_team_item(
     // fix in `items::update_item` for the full explanation: descendants must be measured
     // against the true top-level ancestor's anchor, not `item`'s own (possibly offset-derived)
     // anchor.
-    let old_due_anchor = top_level_anchor_project(repo, &params.project_id, &current).await?;
-    let new_due_anchor = top_level_anchor_project(repo, &params.project_id, &item).await?;
+    let old_due_anchor = top_level_anchor_project(repo, &project_id, &current).await?;
+    let new_due_anchor = top_level_anchor_project(repo, &project_id, &item).await?;
     if let Some(new_due_anchor) = new_due_anchor
         && Some(new_due_anchor) != old_due_anchor
     {
@@ -708,6 +548,35 @@ pub async fn update_team_item(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::item::{EventItem, ItemType, Recurrence, Schedule, TaskItem, TemplateItem};
+    use crate::service::item_input::{EditItemKind, EditTask, NewTask, NewTemplate};
+
+    /// `create_team_item`/`update_team_item` take a kind-typed input as of Stage 8 of
+    /// docs/typed-item-params-plan.md, so every test below names only the fields its own
+    /// assertion is about and lets the variant supply the rest. Every one of them is a Task
+    /// — points, assignment and completion are Task-only, which is what this module's
+    /// behavior is about.
+    fn new_item(name: &str, kind: NewItemKind) -> NewItem {
+        NewItem {
+            project_id: "p1".to_string(),
+            name: name.to_string(),
+            description: None,
+            timezone_offset_minutes: None,
+            kind,
+        }
+    }
+
+    fn edit_item(item_id: &str, name: &str, kind: EditItemKind) -> EditItem {
+        EditItem {
+            project_id: "p1".to_string(),
+            item_id: item_id.to_string(),
+            name: name.to_string(),
+            description: None,
+            timezone_offset_minutes: None,
+            depends_on_item_ids: None,
+            kind,
+        }
+    }
     use crate::domain::activity_log::ActivityLogEntry;
     use crate::domain::team::TeamRole;
     use crate::storage::sqlite::{
@@ -770,12 +639,16 @@ mod tests {
             &teams,
             &projects,
             "member1",
-            CreateTeamItemParams {
-                project_id: "p1".to_string(),
-                name: "Mow the lawn".to_string(),
-                points: Some(50),
-                ..Default::default()
-            },
+            new_item(
+                "Mow the lawn",
+                NewItemKind::Task(NewTask {
+                    assignment: TeamAssignment {
+                        assigned_to_user_id: None,
+                        points: Some(50),
+                    },
+                    ..Default::default()
+                }),
+            ),
         )
         .await
         .expect("should create item");
@@ -808,13 +681,17 @@ mod tests {
             &teams,
             &projects,
             "member1",
-            CreateTeamItemParams {
-                project_id: "p1".to_string(),
-                name: "Standup".to_string(),
-                points: Some(50),
-                series_id: Some("s1".to_string()),
-                ..Default::default()
-            },
+            new_item(
+                "Standup",
+                NewItemKind::Task(NewTask {
+                    assignment: TeamAssignment {
+                        assigned_to_user_id: None,
+                        points: Some(50),
+                    },
+                    series_id: Some("s1".to_string()),
+                    ..Default::default()
+                }),
+            ),
         )
         .await
         .expect("should create item");
@@ -839,12 +716,16 @@ mod tests {
             &teams,
             &projects,
             "admin1",
-            CreateTeamItemParams {
-                project_id: "p1".to_string(),
-                name: "Mow the lawn".to_string(),
-                points: Some(50),
-                ..Default::default()
-            },
+            new_item(
+                "Mow the lawn",
+                NewItemKind::Task(NewTask {
+                    assignment: TeamAssignment {
+                        assigned_to_user_id: None,
+                        points: Some(50),
+                    },
+                    ..Default::default()
+                }),
+            ),
         )
         .await
         .expect("should create item");
@@ -905,13 +786,11 @@ mod tests {
             &ctx_with(teams, projects),
             "member1",
             "t1",
-            UpdateTeamItemParams {
-                project_id: "p1".to_string(),
-                item_id: "item1".to_string(),
-                name: "Trying to rename".to_string(),
-                complete: false,
-                ..Default::default()
-            },
+            edit_item(
+                "item1",
+                "Trying to rename",
+                EditItemKind::Task(EditTask::default()),
+            ),
         )
         .await
         .expect_err("should reject editing an imported item");
@@ -987,14 +866,17 @@ mod tests {
             &ctx_with(teams, projects),
             "member1",
             "t1",
-            UpdateTeamItemParams {
-                project_id: "p1".to_string(),
-                item_id: "item1".to_string(),
-                name: "Mow the lawn".to_string(),
-                complete: false,
-                points: Some(999),
-                ..Default::default()
-            },
+            edit_item(
+                "item1",
+                "Mow the lawn",
+                EditItemKind::Task(EditTask {
+                    assignment: TeamAssignment {
+                        assigned_to_user_id: None,
+                        points: Some(999),
+                    },
+                    ..Default::default()
+                }),
+            ),
         )
         .await
         .expect("should update item");
@@ -1025,14 +907,17 @@ mod tests {
             &ctx_with(teams, projects),
             "admin1",
             "t1",
-            UpdateTeamItemParams {
-                project_id: "p1".to_string(),
-                item_id: "item1".to_string(),
-                name: "Mow the lawn".to_string(),
-                complete: false,
-                points: Some(999),
-                ..Default::default()
-            },
+            edit_item(
+                "item1",
+                "Mow the lawn",
+                EditItemKind::Task(EditTask {
+                    assignment: TeamAssignment {
+                        assigned_to_user_id: None,
+                        points: Some(999),
+                    },
+                    ..Default::default()
+                }),
+            ),
         )
         .await
         .expect("should update item");
@@ -1069,13 +954,14 @@ mod tests {
             &ctx_with(teams, projects),
             "member1",
             "t1",
-            UpdateTeamItemParams {
-                project_id: "p1".to_string(),
-                item_id: "item1".to_string(),
-                name: "Mow the lawn".to_string(),
-                complete: true,
-                ..Default::default()
-            },
+            edit_item(
+                "item1",
+                "Mow the lawn",
+                EditItemKind::Task(EditTask {
+                    complete: true,
+                    ..Default::default()
+                }),
+            ),
         )
         .await
         .expect_err("should reject completing with an incomplete child");
@@ -1135,14 +1021,18 @@ mod tests {
             },
             "member1",
             "t1",
-            UpdateTeamItemParams {
-                project_id: "p1".to_string(),
-                item_id: "item1".to_string(),
-                name: "Mow the lawn".to_string(),
-                complete: true,
-                assigned_to_user_id: Some("member1".to_string()),
-                ..Default::default()
-            },
+            edit_item(
+                "item1",
+                "Mow the lawn",
+                EditItemKind::Task(EditTask {
+                    complete: true,
+                    assignment: TeamAssignment {
+                        assigned_to_user_id: Some("member1".to_string()),
+                        points: None,
+                    },
+                    ..Default::default()
+                }),
+            ),
         )
         .await
         .expect("should allow completion when all children are complete");
@@ -1174,13 +1064,14 @@ mod tests {
             &ctx_with(teams, projects),
             "member1",
             "t1",
-            UpdateTeamItemParams {
-                project_id: "p1".to_string(),
-                item_id: "item1".to_string(),
-                name: "Changed name".to_string(),
-                complete: true,
-                ..Default::default()
-            },
+            edit_item(
+                "item1",
+                "Changed name",
+                EditItemKind::Task(EditTask {
+                    complete: true,
+                    ..Default::default()
+                }),
+            ),
         )
         .await
         .expect_err("should reject editing a field on a completed item");
@@ -1218,13 +1109,11 @@ mod tests {
             &ctx_with(teams, projects),
             "member1",
             "t1",
-            UpdateTeamItemParams {
-                project_id: "p1".to_string(),
-                item_id: "item1".to_string(),
-                name: "Same name".to_string(),
-                complete: false,
-                ..Default::default()
-            },
+            edit_item(
+                "item1",
+                "Same name",
+                EditItemKind::Task(EditTask::default()),
+            ),
         )
         .await
         .expect("pure toggle should be allowed on a completed item");
@@ -1263,13 +1152,14 @@ mod tests {
             },
             "member1",
             "t1",
-            UpdateTeamItemParams {
-                project_id: "p1".to_string(),
-                item_id: "item1".to_string(),
-                name: "Mow the lawn".to_string(),
-                complete: true,
-                ..Default::default()
-            },
+            edit_item(
+                "item1",
+                "Mow the lawn",
+                EditItemKind::Task(EditTask {
+                    complete: true,
+                    ..Default::default()
+                }),
+            ),
         )
         .await
         .expect("completing an unassigned team item should now be allowed");
@@ -1322,14 +1212,18 @@ mod tests {
             },
             "someone-else",
             "t1",
-            UpdateTeamItemParams {
-                project_id: "p1".to_string(),
-                item_id: "item1".to_string(),
-                name: "Mow the lawn".to_string(),
-                complete: true,
-                assigned_to_user_id: Some("member1".to_string()),
-                ..Default::default()
-            },
+            edit_item(
+                "item1",
+                "Mow the lawn",
+                EditItemKind::Task(EditTask {
+                    complete: true,
+                    assignment: TeamAssignment {
+                        assigned_to_user_id: Some("member1".to_string()),
+                        points: None,
+                    },
+                    ..Default::default()
+                }),
+            ),
         )
         .await
         .expect("completion by a non-assignee project member should now be allowed");
@@ -1391,15 +1285,18 @@ mod tests {
             },
             "member1",
             "t1",
-            UpdateTeamItemParams {
-                project_id: "p1".to_string(),
-                item_id: "item1".to_string(),
-                name: "Mow the lawn".to_string(),
-                complete: true,
-                assigned_to_user_id: Some("member1".to_string()),
-                points: Some(20),
-                ..Default::default()
-            },
+            edit_item(
+                "item1",
+                "Mow the lawn",
+                EditItemKind::Task(EditTask {
+                    complete: true,
+                    assignment: TeamAssignment {
+                        assigned_to_user_id: Some("member1".to_string()),
+                        points: Some(20),
+                    },
+                    ..Default::default()
+                }),
+            ),
         )
         .await
         .expect("should award points on a genuine completion");
@@ -1452,14 +1349,18 @@ mod tests {
             },
             "member1",
             "t1",
-            UpdateTeamItemParams {
-                project_id: "p1".to_string(),
-                item_id: "item1".to_string(),
-                name: "Mow the lawn".to_string(),
-                complete: true,
-                assigned_to_user_id: Some("member1".to_string()),
-                ..Default::default()
-            },
+            edit_item(
+                "item1",
+                "Mow the lawn",
+                EditItemKind::Task(EditTask {
+                    complete: true,
+                    assignment: TeamAssignment {
+                        assigned_to_user_id: Some("member1".to_string()),
+                        points: None,
+                    },
+                    ..Default::default()
+                }),
+            ),
         )
         .await
         .expect("should log the completion without awarding points");
@@ -1495,15 +1396,18 @@ mod tests {
             &ctx_with(teams, projects),
             "member1",
             "t1",
-            UpdateTeamItemParams {
-                project_id: "p1".to_string(),
-                item_id: "item1".to_string(),
-                name: "Mow the lawn".to_string(),
-                complete: true,
-                assigned_to_user_id: Some("member1".to_string()),
-                points: Some(20),
-                ..Default::default()
-            },
+            edit_item(
+                "item1",
+                "Mow the lawn",
+                EditItemKind::Task(EditTask {
+                    complete: true,
+                    assignment: TeamAssignment {
+                        assigned_to_user_id: Some("member1".to_string()),
+                        points: Some(20),
+                    },
+                    ..Default::default()
+                }),
+            ),
         )
         .await
         .expect("no-op resubmit of an already-complete item should succeed with no award");
@@ -1573,15 +1477,17 @@ mod tests {
             },
             "member1",
             "t1",
-            UpdateTeamItemParams {
-                project_id: "p1".to_string(),
-                item_id: "item1".to_string(),
-                name: "Mow the lawn".to_string(),
-                complete: false,
-                assigned_to_user_id: Some("member1".to_string()),
-                points: Some(999),
-                ..Default::default()
-            },
+            edit_item(
+                "item1",
+                "Mow the lawn",
+                EditItemKind::Task(EditTask {
+                    assignment: TeamAssignment {
+                        assigned_to_user_id: Some("member1".to_string()),
+                        points: Some(999),
+                    },
+                    ..Default::default()
+                }),
+            ),
         )
         .await
         .expect("should reverse using the logged delta");
@@ -1619,14 +1525,17 @@ mod tests {
             },
             "member1",
             "t1",
-            UpdateTeamItemParams {
-                project_id: "p1".to_string(),
-                item_id: "item1".to_string(),
-                name: "Mow the lawn".to_string(),
-                complete: false,
-                assigned_to_user_id: Some("member1".to_string()),
-                ..Default::default()
-            },
+            edit_item(
+                "item1",
+                "Mow the lawn",
+                EditItemKind::Task(EditTask {
+                    assignment: TeamAssignment {
+                        assigned_to_user_id: Some("member1".to_string()),
+                        points: None,
+                    },
+                    ..Default::default()
+                }),
+            ),
         )
         .await
         .expect("uncompleting an item with no logged points should silently no-op");
@@ -1651,11 +1560,7 @@ mod tests {
             &teams,
             &projects,
             "member1",
-            CreateTeamItemParams {
-                project_id: "p1".to_string(),
-                name: "Mow the lawn".to_string(),
-                ..Default::default()
-            },
+            new_item("Mow the lawn", NewItemKind::Task(NewTask::default())),
         )
         .await
         .expect("should create team item");
@@ -1687,13 +1592,7 @@ mod tests {
             &ctx_with(teams, projects),
             "member1",
             "t1",
-            UpdateTeamItemParams {
-                project_id: "p1".to_string(),
-                item_id: "item1".to_string(),
-                name: "Renamed".to_string(),
-                complete: false,
-                ..Default::default()
-            },
+            edit_item("item1", "Renamed", EditItemKind::Task(EditTask::default())),
         )
         .await
         .expect("should update using params.project_id");
@@ -1735,13 +1634,15 @@ mod tests {
             &teams,
             &projects,
             "member1",
-            CreateTeamItemParams {
-                project_id: "p1".to_string(),
-                name: "Book venue".to_string(),
-                parent_item_id: Some("tpl1".to_string()),
-                item_type: Some(ItemKind::Template),
-                ..Default::default()
-            },
+            new_item(
+                "Book venue",
+                NewItemKind::Template(NewTemplate {
+                    parent_item_id: "tpl1".to_string(),
+                    schedule: Schedule::default(),
+                    event_type: None,
+                    due_offset_days: None,
+                }),
+            ),
         )
         .await
         .expect("a template child is not a library template");

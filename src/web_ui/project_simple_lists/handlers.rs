@@ -256,7 +256,7 @@ pub async fn create_project_simple_item_form(
     // a Simple one.
     let parent_item_id = super::non_empty(&form.parent_item_id);
     let params = create_params_from_form(&project_id, &form);
-    project_item_service::create_item_typed(
+    project_item_service::create_project_item(
         &repo,
         &projects,
         &teams,
@@ -314,7 +314,7 @@ pub async fn create_project_simple_items_batch(
                 parent_item_id: parent_item_id.clone(),
             }),
         };
-        project_item_service::create_item_typed(
+        project_item_service::create_project_item(
             &repo,
             &projects,
             &teams,
@@ -363,7 +363,7 @@ pub async fn update_project_simple_item_form(
     let current = require_simple(current)?;
     let close = form.redirect.is_some();
     let params = update_params_from_form(&project_id, &item_id, &current, &form);
-    project_item_service::update_item_typed(
+    project_item_service::update_project_item(
         &repo,
         &projects,
         &teams,
@@ -604,7 +604,7 @@ pub async fn move_project_simple_item_form(
         (require_simple(target.current)?, Some(target.new_parent.id))
     };
     let params = reparent_params(&project_id, &item_id, &current, new_parent_item_id);
-    project_item_service::update_item_typed(
+    project_item_service::update_project_item(
         &repo,
         &projects,
         &teams,

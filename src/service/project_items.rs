@@ -1,15 +1,13 @@
-use crate::domain::item::{Item, ItemKind, ItemType};
+use crate::domain::item::{Item, ItemType};
 use crate::domain::project::Project;
 use crate::service::error::ItemError;
 use crate::service::item_dependencies;
 use crate::service::item_input::{EditItem, NewItem};
 use crate::service::item_series;
-use crate::service::items::{self, CreateItemParams, UpdateItemParams, item_anchor};
+use crate::service::items::{self, item_anchor};
 use crate::service::projects::require_project_member;
 use crate::service::reminders;
-use crate::service::team_items::{
-    self, CreateTeamItemParams, UpdateTeamItemContext, UpdateTeamItemParams,
-};
+use crate::service::team_items::{self, UpdateTeamItemContext};
 use crate::storage::sqlite::{
     ActivityLogRepo, DueItem, ItemDependencyRepo, ItemRepo, ItemSeriesRepo, ProjectRepo,
     ReminderRepo, TeamRepo,
@@ -226,33 +224,6 @@ pub async fn resolve_subordination_target(
     })
 }
 
-#[derive(Debug, Default)]
-pub struct CreateProjectItemParams {
-    pub project_id: String,
-    pub name: String,
-    pub description: Option<String>,
-    pub due_date: Option<DateTime<Utc>>,
-    pub scheduled_date: Option<DateTime<Utc>>,
-    pub scheduled_end_date: Option<DateTime<Utc>>,
-    pub complete: Option<bool>,
-    pub has_due_time: Option<bool>,
-    pub has_scheduled_time: Option<bool>,
-    pub has_end_time: Option<bool>,
-    pub parent_item_id: Option<String>,
-    pub item_type: Option<ItemKind>,
-    pub event_type: Option<String>,
-    pub due_offset_days: Option<i32>,
-    pub assigned_to_user_id: Option<String>,
-    pub source_event_id: Option<String>,
-    pub timezone_offset_minutes: Option<i32>,
-    pub points: Option<i32>,
-    /// Task-only, ungated — see root CLAUDE.md's Priority section.
-    pub priority: Option<i32>,
-    /// Internal-only — never exposed via Smithy/CLI/MCP. Set exclusively by
-    /// `service::item_series::get_or_materialize_occurrence`.
-    pub series_id: Option<String>,
-}
-
 /// Stage B4's unified create path. Rather than reimplementing the recurrence/
 /// offset/event-trigger/points machinery a third time, this resolves `project_id`
 /// down to a plain `user_id` (personal project) or delegates straight to
@@ -261,113 +232,32 @@ pub struct CreateProjectItemParams {
 /// items still dual-write `user_id` exactly like those do, keeping the legacy read
 /// APIs consistent (see docs/project-abstraction-plan.md's stage B4 dual-write-bridge
 /// verification). Team-backed items no longer dual-write `items.team_id` — that
-/// column was dropped in Stage 6 of docs/team-id-removal-plan.md. `assigned_to_user_id`/
-/// `points` are simply dropped for a personal project — `CreateItemParams` has no slot
-/// for either, matching personal items never having carried a `TeamAssignment` at all.
+/// column was dropped in Stage 6 of docs/team-id-removal-plan.md.
+///
+/// Takes a kind-typed `NewItem` as of Stage 8 of docs/typed-item-params-plan.md; the flat
+/// `CreateProjectItemParams` it used to take, and the `create_item_typed` shim that stood in
+/// front of it through Stages 2-7, are both gone. `NewTask::assignment` is simply dropped on
+/// the personal branch — a personal item has never carried a `TeamAssignment` at all.
 pub async fn create_project_item(
     repo: &Arc<dyn ItemRepo>,
     projects: &Arc<dyn ProjectRepo>,
     teams: &Arc<dyn TeamRepo>,
     reminders_repo: &Arc<dyn ReminderRepo>,
     requester_user_id: &str,
-    params: CreateProjectItemParams,
+    new: NewItem,
 ) -> Result<String, ItemError> {
-    require_project_member(projects, teams, &params.project_id, requester_user_id).await?;
-    let project = projects.get(&params.project_id).await?;
-    let project_id = params.project_id.clone();
+    require_project_member(projects, teams, &new.project_id, requester_user_id).await?;
+    let project = projects.get(&new.project_id).await?;
+    let project_id = new.project_id.clone();
     let item_id = match project.team_id {
         Some(_) => {
-            team_items::create_team_item(
-                repo,
-                teams,
-                projects,
-                requester_user_id,
-                CreateTeamItemParams {
-                    project_id: params.project_id,
-                    name: params.name,
-                    description: params.description,
-                    due_date: params.due_date,
-                    scheduled_date: params.scheduled_date,
-                    scheduled_end_date: params.scheduled_end_date,
-                    complete: params.complete,
-                    has_due_time: params.has_due_time,
-                    has_scheduled_time: params.has_scheduled_time,
-                    has_end_time: params.has_end_time,
-                    parent_item_id: params.parent_item_id,
-                    item_type: params.item_type,
-                    event_type: params.event_type,
-                    due_offset_days: params.due_offset_days,
-                    assigned_to_user_id: params.assigned_to_user_id,
-                    source_event_id: params.source_event_id,
-                    timezone_offset_minutes: params.timezone_offset_minutes,
-                    points: params.points,
-                    priority: params.priority,
-                    series_id: params.series_id,
-                },
-            )
-            .await
+            team_items::create_team_item(repo, teams, projects, requester_user_id, new).await
         }
-        None => {
-            items::create_item(
-                repo,
-                projects,
-                CreateItemParams {
-                    user_id: project.owner_user_id,
-                    name: params.name,
-                    description: params.description,
-                    due_date: params.due_date,
-                    scheduled_date: params.scheduled_date,
-                    scheduled_end_date: params.scheduled_end_date,
-                    complete: params.complete,
-                    has_due_time: params.has_due_time,
-                    has_scheduled_time: params.has_scheduled_time,
-                    has_end_time: params.has_end_time,
-                    parent_item_id: params.parent_item_id,
-                    item_type: params.item_type,
-                    event_type: params.event_type,
-                    due_offset_days: params.due_offset_days,
-                    source_event_id: params.source_event_id,
-                    timezone_offset_minutes: params.timezone_offset_minutes,
-                    series_id: params.series_id,
-                    priority: params.priority,
-                },
-            )
-            .await
-        }
+        None => items::create_item(repo, projects, &project.owner_user_id, new).await,
     }?;
     let item = repo.get_by_project(&project_id, &item_id).await?;
     reminders::sync_item_reminders(reminders_repo, projects, &item).await?;
     Ok(item_id)
-}
-
-#[derive(Debug, Default)]
-pub struct UpdateProjectItemParams {
-    pub project_id: String,
-    pub item_id: String,
-    pub name: String,
-    pub description: Option<String>,
-    pub due_date: Option<DateTime<Utc>>,
-    pub scheduled_date: Option<DateTime<Utc>>,
-    pub scheduled_end_date: Option<DateTime<Utc>>,
-    pub complete: bool,
-    pub has_due_time: Option<bool>,
-    pub has_scheduled_time: Option<bool>,
-    pub has_end_time: Option<bool>,
-    pub parent_item_id: Option<String>,
-    pub item_type: Option<ItemKind>,
-    pub event_type: Option<String>,
-    pub due_offset_days: Option<i32>,
-    pub assigned_to_user_id: Option<String>,
-    pub source_event_id: Option<String>,
-    pub timezone_offset_minutes: Option<i32>,
-    pub points: Option<i32>,
-    /// Task-only, ungated — see root CLAUDE.md's Priority section.
-    pub priority: Option<i32>,
-    /// "Depends on" (docs/issues_and_features.md) — `None` means "leave dependencies
-    /// unchanged" (deliberately not this struct's usual direct-overwrite-Option
-    /// convention; see `service::item_dependencies::set_item_dependencies`'s doc comment
-    /// for why). `Some(vec![])` clears every dependency.
-    pub depends_on_item_ids: Option<Vec<String>>,
 }
 
 /// Stage B4's unified update path — same delegation shape as `create_project_item`.
@@ -375,12 +265,20 @@ pub struct UpdateProjectItemParams {
 /// reversal, see `team_items::update_team_item`); the personal branch's
 /// `items::update_item` has no use for it at all.
 ///
+/// Takes a kind-typed `EditItem` as of Stage 8 of docs/typed-item-params-plan.md. One
+/// field on it is the envelope's rather than any kind's: `depends_on_item_ids`, where
+/// `None` means "leave dependencies unchanged" (deliberately not the direct-overwrite
+/// convention every other field follows; see
+/// `service::item_dependencies::set_item_dependencies`'s doc comment for why) and
+/// `Some(vec![])` clears them.
+///
 /// `series` (Stage 9 of docs/recurring-events-virtual-occurrences-rough-plan.md)
 /// is the completion-side counterpart to `delete_project_item`'s own `series`
 /// parameter: after a successful update that requests `complete: true`, this calls
 /// `item_series::record_task_completion` — a cheap no-op for the overwhelmingly common
-/// case (`item_id` never came from a series). Gated on `params.complete` rather than
-/// on detecting an actual incomplete→complete *transition*, since `record_task_completion`'s
+/// case (`item_id` never came from a series). Gated on the request's own completion flag
+/// rather than on detecting an actual incomplete→complete *transition*, since
+/// `record_task_completion`'s
 /// own cursor advance is already idempotent (`advance_cursor`'s forward-only max) — no
 /// extra pre-read of the item's prior state is needed to make this safe to call on a
 /// no-op re-completion. Stage 10a added a *pre*-persistence counterpart,
@@ -396,7 +294,8 @@ pub struct UpdateProjectItemParams {
 /// `item_series::validate_uncompletable` (pre-persistence, rejection) and
 /// `item_series::record_task_uncompletion` (post-persistence, cursor restore) are
 /// gated on `was_complete` — a real fetch-and-check of the item's prior state — rather
-/// than on `!params.complete` alone.
+/// than on the request's flag alone.
+#[allow(clippy::too_many_arguments)]
 pub async fn update_project_item(
     repo: &Arc<dyn ItemRepo>,
     projects: &Arc<dyn ProjectRepo>,
@@ -406,14 +305,18 @@ pub async fn update_project_item(
     reminders_repo: &Arc<dyn ReminderRepo>,
     item_dependencies_repo: &Arc<dyn ItemDependencyRepo>,
     requester_user_id: &str,
-    params: UpdateProjectItemParams,
+    mut edit: EditItem,
 ) -> Result<(), ItemError> {
-    require_project_member(projects, teams, &params.project_id, requester_user_id).await?;
-    let project = projects.get(&params.project_id).await?;
-    let complete = params.complete;
-    let item_id = params.item_id.clone();
-    let project_id = params.project_id.clone();
-    let depends_on_item_ids = params.depends_on_item_ids.clone();
+    require_project_member(projects, teams, &edit.project_id, requester_user_id).await?;
+    let project = projects.get(&edit.project_id).await?;
+    let complete = edit.kind.complete();
+    let item_id = edit.item_id.clone();
+    let project_id = edit.project_id.clone();
+    let tz_offset_minutes = edit.timezone_offset_minutes.unwrap_or(0);
+    // Taken off the envelope rather than cloned: dependencies are a side-table write this
+    // function performs itself after the dispatch below, never something the two branches
+    // are handed (see `has_incomplete_dependencies`' doc comment).
+    let depends_on_item_ids = edit.depends_on_item_ids.take();
 
     // `was_complete` is this item's *pre-update* completion state — needed below for three
     // things: gating the Task-series uncomplete-order check and `record_task_uncompletion`
@@ -431,12 +334,7 @@ pub async fn update_project_item(
     // happens — `record_task_completion` below only ever runs after a successful
     // persist, so it can no longer be the rejection point.
     if complete {
-        item_series::validate_completable(
-            series,
-            &item_id,
-            params.timezone_offset_minutes.unwrap_or(0),
-        )
-        .await?;
+        item_series::validate_completable(series, &item_id, tz_offset_minutes).await?;
         // "Depends on" (docs/issues_and_features.md): reject a fresh incomplete->complete
         // transition while any dependency is still incomplete — the same shape as
         // `service::items::has_incomplete_children`'s own gate, just resolved one layer up
@@ -475,70 +373,19 @@ pub async fn update_project_item(
                 },
                 requester_user_id,
                 &team_id,
-                UpdateTeamItemParams {
-                    project_id: params.project_id,
-                    item_id: params.item_id,
-                    name: params.name,
-                    description: params.description,
-                    due_date: params.due_date,
-                    scheduled_date: params.scheduled_date,
-                    scheduled_end_date: params.scheduled_end_date,
-                    complete: params.complete,
-                    has_due_time: params.has_due_time,
-                    has_scheduled_time: params.has_scheduled_time,
-                    has_end_time: params.has_end_time,
-                    parent_item_id: params.parent_item_id,
-                    item_type: params.item_type,
-                    event_type: params.event_type,
-                    due_offset_days: params.due_offset_days,
-                    assigned_to_user_id: params.assigned_to_user_id,
-                    source_event_id: params.source_event_id,
-                    timezone_offset_minutes: params.timezone_offset_minutes,
-                    points: params.points,
-                    priority: params.priority,
-                },
+                edit,
             )
             .await
         }
         None => {
-            items::update_item(
-                repo,
-                projects,
-                activity_log,
-                UpdateItemParams {
-                    user_id: project.owner_user_id,
-                    item_id: params.item_id,
-                    name: params.name,
-                    description: params.description,
-                    due_date: params.due_date,
-                    scheduled_date: params.scheduled_date,
-                    scheduled_end_date: params.scheduled_end_date,
-                    complete: params.complete,
-                    has_due_time: params.has_due_time,
-                    has_scheduled_time: params.has_scheduled_time,
-                    has_end_time: params.has_end_time,
-                    parent_item_id: params.parent_item_id,
-                    item_type: params.item_type,
-                    event_type: params.event_type,
-                    due_offset_days: params.due_offset_days,
-                    source_event_id: params.source_event_id,
-                    timezone_offset_minutes: params.timezone_offset_minutes,
-                    priority: params.priority,
-                },
-            )
-            .await
+            items::update_item(repo, projects, activity_log, &project.owner_user_id, edit).await
         }
     };
     result?;
     if complete {
         item_series::record_task_completion(series, &item_id).await?;
     } else if was_complete {
-        item_series::record_task_uncompletion(
-            series,
-            &item_id,
-            params.timezone_offset_minutes.unwrap_or(0),
-        )
-        .await?;
+        item_series::record_task_uncompletion(series, &item_id, tz_offset_minutes).await?;
     }
     let item = repo.get_by_project(&project_id, &item_id).await?;
     reminders::sync_item_reminders(reminders_repo, projects, &item).await?;
@@ -665,66 +512,43 @@ pub async fn delete_project_item(
     Ok(())
 }
 
-/// Kind-typed entry point to `create_project_item`, taking a `NewItem` instead of the flat
-/// `CreateProjectItemParams`. Every caller that knows its kind statically — which is all but
-/// `json_api::project_items` — should use this; see `docs/typed-item-params-plan.md`. The
-/// conversion is the only thing this adds today; once every caller has migrated, this becomes
-/// `create_project_item` itself and the flat struct goes away (that plan's Stage 8).
-pub async fn create_item_typed(
-    repo: &Arc<dyn ItemRepo>,
-    projects: &Arc<dyn ProjectRepo>,
-    teams: &Arc<dyn TeamRepo>,
-    reminders_repo: &Arc<dyn ReminderRepo>,
-    requester_user_id: &str,
-    new: NewItem,
-) -> Result<String, ItemError> {
-    create_project_item(
-        repo,
-        projects,
-        teams,
-        reminders_repo,
-        requester_user_id,
-        new.into(),
-    )
-    .await
-}
-
-/// Kind-typed entry point to `update_project_item` — `create_item_typed`'s counterpart.
-#[allow(clippy::too_many_arguments)]
-pub async fn update_item_typed(
-    repo: &Arc<dyn ItemRepo>,
-    projects: &Arc<dyn ProjectRepo>,
-    teams: &Arc<dyn TeamRepo>,
-    activity_log: &Arc<dyn ActivityLogRepo>,
-    series: &Arc<dyn ItemSeriesRepo>,
-    reminders_repo: &Arc<dyn ReminderRepo>,
-    item_dependencies_repo: &Arc<dyn ItemDependencyRepo>,
-    requester_user_id: &str,
-    edit: EditItem,
-) -> Result<(), ItemError> {
-    update_project_item(
-        repo,
-        projects,
-        teams,
-        activity_log,
-        series,
-        reminders_repo,
-        item_dependencies_repo,
-        requester_user_id,
-        edit.into(),
-    )
-    .await
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::item::{ItemKind, TeamAssignment};
     use crate::domain::project::Project;
     use crate::domain::team::TeamRole;
+    use crate::service::item_input::{EditItemKind, EditTask, NewItemKind, NewTask};
     use crate::storage::sqlite::{
         MockActivityLogRepo, MockItemDependencyRepo, MockItemRepo, MockItemSeriesRepo,
         MockProjectRepo, MockReminderRepo, MockTeamRepo,
     };
+
+    /// `create_project_item`/`update_project_item` take a kind-typed input as of Stage 8 of
+    /// docs/typed-item-params-plan.md. Every test below is a Task — this module's own
+    /// behavior (completion transitions, the dependency guard, the series cursor, the
+    /// personal-vs-team dispatch) is all Task-shaped.
+    fn new_item(name: &str, kind: NewItemKind) -> NewItem {
+        NewItem {
+            project_id: "p1".to_string(),
+            name: name.to_string(),
+            description: None,
+            timezone_offset_minutes: None,
+            kind,
+        }
+    }
+
+    fn edit_item(item_id: &str, name: &str, kind: EditItemKind) -> EditItem {
+        EditItem {
+            project_id: "p1".to_string(),
+            item_id: item_id.to_string(),
+            name: name.to_string(),
+            description: None,
+            timezone_offset_minutes: None,
+            depends_on_item_ids: None,
+            kind,
+        }
+    }
 
     /// Every `delete_project_item` test but the dedicated series-unlinking one below just
     /// needs the reverse lookup to be a harmless no-op — this is what those tests share.
@@ -936,11 +760,7 @@ mod tests {
             &teams,
             &reminders,
             "owner1",
-            CreateProjectItemParams {
-                project_id: "p1".to_string(),
-                name: "Buy milk".to_string(),
-                ..Default::default()
-            },
+            new_item("Buy milk", NewItemKind::Task(NewTask::default())),
         )
         .await
         .expect("should create personal project item");
@@ -979,11 +799,7 @@ mod tests {
             &teams,
             &reminders,
             "member1",
-            CreateProjectItemParams {
-                project_id: "p1".to_string(),
-                name: "Mow the lawn".to_string(),
-                ..Default::default()
-            },
+            new_item("Mow the lawn", NewItemKind::Task(NewTask::default())),
         )
         .await
         .expect("should create team project item");
@@ -1008,11 +824,7 @@ mod tests {
             &teams,
             &reminders,
             "not-owner",
-            CreateProjectItemParams {
-                project_id: "p1".to_string(),
-                name: "Sneaky".to_string(),
-                ..Default::default()
-            },
+            new_item("Sneaky", NewItemKind::Task(NewTask::default())),
         )
         .await;
         assert!(result.is_err());
@@ -1055,13 +867,7 @@ mod tests {
             &reminders,
             &item_dependencies,
             "owner1",
-            UpdateProjectItemParams {
-                project_id: "p1".to_string(),
-                item_id: "i1".to_string(),
-                name: "New name".to_string(),
-                complete: false,
-                ..Default::default()
-            },
+            edit_item("i1", "New name", EditItemKind::Task(EditTask::default())),
         )
         .await
         .expect("should update personal project item");
@@ -1103,13 +909,14 @@ mod tests {
             &reminders,
             &item_dependencies,
             "owner1",
-            UpdateProjectItemParams {
-                project_id: "p1".to_string(),
-                item_id: "i1".to_string(),
-                name: "Task".to_string(),
-                complete: true,
-                ..Default::default()
-            },
+            edit_item(
+                "i1",
+                "Task",
+                EditItemKind::Task(EditTask {
+                    complete: true,
+                    ..Default::default()
+                }),
+            ),
         )
         .await
         .expect_err("should reject completion while a dependency is incomplete");
@@ -1162,13 +969,17 @@ mod tests {
             &reminders,
             &item_dependencies,
             "owner1",
-            UpdateProjectItemParams {
-                project_id: "p1".to_string(),
-                item_id: "i1".to_string(),
-                name: "Task".to_string(),
-                complete: true,
-                depends_on_item_ids: Some(vec!["dep1".to_string()]),
-                ..Default::default()
+            {
+                let mut edit = edit_item(
+                    "i1",
+                    "Task",
+                    EditItemKind::Task(EditTask {
+                        complete: true,
+                        ..Default::default()
+                    }),
+                );
+                edit.depends_on_item_ids = Some(vec!["dep1".to_string()]);
+                edit
             },
         )
         .await
@@ -1237,13 +1048,14 @@ mod tests {
             &reminders,
             &item_dependencies,
             "owner1",
-            UpdateProjectItemParams {
-                project_id: "p1".to_string(),
-                item_id: "i1".to_string(),
-                name: "Old name".to_string(),
-                complete: true,
-                ..Default::default()
-            },
+            edit_item(
+                "i1",
+                "Old name",
+                EditItemKind::Task(EditTask {
+                    complete: true,
+                    ..Default::default()
+                }),
+            ),
         )
         .await
         .expect("should update and check for a linked series occurrence");
@@ -1299,13 +1111,7 @@ mod tests {
             &reminders,
             &item_dependencies,
             "owner1",
-            UpdateProjectItemParams {
-                project_id: "p1".to_string(),
-                item_id: "i1".to_string(),
-                name: "Old name".to_string(),
-                complete: false,
-                ..Default::default()
-            },
+            edit_item("i1", "Old name", EditItemKind::Task(EditTask::default())),
         )
         .await
         .expect("should update and check for a linked series occurrence");
@@ -1348,13 +1154,7 @@ mod tests {
             &reminders,
             &item_dependencies,
             "member1",
-            UpdateProjectItemParams {
-                project_id: "p1".to_string(),
-                item_id: "i1".to_string(),
-                name: "New name".to_string(),
-                complete: false,
-                ..Default::default()
-            },
+            edit_item("i1", "New name", EditItemKind::Task(EditTask::default())),
         )
         .await
         .expect("should update team project item");
@@ -1511,15 +1311,17 @@ mod tests {
             &reminders,
             &item_dependencies,
             "member1",
-            UpdateProjectItemParams {
-                project_id: "p1".to_string(),
-                item_id: "i1".to_string(),
-                name: "Standup".to_string(),
-                complete: false,
-                assigned_to_user_id: Some("member1".to_string()),
-                points: Some(15),
-                ..Default::default()
-            },
+            edit_item(
+                "i1",
+                "Standup",
+                EditItemKind::Task(EditTask {
+                    assignment: TeamAssignment {
+                        assigned_to_user_id: Some("member1".to_string()),
+                        points: Some(15),
+                    },
+                    ..Default::default()
+                }),
+            ),
         )
         .await
         .expect("should reverse points and restore the series cursor together");
@@ -1664,13 +1466,11 @@ mod tests {
             &reminders,
             &item_dependencies,
             "member1",
-            UpdateProjectItemParams {
-                project_id: "p1".to_string(),
-                item_id: "i1".to_string(),
-                name: "New name".to_string(),
-                complete: false,
-                ..Default::default()
-            },
+            edit_item(
+                "i1",
+                "New name",
+                EditItemKind::Task(EditTask::default()),
+            ),
         )
         .await
         .expect(

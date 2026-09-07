@@ -1038,7 +1038,7 @@ pub async fn update_project_task_series_occurrence_form(
     )
     .await?;
     let edit = update_params_from_form(&project_id, &item.id, &item, &form, tz);
-    project_item_service::update_item_typed(
+    project_item_service::update_project_item(
         &repo,
         &projects,
         &teams,
@@ -1151,7 +1151,7 @@ pub async fn complete_project_item_series_occurrence_form(
         ..Default::default()
     };
     let edit = update_params_from_form(&project_id, &item.id, &item, &form, tz);
-    project_item_service::update_item_typed(
+    project_item_service::update_project_item(
         &repo,
         &projects,
         &teams,
@@ -1321,7 +1321,7 @@ pub async fn create_project_task_series_occurrence_child_form(
             ..Default::default()
         }),
     };
-    project_item_service::create_item_typed(
+    project_item_service::create_project_item(
         &repo,
         &projects,
         &teams,
@@ -1568,7 +1568,7 @@ pub async fn update_project_task_series_child_occurrence_form(
     )
     .await?;
     let edit = update_params_from_form(&project_id, &item.id, &item, &form, tz);
-    project_item_service::update_item_typed(
+    project_item_service::update_project_item(
         &repo,
         &projects,
         &teams,
@@ -1631,7 +1631,7 @@ pub async fn complete_project_task_series_child_occurrence_form(
         ..Default::default()
     };
     let edit = update_params_from_form(&project_id, &item.id, &item, &form, tz);
-    project_item_service::update_item_typed(
+    project_item_service::update_project_item(
         &repo,
         &projects,
         &teams,
@@ -1877,7 +1877,7 @@ pub async fn create_project_task_form(
     // uses (see Stage 2's note in docs/typed-item-params-plan.md).
     let parent_item_id = non_empty(&form.parent_item_id);
     let new = create_params_from_form(&project_id, &form, tz);
-    project_item_service::create_item_typed(
+    project_item_service::create_project_item(
         &repo,
         &projects,
         &teams,
@@ -1958,7 +1958,7 @@ pub async fn create_project_tasks_batch(
                 ..Default::default()
             }),
         };
-        project_item_service::create_item_typed(
+        project_item_service::create_project_item(
             &repo,
             &projects,
             &teams,
@@ -2245,7 +2245,7 @@ pub async fn batch_set_priority_form(
         let mut task = EditTask::from_item(item);
         task.priority = new_priority;
         let edit = identity_edit(&project_id, item, tz, task);
-        project_item_service::update_item_typed(
+        project_item_service::update_project_item(
             &repo,
             &projects,
             &teams,
@@ -2339,7 +2339,7 @@ pub async fn batch_set_dates_form(
                 overlay_has_due_time(&form.scheduled_end_time, item.has_end_time());
         }
         let edit = identity_edit(&project_id, item, tz, task);
-        project_item_service::update_item_typed(
+        project_item_service::update_project_item(
             &repo,
             &projects,
             &teams,
@@ -2400,7 +2400,7 @@ pub async fn batch_set_offset_form(
         let mut task = EditTask::from_item(item);
         task.due_offset_days = new_offset;
         let edit = identity_edit(&project_id, item, tz, task);
-        project_item_service::update_item_typed(
+        project_item_service::update_project_item(
             &repo,
             &projects,
             &teams,
@@ -2469,7 +2469,7 @@ pub async fn batch_set_assignee_form(
         let mut task = EditTask::from_item(item);
         task.assignment.assigned_to_user_id = new_assignee.clone();
         let edit = identity_edit(&project_id, item, tz, task);
-        project_item_service::update_item_typed(
+        project_item_service::update_project_item(
             &repo,
             &projects,
             &teams,
@@ -2513,7 +2513,7 @@ pub async fn update_project_task_form(
     let close = form.redirect.is_some();
     let row_view = super::normalize_row_view(view_q);
     let edit = update_params_from_form(&project_id, &item_id, &current, &form, tz);
-    project_item_service::update_item_typed(
+    project_item_service::update_project_item(
         &repo,
         &projects,
         &teams,
@@ -3071,7 +3071,7 @@ pub async fn move_project_task_form(
         )
     };
     let edit = reparent_edit(&project_id, &current, new_parent_item_id, offset_anchor, tz)?;
-    project_item_service::update_item_typed(
+    project_item_service::update_project_item(
         &repo,
         &projects,
         &teams,
@@ -3395,6 +3395,16 @@ mod reparent_edit_tests {
     use super::*;
     use crate::domain::item::{ItemType, TaskItem};
 
+    /// `reparent_edit`'s whole job is picking the right `TaskAnchor`, so that is what these
+    /// read back — the two flat `parent_item_id`/`source_event_id` fields they used to assert
+    /// on no longer exist anywhere between here and storage.
+    fn anchor_of(edit: EditItem) -> TaskAnchor {
+        match edit.kind {
+            EditItemKind::Task(task) => task.anchor,
+            other => panic!("reparent_edit must produce a Task edit, got {other:?}"),
+        }
+    }
+
     fn task(f: impl FnOnce(&mut TaskItem)) -> Item {
         let mut t = TaskItem::default();
         f(&mut t);
@@ -3417,9 +3427,7 @@ mod reparent_edit_tests {
             0,
         )
         .expect("a plain task has no event link to conflict with");
-        let p: crate::service::project_items::UpdateProjectItemParams = edit.into();
-        assert_eq!(p.parent_item_id.as_deref(), Some("newparent"));
-        assert_eq!(p.source_event_id, None);
+        assert_eq!(anchor_of(edit), TaskAnchor::Parent("newparent".to_string()));
     }
 
     /// Promoting an event-linked task to top level keeps the link — `TaskAnchor` carries the
@@ -3434,9 +3442,7 @@ mod reparent_edit_tests {
             0,
         )
         .expect("promotion to top level conflicts with nothing");
-        let p: crate::service::project_items::UpdateProjectItemParams = edit.into();
-        assert_eq!(p.parent_item_id, None);
-        assert_eq!(p.source_event_id.as_deref(), Some("ev1"));
+        assert_eq!(anchor_of(edit), TaskAnchor::SourceEvent("ev1".to_string()));
     }
 
     /// The rejection `Item::validate()` used to raise one layer down, now raised where the

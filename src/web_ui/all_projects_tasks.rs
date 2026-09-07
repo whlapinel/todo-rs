@@ -755,7 +755,7 @@ pub async fn toggle_all_projects_task_complete(
         depends_on_item_ids: None,
         kind: EditItemKind::Task(task),
     };
-    project_item_service::update_item_typed(
+    project_item_service::update_project_item(
         &repo,
         &projects,
         &teams,

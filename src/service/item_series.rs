@@ -105,7 +105,8 @@ pub async fn get_or_materialize_occurrence(
     // would be a series this module cannot materialize at all, which is what the `Err` says.
     //
     // Each arm carries only what its kind can hold, and every field that disappears was
-    // already being dropped by `build_item_type` one layer down — `resolve_series_assignment`
+    // already being dropped by `item_input::build_item_type` one layer down —
+    // `resolve_series_assignment`
     // and `validate_series_priority` reject assignment/points/priority on an Event series at
     // the input boundary, so those are structurally `None` here, and `validate_series_event_type`
     // has rejected `event_type` on *any* series since 2026-08-15 (a legacy Event-typed row
@@ -133,7 +134,7 @@ pub async fn get_or_materialize_occurrence(
             )));
         }
     };
-    let item_id = project_items::create_item_typed(
+    let item_id = project_items::create_project_item(
         repo,
         projects,
         teams,
@@ -266,7 +267,7 @@ pub async fn get_or_materialize_child_occurrence(
     // such an occurrence today. Closing it means changing shared behavior (what `item_anchor`
     // reads, or what basis a series with sub-items materializes onto), which is deliberately
     // not decided here.
-    let item_id = project_items::create_item_typed(
+    let item_id = project_items::create_project_item(
         repo,
         projects,
         teams,
@@ -959,8 +960,7 @@ fn validate_series_basis(
 
 /// Stage 7c originally let `event_type` through on an `Event`-typed series (rejecting it
 /// only on a `Task` series, whose materialized `Item` has no `event_type` slot to begin
-/// with — `ItemType::Task` carries no such field, see `domain::item::build_item_type`/
-/// `ItemType`). As of 2026-08-15, `event_type` is unconditionally unsupported on *any*
+/// with — `ItemType::Task` carries no such field, see `domain::item::ItemType`). As of 2026-08-15, `event_type` is unconditionally unsupported on *any*
 /// series, Task or Event: `get_or_materialize_occurrence` routes through the same
 /// `create_project_item` call path the legacy per-creation template-trigger mechanism
 /// (CLAUDE.md's Events section — matching `event_type` to auto-copy a template's children

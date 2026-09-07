@@ -335,7 +335,7 @@ pub async fn import_project_items(
         };
         new.timezone_offset_minutes = timezone_offset_minutes;
 
-        match project_items::create_item_typed(
+        match project_items::create_project_item(
             repo,
             projects,
             teams,

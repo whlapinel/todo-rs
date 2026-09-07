@@ -415,7 +415,63 @@ per this repo's convention (`docs/archived/team-id-removal-plan.md`,
    `CreateItemParams`/`UpdateItemParams`/`CreateTeamItemParams`/`UpdateTeamItemParams`; have
    `items::create_item` and `team_items::create_team_item` take `NewItem` directly. This is the
    stage that deletes the ~80 lines of field transcription and closes the silent-drop class of
-   bug for good. `build_item_type` collapses into the `NewItemKind` match.
+   bug for good. `build_item_type` collapses into the `NewItemKind` match. **Done** (690 tests
+   passing, up from Stage 7's 683 — the seven are net new coverage in `item_input`, since
+   deleting the two `From` impls also deleted what several of its existing tests asserted on
+   and they had to be re-pointed at the built `ItemType` instead).
+
+   All six structs are gone, and so are the `create_item_typed`/`update_item_typed` shims —
+   `create_project_item`/`update_project_item` now *are* the typed entry points, under their
+   own names, so nothing is left carrying a `_typed` suffix that no longer distinguishes it
+   from anything. Net −105 lines across the four service modules.
+
+   Five deviations from the line above:
+
+   - **`build_item_type` didn't just collapse — the two copies merged into one, and it moved.**
+     The plan said "collapses into the `NewItemKind` match", singular, but there were two
+     near-identical ~45-line copies (`service::items`' and `service::team_items`', already
+     cross-referencing each other as siblings). Both are now one `pub(crate)` function in
+     `service::item_input`, next to the types it matches on, taking the resolved
+     `Option<TeamAssignment>` as a parameter: `items` passes `None` (a personal item has never
+     carried one), `team_items` passes what its authority gating produced. That is the whole
+     thesis of this plan applied one level further in — there is now exactly one answer to
+     "what does a Task store", and it is reached by matching a variant rather than by
+     re-deriving a kind from a bag of `Option`s.
+   - **The `Edit*` side reuses that same function rather than getting a second one**, via
+     `EditItemKind::into_new_kind(series_id)`. An edit turned out to be structurally a create
+     plus exactly one field its caller cannot supply — `series_id`, which is carried forward
+     from the stored item because series membership is set once at materialization. So the two
+     update paths fold that value back in and call the create builder. Verified field-by-field:
+     the four `Edit*` structs differ from their `New*` counterparts by that one field and
+     nothing else.
+   - **The template coercion needed a home.** "Any child of a Template is itself Template-typed"
+     used to be one line (`kind = ItemKind::Template`) precisely because the kind was a bare
+     discriminant with the fields alongside it; with typed inputs it is a rewrite of one
+     variant into another, dropping everything a `TemplateItem` has no slot for. That is now
+     `NewItemKind::coerce_to_template(parent_item_id)`, shared by all four create/update paths
+     and covered by three tests (from a Task, from an Event, from a Simple) that pin exactly
+     which fields survive. It takes the parent id as an argument rather than reading it back
+     off `self`, because it only ever fires once a parent's kind has been resolved — which is
+     what lets `NewTemplate` keep a non-optional parent.
+   - **`items::create_item`/`update_item` take `user_id` as a separate parameter**, not off the
+     `NewItem`. The personal branch is keyed by owner, not project (`CreateItemParams` had a
+     `user_id` and no `project_id` at all), and `create_project_item` resolves it from the
+     project's `owner_user_id` before delegating. Writing that signature is what surfaced the
+     bug below.
+   - **`create_item_rejects_template_item_type` had to be reframed.** It sent an unparented
+     `itemType: TEMPLATE`; that request is no longer constructable, since `NewTemplate`'s parent
+     is a plain `String`. What is still expressible — a Template whose parent is *not* a
+     Template — is what the test now covers, under a name that says so. The unparented case is
+     rejected one layer out by Stage 7's `item_input::template_parent`, with the same message.
+
+   **Bug found, not fixed:** an item created in a user's *second* team-less project is filed
+   under the wrong project and the request then fails. `items::create_item` derives the row's
+   `project_id` from `find_personal_project(user_id)` (`LIMIT 1` over the user's team-less
+   projects) instead of from the requested project, so the row lands under the first one and
+   `create_project_item`'s own post-create read can't find it. Pre-existing since the Project
+   abstraction's stage B2 dual-write and entirely unrelated to typed inputs — passing `NewItem`
+   down just made the ignored `project_id` visible. Out of scope here because the dual-write is
+   this plan's stated exclusion; recorded in `docs/issues_and_features.md` with the reasoning.
 
 ## Verification
 

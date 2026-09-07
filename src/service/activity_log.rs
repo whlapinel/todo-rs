@@ -105,7 +105,7 @@ async fn reopen_item_if_still_complete(
     if !item.complete() {
         return Ok(());
     }
-    project_items::update_item_typed(
+    project_items::update_project_item(
         repo,
         projects,
         teams,

@@ -37,8 +37,10 @@ fn to_utc(dt: Option<SmithyDateTime>) -> Option<chrono::DateTime<chrono::Utc>> {
 }
 
 fn try_into_new_item(input: input::CreateProjectItemInput) -> Result<NewItem, ItemError> {
-    // An omitted `itemType` means Task, matching `CreateProjectItemParams`'s own
-    // `unwrap_or_default()` in `items::create_item`.
+    // An omitted `itemType` means Task on create — `ItemKind`'s own `#[default]`, which is
+    // what the flat params this replaced resolved an omitted kind to as well. (Update is
+    // different: there, omitting it means "leave the kind unchanged", so the caller resolves
+    // it from the stored item before building an `EditItem` at all.)
     let kind = to_domain_item_type(input.item_type).unwrap_or_default();
     let schedule = Schedule {
         due_date: to_utc(input.due_date),
@@ -224,7 +226,7 @@ pub async fn create_project_item(
     // nothing has to be read to know the kind, and a rejection here reveals only that the
     // caller's own request was self-inconsistent. The update path below cannot say the same.
     let new = try_into_new_item(input).map_err(to_create_project_item_error)?;
-    let item_id = project_item_service::create_item_typed(
+    let item_id = project_item_service::create_project_item(
         &repo,
         &projects,
         &teams,
@@ -327,7 +329,7 @@ pub async fn update_project_item(
     // That read is gated on the membership check, not merely followed by one. Reading first
     // and rejecting afterwards would let a non-member tell "this item exists in that project"
     // (a cross-kind field error) from "it doesn't" (not found) by deliberately sending a bad
-    // field — `update_item_typed` re-checks membership anyway, so the check here is redundant
+    // field — `update_project_item` re-checks membership anyway, so the check here is redundant
     // for authorization and load-bearing only for that ordering. The extra queries are the
     // price of the kind-optional wire contract; a request that states its `itemType` pays
     // nothing.
@@ -345,7 +347,7 @@ pub async fn update_project_item(
         }
     };
     let edit = try_into_edit_item(input, kind).map_err(to_error)?;
-    project_item_service::update_item_typed(
+    project_item_service::update_project_item(
         &repo,
         &projects,
         &teams,
@@ -646,7 +648,7 @@ mod tests {
     }
 
     /// A well-formed request of each kind still converts, and an omitted `itemType` on create
-    /// still means Task — `CreateProjectItemParams`' own `unwrap_or_default()`.
+    /// still means Task — `ItemKind`'s own `#[default]`.
     #[test]
     fn well_formed_requests_of_every_kind_still_convert() {
         assert!(matches!(

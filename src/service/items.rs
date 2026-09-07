@@ -1,9 +1,8 @@
-use crate::domain::item::{
-    EventItem, Item, ItemKind, ItemType, Recurrence, Schedule, SimpleItem, TaskItem, TemplateItem,
-};
+use crate::domain::item::{Item, ItemKind, ItemType, TaskItem, TemplateItem};
 #[cfg(test)]
 use crate::domain::recurrence;
 use crate::service::activity_log::reverse_entry;
+use crate::service::item_input::{EditItem, NewItem, NewItemKind, build_item_type};
 use crate::service::item_series;
 use crate::storage::sqlite::{
     ActivityLogRepo, ItemDependencyRepo, ItemRepo, ItemSeriesRepo, ProjectRepo, ReminderRepo,
@@ -19,84 +18,6 @@ use std::sync::Arc;
 /// across every module in this layer (items, team_items, templates, teams), not specific to
 /// items.
 pub use crate::service::error::ItemError;
-
-#[derive(Debug, Default)]
-pub struct CreateItemParams {
-    pub user_id: String,
-    pub name: String,
-    pub description: Option<String>,
-    pub due_date: Option<DateTime<Utc>>,
-    pub scheduled_date: Option<DateTime<Utc>>,
-    pub scheduled_end_date: Option<DateTime<Utc>>,
-    pub complete: Option<bool>,
-    pub has_due_time: Option<bool>,
-    pub has_scheduled_time: Option<bool>,
-    pub has_end_time: Option<bool>,
-    pub parent_item_id: Option<String>,
-    pub item_type: Option<ItemKind>,
-    pub event_type: Option<String>,
-    pub due_offset_days: Option<i32>,
-    pub source_event_id: Option<String>,
-    pub timezone_offset_minutes: Option<i32>,
-    /// Internal-only — never exposed via Smithy/CLI/MCP. Set exclusively by
-    /// `service::item_series::get_or_materialize_occurrence`.
-    pub series_id: Option<String>,
-    /// Task-only, ungated — see root CLAUDE.md's Priority section. Unlike `points`
-    /// (`team_items::CreateTeamItemParams` only), this is available on personal
-    /// items too.
-    pub priority: Option<i32>,
-}
-
-/// Builds the `ItemType` payload for a given kind from a `CreateItemParams`/`UpdateItemParams`-
-/// shaped set of flat fields — the one place that decides which of `Schedule`/`Recurrence`/
-/// `event_type` a kind actually gets to carry. Personal items never get a `TeamAssignment`
-/// (points/assignment are team-item-only — see `team_items::build_item_type`, its sibling).
-#[allow(clippy::too_many_arguments)]
-fn build_item_type(
-    kind: ItemKind,
-    parent_item_id: Option<String>,
-    schedule: Schedule,
-    recurrence: Recurrence,
-    event_type: Option<String>,
-    source_event_id: Option<String>,
-    priority: Option<i32>,
-    complete: bool,
-    series_id: Option<String>,
-) -> ItemType {
-    match kind {
-        ItemKind::Simple => ItemType::Simple(SimpleItem { parent_item_id }),
-        ItemKind::Task => ItemType::Task(TaskItem {
-            parent_item_id,
-            schedule,
-            recurrence,
-            team_assignment: None,
-            source_event_id,
-            priority,
-            complete,
-            series_id,
-        }),
-        ItemKind::Event => ItemType::Event(EventItem {
-            schedule,
-            recurrence,
-            event_type,
-            series_id,
-            // Never settable via `CreateItemParams`/`UpdateItemParams` (see
-            // `EventItem::google_event_id`'s doc comment) — only
-            // `service::calendar_sync` writes these, directly onto an `Item` it
-            // builds itself, not through this function. `update_item`'s
-            // `current.google_event_id().is_some()` guard means this function is
-            // never even reached for an already-imported item's update.
-            google_event_id: None,
-            calendar_subscription_id: None,
-        }),
-        ItemKind::Template => ItemType::Template(TemplateItem {
-            parent_item_id,
-            schedule,
-            recurrence,
-            event_type,
-        }),
-    }
-}
 
 /// Resolves a would-be parent's kind, or `None` when there is no parent. An unreadable
 /// parent also yields `None` — the same treatment the `if let Ok(..)` chains this replaced
@@ -135,12 +56,21 @@ pub(crate) fn require_template_has_template_parent(
 
 /// Moved from `json_api::items::create_item` (C.0.2 of the migration plan) — this is the one
 /// place "what does creating an item mean" is decided; `json_api` and `web_ui` both call in.
+///
+/// `user_id` is a separate parameter rather than a field on `NewItem` because the personal
+/// branch is keyed by owner, not project: `project_items::create_project_item` resolves it
+/// from the project's `owner_user_id` before delegating here. `new.project_id` is deliberately
+/// *not* read — this branch resolves the item's `project_id` through
+/// `find_personal_project(user_id)` instead, the dual-write described below, exactly as the
+/// flat `CreateItemParams` (which had no `project_id` field at all) forced it to.
 pub async fn create_item(
     repo: &Arc<dyn ItemRepo>,
     projects: &Arc<dyn ProjectRepo>,
-    params: CreateItemParams,
+    user_id: &str,
+    new: NewItem,
 ) -> Result<String, ItemError> {
-    if let (Some(start), Some(end)) = (params.scheduled_date, params.scheduled_end_date)
+    if let Some(schedule) = new.kind.schedule()
+        && let (Some(start), Some(end)) = (schedule.scheduled_date, schedule.scheduled_end_date)
         && end < start
     {
         return Err(ItemError::Invalid(
@@ -148,68 +78,42 @@ pub async fn create_item(
         ));
     }
 
-    let mut kind = params.item_type.unwrap_or_default();
-
     // Child items of a template automatically become template items; Events can never
     // have children (see `Item::source_event_id` — a task references an event instead
     // of nesting under it).
-    let parent_kind = parent_kind_of(repo, &params.user_id, &params.parent_item_id).await;
+    let parent_item_id = new.kind.parent_item_id();
+    let parent_kind = parent_kind_of(repo, user_id, &parent_item_id).await;
     if parent_kind == Some(ItemKind::Event) {
         return Err(ItemError::Invalid(
             "Events cannot have children; link a task to it via sourceEventId instead".to_string(),
         ));
     }
-    if parent_kind == Some(ItemKind::Template) {
-        kind = ItemKind::Template;
-    }
-    require_template_has_template_parent(params.item_type, parent_kind)?;
-
-    let schedule = Schedule {
-        due_date: params.due_date,
-        has_due_time: params.has_due_time.unwrap_or(false),
-        scheduled_date: params.scheduled_date,
-        has_scheduled_time: params.has_scheduled_time.unwrap_or(false),
-        scheduled_end_date: params.scheduled_end_date,
-        has_end_time: params.has_end_time.unwrap_or(false),
-    };
-    // Item-level recurrence is retired (Stage 10 core) — nothing can ever set
-    // `pattern`/`basis` again, only `due_offset_days` survives here.
-    let recurrence_data = Recurrence {
-        pattern: None,
-        basis: None,
-        due_offset_days: params.due_offset_days,
+    require_template_has_template_parent(Some(new.kind.kind()), parent_kind)?;
+    let kind = match (parent_kind, parent_item_id) {
+        (Some(ItemKind::Template), Some(parent_id)) => new.kind.coerce_to_template(parent_id),
+        _ => new.kind,
     };
 
     let mut item = match kind {
-        ItemKind::Simple => Item::new_simple(&params.user_id, &params.name),
-        _ => Item::new_user_item(&params.user_id, &params.name),
+        NewItemKind::Simple(_) => Item::new_simple(user_id, &new.name),
+        _ => Item::new_user_item(user_id, &new.name),
     };
-    item.item_type = build_item_type(
-        kind,
-        params.parent_item_id.clone(),
-        schedule,
-        recurrence_data,
-        params.event_type.clone(),
-        params.source_event_id.clone(),
-        params.priority,
-        params.complete.unwrap_or(false),
-        params.series_id.clone(),
-    );
-    item.description = params.description.clone();
+    // Personal items never carry a `TeamAssignment` — the flat `CreateItemParams` had no
+    // slot for points or an assignee at all, and `NewTask`'s own `assignment` is simply
+    // dropped here, matching that. See root CLAUDE.md's Points section.
+    item.item_type = build_item_type(kind, None);
+    item.description = new.description.clone();
     // Dual-write, stage B2 (docs/project-abstraction-plan.md) — alongside the
     // still-authoritative `user_id`. Left `None` if the user somehow has no personal
     // project yet (shouldn't happen post-login, see `ensure_default_project`) rather
     // than hard-failing item creation over it.
-    item.project_id = projects
-        .find_personal_project(&params.user_id)
-        .await?
-        .map(|p| p.id);
+    item.project_id = projects.find_personal_project(user_id).await?.map(|p| p.id);
 
     item.validate().map_err(ItemError::Invalid)?;
 
-    let tz_offset = params.timezone_offset_minutes.unwrap_or(0);
+    let tz_offset = new.timezone_offset_minutes.unwrap_or(0);
     if item.is_offset_driven() {
-        let anchor = resolve_offset_anchor(repo, &params.user_id, &item).await?;
+        let anchor = resolve_offset_anchor(repo, user_id, &item).await?;
         let new_due_date = anchor.and_then(|a| item.deadline_from_offset(a, tz_offset));
         if let Some(schedule) = item.item_type.schedule_mut() {
             schedule.due_date = new_due_date;
@@ -224,11 +128,10 @@ pub async fn create_item(
     // by event_type matching instead of a manual click, and landing as references rather
     // than nested children since Events can't have children.
     if let Some(event_type) = item.event_type() {
-        let tz_offset = params.timezone_offset_minutes.unwrap_or(0);
         // `item` here is always the just-created Event (see this trigger's own doc comment
         // above) — its anchor is `event_anchor` (scheduled_date), never `item_anchor` (due_date).
         let root_date = event_anchor(&item);
-        let templates = repo.list_templates(&params.user_id).await?;
+        let templates = repo.list_templates(user_id).await?;
         for tpl in templates
             .iter()
             .filter(|t| t.event_type().as_deref() == Some(event_type.as_str()))
@@ -239,35 +142,10 @@ pub async fn create_item(
     Ok(item_id)
 }
 
-#[derive(Debug, Default)]
-pub struct UpdateItemParams {
-    pub user_id: String,
-    pub item_id: String,
-    pub name: String,
-    pub description: Option<String>,
-    pub due_date: Option<DateTime<Utc>>,
-    pub scheduled_date: Option<DateTime<Utc>>,
-    pub scheduled_end_date: Option<DateTime<Utc>>,
-    pub complete: bool,
-    pub has_due_time: Option<bool>,
-    pub has_scheduled_time: Option<bool>,
-    pub has_end_time: Option<bool>,
-    pub parent_item_id: Option<String>,
-    pub item_type: Option<ItemKind>,
-    pub event_type: Option<String>,
-    pub due_offset_days: Option<i32>,
-    pub source_event_id: Option<String>,
-    pub timezone_offset_minutes: Option<i32>,
-    /// Task-only, ungated — see root CLAUDE.md's Priority section. Direct-overwrite,
-    /// same convention as `event_type`: omitting it on an update clears it, so every
-    /// caller that isn't intentionally clearing priority must round-trip `current`'s
-    /// value.
-    pub priority: Option<i32>,
-}
-
 /// Moved from `json_api::items::update_item`. `repo.get` below scopes the fetch to
-/// `params.user_id`, so a mismatched (non-owned) `item_id` surfaces as `ItemError::NotFound`
-/// rather than silently operating on someone else's item.
+/// `user_id`, so a mismatched (non-owned) `item_id` surfaces as `ItemError::NotFound`
+/// rather than silently operating on someone else's item. `user_id` is a separate parameter
+/// for the same reason it is on `create_item`.
 ///
 /// `activity_log` (see docs/archived/archived_issues_and_features.md's "unify completion-undo" note) mirrors
 /// `team_items::update_team_item`'s own completion logging, minus the points/assignee
@@ -279,9 +157,11 @@ pub async fn update_item(
     repo: &Arc<dyn ItemRepo>,
     projects: &Arc<dyn ProjectRepo>,
     activity_log: &Arc<dyn ActivityLogRepo>,
-    params: UpdateItemParams,
+    user_id: &str,
+    edit: EditItem,
 ) -> Result<(), ItemError> {
-    if let (Some(start), Some(end)) = (params.scheduled_date, params.scheduled_end_date)
+    if let Some(schedule) = edit.kind.schedule()
+        && let (Some(start), Some(end)) = (schedule.scheduled_date, schedule.scheduled_end_date)
         && end < start
     {
         return Err(ItemError::Invalid(
@@ -289,7 +169,7 @@ pub async fn update_item(
         ));
     }
 
-    let current = repo.get(&params.user_id, &params.item_id).await?;
+    let current = repo.get(user_id, &edit.item_id).await?;
 
     if current.google_event_id().is_some() {
         return Err(ItemError::Invalid(
@@ -297,10 +177,13 @@ pub async fn update_item(
         ));
     }
 
-    if params.complete
-        && !current.complete()
-        && has_incomplete_children(repo, &params.item_id).await?
-    {
+    // Series membership is set once at materialization and never re-resolved from an edit,
+    // so it is folded back in here rather than being expressible on `EditItemKind` — same
+    // carry-forward reasoning as `project_id` below.
+    let kind = edit.kind.into_new_kind(current.series_id());
+    let complete = kind.complete();
+
+    if complete && !current.complete() && has_incomplete_children(repo, &edit.item_id).await? {
         return Err(ItemError::Invalid(
             "cannot complete an item with incomplete sub-items".to_string(),
         ));
@@ -308,64 +191,38 @@ pub async fn update_item(
 
     // Events can never have children (a task references an event via
     // sourceEventId instead of nesting under it).
-    let parent_kind = parent_kind_of(repo, &params.user_id, &params.parent_item_id).await;
+    let parent_item_id = kind.parent_item_id();
+    let parent_kind = parent_kind_of(repo, user_id, &parent_item_id).await;
     if parent_kind == Some(ItemKind::Event) {
         return Err(ItemError::Invalid(
             "Events cannot have children; link a task to it via sourceEventId instead".to_string(),
         ));
     }
-    require_template_has_template_parent(params.item_type, parent_kind)?;
+    require_template_has_template_parent(Some(kind.kind()), parent_kind)?;
 
-    let mut kind = params.item_type.unwrap_or(current.kind());
     // Same coercion `create_item` applies: a template's child subtree is Template-typed,
     // so a plain edit must not be able to demote a child out of it. Without this, the
     // Templates screen's own child edit (which passed `Some(ItemKind::Task)`) silently
     // rewrote the row's kind.
-    if parent_kind == Some(ItemKind::Template) {
-        kind = ItemKind::Template;
-    }
-    let schedule = Schedule {
-        due_date: params.due_date,
-        has_due_time: params.has_due_time.unwrap_or(false),
-        scheduled_date: params.scheduled_date,
-        has_scheduled_time: params.has_scheduled_time.unwrap_or(false),
-        scheduled_end_date: params.scheduled_end_date,
-        has_end_time: params.has_end_time.unwrap_or(false),
-    };
-    // Item-level recurrence is retired (Stage 10 core) — nothing can ever set
-    // `pattern`/`basis` again, only `due_offset_days` survives here.
-    let recurrence_data = Recurrence {
-        pattern: None,
-        basis: None,
-        due_offset_days: params.due_offset_days,
+    let kind = match (parent_kind, parent_item_id) {
+        (Some(ItemKind::Template), Some(parent_id)) => kind.coerce_to_template(parent_id),
+        _ => kind,
     };
 
     let mut item = match kind {
-        ItemKind::Simple => Item::new_simple(&params.user_id, &params.name),
-        _ => Item::new_user_item(&params.user_id, &params.name),
+        NewItemKind::Simple(_) => Item::new_simple(user_id, &edit.name),
+        _ => Item::new_user_item(user_id, &edit.name),
     };
-    item.item_type = build_item_type(
-        kind,
-        params.parent_item_id.clone(),
-        schedule,
-        recurrence_data,
-        params.event_type.clone(),
-        params.source_event_id.clone(),
-        params.priority,
-        params.complete,
-        // Same reasoning as project_id below — series membership is set once at
-        // materialization and never re-resolved from update params.
-        current.series_id(),
-    );
-    item.id = params.item_id.clone();
-    item.description = params.description.clone();
+    item.item_type = build_item_type(kind, None);
+    item.id = edit.item_id.clone();
+    item.description = edit.description.clone();
     // Carried forward from `current` rather than re-resolved (stage B2) — an item's
     // owner, and thus its personal project, never changes after creation.
     item.project_id = current.project_id.clone();
 
-    let tz_offset = params.timezone_offset_minutes.unwrap_or(0);
+    let tz_offset = edit.timezone_offset_minutes.unwrap_or(0);
     if item.is_offset_driven() {
-        let anchor = resolve_offset_anchor(repo, &params.user_id, &item).await?;
+        let anchor = resolve_offset_anchor(repo, user_id, &item).await?;
         let new_due_date = anchor.and_then(|a| item.deadline_from_offset(a, tz_offset));
         if let Some(schedule) = item.item_type.schedule_mut() {
             schedule.due_date = new_due_date;
@@ -388,7 +245,7 @@ pub async fn update_item(
             .log_activity(
                 None,
                 item.project_id.as_deref(),
-                &params.user_id,
+                user_id,
                 &item.id,
                 &item.name,
                 0,
@@ -397,7 +254,7 @@ pub async fn update_item(
     }
     if just_uncompleted
         && let Some(entry) = activity_log
-            .most_recent_unreversed(&item.id, &params.user_id)
+            .most_recent_unreversed(&item.id, user_id)
             .await?
     {
         reverse_entry(projects, activity_log, &entry).await?;
@@ -409,8 +266,8 @@ pub async fn update_item(
     // — using `item_anchor(&item)` here silently chained a mid-chain item's own (already
     // offset-derived) date to its children whenever `item` itself has a `parent_item_id`,
     // corrupting every deeper descendant's due date.
-    let old_due_anchor = top_level_anchor(repo, &params.user_id, &current).await?;
-    let new_due_anchor = top_level_anchor(repo, &params.user_id, &item).await?;
+    let old_due_anchor = top_level_anchor(repo, user_id, &current).await?;
+    let new_due_anchor = top_level_anchor(repo, user_id, &item).await?;
     if let Some(new_due_anchor) = new_due_anchor
         && Some(new_due_anchor) != old_due_anchor
     {
@@ -826,6 +683,10 @@ pub(crate) fn copy_children_as_template<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::item::{EventItem, Recurrence, Schedule, SimpleItem};
+    use crate::service::item_input::{
+        EditItemKind, EditTask, NewEvent, NewSimple, NewTask, NewTemplate, TaskAnchor,
+    };
     use crate::storage::sqlite::{
         MockActivityLogRepo, MockItemDependencyRepo, MockItemRepo, MockItemSeriesRepo,
         MockProjectRepo, MockReminderRepo,
@@ -864,6 +725,33 @@ mod tests {
     /// set up an expectation on it.
     fn no_op_activity_log() -> Arc<dyn ActivityLogRepo> {
         Arc::new(MockActivityLogRepo::new())
+    }
+
+    /// `create_item`/`update_item` take a kind-typed input as of Stage 8 of
+    /// docs/typed-item-params-plan.md, so every test below names only the fields its own
+    /// assertion is about and lets the variant supply the rest. `project_id` is inert on
+    /// this module's personal branch — `create_item` resolves the stored one through
+    /// `find_personal_project` instead (see its doc comment).
+    fn new_item(name: &str, kind: NewItemKind) -> NewItem {
+        NewItem {
+            project_id: "p1".to_string(),
+            name: name.to_string(),
+            description: None,
+            timezone_offset_minutes: None,
+            kind,
+        }
+    }
+
+    fn edit_item(item_id: &str, name: &str, kind: EditItemKind) -> EditItem {
+        EditItem {
+            project_id: "p1".to_string(),
+            item_id: item_id.to_string(),
+            name: name.to_string(),
+            description: None,
+            timezone_offset_minutes: None,
+            depends_on_item_ids: None,
+            kind,
+        }
     }
 
     fn template_item(id: &str, user_id: &str, event_type: &str) -> Item {
@@ -990,13 +878,14 @@ mod tests {
         let item_id = create_item(
             &repo,
             &no_personal_project(),
-            CreateItemParams {
-                user_id: "u1".to_string(),
-                name: "It rained".to_string(),
-                item_type: Some(ItemKind::Event),
-                event_type: Some("rain".to_string()),
-                ..Default::default()
-            },
+            "u1",
+            new_item(
+                "It rained",
+                NewItemKind::Event(NewEvent {
+                    event_type: Some("rain".to_string()),
+                    ..Default::default()
+                }),
+            ),
         )
         .await
         .expect("should create item");
@@ -1024,13 +913,14 @@ mod tests {
         create_item(
             &repo,
             &no_personal_project(),
-            CreateItemParams {
-                user_id: "u1".to_string(),
-                name: "It rained".to_string(),
-                item_type: Some(ItemKind::Event),
-                event_type: Some("rain".to_string()),
-                ..Default::default()
-            },
+            "u1",
+            new_item(
+                "It rained",
+                NewItemKind::Event(NewEvent {
+                    event_type: Some("rain".to_string()),
+                    ..Default::default()
+                }),
+            ),
         )
         .await
         .expect("should create item");
@@ -1072,12 +962,14 @@ mod tests {
         let err = create_item(
             &repo,
             &no_personal_project(),
-            CreateItemParams {
-                user_id: "u1".to_string(),
-                name: "Sneaky child".to_string(),
-                parent_item_id: Some("event1".to_string()),
-                ..Default::default()
-            },
+            "u1",
+            new_item(
+                "Sneaky child",
+                NewItemKind::Task(NewTask {
+                    anchor: TaskAnchor::Parent("event1".to_string()),
+                    ..Default::default()
+                }),
+            ),
         )
         .await
         .expect_err("should reject an Event as parent");
@@ -1133,20 +1025,25 @@ mod tests {
         create_item(
             &repo,
             &no_personal_project(),
-            CreateItemParams {
-                user_id: "u1".to_string(),
-                name: "Buy cake".to_string(),
-                source_event_id: Some("event1".to_string()),
-                due_offset_days: Some(-2),
-                // A manually-submitted due_date must be ignored/overwritten for an
-                // offset-driven item — this stale value proves it never reaches storage.
-                due_date: Some(
-                    DateTime::parse_from_rfc3339("2020-01-01T00:00:00Z")
-                        .unwrap()
-                        .with_timezone(&Utc),
-                ),
-                ..Default::default()
-            },
+            "u1",
+            new_item(
+                "Buy cake",
+                NewItemKind::Task(NewTask {
+                    anchor: TaskAnchor::SourceEvent("event1".to_string()),
+                    due_offset_days: Some(-2),
+                    // A manually-submitted due_date must be ignored/overwritten for an
+                    // offset-driven item — this stale value proves it never reaches storage.
+                    schedule: Schedule {
+                        due_date: Some(
+                            DateTime::parse_from_rfc3339("2020-01-01T00:00:00Z")
+                                .unwrap()
+                                .with_timezone(&Utc),
+                        ),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }),
+            ),
         )
         .await
         .expect("should create source-event-linked task with a computed due date");
@@ -1201,13 +1098,15 @@ mod tests {
         create_item(
             &repo,
             &no_personal_project(),
-            CreateItemParams {
-                user_id: "u1".to_string(),
-                name: "Buy cake".to_string(),
-                source_event_id: Some("event1".to_string()),
-                due_offset_days: Some(-2),
-                ..Default::default()
-            },
+            "u1",
+            new_item(
+                "Buy cake",
+                NewItemKind::Task(NewTask {
+                    anchor: TaskAnchor::SourceEvent("event1".to_string()),
+                    due_offset_days: Some(-2),
+                    ..Default::default()
+                }),
+            ),
         )
         .await
         .expect("should anchor off scheduled_date, ignoring the event's due_date");
@@ -1282,23 +1181,37 @@ mod tests {
         .expect("should delete the event and unlink referencing tasks");
     }
 
+    /// The template *library* is root-only, and only `service::templates` may mint one.
+    ///
+    /// This used to send an unparented `itemType: TEMPLATE`. That request is no longer
+    /// constructable — `NewTemplate::parent_item_id` is a plain `String` — so what remains
+    /// expressible, and what this now covers, is a Template whose parent is not itself a
+    /// Template. The unparented case is rejected one layer out instead, by
+    /// `item_input::template_parent` at the untyped boundary (Stage 7 of
+    /// docs/typed-item-params-plan.md), with the same message.
     #[tokio::test]
-    async fn create_item_rejects_template_item_type() {
-        let mock = MockItemRepo::new();
+    async fn create_item_rejects_a_template_under_a_non_template_parent() {
+        let mut mock = MockItemRepo::new();
+        mock.expect_get()
+            .returning(|_, _| Ok(task_with_due_date("task1", Utc::now())));
         let repo: Arc<dyn ItemRepo> = Arc::new(mock);
 
         let err = create_item(
             &repo,
             &no_personal_project(),
-            CreateItemParams {
-                user_id: "u1".to_string(),
-                name: "Sneaky template".to_string(),
-                item_type: Some(ItemKind::Template),
-                ..Default::default()
-            },
+            "u1",
+            new_item(
+                "Sneaky template",
+                NewItemKind::Template(NewTemplate {
+                    parent_item_id: "task1".to_string(),
+                    schedule: Schedule::default(),
+                    event_type: None,
+                    due_offset_days: None,
+                }),
+            ),
         )
         .await
-        .expect_err("should reject Template item_type");
+        .expect_err("should reject a Template outside a template subtree");
 
         assert!(matches!(err, ItemError::Invalid(_)));
     }
@@ -1316,13 +1229,18 @@ mod tests {
         let err = create_item(
             &repo,
             &no_personal_project(),
-            CreateItemParams {
-                user_id: "u1".to_string(),
-                name: "Backwards window".to_string(),
-                scheduled_date: Some(start),
-                scheduled_end_date: Some(end),
-                ..Default::default()
-            },
+            "u1",
+            new_item(
+                "Backwards window",
+                NewItemKind::Task(NewTask {
+                    schedule: Schedule {
+                        scheduled_date: Some(start),
+                        scheduled_end_date: Some(end),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }),
+            ),
         )
         .await
         .expect_err("should reject end before start");
@@ -1344,14 +1262,19 @@ mod tests {
             &repo,
             &no_personal_project(),
             &no_op_activity_log(),
-            UpdateItemParams {
-                user_id: "u1".to_string(),
-                item_id: "item1".to_string(),
-                name: "Backwards window".to_string(),
-                scheduled_date: Some(start),
-                scheduled_end_date: Some(end),
-                ..Default::default()
-            },
+            "u1",
+            edit_item(
+                "item1",
+                "Backwards window",
+                EditItemKind::Task(EditTask {
+                    schedule: Schedule {
+                        scheduled_date: Some(start),
+                        scheduled_end_date: Some(end),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }),
+            ),
         )
         .await
         .expect_err("should reject end before start");
@@ -1379,12 +1302,12 @@ mod tests {
             &repo,
             &no_personal_project(),
             &no_op_activity_log(),
-            UpdateItemParams {
-                user_id: "u1".to_string(),
-                item_id: "item1".to_string(),
-                name: "Trying to rename".to_string(),
-                ..Default::default()
-            },
+            "u1",
+            edit_item(
+                "item1",
+                "Trying to rename",
+                EditItemKind::Task(EditTask::default()),
+            ),
         )
         .await
         .expect_err("should reject editing an imported item");
@@ -1481,13 +1404,18 @@ mod tests {
             &repo,
             &no_personal_project(),
             &no_op_activity_log(),
-            UpdateItemParams {
-                user_id: "u1".to_string(),
-                item_id: "item1".to_string(),
-                name: "Rescheduled".to_string(),
-                due_date: Some(new_due),
-                ..Default::default()
-            },
+            "u1",
+            edit_item(
+                "item1",
+                "Rescheduled",
+                EditItemKind::Task(EditTask {
+                    schedule: Schedule {
+                        due_date: Some(new_due),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }),
+            ),
         )
         .await
         .expect("should update and sync offset children only");
@@ -1556,13 +1484,18 @@ mod tests {
             &repo,
             &no_personal_project(),
             &no_op_activity_log(),
-            UpdateItemParams {
-                user_id: "u1".to_string(),
-                item_id: "item1".to_string(),
-                name: "Rescheduled".to_string(),
-                due_date: Some(new_due),
-                ..Default::default()
-            },
+            "u1",
+            edit_item(
+                "item1",
+                "Rescheduled",
+                EditItemKind::Task(EditTask {
+                    schedule: Schedule {
+                        due_date: Some(new_due),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }),
+            ),
         )
         .await
         .expect("should update and cascade both levels off the same top-level anchor");
@@ -1593,13 +1526,18 @@ mod tests {
             &repo,
             &no_personal_project(),
             &no_op_activity_log(),
-            UpdateItemParams {
-                user_id: "u1".to_string(),
-                item_id: "item1".to_string(),
-                name: "Renamed only".to_string(),
-                due_date: Some(due),
-                ..Default::default()
-            },
+            "u1",
+            edit_item(
+                "item1",
+                "Renamed only",
+                EditItemKind::Task(EditTask {
+                    schedule: Schedule {
+                        due_date: Some(due),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }),
+            ),
         )
         .await
         .expect("should update without touching children");
@@ -1636,13 +1574,15 @@ mod tests {
             &repo,
             &no_personal_project(),
             &no_op_activity_log(),
-            UpdateItemParams {
-                user_id: "u1".to_string(),
-                item_id: "item1".to_string(),
-                name: "Parent".to_string(),
-                complete: true,
-                ..Default::default()
-            },
+            "u1",
+            edit_item(
+                "item1",
+                "Parent",
+                EditItemKind::Task(EditTask {
+                    complete: true,
+                    ..Default::default()
+                }),
+            ),
         )
         .await
         .expect_err("should reject completing with an incomplete child");
@@ -1698,13 +1638,15 @@ mod tests {
             &repo,
             &no_personal_project(),
             &(Arc::new(activity_log) as Arc<dyn ActivityLogRepo>),
-            UpdateItemParams {
-                user_id: "u1".to_string(),
-                item_id: "item1".to_string(),
-                name: "Parent".to_string(),
-                complete: true,
-                ..Default::default()
-            },
+            "u1",
+            edit_item(
+                "item1",
+                "Parent",
+                EditItemKind::Task(EditTask {
+                    complete: true,
+                    ..Default::default()
+                }),
+            ),
         )
         .await
         .expect("should allow completion when all children are complete");
@@ -1733,13 +1675,15 @@ mod tests {
             &repo,
             &no_personal_project(),
             &no_op_activity_log(),
-            UpdateItemParams {
-                user_id: "u1".to_string(),
-                item_id: "item1".to_string(),
-                name: "Changed name".to_string(),
-                complete: true,
-                ..Default::default()
-            },
+            "u1",
+            edit_item(
+                "item1",
+                "Changed name",
+                EditItemKind::Task(EditTask {
+                    complete: true,
+                    ..Default::default()
+                }),
+            ),
         )
         .await
         .expect_err("should reject editing a field on a completed item");
@@ -1781,13 +1725,12 @@ mod tests {
             &repo,
             &no_personal_project(),
             &(Arc::new(activity_log) as Arc<dyn ActivityLogRepo>),
-            UpdateItemParams {
-                user_id: "u1".to_string(),
-                item_id: "item1".to_string(),
-                name: "Same name".to_string(),
-                complete: false,
-                ..Default::default()
-            },
+            "u1",
+            edit_item(
+                "item1",
+                "Same name",
+                EditItemKind::Task(EditTask::default()),
+            ),
         )
         .await
         .expect("pure toggle should be allowed on a completed item");
@@ -1819,11 +1762,8 @@ mod tests {
         create_item(
             &repo,
             &projects,
-            CreateItemParams {
-                user_id: "u1".to_string(),
-                name: "Buy milk".to_string(),
-                ..Default::default()
-            },
+            "u1",
+            new_item("Buy milk", NewItemKind::Task(NewTask::default())),
         )
         .await
         .expect("should create item");
@@ -1851,13 +1791,8 @@ mod tests {
             &repo,
             &no_personal_project(),
             &no_op_activity_log(),
-            UpdateItemParams {
-                user_id: "u1".to_string(),
-                item_id: "item1".to_string(),
-                name: "Renamed".to_string(),
-                complete: false,
-                ..Default::default()
-            },
+            "u1",
+            edit_item("item1", "Renamed", EditItemKind::Task(EditTask::default())),
         )
         .await
         .expect("should update and carry project_id forward");
@@ -1898,16 +1833,17 @@ mod tests {
             &repo,
             &no_personal_project(),
             &no_op_activity_log(),
-            UpdateItemParams {
-                user_id: "u1".to_string(),
-                item_id: "child1".to_string(),
-                name: "Renamed child".to_string(),
-                complete: false,
-                parent_item_id: Some("tpl1".to_string()),
-                // What the Templates screen used to send.
-                item_type: Some(ItemKind::Task),
-                ..Default::default()
-            },
+            "u1",
+            // What the Templates screen used to send: a plain Task edit, under a
+            // Template parent.
+            edit_item(
+                "child1",
+                "Renamed child",
+                EditItemKind::Task(EditTask {
+                    anchor: TaskAnchor::Parent("tpl1".to_string()),
+                    ..Default::default()
+                }),
+            ),
         )
         .await
         .expect("should update the child without changing its kind");
@@ -1931,13 +1867,16 @@ mod tests {
         create_item(
             &repo,
             &no_personal_project(),
-            CreateItemParams {
-                user_id: "u1".to_string(),
-                name: "Book venue".to_string(),
-                parent_item_id: Some("tpl1".to_string()),
-                item_type: Some(ItemKind::Template),
-                ..Default::default()
-            },
+            "u1",
+            new_item(
+                "Book venue",
+                NewItemKind::Template(NewTemplate {
+                    parent_item_id: "tpl1".to_string(),
+                    schedule: Schedule::default(),
+                    event_type: None,
+                    due_offset_days: None,
+                }),
+            ),
         )
         .await
         .expect("a template child is not a library template");

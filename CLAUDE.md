@@ -195,6 +195,8 @@ Everything above is about what a kind can *hold*. Until Stage 7 of `docs/typed-i
 
 **Those requests are now rejected.** The two places where a request's kind is *data* rather than a fact the code knows — `json_api::project_items` (the `itemType` wire field) and `service::import` (the `itemType` CSV column) — share one set of guards in `service::item_input` and fail with the API's ordinary client error naming the field and the kind. Everywhere else in the codebase the typed inputs (`NewTask`/`NewEvent`/`NewSimple`/`NewTemplate` and their `Edit*` counterparts) are built by construction and simply have nowhere to put a wrong field.
 
+Since Stage 8 of that plan that holds the whole way down: `create_project_item`/`update_project_item` and the `items`/`team_items` functions they dispatch to all take `NewItem`/`EditItem` themselves, and `service::item_input::build_item_type` is the single place deciding which of `Schedule`/`Recurrence`/`event_type`/`TeamAssignment` each kind gets to carry. The flat property bags that used to sit between the two — `CreateProjectItemParams` and its five siblings — are gone, along with the ~80 lines of field transcription that copied one into the next.
+
 Two things this deliberately does **not** change:
 
 - **Authority is a separate axis.** A non-admin setting `points` on a perfectly valid Task is still silently preserved-not-applied by `team_items` (see Points). That rule is about *who may*, not about *what fits*, and it keeps its own rationale.

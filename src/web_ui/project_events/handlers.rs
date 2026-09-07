@@ -330,7 +330,7 @@ pub async fn update_project_event_series_occurrence_form(
     )
     .await?;
     let edit = update_params_from_form(&project_id, &item.id, &item, &form, tz);
-    project_item_service::update_item_typed(
+    project_item_service::update_project_item(
         &repo,
         &projects,
         &teams,
@@ -408,7 +408,7 @@ pub async fn create_project_event_series_occurrence_child_form(
         }),
         description: None,
     };
-    project_item_service::create_item_typed(
+    project_item_service::create_project_item(
         &repo,
         &projects,
         &teams,
@@ -524,7 +524,7 @@ pub async fn create_project_event_child_form(
         }),
         description: None,
     };
-    project_item_service::create_item_typed(
+    project_item_service::create_project_item(
         &repo,
         &projects,
         &teams,
@@ -577,7 +577,7 @@ pub async fn create_project_event_form(
 ) -> Result<Response, ItemError> {
     project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
     let new = create_params_from_form(&project_id, &form, tz);
-    project_item_service::create_item_typed(
+    project_item_service::create_project_item(
         &repo,
         &projects,
         &teams,
@@ -625,7 +625,7 @@ pub async fn update_project_event_form(
     let close = form.redirect.is_some();
     let row_view = crate::web_ui::project_tasks::normalize_row_view(view_q);
     let edit = update_params_from_form(&project_id, &item_id, &current, &form, tz);
-    project_item_service::update_item_typed(
+    project_item_service::update_project_item(
         &repo,
         &projects,
         &teams,
