@@ -99,7 +99,7 @@ fn start_of_day() -> NaiveTime {
 /// two are the only callers whose kind comes from data rather than from the call site.
 ///
 /// **A column the row's kind cannot hold fails that row**, as of Stage 7 of
-/// docs/typed-item-params-plan.md; Stage 6 left it dropping silently pending that decision. A
+/// docs/archived/typed-item-params-plan.md; Stage 6 left it dropping silently pending that decision. A
 /// per-row failure is the mildest possible form of the change: the rest of the file still
 /// imports, and the message names the column and the kind. A blank cell is `None` here
 /// (`cell` filters empty strings), so a mixed-kind file carrying a `points` column that is
@@ -686,7 +686,7 @@ mod tests {
         );
     }
 
-    /// Both rejections this stage relocated (Stage 6 of docs/typed-item-params-plan.md) land in
+    /// Both rejections this stage relocated (Stage 6 of docs/archived/typed-item-params-plan.md) land in
     /// the per-row error channel with byte-identical text — `ItemError`'s `Invalid` arm is
     /// `#[error("{0}")]`, so what the row reported before was already just the bare message.
     #[tokio::test]

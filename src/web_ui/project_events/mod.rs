@@ -166,7 +166,7 @@ fn overlay_scheduled_end_date(
 /// Every field an Event cannot carry — `parent_item_id`, `source_event_id`, `complete`,
 /// `priority`, `points`/`assigned_to_user_id` — used to be an explicit `None` here. `NewEvent`
 /// has nowhere to put them, so they are gone rather than defaulted (see
-/// `docs/typed-item-params-plan.md`).
+/// `docs/archived/typed-item-params-plan.md`).
 pub(crate) fn create_params_from_form(
     project_id: &str,
     form: &ProjectEventForm,

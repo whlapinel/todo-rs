@@ -331,7 +331,7 @@ fn overlay_scheduled_end_date(
 
 /// Every field a Task cannot carry — `event_type` above all — used to be an explicit `None`
 /// here. `NewTask` has nowhere to put them, so they are gone rather than defaulted (see
-/// `docs/typed-item-params-plan.md`).
+/// `docs/archived/typed-item-params-plan.md`).
 pub(crate) fn create_params_from_form(
     project_id: &str,
     form: &ProjectTaskForm,

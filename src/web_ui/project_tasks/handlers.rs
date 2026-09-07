@@ -1874,7 +1874,7 @@ pub async fn create_project_task_form(
     let return_to = form.return_to.clone();
     // Read straight off the form rather than back out of the built input — a `NewItem`'s
     // parent lives inside its kind payload, and this is the same expression the builder itself
-    // uses (see Stage 2's note in docs/typed-item-params-plan.md).
+    // uses (see Stage 2's note in docs/archived/typed-item-params-plan.md).
     let parent_item_id = non_empty(&form.parent_item_id);
     let new = create_params_from_form(&project_id, &form, tz);
     project_item_service::create_project_item(

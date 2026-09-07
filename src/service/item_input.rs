@@ -2,7 +2,7 @@
 //!
 //! These are the input counterpart of `domain::item::ItemType` — one variant per
 //! `ItemKind`, each carrying only the fields that kind can legitimately have. Until Stage 8
-//! of `docs/typed-item-params-plan.md` they sat in front of a flat, kind-agnostic
+//! of `docs/archived/typed-item-params-plan.md` they sat in front of a flat, kind-agnostic
 //! `CreateProjectItemParams`/`UpdateProjectItemParams` pair and converted into it; those
 //! structs are gone now, and these are what `service::project_items`, `service::items` and
 //! `service::team_items` actually take.
@@ -209,7 +209,7 @@ pub struct NewItem {
 
 /// The one place that decides which of `Schedule`/`Recurrence`/`event_type` a kind actually
 /// gets to carry, replacing the near-identical `build_item_type` pair that used to sit in
-/// `service::items` and `service::team_items` (Stage 8 of docs/typed-item-params-plan.md).
+/// `service::items` and `service::team_items` (Stage 8 of docs/archived/typed-item-params-plan.md).
 /// Merging them is the point of the whole plan: there is now exactly one answer to "what does
 /// a Task store", and it is reached by matching the input's own variant rather than by
 /// re-deriving a kind from a flat bag of `Option`s.
@@ -427,7 +427,7 @@ impl EditItemKind {
 
 // ---- the untyped boundary --------------------------------------------------------------
 //
-// Stage 7 of docs/typed-item-params-plan.md. Two callers receive a request whose kind is
+// Stage 7 of docs/archived/typed-item-params-plan.md. Two callers receive a request whose kind is
 // *data* rather than a fact the code knows: `json_api::project_items` (an `itemType` field on
 // the wire) and `service::import` (an `itemType` CSV column). Everything else in the codebase
 // reaches the types above by construction. These helpers are what those two share, so the one

@@ -234,7 +234,7 @@ pub async fn resolve_subordination_target(
 /// verification). Team-backed items no longer dual-write `items.team_id` — that
 /// column was dropped in Stage 6 of docs/team-id-removal-plan.md.
 ///
-/// Takes a kind-typed `NewItem` as of Stage 8 of docs/typed-item-params-plan.md; the flat
+/// Takes a kind-typed `NewItem` as of Stage 8 of docs/archived/typed-item-params-plan.md; the flat
 /// `CreateProjectItemParams` it used to take, and the `create_item_typed` shim that stood in
 /// front of it through Stages 2-7, are both gone. `NewTask::assignment` is simply dropped on
 /// the personal branch — a personal item has never carried a `TeamAssignment` at all.
@@ -265,7 +265,7 @@ pub async fn create_project_item(
 /// reversal, see `team_items::update_team_item`); the personal branch's
 /// `items::update_item` has no use for it at all.
 ///
-/// Takes a kind-typed `EditItem` as of Stage 8 of docs/typed-item-params-plan.md. One
+/// Takes a kind-typed `EditItem` as of Stage 8 of docs/archived/typed-item-params-plan.md. One
 /// field on it is the envelope's rather than any kind's: `depends_on_item_ids`, where
 /// `None` means "leave dependencies unchanged" (deliberately not the direct-overwrite
 /// convention every other field follows; see
@@ -525,7 +525,7 @@ mod tests {
     };
 
     /// `create_project_item`/`update_project_item` take a kind-typed input as of Stage 8 of
-    /// docs/typed-item-params-plan.md. Every test below is a Task — this module's own
+    /// docs/archived/typed-item-params-plan.md. Every test below is a Task — this module's own
     /// behavior (completion transitions, the dependency guard, the series cursor, the
     /// personal-vs-team dispatch) is all Task-shaped.
     fn new_item(name: &str, kind: NewItemKind) -> NewItem {

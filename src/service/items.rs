@@ -728,7 +728,7 @@ mod tests {
     }
 
     /// `create_item`/`update_item` take a kind-typed input as of Stage 8 of
-    /// docs/typed-item-params-plan.md, so every test below names only the fields its own
+    /// docs/archived/typed-item-params-plan.md, so every test below names only the fields its own
     /// assertion is about and lets the variant supply the rest. `project_id` is inert on
     /// this module's personal branch — `create_item` resolves the stored one through
     /// `find_personal_project` instead (see its doc comment).
@@ -1188,7 +1188,7 @@ mod tests {
     /// expressible, and what this now covers, is a Template whose parent is not itself a
     /// Template. The unparented case is rejected one layer out instead, by
     /// `item_input::template_parent` at the untyped boundary (Stage 7 of
-    /// docs/typed-item-params-plan.md), with the same message.
+    /// docs/archived/typed-item-params-plan.md), with the same message.
     #[tokio::test]
     async fn create_item_rejects_a_template_under_a_non_template_parent() {
         let mut mock = MockItemRepo::new();
@@ -1801,7 +1801,7 @@ mod tests {
     /// subtree. `web_ui::project_templates` passed `item_type: Some(ItemKind::Task)` and
     /// `update_item` — unlike `create_item` — had no parent-coercion, so the row's kind
     /// was silently rewritten on the first edit. See Stage 4 of
-    /// docs/typed-item-params-plan.md.
+    /// docs/archived/typed-item-params-plan.md.
     #[tokio::test]
     async fn update_item_keeps_a_template_child_template_typed() {
         let mut mock = MockItemRepo::new();

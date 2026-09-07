@@ -100,7 +100,7 @@ pub async fn get_or_materialize_occurrence(
     };
     // The kind comes from the series rather than from this call site, which is what makes this
     // (with `import`) the shape the wire boundary will need in Stage 7 of
-    // docs/typed-item-params-plan.md. `ItemSeries::item_type` is restricted to Task/Event and
+    // docs/archived/typed-item-params-plan.md. `ItemSeries::item_type` is restricted to Task/Event and
     // immutable after creation, so the two arms below are exhaustive in practice; a third kind
     // would be a series this module cannot materialize at all, which is what the `Err` says.
     //
@@ -2206,7 +2206,7 @@ mod tests {
         assert_eq!(item.name, "Standup");
     }
 
-    /// The `other` arm of the kind dispatch Stage 6 of docs/typed-item-params-plan.md
+    /// The `other` arm of the kind dispatch Stage 6 of docs/archived/typed-item-params-plan.md
     /// introduced. `validate_series_item_type` restricts a series to Task/Event and the kind is
     /// immutable after creation, so this is only reachable from a corrupt row — but a typed
     /// input has to decide *something* for the other two kinds, and an error naming the problem

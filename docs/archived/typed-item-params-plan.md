@@ -1,5 +1,18 @@
 # Typed item params
 
+**Status: complete.** All eight stages shipped (see each stage's write-up below for what it
+did and where it deviated). The six flat `Create*`/`Update*Params` structs are gone;
+`service::project_items`, `service::items` and `service::team_items` all take the kind-typed
+`NewItem`/`EditItem` from `service::item_input`, and a field the requested kind cannot hold is
+rejected rather than dropped at the two places where the kind is data (see root CLAUDE.md's
+"Cross-kind fields at the boundary"). Kept here as historical context, the same way this plan's
+own predecessor (`docs/archived/item-kind-split-plan.md`) is.
+
+One thing this plan found and deliberately did not fix: an item created in a user's *second*
+team-less project is filed under the wrong project and the request then fails — a pre-existing
+consequence of the Project abstraction's stage B2 dual-write, which is this plan's stated
+exclusion. Tracked in `docs/issues_and_features.md`.
+
 ## Context
 
 `Item` was split into `TaskItem`/`EventItem`/`TemplateItem`/`SimpleItem` by

@@ -552,7 +552,7 @@ mod tests {
     use crate::service::item_input::{EditItemKind, EditTask, NewTask, NewTemplate};
 
     /// `create_team_item`/`update_team_item` take a kind-typed input as of Stage 8 of
-    /// docs/typed-item-params-plan.md, so every test below names only the fields its own
+    /// docs/archived/typed-item-params-plan.md, so every test below names only the fields its own
     /// assertion is about and lets the variant supply the rest. Every one of them is a Task
     /// — points, assignment and completion are Task-only, which is what this module's
     /// behavior is about.
@@ -1600,7 +1600,7 @@ mod tests {
     /// Regression test: `create_team_item` never had `items::create_item`'s
     /// parent-coercion, so a template child on a team-backed project was created as a
     /// plain Task while the same action on a personal project produced a Template. See
-    /// Stage 4 of docs/typed-item-params-plan.md.
+    /// Stage 4 of docs/archived/typed-item-params-plan.md.
     #[tokio::test]
     async fn create_team_item_makes_a_template_child_template_typed() {
         let mut items = MockItemRepo::new();
