@@ -87,11 +87,18 @@ pub struct NewSimple {
     pub parent_item_id: Option<String>,
 }
 
-/// A library artifact. `event_type` here means "fire me when a matching item is created",
-/// not "this occurrence's category" — see root CLAUDE.md's Events section.
-#[derive(Debug, Default)]
+/// A Template *child* — a row in a template's subtree, which is itself Template-typed
+/// (root CLAUDE.md's Domain Models section). Deliberately not `Default`, and its parent
+/// is a plain `String` rather than an `Option`: a *root* template is a library artifact
+/// that only `service::templates` may mint, so an unparented `NewTemplate` is a request
+/// `items::create_item` would reject (`require_template_has_template_parent`) and is made
+/// unconstructable here instead.
+///
+/// `event_type` on a template means "fire me when a matching item is created", not "this
+/// occurrence's category" — see root CLAUDE.md's Events section.
+#[derive(Debug)]
 pub struct NewTemplate {
-    pub parent_item_id: Option<String>,
+    pub parent_item_id: String,
     pub schedule: Schedule,
     pub event_type: Option<String>,
     pub due_offset_days: Option<i32>,
@@ -102,9 +109,6 @@ pub enum NewItemKind {
     Task(NewTask),
     Event(NewEvent),
     Simple(NewSimple),
-    /// Transient `allow`: constructed only by the Templates screen (Stage 4 of
-    /// docs/typed-item-params-plan.md). Remove the attribute with that stage.
-    #[allow(dead_code)]
     Template(NewTemplate),
 }
 
@@ -180,7 +184,7 @@ impl From<NewItem> for CreateProjectItemParams {
                 has_scheduled_time: Some(t.schedule.has_scheduled_time),
                 scheduled_end_date: t.schedule.scheduled_end_date,
                 has_end_time: Some(t.schedule.has_end_time),
-                parent_item_id: t.parent_item_id,
+                parent_item_id: Some(t.parent_item_id),
                 event_type: t.event_type,
                 due_offset_days: t.due_offset_days,
                 ..base
@@ -216,9 +220,10 @@ pub struct EditSimple {
     pub parent_item_id: Option<String>,
 }
 
-#[derive(Debug, Default)]
+/// Update counterpart of `NewTemplate`, and non-`Default` for the same reason.
+#[derive(Debug)]
 pub struct EditTemplate {
-    pub parent_item_id: Option<String>,
+    pub parent_item_id: String,
     pub schedule: Schedule,
     pub event_type: Option<String>,
     pub due_offset_days: Option<i32>,
@@ -226,13 +231,12 @@ pub struct EditTemplate {
 
 #[derive(Debug)]
 pub enum EditItemKind {
-    /// Transient `allow`s, as `NewItemKind`'s: Stage 4 (Template) and Stage 5 (Task) of
-    /// docs/typed-item-params-plan.md are what give these non-test constructors.
+    /// Transient `allow`: Stage 5 (Task) of docs/typed-item-params-plan.md is what gives
+    /// this variant a non-test constructor. Remove the attribute with that stage.
     #[allow(dead_code)]
     Task(EditTask),
     Event(EditEvent),
     Simple(EditSimple),
-    #[allow(dead_code)]
     Template(EditTemplate),
 }
 
@@ -314,7 +318,7 @@ impl From<EditItem> for UpdateProjectItemParams {
                 has_scheduled_time: Some(t.schedule.has_scheduled_time),
                 scheduled_end_date: t.schedule.scheduled_end_date,
                 has_end_time: Some(t.schedule.has_end_time),
-                parent_item_id: t.parent_item_id,
+                parent_item_id: Some(t.parent_item_id),
                 event_type: t.event_type,
                 due_offset_days: t.due_offset_days,
                 ..base
@@ -470,7 +474,7 @@ mod tests {
     #[test]
     fn new_template_carries_its_event_type_and_parent() {
         let p: CreateProjectItemParams = new_item(NewItemKind::Template(NewTemplate {
-            parent_item_id: Some("root".into()),
+            parent_item_id: "root".into(),
             schedule: schedule(),
             event_type: Some("rain".into()),
             due_offset_days: Some(-7),
@@ -525,8 +529,13 @@ mod tests {
             edit_item(EditItemKind::Simple(EditSimple::default())).into();
         assert!(!simple.complete);
 
-        let template: UpdateProjectItemParams =
-            edit_item(EditItemKind::Template(EditTemplate::default())).into();
+        let template: UpdateProjectItemParams = edit_item(EditItemKind::Template(EditTemplate {
+            parent_item_id: "root".into(),
+            schedule: Schedule::default(),
+            event_type: None,
+            due_offset_days: None,
+        }))
+        .into();
         assert!(!template.complete);
     }
 

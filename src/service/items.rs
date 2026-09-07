@@ -98,6 +98,41 @@ fn build_item_type(
     }
 }
 
+/// Resolves a would-be parent's kind, or `None` when there is no parent. An unreadable
+/// parent also yields `None` — the same treatment the `if let Ok(..)` chains this replaced
+/// gave it, leaving a bad reference to `Item::validate`/the repo rather than guessing here.
+async fn parent_kind_of(
+    repo: &Arc<dyn ItemRepo>,
+    user_id: &str,
+    parent_item_id: &Option<String>,
+) -> Option<ItemKind> {
+    match parent_item_id {
+        Some(parent_id) => repo.get(user_id, parent_id).await.ok().map(|p| p.kind()),
+        None => None,
+    }
+}
+
+/// The guard that keeps the template *library* closed: a library template is root-only
+/// (`ItemRepo::list_templates_by_project` filters `parent_item_id IS NULL`) and only
+/// `service::templates` may mint one.
+///
+/// It deliberately does **not** reject a Template *child*. A template's child subtree is
+/// itself Template-typed (root CLAUDE.md's Domain Models section), which is exactly what
+/// `create_item`'s parent-coercion already produces — so asking for it explicitly under a
+/// Template parent is the same request spelled honestly, and the typed
+/// `NewItemKind::Template` path in `service::item_input` does spell it that way.
+pub(crate) fn require_template_has_template_parent(
+    requested: Option<ItemKind>,
+    parent_kind: Option<ItemKind>,
+) -> Result<(), ItemError> {
+    if requested == Some(ItemKind::Template) && parent_kind != Some(ItemKind::Template) {
+        return Err(ItemError::Invalid(
+            "item_type Template can only be set via the template creation flow".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 /// Moved from `json_api::items::create_item` (C.0.2 of the migration plan) — this is the one
 /// place "what does creating an item mean" is decided; `json_api` and `web_ui` both call in.
 pub async fn create_item(
@@ -105,11 +140,6 @@ pub async fn create_item(
     projects: &Arc<dyn ProjectRepo>,
     params: CreateItemParams,
 ) -> Result<String, ItemError> {
-    if params.item_type == Some(ItemKind::Template) {
-        return Err(ItemError::Invalid(
-            "item_type Template can only be set via the template creation flow".to_string(),
-        ));
-    }
     if let (Some(start), Some(end)) = (params.scheduled_date, params.scheduled_end_date)
         && end < start
     {
@@ -123,19 +153,16 @@ pub async fn create_item(
     // Child items of a template automatically become template items; Events can never
     // have children (see `Item::source_event_id` — a task references an event instead
     // of nesting under it).
-    if let Some(ref parent_id) = params.parent_item_id
-        && let Ok(parent) = repo.get(&params.user_id, parent_id).await
-    {
-        if parent.kind() == ItemKind::Template {
-            kind = ItemKind::Template;
-        }
-        if parent.kind() == ItemKind::Event {
-            return Err(ItemError::Invalid(
-                "Events cannot have children; link a task to it via sourceEventId instead"
-                    .to_string(),
-            ));
-        }
+    let parent_kind = parent_kind_of(repo, &params.user_id, &params.parent_item_id).await;
+    if parent_kind == Some(ItemKind::Event) {
+        return Err(ItemError::Invalid(
+            "Events cannot have children; link a task to it via sourceEventId instead".to_string(),
+        ));
     }
+    if parent_kind == Some(ItemKind::Template) {
+        kind = ItemKind::Template;
+    }
+    require_template_has_template_parent(params.item_type, parent_kind)?;
 
     let schedule = Schedule {
         due_date: params.due_date,
@@ -254,11 +281,6 @@ pub async fn update_item(
     activity_log: &Arc<dyn ActivityLogRepo>,
     params: UpdateItemParams,
 ) -> Result<(), ItemError> {
-    if params.item_type == Some(ItemKind::Template) {
-        return Err(ItemError::Invalid(
-            "item_type Template can only be set via the template creation flow".to_string(),
-        ));
-    }
     if let (Some(start), Some(end)) = (params.scheduled_date, params.scheduled_end_date)
         && end < start
     {
@@ -286,16 +308,22 @@ pub async fn update_item(
 
     // Events can never have children (a task references an event via
     // sourceEventId instead of nesting under it).
-    if let Some(ref parent_id) = params.parent_item_id
-        && let Ok(parent) = repo.get(&params.user_id, parent_id).await
-        && parent.kind() == ItemKind::Event
-    {
+    let parent_kind = parent_kind_of(repo, &params.user_id, &params.parent_item_id).await;
+    if parent_kind == Some(ItemKind::Event) {
         return Err(ItemError::Invalid(
             "Events cannot have children; link a task to it via sourceEventId instead".to_string(),
         ));
     }
+    require_template_has_template_parent(params.item_type, parent_kind)?;
 
-    let kind = params.item_type.unwrap_or(current.kind());
+    let mut kind = params.item_type.unwrap_or(current.kind());
+    // Same coercion `create_item` applies: a template's child subtree is Template-typed,
+    // so a plain edit must not be able to demote a child out of it. Without this, the
+    // Templates screen's own child edit (which passed `Some(ItemKind::Task)`) silently
+    // rewrote the row's kind.
+    if parent_kind == Some(ItemKind::Template) {
+        kind = ItemKind::Template;
+    }
     let schedule = Schedule {
         due_date: params.due_date,
         has_due_time: params.has_due_time.unwrap_or(false),
@@ -1833,5 +1861,85 @@ mod tests {
         )
         .await
         .expect("should update and carry project_id forward");
+    }
+    /// Regression test: editing a template child used to demote it out of the template
+    /// subtree. `web_ui::project_templates` passed `item_type: Some(ItemKind::Task)` and
+    /// `update_item` — unlike `create_item` — had no parent-coercion, so the row's kind
+    /// was silently rewritten on the first edit. See Stage 4 of
+    /// docs/typed-item-params-plan.md.
+    #[tokio::test]
+    async fn update_item_keeps_a_template_child_template_typed() {
+        let mut mock = MockItemRepo::new();
+        mock.expect_get().returning(|_, id| {
+            if id == "tpl1" {
+                return Ok(template_item("tpl1", "u1", "rain"));
+            }
+            Ok(Item {
+                id: "child1".to_string(),
+                user_id: Some("u1".to_string()),
+                project_id: Some("p1".to_string()),
+                name: "Child".to_string(),
+                item_type: ItemType::Template(TemplateItem {
+                    parent_item_id: Some("tpl1".to_string()),
+                    schedule: Schedule::default(),
+                    recurrence: Recurrence::default(),
+                    event_type: None,
+                }),
+                ..Item::default()
+            })
+        });
+        mock.expect_update()
+            .withf(|item: &Item| item.kind() == ItemKind::Template)
+            .times(1)
+            .returning(|_| Ok(()));
+        let repo: Arc<dyn ItemRepo> = Arc::new(mock);
+
+        update_item(
+            &repo,
+            &no_personal_project(),
+            &no_op_activity_log(),
+            UpdateItemParams {
+                user_id: "u1".to_string(),
+                item_id: "child1".to_string(),
+                name: "Renamed child".to_string(),
+                complete: false,
+                parent_item_id: Some("tpl1".to_string()),
+                // What the Templates screen used to send.
+                item_type: Some(ItemKind::Task),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("should update the child without changing its kind");
+    }
+
+    /// The other half of `create_item_rejects_template_item_type`: the guard is about the
+    /// *library* (root-only), so an explicit Template under a Template parent — exactly
+    /// what the coercion already produces, and what `NewItemKind::Template` now sends — is
+    /// allowed rather than rejected.
+    #[tokio::test]
+    async fn create_item_allows_an_explicit_template_child_under_a_template() {
+        let mut mock = MockItemRepo::new();
+        mock.expect_get()
+            .returning(|_, _| Ok(template_item("tpl1", "u1", "rain")));
+        mock.expect_create()
+            .withf(|item: &Item| item.kind() == ItemKind::Template)
+            .times(1)
+            .returning(|_| Ok("child1".to_string()));
+        let repo: Arc<dyn ItemRepo> = Arc::new(mock);
+
+        create_item(
+            &repo,
+            &no_personal_project(),
+            CreateItemParams {
+                user_id: "u1".to_string(),
+                name: "Book venue".to_string(),
+                parent_item_id: Some("tpl1".to_string()),
+                item_type: Some(ItemKind::Template),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("a template child is not a library template");
     }
 }

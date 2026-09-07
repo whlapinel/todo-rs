@@ -223,7 +223,54 @@ per this repo's convention (`docs/archived/team-id-removal-plan.md`,
    repo's pre-existing 11.
 4. **Template.** `web_ui/project_templates/`, including the explicit `NewItemKind::Template`
    above. `service/templates.rs` has its own `Create*TemplateParams` family, already per-kind;
-   audit whether it should fold into `NewTemplate` or stay separate.
+   audit whether it should fold into `NewTemplate` or stay separate. **Done** (665 tests
+   passing, up from Stage 3's 662 — this stage fixes behavior, so unlike Stages 2–3 it adds
+   tests).
+
+   **The audit's answer: `service/templates.rs` stays separate.** Its functions build an `Item`
+   and call `repo.create`/`repo.update` directly, deliberately never entering the
+   `create_item`/`create_project_item` funnel — that bypass is precisely what lets the funnel
+   carry a guard against minting library templates at all. Folding them into `NewTemplate`
+   would mean routing template creation through the one funnel designed to reject it, which is
+   a different (and much larger) change than this plan's.
+
+   Three deviations from the design above:
+
+   - **`NewItemKind::Template` was unconstructible as designed, and the guard had to narrow
+     before it could exist.** All four of `items::create_item`/`update_item`,
+     `team_items::create_team_item`/`update_team_item` rejected `item_type: Some(Template)`
+     outright, so the conversion's `item_type: Some(new.kind.kind())` would have been rejected
+     at every call site. The guard now rejects only a Template whose parent is not itself a
+     Template (shared helper `items::require_template_has_template_parent`). That is a strict
+     narrowing — the accepted-request set grows by exactly one shape, "explicit Template under
+     a Template parent", which `create_item`'s long-standing parent-coercion already produced
+     from the equivalent request with `item_type` omitted. Confirmed with the user before
+     writing it; the alternative (delete `NewItemKind::Template`, treat template children as
+     Tasks) was rejected because `copy_children_as_template` mints Template-typed children, so
+     hand-added and saved-from-item children would have permanently disagreed.
+
+   - **Two live defects fell out of the audit, both fixed here with regression tests.** Neither
+     was in the plan's scope; both are the exact silent-kind class this plan exists to close.
+     (1) `update_item` had no parent-coercion and `project_templates/handlers.rs` passed
+     `item_type: Some(ItemKind::Task)`, so **editing a template child rewrote its kind to
+     Task** — proved with a probe before fixing (`persisted kind = Task`), and the `UPDATE`
+     statement does write `item_type`. (2) `create_team_item` had no coercion either and
+     rejected Template, so **a template child on a team-backed project was created as a Task
+     from birth**. Blast radius was contained — the library query is root-only and
+     `copy_template_children` walks `list_children` kind-agnostically — which is why it went
+     unnoticed. Both paths now coerce.
+
+   - **`NewTemplate`/`EditTemplate` lost `Default` and their `parent_item_id` is a plain
+     `String`.** A root template is `service::templates`' business, so an unparented
+     `NewTemplate` is a request the narrowed guard rejects; making it unconstructable is
+     cheaper than a runtime error. Only two call sites build these, so the lost `..Default`
+     costs nothing.
+
+   This is the first stage needing a **root CLAUDE.md** edit — the Events section stated the
+   old guard as an invariant, and the Touch-Point Checklist requires the owning section be
+   updated when one changes. Stages 1–3 genuinely needed none. The `#[allow(dead_code)]` on
+   `NewItemKind::Template`/`EditItemKind::Template` is gone; `TaskAnchor::Parent` and
+   `EditItemKind::Task` still carry theirs until Stage 5.
 5. **Task.** The largest: `web_ui/project_tasks/` (6 create, 6 update), both calendars,
    `all_projects_tasks.rs`, `service/activity_log.rs`.
 6. **Internal service callers.** `service/item_series.rs` (3 sites, Task-or-Event from

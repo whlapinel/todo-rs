@@ -6,8 +6,8 @@ use crate::service::activity_log::reverse_entry;
 use crate::service::item_series;
 use crate::service::items::{
     ItemError, copy_template_children_to_event, event_anchor, has_incomplete_children,
-    is_pure_complete_toggle, item_anchor, sync_offset_children, sync_source_event_tasks,
-    unlink_source_event_tasks,
+    is_pure_complete_toggle, item_anchor, require_template_has_template_parent,
+    sync_offset_children, sync_source_event_tasks, unlink_source_event_tasks,
 };
 use crate::service::projects::{
     require_project_admin, require_project_member, resolve_project_assignee,
@@ -148,6 +148,23 @@ pub(crate) async fn resolve_offset_anchor_project(
     }
 }
 
+/// `items::parent_kind_of`'s project-scoped twin — a team-backed item resolves its parent
+/// through `get_by_project`, not through the owning `user_id`.
+async fn parent_kind_of(
+    repo: &Arc<dyn ItemRepo>,
+    project_id: &str,
+    parent_item_id: &Option<String>,
+) -> Option<ItemKind> {
+    match parent_item_id {
+        Some(parent_id) => repo
+            .get_by_project(project_id, parent_id)
+            .await
+            .ok()
+            .map(|p| p.kind()),
+        None => None,
+    }
+}
+
 /// Moved from `json_api::team_items::create_team_item`; rewritten in Stage 4 of
 /// docs/team-id-removal-plan.md to be `project_id`-primary — every repo/membership
 /// lookup below goes through `params.project_id`, not a `team_id`. Stage 6 dropped
@@ -163,11 +180,6 @@ pub async fn create_team_item(
     params: CreateTeamItemParams,
 ) -> Result<String, ItemError> {
     require_project_member(projects, teams, &params.project_id, requester_user_id).await?;
-    if params.item_type == Some(ItemKind::Template) {
-        return Err(ItemError::Invalid(
-            "item_type Template is not supported for team items".to_string(),
-        ));
-    }
     if let (Some(start), Some(end)) = (params.scheduled_date, params.scheduled_end_date)
         && end < start
     {
@@ -178,16 +190,21 @@ pub async fn create_team_item(
 
     // Events can never have children (a task references an event via
     // sourceEventId instead of nesting under it).
-    if let Some(ref parent_id) = params.parent_item_id
-        && let Ok(parent) = repo.get_by_project(&params.project_id, parent_id).await
-        && parent.kind() == ItemKind::Event
-    {
+    let parent_kind = parent_kind_of(repo, &params.project_id, &params.parent_item_id).await;
+    if parent_kind == Some(ItemKind::Event) {
         return Err(ItemError::Invalid(
             "Events cannot have children; link a task to it via sourceEventId instead".to_string(),
         ));
     }
+    require_template_has_template_parent(params.item_type, parent_kind)?;
 
-    let kind = params.item_type.unwrap_or_default();
+    let mut kind = params.item_type.unwrap_or_default();
+    // A template's child subtree is itself Template-typed (root CLAUDE.md's Domain Models
+    // section). `items::create_item` has always coerced this; `team_items` never did, so a
+    // template child on a team-backed project was created as a plain Task instead.
+    if parent_kind == Some(ItemKind::Template) {
+        kind = ItemKind::Template;
+    }
 
     let schedule = Schedule {
         due_date: params.due_date,
@@ -441,11 +458,6 @@ pub async fn update_team_item(
     let projects = &ctx.projects;
     let activity_log = &ctx.activity_log;
     require_project_member(projects, teams, &params.project_id, requester_user_id).await?;
-    if params.item_type == Some(ItemKind::Template) {
-        return Err(ItemError::Invalid(
-            "item_type Template is not supported for team items".to_string(),
-        ));
-    }
     if let (Some(start), Some(end)) = (params.scheduled_date, params.scheduled_end_date)
         && end < start
     {
@@ -474,16 +486,21 @@ pub async fn update_team_item(
 
     // Events can never have children (a task references an event via
     // sourceEventId instead of nesting under it).
-    if let Some(ref parent_id) = params.parent_item_id
-        && let Ok(parent) = repo.get_by_project(&params.project_id, parent_id).await
-        && parent.kind() == ItemKind::Event
-    {
+    let parent_kind = parent_kind_of(repo, &params.project_id, &params.parent_item_id).await;
+    if parent_kind == Some(ItemKind::Event) {
         return Err(ItemError::Invalid(
             "Events cannot have children; link a task to it via sourceEventId instead".to_string(),
         ));
     }
+    require_template_has_template_parent(params.item_type, parent_kind)?;
 
-    let kind = params.item_type.unwrap_or(current.kind());
+    let mut kind = params.item_type.unwrap_or(current.kind());
+    // A template's child subtree is itself Template-typed (root CLAUDE.md's Domain Models
+    // section). `items::create_item` has always coerced this; `team_items` never did, so a
+    // template child on a team-backed project was created as a plain Task instead.
+    if parent_kind == Some(ItemKind::Template) {
+        kind = ItemKind::Template;
+    }
     let schedule = Schedule {
         due_date: params.due_date,
         has_due_time: params.has_due_time.unwrap_or(false),
@@ -1680,5 +1697,53 @@ mod tests {
         )
         .await
         .expect("should update using params.project_id");
+    }
+    /// Regression test: `create_team_item` never had `items::create_item`'s
+    /// parent-coercion, so a template child on a team-backed project was created as a
+    /// plain Task while the same action on a personal project produced a Template. See
+    /// Stage 4 of docs/typed-item-params-plan.md.
+    #[tokio::test]
+    async fn create_team_item_makes_a_template_child_template_typed() {
+        let mut items = MockItemRepo::new();
+        items.expect_get_by_project().returning(|_, _| {
+            Ok(Item {
+                id: "tpl1".to_string(),
+                project_id: Some("p1".to_string()),
+                name: "Party template".to_string(),
+                item_type: ItemType::Template(TemplateItem {
+                    parent_item_id: None,
+                    schedule: Schedule::default(),
+                    recurrence: Recurrence::default(),
+                    event_type: None,
+                }),
+                ..Item::default()
+            })
+        });
+        items
+            .expect_create()
+            .withf(|item: &Item| item.kind() == ItemKind::Template)
+            .times(1)
+            .returning(|_| Ok("child1".to_string()));
+
+        let items: Arc<dyn ItemRepo> = Arc::new(items);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+        let projects: Arc<dyn ProjectRepo> =
+            Arc::new(project_with_role("p1", "t1", TeamRole::Member));
+
+        create_team_item(
+            &items,
+            &teams,
+            &projects,
+            "member1",
+            CreateTeamItemParams {
+                project_id: "p1".to_string(),
+                name: "Book venue".to_string(),
+                parent_item_id: Some("tpl1".to_string()),
+                item_type: Some(ItemKind::Template),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("a template child is not a library template");
     }
 }

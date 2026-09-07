@@ -1,11 +1,12 @@
 use crate::auth::AuthUser;
-use crate::domain::item::{Item, ItemKind};
+use crate::domain::item::{Item, Schedule, TeamAssignment};
 use crate::domain::recurrence;
 use crate::service::error::ItemError;
-use crate::service::items as item_service;
-use crate::service::project_items::{
-    self as project_item_service, CreateProjectItemParams, UpdateProjectItemParams,
+use crate::service::item_input::{
+    EditItem, EditItemKind, EditTemplate, NewItem, NewItemKind, NewTask, NewTemplate,
 };
+use crate::service::items as item_service;
+use crate::service::project_items::{self as project_item_service};
 use crate::service::projects::{self as project_service};
 use crate::service::templates::{
     self as template_service, CreateProjectTemplateParams, UpdateProjectTemplateParams,
@@ -372,20 +373,28 @@ pub async fn create_project_template_child_form(
     Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
     Form(form): Form<ProjectTemplateChildForm>,
 ) -> Result<Html<String>, ItemError> {
-    let params = CreateProjectItemParams {
+    // `NewItemKind::Template` states what this has always created rather than leaning on
+    // `items::create_item`'s parent-coercion to supply it — which `team_items` never had,
+    // so a template child on a team-backed project used to be created as a plain Task.
+    let new = NewItem {
         project_id: project_id.clone(),
         name: form.name,
-        parent_item_id: Some(template_id.clone()),
-        due_offset_days: parse_offset(&form.due_offset_days),
-        ..Default::default()
+        description: None,
+        timezone_offset_minutes: None,
+        kind: NewItemKind::Template(NewTemplate {
+            parent_item_id: template_id.clone(),
+            schedule: Schedule::default(),
+            event_type: None,
+            due_offset_days: parse_offset(&form.due_offset_days),
+        }),
     };
-    project_item_service::create_project_item(
+    project_item_service::create_item_typed(
         &repo,
         &projects,
         &teams,
         &reminders,
         &auth_user.user_id,
-        params,
+        new,
     )
     .await?;
     render_children_fragment(&repo, &project_id, &template_id).await
@@ -490,19 +499,25 @@ pub async fn update_project_template_child_form(
     } else {
         form.name.trim().to_string()
     };
-    let params = UpdateProjectItemParams {
+    // This used to pass `item_type: Some(ItemKind::Task)`, which — `update_item` having no
+    // parent-coercion of its own — silently rewrote the row's kind, so a template child
+    // stopped being Template-typed the first time anyone edited it. `EditTemplate` has no
+    // way to say anything but Template.
+    let edit = EditItem {
         project_id: project_id.clone(),
         item_id: item_id.clone(),
         name,
         description: current.description.clone(),
-        complete: false,
-        parent_item_id: Some(template_id.clone()),
-        item_type: Some(ItemKind::Task),
-        event_type: current.event_type(),
-        due_offset_days: parse_offset(&form.due_offset_days),
-        ..Default::default()
+        timezone_offset_minutes: None,
+        depends_on_item_ids: None,
+        kind: EditItemKind::Template(EditTemplate {
+            parent_item_id: template_id.clone(),
+            schedule: Schedule::default(),
+            event_type: current.event_type(),
+            due_offset_days: parse_offset(&form.due_offset_days),
+        }),
     };
-    project_item_service::update_project_item(
+    project_item_service::update_item_typed(
         &repo,
         &projects,
         &teams,
@@ -511,7 +526,7 @@ pub async fn update_project_template_child_form(
         &reminders,
         &item_dependencies,
         &auth_user.user_id,
-        params,
+        edit,
     )
     .await?;
     let updated =
@@ -618,21 +633,30 @@ pub async fn use_project_template_form(
     // create/update paths do for `assignedToUserId`/`points`.
     let assigned_to_user_id = form.assigned_to_user_id.filter(|s| !s.is_empty());
 
-    let params = CreateProjectItemParams {
+    let new = NewItem {
         project_id: project_id.clone(),
         name,
-        due_date,
-        assigned_to_user_id,
+        description: None,
         timezone_offset_minutes: Some(tz),
-        ..Default::default()
+        kind: NewItemKind::Task(NewTask {
+            schedule: Schedule {
+                due_date,
+                ..Default::default()
+            },
+            assignment: TeamAssignment {
+                assigned_to_user_id,
+                points: None,
+            },
+            ..Default::default()
+        }),
     };
-    let new_item_id = project_item_service::create_project_item(
+    let new_item_id = project_item_service::create_item_typed(
         &repo,
         &projects,
         &teams,
         &reminders,
         &auth_user.user_id,
-        params,
+        new,
     )
     .await?;
 
