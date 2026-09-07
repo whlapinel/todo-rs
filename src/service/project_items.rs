@@ -2,6 +2,7 @@ use crate::domain::item::{Item, ItemKind, ItemType};
 use crate::domain::project::Project;
 use crate::service::error::ItemError;
 use crate::service::item_dependencies;
+use crate::service::item_input::{EditItem, NewItem};
 use crate::service::item_series;
 use crate::service::items::{self, CreateItemParams, UpdateItemParams, item_anchor};
 use crate::service::projects::require_project_member;
@@ -662,6 +663,57 @@ pub async fn delete_project_item(
     // to `item_id` as *its* dependency.
     item_dependencies_repo.delete_for_item(item_id).await?;
     Ok(())
+}
+
+/// Kind-typed entry point to `create_project_item`, taking a `NewItem` instead of the flat
+/// `CreateProjectItemParams`. Every caller that knows its kind statically — which is all but
+/// `json_api::project_items` — should use this; see `docs/typed-item-params-plan.md`. The
+/// conversion is the only thing this adds today; once every caller has migrated, this becomes
+/// `create_project_item` itself and the flat struct goes away (that plan's Stage 8).
+pub async fn create_item_typed(
+    repo: &Arc<dyn ItemRepo>,
+    projects: &Arc<dyn ProjectRepo>,
+    teams: &Arc<dyn TeamRepo>,
+    reminders_repo: &Arc<dyn ReminderRepo>,
+    requester_user_id: &str,
+    new: NewItem,
+) -> Result<String, ItemError> {
+    create_project_item(
+        repo,
+        projects,
+        teams,
+        reminders_repo,
+        requester_user_id,
+        new.into(),
+    )
+    .await
+}
+
+/// Kind-typed entry point to `update_project_item` — `create_item_typed`'s counterpart.
+#[allow(clippy::too_many_arguments)]
+pub async fn update_item_typed(
+    repo: &Arc<dyn ItemRepo>,
+    projects: &Arc<dyn ProjectRepo>,
+    teams: &Arc<dyn TeamRepo>,
+    activity_log: &Arc<dyn ActivityLogRepo>,
+    series: &Arc<dyn ItemSeriesRepo>,
+    reminders_repo: &Arc<dyn ReminderRepo>,
+    item_dependencies_repo: &Arc<dyn ItemDependencyRepo>,
+    requester_user_id: &str,
+    edit: EditItem,
+) -> Result<(), ItemError> {
+    update_project_item(
+        repo,
+        projects,
+        teams,
+        activity_log,
+        series,
+        reminders_repo,
+        item_dependencies_repo,
+        requester_user_id,
+        edit.into(),
+    )
+    .await
 }
 
 #[cfg(test)]

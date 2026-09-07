@@ -6,6 +6,7 @@ pub mod comments;
 pub mod error;
 pub mod import;
 pub mod item_dependencies;
+pub mod item_input;
 pub mod item_series;
 pub mod items;
 pub mod project_items;

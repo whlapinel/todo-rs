@@ -1,0 +1,238 @@
+# Typed item params
+
+## Context
+
+`Item` was split into `TaskItem`/`EventItem`/`TemplateItem`/`SimpleItem` by
+`docs/archived/item-kind-split-plan.md` (Stages 0–8, complete). That split stopped at the domain
+layer by explicit decision. Its Non-goals #1 and #2 ruled the wire format and the SQLite schema
+out of scope, and its Service layer section ruled that the params structs
+**"stay flat, kind-agnostic DTOs — they mirror the wire shape on purpose."**
+
+This plan revisits only the third of those. The wire (Non-goal #1) and the schema (Non-goal #2)
+stay exactly as they are, and both decisions still look right:
+
+- **Schema.** A per-kind table split trades NULL-column risk for JOIN complexity across every
+  cross-kind query the app already has (`list_by_project`, `list_due_by_project`, both calendars,
+  `all_projects_tasks`), and would make seven tables' `item_id` foreign keys polymorphic —
+  `comments`, `attachments`, `reminders`, `item_dependencies`, `activity_log`,
+  `item_occurrences`, `series_child_occurrences`, across ~87 query sites. `parent_item_id` is
+  heterogeneous too (Task children under Events via the template trigger, Task children under
+  Task occurrences via series sub-items, Template under Template), so a self-FK would become a
+  cross-table one. No Rust-type-safety benefit, since a table row is never a value callers touch.
+- **Wire.** Tightening it means a breaking API change rippling through every generated SDK,
+  `prl`, and the MCP server. If it is ever done, a Smithy `union` for the per-kind detail is the
+  cheaper shape than four resources (5 item operations would otherwise become 20) — and it should
+  come *after* this plan, which is what will establish what the per-kind shapes actually are.
+  Nothing in this plan touches `model/`, so no `task codegen` run is needed at any stage.
+
+### Why the "mirrors the wire shape" reasoning doesn't hold for the service layer
+
+It is correct about the wire, and it over-generalized from there. Counting the actual callers:
+
+| Struct | Construction sites | Genuinely untyped input |
+|---|---|---|
+| `CreateProjectItemParams` | 21 | **1** — `json_api/project_items.rs` |
+| `UpdateProjectItemParams` | 26 | **1** — `json_api/project_items.rs` |
+
+Everything else passes a **literal** `ItemKind::Task`/`Event`/`Simple`, or is `service/import.rs`
+(kind from a CSV column) or `service/item_series.rs` (kind from `series.item_type`, Task or Event
+only). So the flat DTO is an honest representation of its input for 1 caller in 21, and a
+19-field form that the other 20 fill largely by omission.
+
+`#[derive(Default)]` plus `..Default::default()` already softens the typing burden at most sites.
+The burden was never the real cost. Three things are:
+
+1. **Three parallel flat structs, transcribed field by field.** `create_project_item` copies 19
+   fields into `CreateTeamItemParams` and 17 into `CreateItemParams`; `update_project_item` does
+   the same twice more. That is ~80 lines of pure transcription which every new field must be
+   threaded through, and where **omitting a field is a silent behavior change, not a compile
+   error**. This is already load-bearing — `web_ui/project_templates/handlers.rs` carries a
+   comment reading *"Dropped by `create_project_item` on the personal branch (`CreateItemParams`
+   has no slot for it) — harmless to always pass through"*, which is a documented silent drop.
+2. **`Default` hides which fields are required for which kind.**
+   `CreateProjectItemParams::default()` is a Task with no project and no name. Nothing in the
+   type says `event_type` is meaningless on a Task, or that `points` is Task-and-team-only.
+3. **Direct-overwrite semantics are invisible.** `priority`, `event_type` and `due_offset_days`
+   are cleared by omission on update, so every caller must round-trip a value it did not intend
+   to touch. That convention is currently documented in four separate doc comments and enforced
+   nowhere.
+
+### What becomes unrepresentable
+
+Seven classes of input that are today either silently dropped or caught by a runtime check:
+
+| Input | Today | After |
+|---|---|---|
+| `complete` on Simple / Event | `Item::validate()` rejects | no field on `NewSimple`/`NewEvent` |
+| `points` / `assigned_to_user_id` on non-Task | silently dropped | no field |
+| `priority` on non-Task | silently dropped | no field |
+| `event_type` on Task / Simple | silently dropped | no field |
+| `parent_item_id` on Event | silently dropped | no field |
+| `source_event_id` on non-Task | silently dropped | no field |
+| `series_id` on Simple / Template | silently dropped | no field |
+
+Plus one that an enum makes structural rather than a check: `Item::validate()`'s
+*"an item cannot both have a parent and reference an event"* becomes `TaskAnchor::Parent(_) |
+TaskAnchor::SourceEvent(_)`, since a Task has exactly one anchor source by construction.
+
+Checks that deliberately **stay** runtime, so this plan does not overpromise: name/description
+length, `priority` in 1–4, `scheduled_end_date >= scheduled_date`, points-on-a-child,
+`due_offset_days` non-positive, and every permission/role gate. Newtypes (`Priority`,
+`DaysBefore`) could absorb two of those and are explicitly out of scope — they would touch the
+domain layer, which this plan does not.
+
+## Design
+
+A new `src/service/item_input.rs`, shaped to **mirror `ItemType`** — these types are the input
+counterpart of the domain enum they construct, which is what lets `build_item_type` collapse.
+
+```rust
+/// The envelope every kind carries — mirrors `Item`'s own envelope.
+pub struct NewItem {
+    pub project_id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub timezone_offset_minutes: Option<i32>,
+    pub kind: NewItemKind,
+}
+
+pub enum NewItemKind {
+    Task(NewTask),
+    Event(NewEvent),
+    Simple(NewSimple),
+    Template(NewTemplate),
+}
+
+/// Exactly one anchor source — replaces `validate()`'s parent/source_event exclusion check.
+pub enum TaskAnchor {
+    None,
+    Parent(String),
+    SourceEvent(String),
+}
+
+pub struct NewTask {
+    pub anchor: TaskAnchor,
+    pub schedule: ScheduleInput,
+    pub due_offset_days: Option<i32>,
+    pub priority: Option<i32>,
+    pub complete: bool,
+    /// Team-backed projects only; the personal branch rejects rather than drops it.
+    pub assignment: Option<AssignmentInput>,
+    /// Internal-only — set exclusively by `item_series::get_or_materialize_occurrence`.
+    pub series_id: Option<String>,
+}
+
+pub struct NewEvent {
+    pub schedule: ScheduleInput,
+    pub event_type: Option<String>,
+    pub due_offset_days: Option<i32>,
+    pub series_id: Option<String>,
+}
+
+pub struct NewSimple {
+    pub parent_item_id: Option<String>,
+}
+
+pub struct NewTemplate {
+    pub parent_item_id: Option<String>,
+    pub schedule: ScheduleInput,
+    pub event_type: Option<String>,
+    pub due_offset_days: Option<i32>,
+}
+```
+
+`ScheduleInput` mirrors `Schedule` (`due_date`/`has_due_time`/`scheduled_date`/
+`has_scheduled_time`/`scheduled_end_date`/`has_end_time`), so the split date+time control
+convention described in root CLAUDE.md's Scheduled start/end section carries over unchanged.
+`EditItem`/`EditItemKind` are the update counterparts, adding the update-only
+`depends_on_item_ids` to the envelope (`None` = leave alone, per its existing convention).
+
+**`google_event_id`/`calendar_subscription_id` get no input field at all**, matching today:
+`service::calendar_sync` writes them by building an `Item` directly rather than going through
+this funnel, and `build_item_type` already hardcodes both to `None`.
+
+**The template-child kind coercion.** `items::create_item` currently coerces a child of a
+Template to `ItemKind::Template`. `web_ui/project_templates/handlers.rs` relies on it — it
+creates template children by passing the default kind. Under typed params that path passes
+`NewItemKind::Template` explicitly instead, which is what it means. The coercion itself stays for
+the wire path, where the caller genuinely may not know the parent's kind.
+
+## Staging
+
+Every stage leaves the **whole workspace** — `todo-cli` included — building and testing green,
+per this repo's convention (`docs/archived/team-id-removal-plan.md`,
+`docs/archived/project-abstraction-plan.md`). Baseline is 655 test functions in `src`.
+
+1. **The input types plus a conversion shim.** Add `src/service/item_input.rs` and
+   `impl From<NewItem> for CreateProjectItemParams` / `From<EditItem> for
+   UpdateProjectItemParams`, with `create_project_item_typed`/`update_project_item_typed`
+   delegating through it. Purely additive — no existing caller changes. Unit tests that each
+   variant converts to the flat params the old callers would have built by hand. **Done**
+   (662 tests passing, up from a 654 baseline).
+
+   Two deviations from the design above:
+
+   - **The shims are named `create_item_typed`/`update_item_typed`**, not
+     `create_project_item_typed`/`update_project_item_typed`. They live in
+     `service::project_items` already, so the module name carried the `project_item` half; at
+     Stage 8 they take over the plain names.
+   - **`EditItem` carries `depends_on_item_ids` on the envelope, not on `EditTask`**, despite
+     dependencies being Task-only (root CLAUDE.md's Item dependencies section). Clearing must
+     stay possible for an item whose kind has since changed — that is the *only* way rows on a
+     no-longer-Task item can be removed — so putting the field inside the Task variant would
+     make an existing, deliberate escape hatch unrepresentable.
+2. **Simple, end to end.** Migrate `web_ui/project_simple_lists/` (3 create, 4 update sites).
+   Smallest payload — `NewSimple` is one field against the flat struct's 19 — and a
+   self-contained screen, so it proves the pattern cheaply. **Done** (no test-count change —
+   this stage rewrites call sites, it adds no behavior).
+
+   Two things worth knowing before Stages 3–5 repeat the pattern:
+
+   - **A handler that read `params.parent_item_id` back had to change.** `create_item_form`
+     used it to decide which scope to re-render; a `NewItem`'s parent lives inside its kind
+     payload, so it now reads `non_empty(&form.parent_item_id)` from the form directly — the
+     same expression the builder itself uses. Expect one of these per screen that re-renders
+     conditionally.
+   - **`TaskAnchor`, `NewItemKind` and `EditItemKind` carry a transient
+     `#[allow(dead_code)]`.** Only the `Simple` arms have callers until Stages 3–5 land.
+     Remove the attribute as each kind's stage lands; it is gone entirely by Stage 5.
+3. **Event.** `web_ui/project_events/` (4 create, 2 update) and `all_projects_events.rs`.
+4. **Template.** `web_ui/project_templates/`, including the explicit `NewItemKind::Template`
+   above. `service/templates.rs` has its own `Create*TemplateParams` family, already per-kind;
+   audit whether it should fold into `NewTemplate` or stay separate.
+5. **Task.** The largest: `web_ui/project_tasks/` (6 create, 6 update), both calendars,
+   `all_projects_tasks.rs`, `service/activity_log.rs`.
+6. **Internal service callers.** `service/item_series.rs` (3 sites, Task-or-Event from
+   `series.item_type`) and `service/import.rs` (kind from a CSV column). Both are the
+   "dynamic kind" shape the wire boundary will also need, so doing them here de-risks Stage 7.
+7. **The wire boundary.** `json_api/project_items.rs` gets an explicit
+   `try_into_new_item()`/`try_into_edit_item()`. **Behavior change to decide before writing it:**
+   today a cross-kind field on the wire (`points` on an Event) is silently dropped; the natural
+   typed conversion rejects it. Rejecting is the better contract and matches how `itemType`
+   itself already behaves (smithy-rs rejects an unrecognized value at the deserialization
+   boundary, per root CLAUDE.md's Events section) — but it is a real API behavior change for
+   `prl` and the MCP server, so confirm before shipping rather than assuming.
+8. **Delete the flat structs.** Remove `CreateProjectItemParams`/`UpdateProjectItemParams`/
+   `CreateItemParams`/`UpdateItemParams`/`CreateTeamItemParams`/`UpdateTeamItemParams`; have
+   `items::create_item` and `team_items::create_team_item` take `NewItem` directly. This is the
+   stage that deletes the ~80 lines of field transcription and closes the silent-drop class of
+   bug for good. `build_item_type` collapses into the `NewItemKind` match.
+
+## Verification
+
+- `cargo build`, `cargo test`, and plain `cargo fmt` (no path arguments, repo root — CLAUDE.md's
+  formatting policy) after every stage.
+- No `task codegen` at any stage: `model/` is untouched throughout.
+- `task web-styles` only if a template's Tailwind classes change (Stages 2–5 may touch templates
+  where a form field's shape changes; most should not).
+- Per CLAUDE.md this repo does **not** use Playwright. In-browser behavior is the user's own
+  verification step, and any claim about it will be stated as unverified.
+
+## Explicitly out of scope
+
+- The SQLite schema (see Context) and the Smithy wire format beyond Stage 7's conversion.
+- Newtypes for `priority`/`due_offset_days` — domain-layer changes, a separate question.
+- Splitting `ItemSeries` into `TaskSeries`/`EventSeries` — already tracked in
+  `docs/issues_and_features.md` and independent of this, though it is the same idea one level up
+  and this plan's staging discipline applies to it too.
+- `service::templates.rs`'s own params family, beyond the Stage 4 audit.

@@ -1,6 +1,9 @@
 use crate::auth::AuthUser;
 use crate::domain::item::Item;
 use crate::service::error::ItemError;
+use crate::service::item_input::{
+    EditItem, EditItemKind, EditSimple, NewItem, NewItemKind, NewSimple,
+};
 use crate::service::project_items::{self as project_item_service};
 use crate::service::projects::{self as project_service};
 use crate::service::teams as team_service;
@@ -248,9 +251,12 @@ pub async fn create_project_simple_item_form(
 ) -> Result<Response, ItemError> {
     let redirect = form.redirect.is_some();
     let return_to = form.return_to.clone();
+    // Read the scope to re-render from the form rather than back out of `params` — a
+    // `NewItem`'s parent lives inside its kind payload, and this handler only ever builds
+    // a Simple one.
+    let parent_item_id = super::non_empty(&form.parent_item_id);
     let params = create_params_from_form(&project_id, &form);
-    let parent_item_id = params.parent_item_id.clone();
-    project_item_service::create_project_item(
+    project_item_service::create_item_typed(
         &repo,
         &projects,
         &teams,
@@ -299,14 +305,16 @@ pub async fn create_project_simple_items_batch(
         if name.is_empty() {
             continue;
         }
-        let params = crate::service::project_items::CreateProjectItemParams {
+        let params = NewItem {
             project_id: project_id.clone(),
             name: name.to_string(),
-            parent_item_id: parent_item_id.clone(),
-            item_type: Some(crate::domain::item::ItemKind::Simple),
-            ..Default::default()
+            description: None,
+            timezone_offset_minutes: None,
+            kind: NewItemKind::Simple(NewSimple {
+                parent_item_id: parent_item_id.clone(),
+            }),
         };
-        project_item_service::create_project_item(
+        project_item_service::create_item_typed(
             &repo,
             &projects,
             &teams,
@@ -355,7 +363,7 @@ pub async fn update_project_simple_item_form(
     let current = require_simple(current)?;
     let close = form.redirect.is_some();
     let params = update_params_from_form(&project_id, &item_id, &current, &form);
-    project_item_service::update_project_item(
+    project_item_service::update_item_typed(
         &repo,
         &projects,
         &teams,
@@ -489,16 +497,17 @@ fn reparent_params(
     item_id: &str,
     current: &Item,
     new_parent_item_id: Option<String>,
-) -> crate::service::project_items::UpdateProjectItemParams {
-    crate::service::project_items::UpdateProjectItemParams {
+) -> EditItem {
+    EditItem {
         project_id: project_id.to_string(),
         item_id: item_id.to_string(),
         name: current.name.clone(),
         description: current.description.clone(),
-        complete: false,
-        parent_item_id: new_parent_item_id,
-        item_type: Some(crate::domain::item::ItemKind::Simple),
-        ..Default::default()
+        timezone_offset_minutes: None,
+        depends_on_item_ids: None,
+        kind: EditItemKind::Simple(EditSimple {
+            parent_item_id: new_parent_item_id,
+        }),
     }
 }
 
@@ -595,7 +604,7 @@ pub async fn move_project_simple_item_form(
         (require_simple(target.current)?, Some(target.new_parent.id))
     };
     let params = reparent_params(&project_id, &item_id, &current, new_parent_item_id);
-    project_item_service::update_project_item(
+    project_item_service::update_item_typed(
         &repo,
         &projects,
         &teams,

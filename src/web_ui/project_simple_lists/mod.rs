@@ -3,6 +3,9 @@ pub mod templates;
 
 use crate::domain::item::{Item, ItemKind};
 use crate::service::error::ItemError;
+use crate::service::item_input::{
+    EditItem, EditItemKind, EditSimple, NewItem, NewItemKind, NewSimple,
+};
 use crate::service::project_items::list_project_items_unchecked;
 use crate::storage::sqlite::ItemRepo;
 use crate::web_ui::project_simple_lists::templates::{
@@ -90,17 +93,15 @@ fn overlay_str(form_value: &Option<String>, current: Option<String>) -> Option<S
     }
 }
 
-pub(crate) fn create_params_from_form(
-    project_id: &str,
-    form: &ProjectSimpleItemForm,
-) -> crate::service::project_items::CreateProjectItemParams {
-    crate::service::project_items::CreateProjectItemParams {
+pub(crate) fn create_params_from_form(project_id: &str, form: &ProjectSimpleItemForm) -> NewItem {
+    NewItem {
         project_id: project_id.to_string(),
         name: form.name.clone().unwrap_or_default(),
         description: non_empty(&form.description),
-        parent_item_id: non_empty(&form.parent_item_id),
-        item_type: Some(ItemKind::Simple),
-        ..Default::default()
+        timezone_offset_minutes: None,
+        kind: NewItemKind::Simple(NewSimple {
+            parent_item_id: non_empty(&form.parent_item_id),
+        }),
     }
 }
 
@@ -109,16 +110,17 @@ pub(crate) fn update_params_from_form(
     item_id: &str,
     current: &Item,
     form: &ProjectSimpleItemForm,
-) -> crate::service::project_items::UpdateProjectItemParams {
-    crate::service::project_items::UpdateProjectItemParams {
+) -> EditItem {
+    EditItem {
         project_id: project_id.to_string(),
         item_id: item_id.to_string(),
         name: overlay_required_str(&form.name, &current.name),
         description: overlay_str(&form.description, current.description.clone()),
-        complete: false,
-        parent_item_id: current.parent_item_id(),
-        item_type: Some(ItemKind::Simple),
-        ..Default::default()
+        timezone_offset_minutes: None,
+        depends_on_item_ids: None,
+        kind: EditItemKind::Simple(EditSimple {
+            parent_item_id: current.parent_item_id(),
+        }),
     }
 }
 
