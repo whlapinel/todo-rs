@@ -396,10 +396,14 @@
     //
     // The title bar (the popover has none — it already opens right next to the row it's for, so
     // naming it again would be redundant) reads the item's name from the <template>'s own
-    // `data-name` (components/row.html) via `.textContent`, not string-concatenated into the
-    // innerHTML assignment below like the rest of this markup — an item name is user-authored
-    // text, and going through `.textContent` is what keeps something like `<img onerror=...>` as
-    // a literal task name instead of markup.
+    // `data-name` — every screen's per-row `<template id="row-actions-menu-{id}">` carries it
+    // now (components/row.html for a real row, project_tasks/virtual_row.html and
+    // virtual_child_row.html for a still-virtual occurrence/sub-item) — via `.textContent`, not
+    // string-concatenated into the innerHTML assignment below like the rest of this markup — an
+    // item name is user-authored text, and going through `.textContent` is what keeps something
+    // like `<img onerror=...>` as a literal task name instead of markup. Styled larger, bold,
+    // and on a tinted background (vs. the plain `text-sm` rows below) so it reads as a heading
+    // rather than a disabled-looking first menu entry.
     function openRowActionsMenuDialog(tpl) {
       const dialog = document.getElementById('action-dialog');
       if (!dialog) return;
@@ -407,7 +411,7 @@
         '<div class="fixed inset-0 bg-gray-500/75 dark:bg-gray-900/50 transition-opacity duration-300 ease-out opacity-0 group-open/dialog:opacity-100"></div>' +
         '<div class="relative z-10 flex min-h-full items-end justify-center focus:outline-none">' +
         '<div data-row-actions-menu class="relative w-full max-h-[85vh] overflow-y-auto transform rounded-t-lg bg-white text-left shadow-xl transition-all duration-300 ease-out translate-y-4 opacity-0 group-open/dialog:translate-y-0 group-open/dialog:opacity-100 dark:bg-gray-800 dark:outline dark:-outline-offset-1 dark:outline-white/10">' +
-        '<div data-menu-title class="truncate border-b border-gray-100 px-4 py-3 text-sm font-semibold text-gray-900 dark:border-white/10 dark:text-white"></div>' +
+        '<div data-menu-title class="truncate border-b border-gray-100 bg-gray-50 px-4 py-3 text-base font-semibold text-gray-900 dark:border-white/10 dark:bg-white/5 dark:text-white"></div>' +
         tpl.innerHTML +
         '<div class="border-t border-gray-100 dark:border-white/10">' +
         '<button type="button" onclick="document.getElementById(\'action-dialog\').close()" class="block w-full cursor-pointer px-4 py-3 text-center text-sm font-semibold text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-white/5">Cancel</button>' +

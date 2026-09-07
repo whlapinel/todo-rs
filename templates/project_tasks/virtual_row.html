@@ -71,7 +71,7 @@
          write (see ProjectOccurrence::edit_url/add_task_child_url's doc comments) — everything
          else (Duplicate/Move/Save as template/Delete) still requires a real item id and stays
          out of scope here, tracked in docs/issues_and_features.md. -->
-    <template id="row-actions-menu-{{ row_id }}">
+    <template id="row-actions-menu-{{ row_id }}" data-name="{{ name }}">
       <div class="divide-y divide-gray-100 dark:divide-white/10">
         {% if is_skipped %}
         <!-- Moved off a standalone top-line button (2026-09-05) — mirrors components/row.html's

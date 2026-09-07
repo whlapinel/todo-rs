@@ -32,7 +32,7 @@
          materializes anything; only Edit's own Save (a PUT) does. This mirrors the parent
          occurrence's row menu (project_tasks/virtual_row.html) entry for entry, minus the
          actions that have no sub-item counterpart. -->
-    <template id="row-actions-menu-{{ row_id }}">
+    <template id="row-actions-menu-{{ row_id }}" data-name="{{ name }}">
       <div class="divide-y divide-gray-100 dark:divide-white/10">
         <button type="button" hx-post="{{ complete_url }}"
           {% if in_list_view %}hx-target="#items-list" hx-select="unset" hx-swap="innerHTML transition:true"{% endif %}
