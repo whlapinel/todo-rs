@@ -1,8 +1,11 @@
 pub mod handlers;
 pub mod templates;
 
-use crate::domain::item::{Item, ItemKind};
+use crate::domain::item::{Item, ItemKind, Schedule};
 use crate::service::error::ItemError;
+use crate::service::item_input::{
+    EditEvent, EditItem, EditItemKind, NewEvent, NewItem, NewItemKind,
+};
 use crate::service::item_series::ProjectOccurrence;
 use crate::storage::sqlite::ItemRepo;
 use crate::web_ui::project_events::templates::{ProjectEventRow, ProjectEventVirtualRow};
@@ -160,95 +163,98 @@ fn overlay_scheduled_end_date(
     }
 }
 
+/// Every field an Event cannot carry — `parent_item_id`, `source_event_id`, `complete`,
+/// `priority`, `points`/`assigned_to_user_id` — used to be an explicit `None` here. `NewEvent`
+/// has nowhere to put them, so they are gone rather than defaulted (see
+/// `docs/typed-item-params-plan.md`).
 pub(crate) fn create_params_from_form(
     project_id: &str,
     form: &ProjectEventForm,
     tz: i32,
-) -> crate::service::project_items::CreateProjectItemParams {
-    crate::service::project_items::CreateProjectItemParams {
+) -> NewItem {
+    NewItem {
         project_id: project_id.to_string(),
         name: form.name.clone().unwrap_or_default(),
         description: non_empty(&form.description),
-        due_date: overlay_due_date(&form.due_date, &form.due_time, tz, None),
-        scheduled_date: overlay_scheduled_date(
-            &form.scheduled_date,
-            &form.scheduled_time,
-            tz,
-            None,
-        ),
-        scheduled_end_date: overlay_scheduled_end_date(
-            &form.scheduled_end_date,
-            &form.scheduled_end_time,
-            tz,
-            None,
-        ),
-        complete: None,
-        has_due_time: form.due_time.as_deref().map(|t| !t.trim().is_empty()),
-        has_scheduled_time: form.scheduled_time.as_deref().map(|t| !t.trim().is_empty()),
-        has_end_time: form
-            .scheduled_end_time
-            .as_deref()
-            .map(|t| !t.trim().is_empty()),
-        parent_item_id: None,
-        item_type: Some(ItemKind::Event),
-        event_type: non_empty(&form.event_type),
-        due_offset_days: None,
-        assigned_to_user_id: None,
-        source_event_id: None,
         timezone_offset_minutes: Some(tz),
-        points: None,
-        // Events never carry priority — Task-only, see root CLAUDE.md's Priority
-        // section.
-        priority: None,
-        series_id: None,
+        kind: NewItemKind::Event(NewEvent {
+            schedule: Schedule {
+                due_date: overlay_due_date(&form.due_date, &form.due_time, tz, None),
+                has_due_time: has_time(&form.due_time),
+                scheduled_date: overlay_scheduled_date(
+                    &form.scheduled_date,
+                    &form.scheduled_time,
+                    tz,
+                    None,
+                ),
+                has_scheduled_time: has_time(&form.scheduled_time),
+                scheduled_end_date: overlay_scheduled_end_date(
+                    &form.scheduled_end_date,
+                    &form.scheduled_end_time,
+                    tz,
+                    None,
+                ),
+                has_end_time: has_time(&form.scheduled_end_time),
+            },
+            event_type: non_empty(&form.event_type),
+            due_offset_days: None,
+            series_id: None,
+        }),
     }
 }
 
+/// `Some(false)` and `None` are the same thing to every `has_*_time` consumer (each reads it
+/// through `unwrap_or(false)` in `service::items`/`team_items`), so collapsing the old
+/// `Option<bool>` into `Schedule`'s plain `bool` loses no state.
+fn has_time(form_time: &Option<String>) -> bool {
+    form_time.as_deref().is_some_and(|t| !t.trim().is_empty())
+}
+
+/// The `complete: false` this used to pass explicitly is now structural: `EditEvent` has no
+/// such field, which is `Item::validate()`'s "events cannot be marked complete" rule made
+/// unrepresentable rather than merely obeyed.
 pub(crate) fn update_params_from_form(
     project_id: &str,
     item_id: &str,
     current: &Item,
     form: &ProjectEventForm,
     tz: i32,
-) -> crate::service::project_items::UpdateProjectItemParams {
-    crate::service::project_items::UpdateProjectItemParams {
+) -> EditItem {
+    EditItem {
         project_id: project_id.to_string(),
         item_id: item_id.to_string(),
         name: overlay_required_str(&form.name, &current.name),
         description: overlay_str(&form.description, current.description.clone()),
-        due_date: overlay_due_date(&form.due_date, &form.due_time, tz, current.due_date()),
-        scheduled_date: overlay_scheduled_date(
-            &form.scheduled_date,
-            &form.scheduled_time,
-            tz,
-            current.scheduled_date(),
-        ),
-        scheduled_end_date: overlay_scheduled_end_date(
-            &form.scheduled_end_date,
-            &form.scheduled_end_time,
-            tz,
-            current.scheduled_end_date(),
-        ),
-        complete: false,
-        has_due_time: Some(overlay_has_due_time(&form.due_time, current.has_due_time())),
-        has_scheduled_time: Some(overlay_has_due_time(
-            &form.scheduled_time,
-            current.has_scheduled_time(),
-        )),
-        has_end_time: Some(overlay_has_due_time(
-            &form.scheduled_end_time,
-            current.has_end_time(),
-        )),
-        parent_item_id: None,
-        item_type: Some(ItemKind::Event),
-        event_type: overlay_str(&form.event_type, current.event_type()),
-        due_offset_days: None,
-        assigned_to_user_id: None,
-        source_event_id: None,
         timezone_offset_minutes: Some(tz),
-        points: None,
-        priority: None,
         depends_on_item_ids: None,
+        kind: EditItemKind::Event(EditEvent {
+            schedule: Schedule {
+                due_date: overlay_due_date(&form.due_date, &form.due_time, tz, current.due_date()),
+                has_due_time: overlay_has_due_time(&form.due_time, current.has_due_time()),
+                scheduled_date: overlay_scheduled_date(
+                    &form.scheduled_date,
+                    &form.scheduled_time,
+                    tz,
+                    current.scheduled_date(),
+                ),
+                has_scheduled_time: overlay_has_due_time(
+                    &form.scheduled_time,
+                    current.has_scheduled_time(),
+                ),
+                scheduled_end_date: overlay_scheduled_end_date(
+                    &form.scheduled_end_date,
+                    &form.scheduled_end_time,
+                    tz,
+                    current.scheduled_end_date(),
+                ),
+                has_end_time: overlay_has_due_time(
+                    &form.scheduled_end_time,
+                    current.has_end_time(),
+                ),
+            },
+            event_type: overlay_str(&form.event_type, current.event_type()),
+            due_offset_days: None,
+        }),
     }
 }
 

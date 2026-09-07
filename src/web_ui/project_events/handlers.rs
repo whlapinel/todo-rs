@@ -1,6 +1,7 @@
 use crate::auth::AuthUser;
 use crate::domain::item::ItemKind;
 use crate::service::error::ItemError;
+use crate::service::item_input::{NewItem, NewItemKind, NewTask, TaskAnchor};
 use crate::service::item_series::{self as series_service};
 use crate::service::project_items::{self as project_item_service};
 use crate::service::projects::{self as project_service};
@@ -328,8 +329,8 @@ pub async fn update_project_event_series_occurrence_form(
         tz,
     )
     .await?;
-    let params = update_params_from_form(&project_id, &item.id, &item, &form, tz);
-    project_item_service::update_project_item(
+    let edit = update_params_from_form(&project_id, &item.id, &item, &form, tz);
+    project_item_service::update_item_typed(
         &repo,
         &projects,
         &teams,
@@ -338,7 +339,7 @@ pub async fn update_project_event_series_occurrence_form(
         &reminders,
         &item_dependencies,
         &auth_user.user_id,
-        params,
+        edit,
     )
     .await?;
     Ok(hx_redirect(project_event_url(&project_id, &item.id)))
@@ -391,27 +392,29 @@ pub async fn create_project_event_series_occurrence_child_form(
         tz,
     )
     .await?;
-    let params = crate::service::project_items::CreateProjectItemParams {
+    let new = NewItem {
         project_id: project_id.clone(),
         name: form.name,
-        source_event_id: Some(item.id.clone()),
-        item_type: Some(ItemKind::Task),
-        due_offset_days: form
-            .due_offset_days
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .and_then(parse_days_before_due),
         timezone_offset_minutes: Some(tz),
-        ..Default::default()
+        kind: NewItemKind::Task(NewTask {
+            anchor: TaskAnchor::SourceEvent(item.id.clone()),
+            due_offset_days: form
+                .due_offset_days
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .and_then(parse_days_before_due),
+            ..Default::default()
+        }),
+        description: None,
     };
-    project_item_service::create_project_item(
+    project_item_service::create_item_typed(
         &repo,
         &projects,
         &teams,
         &reminders,
         &auth_user.user_id,
-        params,
+        new,
     )
     .await?;
     Ok(hx_redirect(project_event_url(&project_id, &item.id)))
@@ -505,27 +508,29 @@ pub async fn create_project_event_child_form(
     let project =
         project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
     let redirect = form.redirect.is_some();
-    let params = crate::service::project_items::CreateProjectItemParams {
+    let new = NewItem {
         project_id: project_id.clone(),
         name: form.name,
-        source_event_id: Some(item_id.clone()),
-        item_type: Some(ItemKind::Task),
-        due_offset_days: form
-            .due_offset_days
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .and_then(parse_days_before_due),
         timezone_offset_minutes: Some(tz),
-        ..Default::default()
+        kind: NewItemKind::Task(NewTask {
+            anchor: TaskAnchor::SourceEvent(item_id.clone()),
+            due_offset_days: form
+                .due_offset_days
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .and_then(parse_days_before_due),
+            ..Default::default()
+        }),
+        description: None,
     };
-    project_item_service::create_project_item(
+    project_item_service::create_item_typed(
         &repo,
         &projects,
         &teams,
         &reminders,
         &auth_user.user_id,
-        params,
+        new,
     )
     .await?;
     if redirect {
@@ -571,14 +576,14 @@ pub async fn create_project_event_form(
     Form(form): Form<ProjectEventForm>,
 ) -> Result<Response, ItemError> {
     project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
-    let params = create_params_from_form(&project_id, &form, tz);
-    project_item_service::create_project_item(
+    let new = create_params_from_form(&project_id, &form, tz);
+    project_item_service::create_item_typed(
         &repo,
         &projects,
         &teams,
         &reminders,
         &auth_user.user_id,
-        params,
+        new,
     )
     .await?;
     if form.redirect.is_some() {
@@ -619,8 +624,8 @@ pub async fn update_project_event_form(
     let current = require_event(current)?;
     let close = form.redirect.is_some();
     let row_view = crate::web_ui::project_tasks::normalize_row_view(view_q);
-    let params = update_params_from_form(&project_id, &item_id, &current, &form, tz);
-    project_item_service::update_project_item(
+    let edit = update_params_from_form(&project_id, &item_id, &current, &form, tz);
+    project_item_service::update_item_typed(
         &repo,
         &projects,
         &teams,
@@ -629,7 +634,7 @@ pub async fn update_project_event_form(
         &reminders,
         &item_dependencies,
         &auth_user.user_id,
-        params,
+        edit,
     )
     .await?;
 

@@ -197,6 +197,30 @@ per this repo's convention (`docs/archived/team-id-removal-plan.md`,
      `#[allow(dead_code)]`.** Only the `Simple` arms have callers until Stages 3–5 land.
      Remove the attribute as each kind's stage lands; it is gone entirely by Stage 5.
 3. **Event.** `web_ui/project_events/` (4 create, 2 update) and `all_projects_events.rs`.
+   **Done** (662 tests passing — unchanged, as in Stage 2; this rewrites call sites, it adds no
+   behavior).
+
+   Three deviations from the design above:
+
+   - **`all_projects_events.rs` needed nothing.** It has no create or update path at all — it's
+     a read-only cross-project list. The stage line above overcounted by assuming it mirrored
+     `all_projects_tasks.rs`.
+   - **Two of the four "create" sites build a `NewTask`, not a `NewEvent`.** Both
+     `create_project_event_child_form` and the series-occurrence child form create a *linked
+     task* anchored on the event via `sourceEventId` — an Event can never have structural
+     children (root CLAUDE.md's Events section), so its "children" are Tasks pointing back at
+     it. They are the first non-test users of `TaskAnchor::SourceEvent`, which is exactly the
+     shape the type exists for: `..Default::default()` on `NewTask` can no longer accidentally
+     also set a `parentItemId`.
+   - **`has_*_time` collapsed from `Option<bool>` to `Schedule`'s plain `bool`** via a local
+     `has_time` helper. Verified lossless first: every consumer reads the field through
+     `unwrap_or(false)` (`service::items` and `service::team_items`, create and update paths
+     alike), so `None` and `Some(false)` were never distinguishable.
+
+   The three transient `#[allow(dead_code)]` attributes moved from whole enums onto the four
+   variants that genuinely still have no non-test caller — `TaskAnchor::Parent`,
+   `NewItemKind::Template`, `EditItemKind::{Task, Template}`. Warning count is back to the
+   repo's pre-existing 11.
 4. **Template.** `web_ui/project_templates/`, including the explicit `NewItemKind::Template`
    above. `service/templates.rs` has its own `Create*TemplateParams` family, already per-kind;
    audit whether it should fold into `NewTemplate` or stay separate.

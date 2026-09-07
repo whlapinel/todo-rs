@@ -26,15 +26,13 @@ use crate::service::project_items::{CreateProjectItemParams, UpdateProjectItemPa
 /// A Task's anchor for offset-driven scheduling. Exactly one source by construction —
 /// this is `Item::validate()`'s "an item cannot both have a parent and reference an event"
 /// rule expressed in the type rather than checked at runtime.
-// Transient: only the `Simple` variants have callers so far (Stage 2 of
-// docs/typed-item-params-plan.md). Stages 3-5 migrate the Event, Template and Task
-// screens; remove this attribute as each lands, and it should be gone entirely after
-// Stage 5.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum TaskAnchor {
     #[default]
     None,
+    /// Transient `allow`: the Task screens (Stage 5 of docs/typed-item-params-plan.md) are the
+    /// only non-test constructors of this variant. Remove the attribute with that stage.
+    #[allow(dead_code)]
     Parent(String),
     SourceEvent(String),
 }
@@ -99,16 +97,14 @@ pub struct NewTemplate {
     pub due_offset_days: Option<i32>,
 }
 
-// Transient: only the `Simple` variants have callers so far (Stage 2 of
-// docs/typed-item-params-plan.md). Stages 3-5 migrate the Event, Template and Task
-// screens; remove this attribute as each lands, and it should be gone entirely after
-// Stage 5.
-#[allow(dead_code)]
 #[derive(Debug)]
 pub enum NewItemKind {
     Task(NewTask),
     Event(NewEvent),
     Simple(NewSimple),
+    /// Transient `allow`: constructed only by the Templates screen (Stage 4 of
+    /// docs/typed-item-params-plan.md). Remove the attribute with that stage.
+    #[allow(dead_code)]
     Template(NewTemplate),
 }
 
@@ -228,16 +224,15 @@ pub struct EditTemplate {
     pub due_offset_days: Option<i32>,
 }
 
-// Transient: only the `Simple` variants have callers so far (Stage 2 of
-// docs/typed-item-params-plan.md). Stages 3-5 migrate the Event, Template and Task
-// screens; remove this attribute as each lands, and it should be gone entirely after
-// Stage 5.
-#[allow(dead_code)]
 #[derive(Debug)]
 pub enum EditItemKind {
+    /// Transient `allow`s, as `NewItemKind`'s: Stage 4 (Template) and Stage 5 (Task) of
+    /// docs/typed-item-params-plan.md are what give these non-test constructors.
+    #[allow(dead_code)]
     Task(EditTask),
     Event(EditEvent),
     Simple(EditSimple),
+    #[allow(dead_code)]
     Template(EditTemplate),
 }
 
