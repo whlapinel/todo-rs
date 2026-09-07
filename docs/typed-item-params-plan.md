@@ -364,12 +364,53 @@ per this repo's convention (`docs/archived/team-id-removal-plan.md`,
    **No root CLAUDE.md edit**, as in Stage 5: no stated invariant changed, and the CSV import
    section's account of what a `TEMPLATE` row may do is still accurate.
 7. **The wire boundary.** `json_api/project_items.rs` gets an explicit
-   `try_into_new_item()`/`try_into_edit_item()`. **Behavior change to decide before writing it:**
-   today a cross-kind field on the wire (`points` on an Event) is silently dropped; the natural
-   typed conversion rejects it. Rejecting is the better contract and matches how `itemType`
-   itself already behaves (smithy-rs rejects an unrecognized value at the deserialization
-   boundary, per root CLAUDE.md's Events section) — but it is a real API behavior change for
-   `prl` and the MCP server, so confirm before shipping rather than assuming.
+   `try_into_new_item()`/`try_into_edit_item()`. **Done** (683 tests passing, up from Stage 6's
+   675).
+
+   **The decision: reject.** Put to the user with the alternatives and the measured blast
+   radius, and taken deliberately. A cross-kind field now fails with the API's ordinary client
+   error naming the field and the kind, instead of being discarded behind a success response.
+   Recorded in root CLAUDE.md under a new "Cross-kind fields at the boundary" heading, which
+   the Events, Points and CSV import sections all cross-reference — this is the second stage
+   after Stage 4 to need a root CLAUDE.md edit, and for the same reason: an invariant changed.
+
+   Five deviations from the design above:
+
+   - **The guards live in `service::item_input`, not in `json_api`.** The plan named only the
+     wire, but `service::import` is the same shape one surface over, and Stage 6 had pinned its
+     silent drop with a test explicitly so that this decision could flip it deliberately. Two
+     surfaces answering the same question differently would have been the worst of the three
+     options on offer, so the rejection helpers are shared and CSV import rejects too — per
+     row, naming the column and the kind, with the rest of the file still importing. The wire's
+     camelCase field names double as the PRL format's column names, so one set of strings
+     serves both.
+   - **A cross-kind boolean carrying `false` is accepted and ignored.** Found by reading the
+     MCP tool schema rather than by reasoning about it: `complete` is in `update_item`'s
+     `required` list, and `@required` on `UpdateProjectItem` itself, so a caller renaming an
+     Event has no way *not* to send it. Rejecting `complete: false` would have made editing any
+     non-Task impossible through the MCP server. `false` discards nothing — `Some(false)` and
+     `None` were already indistinguishable to every consumer of these fields — so `reject_flag`
+     rejects only `true`, and `complete: true` on a non-Task does fail.
+   - **Resolving an omitted `itemType` on update needs a read, and that read is gated behind
+     the membership check.** `EditItemKind` has to *be* some kind; when the request doesn't say,
+     only the stored item knows. Reading first and rejecting afterwards would let a non-member
+     distinguish "this item exists in that project" (a cross-kind field error) from "it
+     doesn't" (not found) by deliberately sending a bad field. `update_item_typed` re-checks
+     membership anyway, so the check in the handler is redundant for authorization and
+     load-bearing purely for that ordering. A request that states its `itemType` pays nothing.
+   - **`prl items done` gained a client-side kind guard**, which the plan never mentioned
+     because the bug it fixes only became visible while measuring the blast radius. The command
+     read the item, sent every field back plus `complete: true`, and printed "marked … complete"
+     — for any kind. On an Event, Simple item or Template the server dropped the flag (no
+     non-Task payload has a completion field), nothing changed, and the user was told it had.
+     The server now rejects that request, so the guard turns a bare API error into a sentence
+     naming the kind, using the `itemType` off the fetch it already makes.
+   - **The Simple rejections are the widest and were worth checking twice.** A Simple item is a
+     bare checkable name, so `dueDate`, `scheduledDate`, `scheduledEndDate`, the three
+     `has_*_time` flags, `eventType` and `dueOffsetDays` are *all* cross-kind on it. That is a
+     lot of newly-failing input for one kind, and it is safe only because a CSV blank cell
+     reads as absent (`cell` filters empty strings) — so a mixed-kind file with a fixed column
+     set, which is the normal shape of an import, is untouched.
 8. **Delete the flat structs.** Remove `CreateProjectItemParams`/`UpdateProjectItemParams`/
    `CreateItemParams`/`UpdateItemParams`/`CreateTeamItemParams`/`UpdateTeamItemParams`; have
    `items::create_item` and `team_items::create_team_item` take `NewItem` directly. This is the

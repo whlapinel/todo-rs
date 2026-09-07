@@ -204,11 +204,21 @@ of items, not authoring a recurring series; create a series with `prl series
 create` (or the Item Series screen) instead — see
 [Item series](#item-series) below.
 
+A column that doesn't apply to a row's `itemType` also fails that row, naming
+the column and the kind — `points` on an `EVENT` row, `eventType` on a `TASK`
+row, a date on a `SIMPLE` row. Every other row in the file still imports.
+Leave the cell blank where it doesn't apply: a blank cell counts as absent, so
+one file can mix kinds and only fill in each column where it's meaningful.
+
 ### Mark complete
 
 ```sh
 prl items done <item-id> --project <project-id>
 ```
+
+Only a **task** can be marked done. Events, simple-list entries and templates
+have no completion state, and `prl items done` now says so instead of
+reporting success over a request the server discarded.
 
 Completing an [item series](#item-series)'s currently-materialized occurrence advances the series to its next occurrence (materialized lazily, not eagerly created) rather than spawning a new plain item — individual items themselves don't recur anymore.
 

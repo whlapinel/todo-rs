@@ -315,6 +315,23 @@ pub async fn cmd_items(client: &Client, cmd: ItemsCommand, user_id: Option<Strin
                     .await,
                 "get project item",
             );
+            // Only a Task can be completed. Until this check existed the round-trip below
+            // sent `complete: true` for any kind, the server dropped it (no non-Task payload
+            // has a completion field at all), and this command printed "marked … complete"
+            // over a request that changed nothing. The server now rejects it outright
+            // (Stage 7 of docs/typed-item-params-plan.md), so catching it here is what turns
+            // a bare API error into a sentence that says what is actually wrong.
+            match item.item_type() {
+                Some(ItemType::Task) | None => {}
+                Some(other) => {
+                    eprintln!(
+                        "error: only a TASK can be marked done — {item_id} is a {}. Events, \
+                         simple-list entries and templates have no completion state.",
+                        other.as_str()
+                    );
+                    std::process::exit(1);
+                }
+            }
             let mut req = client
                 .update_project_item()
                 .project_id(&project_id)

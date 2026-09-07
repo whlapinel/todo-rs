@@ -21,6 +21,7 @@
 //! already hardcodes both to `None`.
 
 use crate::domain::item::{Item, ItemKind, Schedule, TeamAssignment};
+use crate::service::error::ItemError;
 use crate::service::project_items::{CreateProjectItemParams, UpdateProjectItemParams};
 
 /// A Task's anchor for offset-driven scheduling. Exactly one source by construction —
@@ -365,6 +366,130 @@ impl From<EditItem> for UpdateProjectItemParams {
             },
         }
     }
+}
+
+// ---- the untyped boundary --------------------------------------------------------------
+//
+// Stage 7 of docs/typed-item-params-plan.md. Two callers receive a request whose kind is
+// *data* rather than a fact the code knows: `json_api::project_items` (an `itemType` field on
+// the wire) and `service::import` (an `itemType` CSV column). Everything else in the codebase
+// reaches the types above by construction. These helpers are what those two share, so the one
+// place a caller can ask for an Event and attach `points` to it has a single answer.
+//
+// **A field the requested kind cannot hold is rejected, not dropped.** Before Stage 7 such a
+// value was silently discarded and the request returned success, so a caller had no way to
+// learn that part of what it sent went nowhere. It now fails with the API's ordinary client
+// error naming the field and the kind — the same treatment `itemType` itself already gets,
+// where smithy-rs rejects an unrecognized enum value at the deserialization boundary before
+// any of this code runs (root CLAUDE.md's Events section).
+//
+// This is about *kind*, not *authority*. `points` set by a non-admin on a perfectly valid
+// Task is still silently preserved-not-applied by `team_items` — a different rule with its
+// own rationale (root CLAUDE.md's Points section), untouched here.
+//
+// Field names in these messages are the wire's own camelCase, which the PRL CSV format
+// deliberately matches column-for-column (root CLAUDE.md's CSV import section), so one set of
+// strings serves both callers.
+
+/// Rejects a field the requested kind has no place to put.
+pub(crate) fn reject_field<T>(
+    kind: ItemKind,
+    field: &str,
+    value: &Option<T>,
+) -> Result<(), ItemError> {
+    if value.is_some() {
+        return Err(ItemError::Invalid(format!(
+            "{field} is not valid on {kind} items"
+        )));
+    }
+    Ok(())
+}
+
+/// The boolean counterpart, which rejects only `true`.
+///
+/// A cross-kind boolean carrying `false` is accepted and ignored, and that is not a
+/// convenience carve-out. `complete` is `@required` on `UpdateProjectItem`, and on the MCP
+/// server's own `update_item` tool, so a caller renaming an Event has no way *not* to send it
+/// — rejecting `false` would make editing a non-Task impossible. And `false` discards
+/// nothing: `Some(false)` and `None` were already indistinguishable to every consumer of
+/// these fields (see this module's header on `has_*_time`). `complete: true` on a non-Task is
+/// a real request to do something the kind cannot do, and is rejected.
+pub(crate) fn reject_flag(
+    kind: ItemKind,
+    field: &str,
+    value: Option<bool>,
+) -> Result<(), ItemError> {
+    if value == Some(true) {
+        return Err(ItemError::Invalid(format!(
+            "{field} is not valid on {kind} items"
+        )));
+    }
+    Ok(())
+}
+
+/// Fields no kind but `Task` can hold, checked in one place so each caller's Event/Simple/
+/// Template arms can't drift apart on which of them they remember.
+pub(crate) fn reject_task_only_fields(
+    kind: ItemKind,
+    complete: Option<bool>,
+    priority: &Option<i32>,
+    points: &Option<i32>,
+    assigned_to_user_id: &Option<String>,
+    source_event_id: &Option<String>,
+) -> Result<(), ItemError> {
+    reject_flag(kind, "complete", complete)?;
+    reject_field(kind, "priority", priority)?;
+    reject_field(kind, "points", points)?;
+    reject_field(kind, "assignedToUserId", assigned_to_user_id)?;
+    reject_field(kind, "sourceEventId", source_event_id)
+}
+
+/// A Simple item is a bare checkable name — no schedule, no `event_type`, no offset (root
+/// CLAUDE.md's Domain Models section). Its rejections have no counterpart on any other kind.
+pub(crate) fn reject_simple_only_fields(
+    event_type: &Option<String>,
+    due_offset_days: &Option<i32>,
+    schedule: &Schedule,
+) -> Result<(), ItemError> {
+    let kind = ItemKind::Simple;
+    reject_field(kind, "eventType", event_type)?;
+    reject_field(kind, "dueOffsetDays", due_offset_days)?;
+    reject_field(kind, "dueDate", &schedule.due_date)?;
+    reject_field(kind, "scheduledDate", &schedule.scheduled_date)?;
+    reject_field(kind, "scheduledEndDate", &schedule.scheduled_end_date)?;
+    reject_flag(kind, "hasDueTime", Some(schedule.has_due_time))?;
+    reject_flag(kind, "hasScheduledTime", Some(schedule.has_scheduled_time))?;
+    reject_flag(kind, "hasEndTime", Some(schedule.has_end_time))
+}
+
+/// A Task's single anchor, resolved from the two wire fields. The "both" case used to reach
+/// `Item::validate()` and be rejected there; `TaskAnchor` cannot express it, so the same
+/// rejection is raised here with the same wording — as it already is in
+/// `web_ui::project_tasks::reparent_edit` (Stage 5).
+pub(crate) fn task_anchor_from_fields(
+    parent_item_id: Option<String>,
+    source_event_id: Option<String>,
+) -> Result<TaskAnchor, ItemError> {
+    match (parent_item_id, source_event_id) {
+        (Some(_), Some(_)) => Err(ItemError::Invalid(
+            "an item cannot both have a parent and reference an event".to_string(),
+        )),
+        (Some(parent), None) => Ok(TaskAnchor::Parent(parent)),
+        (None, Some(event)) => Ok(TaskAnchor::SourceEvent(event)),
+        (None, None) => Ok(TaskAnchor::None),
+    }
+}
+
+/// A Template child's parent. `NewTemplate`/`EditTemplate` take a non-optional `String`
+/// because a *root* template is `service::templates`' business alone — the unparented case is
+/// unconstructable, so `items::require_template_has_template_parent`'s wording is raised here
+/// instead.
+pub(crate) fn template_parent(parent_item_id: Option<String>) -> Result<String, ItemError> {
+    parent_item_id.ok_or_else(|| {
+        ItemError::Invalid(
+            "item_type Template can only be set via the template creation flow".to_string(),
+        )
+    })
 }
 
 #[cfg(test)]

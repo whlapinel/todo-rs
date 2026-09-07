@@ -1,7 +1,8 @@
 use crate::domain::item::{ItemKind, Schedule, TeamAssignment};
 use crate::service::error::ItemError;
 use crate::service::item_input::{
-    NewEvent, NewItem, NewItemKind, NewSimple, NewTask, NewTemplate, TaskAnchor,
+    NewEvent, NewItem, NewItemKind, NewSimple, NewTask, NewTemplate, reject_field,
+    reject_simple_only_fields, reject_task_only_fields, task_anchor_from_fields, template_parent,
 };
 use crate::service::project_items;
 use crate::service::projects::require_project_member;
@@ -94,23 +95,28 @@ fn start_of_day() -> NaiveTime {
     NaiveTime::from_hms_opt(0, 0, 0).unwrap()
 }
 
-/// Builds one row's typed input. This and `item_series::get_or_materialize_occurrence` are the
-/// two "kind comes from data, not from the call site" sites — the shape Stage 7 of
-/// docs/typed-item-params-plan.md needs at the wire boundary.
+/// Builds one row's typed input, sharing `json_api::project_items`' rejection helpers — the
+/// two are the only callers whose kind comes from data rather than from the call site.
 ///
-/// **Cross-kind columns are still silently dropped, deliberately.** A `points` value on an
-/// `EVENT` row, an `eventType` on a `TASK` row, a `complete` on a `SIMPLE` row: each has no
-/// field on its variant, so it vanishes here exactly as it vanished in `build_item_type` one
-/// layer down. Rejecting instead is the better contract and this per-row error channel is the
-/// right place for it — but it is the same API behavior change Stage 7 defers to an explicit
-/// decision, and making it unilaterally for CSV while the JSON API still drops would be worse
-/// than either answer. Recorded there rather than settled here.
+/// **A column the row's kind cannot hold fails that row**, as of Stage 7 of
+/// docs/typed-item-params-plan.md; Stage 6 left it dropping silently pending that decision. A
+/// per-row failure is the mildest possible form of the change: the rest of the file still
+/// imports, and the message names the column and the kind. A blank cell is `None` here
+/// (`cell` filters empty strings), so a mixed-kind file carrying a `points` column that is
+/// only populated on its Task rows is unaffected — which is what makes rejecting safe for a
+/// format whose columns are fixed across rows of different kinds.
 fn build_row_new_item(
     record: &csv::StringRecord,
     headers: &HashMap<String, usize>,
     project_id: &str,
     tz_offset_minutes: i32,
 ) -> Result<NewItem, String> {
+    // The shared rejection helpers speak `ItemError`; a row failure is a plain `String` here.
+    // `ItemError::Invalid` is `#[error("{0}")]`, so the text survives the hop unchanged and a
+    // row reports exactly what the JSON API would have returned for the same request.
+    fn row_error(e: ItemError) -> String {
+        e.to_string()
+    }
     let name = cell(record, headers, "name")
         .ok_or_else(|| "missing required column 'name' or empty value".to_string())?
         .to_string();
@@ -169,7 +175,9 @@ fn build_row_new_item(
         })
         .transpose()?;
 
+    let event_type = cell(record, headers, "eventType").map(str::to_string);
     let parent_item_id = cell(record, headers, "parentItemId").map(str::to_string);
+    let assigned_to_user_id = cell(record, headers, "assignedToUserId").map(str::to_string);
     let source_event_id = cell(record, headers, "sourceEventId").map(str::to_string);
     let schedule = Schedule {
         due_date,
@@ -181,52 +189,77 @@ fn build_row_new_item(
     };
 
     let kind = match item_type.unwrap_or_default() {
-        ItemKind::Task => NewItemKind::Task(NewTask {
-            // `TaskAnchor` can hold one or the other, never both — `Item::validate()`'s own
-            // rule, which used to reject this row two layers down with this same message.
-            // Raised here because the impossible input can no longer be constructed to be
-            // rejected later; the row still fails, with identical text.
-            anchor: match (parent_item_id, source_event_id) {
-                (Some(_), Some(_)) => {
-                    return Err(
-                        "an item cannot both have a parent and reference an event".to_string()
-                    );
-                }
-                (Some(parent), None) => TaskAnchor::Parent(parent),
-                (None, Some(event)) => TaskAnchor::SourceEvent(event),
-                (None, None) => TaskAnchor::None,
-            },
-            schedule,
-            due_offset_days,
-            priority,
-            complete: complete.unwrap_or(false),
-            assignment: TeamAssignment {
-                assigned_to_user_id: cell(record, headers, "assignedToUserId").map(str::to_string),
-                points,
-            },
-            series_id: None,
-        }),
-        ItemKind::Event => NewItemKind::Event(NewEvent {
-            schedule,
-            event_type: cell(record, headers, "eventType").map(str::to_string),
-            due_offset_days,
-            series_id: None,
-        }),
-        ItemKind::Simple => NewItemKind::Simple(NewSimple { parent_item_id }),
+        ItemKind::Task => {
+            reject_field(ItemKind::Task, "eventType", &event_type).map_err(row_error)?;
+            NewItemKind::Task(NewTask {
+                anchor: task_anchor_from_fields(parent_item_id, source_event_id)
+                    .map_err(row_error)?,
+                schedule,
+                due_offset_days,
+                priority,
+                complete: complete.unwrap_or(false),
+                assignment: TeamAssignment {
+                    assigned_to_user_id,
+                    points,
+                },
+                series_id: None,
+            })
+        }
+        ItemKind::Event => {
+            // An Event structurally cannot be a child of anything, so `parentItemId` is
+            // rejected separately from the Task-only set.
+            reject_field(ItemKind::Event, "parentItemId", &parent_item_id).map_err(row_error)?;
+            reject_task_only_fields(
+                ItemKind::Event,
+                complete,
+                &priority,
+                &points,
+                &assigned_to_user_id,
+                &source_event_id,
+            )
+            .map_err(row_error)?;
+            NewItemKind::Event(NewEvent {
+                schedule,
+                event_type,
+                due_offset_days,
+                series_id: None,
+            })
+        }
+        ItemKind::Simple => {
+            reject_simple_only_fields(&event_type, &due_offset_days, &schedule)
+                .map_err(row_error)?;
+            reject_task_only_fields(
+                ItemKind::Simple,
+                complete,
+                &priority,
+                &points,
+                &assigned_to_user_id,
+                &source_event_id,
+            )
+            .map_err(row_error)?;
+            NewItemKind::Simple(NewSimple { parent_item_id })
+        }
         // A *root* Template is `service::templates`' business and has always been rejected on
-        // this path; a row naming an already-existing Template as its `parentItemId` is the one
-        // way through (root CLAUDE.md's CSV import section — there is no intra-file parent
-        // resolution, so a file cannot create a template and then nest under it). `NewTemplate`
-        // makes the unparented case unconstructable, so the rejection moves here, carrying the
-        // wording `items::require_template_has_template_parent` used to answer with.
-        ItemKind::Template => NewItemKind::Template(NewTemplate {
-            parent_item_id: parent_item_id.ok_or_else(|| {
-                "item_type Template can only be set via the template creation flow".to_string()
-            })?,
-            schedule,
-            event_type: cell(record, headers, "eventType").map(str::to_string),
-            due_offset_days,
-        }),
+        // this path; a row naming an already-existing Template as its `parentItemId` is the
+        // one way through (root CLAUDE.md's CSV import section — there is no intra-file parent
+        // resolution, so a file cannot create a template and then nest under it).
+        ItemKind::Template => {
+            reject_task_only_fields(
+                ItemKind::Template,
+                complete,
+                &priority,
+                &points,
+                &assigned_to_user_id,
+                &source_event_id,
+            )
+            .map_err(row_error)?;
+            NewItemKind::Template(NewTemplate {
+                parent_item_id: template_parent(parent_item_id).map_err(row_error)?,
+                schedule,
+                event_type,
+                due_offset_days,
+            })
+        }
     };
 
     Ok(NewItem {
@@ -732,11 +765,68 @@ mod tests {
         );
     }
 
-    /// The silent drop this stage deliberately preserved: `points` and `eventType` on rows whose
-    /// kind has no such field vanish rather than failing the row. Locked down so that Stage 7's
-    /// drop-vs-reject decision is a deliberate change to this test, not an accident.
+    /// The drop Stage 6 preserved and Stage 7 replaced, per the plan's own note that this
+    /// test existed so the change would be deliberate. A `points` on an `EVENT` row and an
+    /// `eventType` on a `TASK` row now fail their own rows, naming the column and the kind,
+    /// while every other row in the file still imports.
     #[tokio::test]
-    async fn import_project_items_still_drops_cross_kind_columns() {
+    async fn import_project_items_rejects_cross_kind_columns_per_row() {
+        let mut projects = MockProjectRepo::new();
+        projects
+            .expect_get()
+            .returning(|id| Ok(test_project(id, "u1")));
+        projects
+            .expect_find_personal_project()
+            .returning(|_| Ok(None));
+
+        let mut repo = MockItemRepo::new();
+        // Only the third row is creatable.
+        repo.expect_create()
+            .times(1)
+            .returning(|item: &Item| Ok(item.id.clone()));
+        repo.expect_get_by_project()
+            .returning(|_, _| Ok(Item::new_project_item("p1", "row")));
+
+        let teams = MockTeamRepo::new();
+
+        let csv_text = "name,itemType,points,eventType\n\
+                        Event with points,EVENT,5,\n\
+                        Task with an event type,TASK,,rain\n\
+                        Ordinary event,EVENT,,\n";
+        let results = import_project_items(
+            &(Arc::new(repo) as Arc<dyn ItemRepo>),
+            &(Arc::new(projects) as Arc<dyn ProjectRepo>),
+            &(Arc::new(teams) as Arc<dyn TeamRepo>),
+            &no_op_reminders(),
+            "u1",
+            "p1",
+            csv_text,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(results.len(), 3);
+        assert!(!results[0].success);
+        assert_eq!(
+            results[0].error.as_deref(),
+            Some("points is not valid on EVENT items")
+        );
+        assert!(!results[1].success);
+        assert_eq!(
+            results[1].error.as_deref(),
+            Some("eventType is not valid on TASK items")
+        );
+        assert!(results[2].success, "{:?}", results[2].error);
+    }
+
+    /// The half of a mixed-kind file that must keep working: the PRL format's columns are
+    /// fixed across every row, so an `EVENT` row in a file that also carries Tasks has an
+    /// empty `points` cell rather than no column. `cell` reads a blank as absent, so nothing
+    /// is rejected — this is what makes rejecting safe for a columnar format at all.
+    #[tokio::test]
+    async fn import_project_items_ignores_blank_cross_kind_cells() {
         let mut projects = MockProjectRepo::new();
         projects
             .expect_get()
@@ -754,10 +844,9 @@ mod tests {
 
         let teams = MockTeamRepo::new();
 
-        // `points` is Task-and-team-only; `eventType` is Event/Template-only.
-        let csv_text = "name,itemType,points,eventType\n\
-                        Event with points,EVENT,5,\n\
-                        Task with an event type,TASK,,rain\n";
+        let csv_text = "name,itemType,points,priority,eventType\n\
+                        A task with points,TASK,5,2,\n\
+                        An event beside it,EVENT,,,\n";
         let results = import_project_items(
             &(Arc::new(repo) as Arc<dyn ItemRepo>),
             &(Arc::new(projects) as Arc<dyn ProjectRepo>),

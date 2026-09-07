@@ -129,7 +129,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       description:
         "Create a new todo item in a project. Supports due dates and nesting under a parent item. " +
         "Item-level recurrence is retired — use create_item_series/update_item_series for recurring items instead. " +
-        "assignedToUserId/points are only meaningful on a team-backed project.",
+        "assignedToUserId/points are only meaningful on a team-backed project. " +
+        "Several parameters below are restricted to one itemType — the server rejects them on any other kind rather than ignoring them, so send only what the kind you asked for can carry.",
       inputSchema: {
         type: "object",
         properties: {
@@ -151,7 +152,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: "string",
             description: "ISO 8601 date/time string for when this is scheduled to end",
           },
-          complete: { type: "boolean" },
+          complete: {
+            type: "boolean",
+            description:
+              "TASK items only — only a task has a completion state. `false` is accepted on any kind (it discards nothing), but `true` on an EVENT/SIMPLE/TEMPLATE item is rejected.",
+          },
           hasDueTime: {
             type: "boolean",
             description: "Whether the due date includes a specific time",
@@ -198,15 +203,15 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           },
           assignedToUserId: {
             type: "string",
-            description: "Active member to assign this item to. Only meaningful on a team-backed project.",
+            description: "Active member to assign this item to. TASK items only — the server rejects it on any other itemType. Only meaningful on a team-backed project.",
           },
           points: {
             type: "number",
-            description: "Points awarded on completion. Only meaningful on a team-backed project. Project admin only (silently dropped if the caller isn't an admin).",
+            description: "Points awarded on completion. TASK items only — the server rejects it on any other itemType. Only meaningful on a team-backed project. Project admin only (a non-admin's value is silently dropped, which is a separate rule about authority, not kind).",
           },
           priority: {
             type: "number",
-            description: "1 (highest) to 4 (lowest). Task items only. Unlike points/assignedToUserId, not restricted to a team-backed project and not admin-gated.",
+            description: "1 (highest) to 4 (lowest). TASK items only — the server rejects it on any other itemType. Unlike points/assignedToUserId, not restricted to a team-backed project and not admin-gated.",
           },
         },
         required: ["projectId", "name"],
@@ -265,7 +270,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: "string",
             description: "Free-form notes, longer than name. Omit to leave unchanged; send an empty string to clear it.",
           },
-          complete: { type: "boolean" },
+          complete: {
+            type: "boolean",
+            description:
+              "TASK items only — only a task has a completion state. Required on this tool, so send `false` when editing any other kind; `true` on an EVENT/SIMPLE/TEMPLATE item is rejected.",
+          },
           dueDate: { type: "string", description: "ISO 8601 date/time string" },
           scheduledDate: { type: "string", description: "ISO 8601 date/time string" },
           scheduledEndDate: { type: "string", description: "ISO 8601 date/time string" },
@@ -291,15 +300,15 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           timezoneOffsetMinutes: { type: "number" },
           assignedToUserId: {
             type: "string",
-            description: "Active member to assign this item to. Only meaningful on a team-backed project.",
+            description: "Active member to assign this item to. TASK items only — the server rejects it on any other itemType. Only meaningful on a team-backed project.",
           },
           points: {
             type: "number",
-            description: "Points awarded on completion. Only meaningful on a team-backed project. Project admin only (the server preserves the existing value if the caller isn't an admin).",
+            description: "Points awarded on completion. TASK items only — the server rejects it on any other itemType. Only meaningful on a team-backed project. Project admin only (the server preserves the existing value if the caller isn't an admin — a separate rule about authority, not kind).",
           },
           priority: {
             type: "number",
-            description: "1 (highest) to 4 (lowest). Task items only, ungated. Omit to leave unchanged; the current value is not preserved automatically if omitted on a caller-built update, so round-trip it explicitly when editing an item that already has one.",
+            description: "1 (highest) to 4 (lowest). TASK items only — the server rejects it on any other itemType — and ungated. Omit to leave unchanged; the current value is not preserved automatically if omitted on a caller-built update, so round-trip it explicitly when editing an item that already has one.",
           },
           dependsOnItemIds: {
             type: "array",
