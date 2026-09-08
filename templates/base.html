@@ -282,6 +282,45 @@
       }
     }, true);
 
+    // Persisted expanded-row state ("Persist expanded rows somehow" in the issue tracker).
+    // Keyed by pathname, not a global set — the same item id can appear on more than one screen
+    // (a per-project tasks list vs. the cross-project all_projects_tasks view) with independently
+    // meaningful expand state. localStorage calls are wrapped since they can throw in a
+    // private-browsing/storage-blocked context; degrading to "nothing persists" beats breaking
+    // the toggle itself.
+    function expandedRowsKey() {
+      return 'expandedRows:' + location.pathname;
+    }
+    function loadExpandedRows() {
+      try {
+        return new Set(JSON.parse(localStorage.getItem(expandedRowsKey()) || '[]'));
+      } catch (e) {
+        return new Set();
+      }
+    }
+    function saveExpandedRows(ids) {
+      try {
+        localStorage.setItem(expandedRowsKey(), JSON.stringify(Array.from(ids)));
+      } catch (e) { /* ignore */ }
+    }
+    // Re-applied after every swap (see the htmx:afterSwap listener below) since the server
+    // always re-renders a freshly-fetched subtree collapsed (see components/row.html's `hidden`
+    // class) with no memory of what the user had open. Silently skips an id that no longer has a
+    // matching children list (a deleted row, or a different screen reusing the same pathname
+    // key) — stale ids are otherwise left in storage rather than pruned, since they cost nothing
+    // and may still apply next time this same screen renders that item.
+    function restoreExpandedRows() {
+      loadExpandedRows().forEach(function (id) {
+        var ul = document.getElementById('item-' + id + '-children');
+        if (!ul || !ul.classList.contains('hidden')) return;
+        ul.classList.remove('hidden');
+        var chevron = document.getElementById('chevron-' + id);
+        if (chevron) chevron.innerHTML = '&#9662;';
+        var row = document.getElementById('item-' + id);
+        if (row && row.hasAttribute('aria-expanded')) row.setAttribute('aria-expanded', 'true');
+      });
+    }
+
     // In-place children expansion (components/row.html's `children_html` branch) — the whole
     // subtree was already fetched and rendered server-side, so this is a pure class toggle, no
     // request. classList.toggle('hidden') returns true when 'hidden' is now present (i.e. we
@@ -299,6 +338,9 @@
       if (row && row.hasAttribute('aria-expanded')) {
         row.setAttribute('aria-expanded', isHidden ? 'false' : 'true');
       }
+      var expanded = loadExpandedRows();
+      if (isHidden) expanded.delete(id); else expanded.add(id);
+      saveExpandedRows(expanded);
     }
 
     // Below the `sm` breakpoint (matching Tailwind's own 640px cutoff — the same one every
@@ -904,11 +946,16 @@
     }
 
     document.addEventListener('htmx:afterSwap', function () {
+      // Before treegridInit: it computes each row's visibility (and thus the roving-tabindex
+      // sequence) from the same `hidden` class this un-collapses, so a row expanded here has to
+      // already be visible by the time treegridInit runs.
+      restoreExpandedRows();
       document.querySelectorAll('[role="treegrid"]').forEach(treegridInit);
       // After treegridInit, so its restore-by-id roving tabindex is in place before this
       // overrides it with the row focus actually belongs on.
       applyPendingRowFocus();
     });
+    restoreExpandedRows();
     document.querySelectorAll('[role="treegrid"]').forEach(treegridInit);
 
     document.addEventListener('keydown', function (evt) {
