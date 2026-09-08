@@ -2,13 +2,14 @@
 
 Open issues and feature requests, merged from the former `docs/issues.md` and `docs/features.md` (2026-08-20) into a single sorted list. Completed or superseded items — including ones from the old files that were already resolved but hadn't been moved out yet — live in `docs/archived/archived_issues_and_features.md`.
 
+- Clicking cancel on edit task button doesn't work (have to hit escape, and not sure what can be done on mobile)
+- Put focus on dialogs when opened (many of the dialogs lack this)
 - remove "scheduled basis" from series recurrence basis (see duplicate item in this list)
 - add to row action for occurrences when clicking skip, new dialog with choice of 'just this one' or 'all in past' or 'to future date' (with date input) which sets the cursor and marks exdate for the last occurrence within the range. 
 - add sub-day support for recurrence rules. hour, minute, second. Time is required for anchor when recurrence unit is sub-day
 - add optional ending date/time for series
 - add "last day of month" to recurrence UI (currently achievable by putting 31st as anchor)
 - "days before" for series subitems and template subitems - change to "time before" and accept e.g. 1y, 1d, 1h, 1m, 1s as values 
-- Clicking cancel on edit task button doesn't work (have to hit escape, and not sure what can be done on mobile)
 - I'd like to allow editing a task series straight from a virtual occurrence row on the project tasks list page, instead of requiring user to navigate to the project series list and then click edit on the series. So new row action 'edit series' (which sends the same dialog returned by clicking on edit on a series from the project series page) and change the existing 'edit' to 'edit occurrence'. Editing the series from this view (may need a query param to tell handler we are fetching from the tasks page rather than the series page) should re-render the task list.
 - disable text selection on holding shift (I don't want to disable "normal" text selection in general, we should try to preserve tap/click+hold/drag-across text functionality, but currently when a row is selected, and user holds shift and selects another row, all text between them is selected, highlighting the text and looking weird.)
 - arrow-up or arrow-down still scrolls page while popover row actions menu is in focus. should disable arrow-key scrolling while open.
@@ -82,4 +83,3 @@ Open issues and feature requests, merged from the former `docs/issues.md` and `d
 - Ctrl+click or tap+hold should select rows, allowing bulk actions: "delete-selected", "reschedule-selected", "assign-selected".
 - Need a plan for deleting old data to keep the DB from growing infinitely (completed recurring/series occurrences, activity log rows), likely via a user-configurable retention/row-limit policy. No design doc exists yet — needs its own planning pass (retention shape, global vs. per-user config, delete vs. archive) before implementation.
 - Should events have "save as template" ability? Not sure we need event templates, but perhaps — maybe templates should be called task templates to clarify the narrower purpose if we decide to rule out event templates. Needs a decision from the user, not sized as a task.
-- Remove the `dueDate`/`dueTime` field from Events (new-event form, event detail/edit views, series-occurrence views). Currently allowed by both backend (`Item::validate()` has no rule against `due_date` on `ItemType::Event` — `Schedule`, the struct holding `due_date`/`scheduled_date`/`scheduled_end_date`, is shared by `Task` and `Event` alike) and UI (deliberately exposed, labeled "separate from the scheduled window above"). Conflicts with the widely held concept of a calendar event, which has a scheduled time/window but no separate "due" date.

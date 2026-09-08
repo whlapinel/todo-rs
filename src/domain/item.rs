@@ -655,6 +655,19 @@ impl Item {
         if self.complete() && self.kind() == ItemKind::Event {
             return Err("events cannot be marked complete".to_string());
         }
+        // An Event is scheduled-window-primary, not due-date-primary — `dueDate`/`hasDueTime`
+        // are a Task-shaped concept `Schedule` still structurally allows an Event to carry
+        // (unlike `complete` above, which `EventItem` has no field for at all) since `Schedule`
+        // is deliberately shared verbatim across every kind that carries one (see root
+        // CLAUDE.md's Domain Models section). Rejected here as the single ground-truth check
+        // every writer goes through `validate()` (calendar sync included, which writes
+        // `ItemRepo` directly rather than through the typed `item_input` funnel); the two
+        // untyped-boundary callers (`json_api::project_items`, `service::import`) additionally
+        // reject it earlier, with a friendlier per-field message, via
+        // `item_input::reject_event_due_date`.
+        if self.kind() == ItemKind::Event && self.due_date().is_some() {
+            return Err("events cannot have a due date".to_string());
+        }
         // A task either nests under a parent or references an event, never both —
         // keeps "offset-driven" unambiguous: exactly one anchor source.
         if self.source_event_id().is_some() && self.parent_item_id().is_some() {
@@ -972,12 +985,18 @@ mod tests {
     }
 
     #[test]
-    fn validate_allows_event_with_all_scheduling_fields() {
+    fn validate_allows_event_with_scheduled_window_fields() {
         let mut item = Item::new_event("u1", "Team offsite");
         let now = Utc::now();
-        set_due_date(&mut item, now);
         set_scheduled_date(&mut item, now);
         assert!(item.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_event_with_due_date() {
+        let mut item = Item::new_event("u1", "Team offsite");
+        set_due_date(&mut item, Utc::now());
+        assert!(item.validate().is_err());
     }
 
     #[test]

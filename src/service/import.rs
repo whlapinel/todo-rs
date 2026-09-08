@@ -1,8 +1,9 @@
 use crate::domain::item::{ItemKind, Schedule, TeamAssignment};
 use crate::service::error::ItemError;
 use crate::service::item_input::{
-    NewEvent, NewItem, NewItemKind, NewSimple, NewTask, NewTemplate, reject_field,
-    reject_simple_only_fields, reject_task_only_fields, task_anchor_from_fields, template_parent,
+    NewEvent, NewItem, NewItemKind, NewSimple, NewTask, NewTemplate, reject_event_due_date,
+    reject_field, reject_simple_only_fields, reject_task_only_fields, task_anchor_from_fields,
+    template_parent,
 };
 use crate::service::project_items;
 use crate::service::projects::require_project_member;
@@ -218,6 +219,7 @@ fn build_row_new_item(
                 &source_event_id,
             )
             .map_err(row_error)?;
+            reject_event_due_date(&schedule).map_err(row_error)?;
             NewItemKind::Event(NewEvent {
                 schedule,
                 event_type,

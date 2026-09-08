@@ -3,8 +3,8 @@ use crate::auth::AuthUser;
 use crate::domain::item::{ItemKind, Schedule, TeamAssignment};
 use crate::service::item_input::{
     EditEvent, EditItem, EditItemKind, EditSimple, EditTask, EditTemplate, NewEvent, NewItem,
-    NewItemKind, NewSimple, NewTask, NewTemplate, reject_field, reject_simple_only_fields,
-    reject_task_only_fields, task_anchor_from_fields, template_parent,
+    NewItemKind, NewSimple, NewTask, NewTemplate, reject_event_due_date, reject_field,
+    reject_simple_only_fields, reject_task_only_fields, task_anchor_from_fields, template_parent,
 };
 use crate::service::items::ItemError;
 use crate::service::project_items::{self as project_item_service};
@@ -78,6 +78,7 @@ fn try_into_new_item(input: input::CreateProjectItemInput) -> Result<NewItem, It
                 &input.assigned_to_user_id,
                 &input.source_event_id,
             )?;
+            reject_event_due_date(&schedule)?;
             NewItemKind::Event(NewEvent {
                 schedule,
                 event_type: input.event_type,
@@ -166,6 +167,7 @@ fn try_into_edit_item(
                 &input.assigned_to_user_id,
                 &input.source_event_id,
             )?;
+            reject_event_due_date(&schedule)?;
             EditItemKind::Event(EditEvent {
                 schedule,
                 event_type: input.event_type,
@@ -576,6 +578,13 @@ mod tests {
         assert_eq!(
             invalid_message(try_into_new_item(parent_on_event).unwrap_err()),
             "parentItemId is not valid on EVENT items"
+        );
+
+        let mut due_date_on_event = create_input(Some(WireItemType::Event));
+        due_date_on_event.due_date = Some(SmithyDateTime::from_secs(1_000));
+        assert_eq!(
+            invalid_message(try_into_new_item(due_date_on_event).unwrap_err()),
+            "dueDate is not valid on EVENT items"
         );
 
         let mut priority_on_template = create_input(Some(WireItemType::Template));

@@ -48,8 +48,6 @@ pub struct ProjectEventForm {
     scheduled_time: Option<String>,
     scheduled_end_date: Option<String>,
     scheduled_end_time: Option<String>,
-    due_date: Option<String>,
-    due_time: Option<String>,
     event_type: Option<String>,
     /// See `project_tasks::ProjectTaskForm`'s identical field for the redirect-vs-in-place-
     /// fragment rationale.
@@ -109,24 +107,6 @@ fn start_of_day() -> chrono::NaiveTime {
     chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap()
 }
 
-fn overlay_due_date(
-    form_date: &Option<String>,
-    form_time: &Option<String>,
-    tz_offset_minutes: i32,
-    current: Option<DateTime<Utc>>,
-) -> Option<DateTime<Utc>> {
-    match form_date {
-        None => current,
-        Some(s) if s.trim().is_empty() => None,
-        Some(s) => combine_local_to_utc(
-            s.trim(),
-            form_time.as_deref(),
-            tz_offset_minutes,
-            end_of_day(),
-        ),
-    }
-}
-
 fn overlay_scheduled_date(
     form_date: &Option<String>,
     form_time: &Option<String>,
@@ -166,7 +146,10 @@ fn overlay_scheduled_end_date(
 /// Every field an Event cannot carry — `parent_item_id`, `source_event_id`, `complete`,
 /// `priority`, `points`/`assigned_to_user_id` — used to be an explicit `None` here. `NewEvent`
 /// has nowhere to put them, so they are gone rather than defaulted (see
-/// `docs/archived/typed-item-params-plan.md`).
+/// `docs/archived/typed-item-params-plan.md`). `due_date`/`has_due_time` are hardcoded rather
+/// than gone outright only because `Schedule` is a shared struct with a required field for
+/// them (root CLAUDE.md's Scheduled start/end section) — there's no form input to read them
+/// from any more.
 pub(crate) fn create_params_from_form(
     project_id: &str,
     form: &ProjectEventForm,
@@ -179,8 +162,8 @@ pub(crate) fn create_params_from_form(
         timezone_offset_minutes: Some(tz),
         kind: NewItemKind::Event(NewEvent {
             schedule: Schedule {
-                due_date: overlay_due_date(&form.due_date, &form.due_time, tz, None),
-                has_due_time: has_time(&form.due_time),
+                due_date: None,
+                has_due_time: false,
                 scheduled_date: overlay_scheduled_date(
                     &form.scheduled_date,
                     &form.scheduled_time,
@@ -229,8 +212,12 @@ pub(crate) fn update_params_from_form(
         depends_on_item_ids: None,
         kind: EditItemKind::Event(EditEvent {
             schedule: Schedule {
-                due_date: overlay_due_date(&form.due_date, &form.due_time, tz, current.due_date()),
-                has_due_time: overlay_has_due_time(&form.due_time, current.has_due_time()),
+                // No form field to read from any more — see `create_params_from_form`'s doc
+                // comment. `current.due_date()` is deliberately not round-tripped here either:
+                // the field is being removed from Events outright, so an edit through this
+                // screen clears any stale value a pre-fix row might still carry.
+                due_date: None,
+                has_due_time: false,
                 scheduled_date: overlay_scheduled_date(
                     &form.scheduled_date,
                     &form.scheduled_time,

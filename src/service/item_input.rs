@@ -501,6 +501,18 @@ pub(crate) fn reject_task_only_fields(
     reject_field(kind, "sourceEventId", source_event_id)
 }
 
+/// An Event is scheduled-window-primary and cannot carry a `dueDate` (root CLAUDE.md's
+/// Scheduled start/end section) — unlike the other cross-kind rejections in this module,
+/// `Schedule` itself doesn't make this unconstructable (it's shared verbatim across every kind
+/// that carries a schedule), so `Item::validate()` carries the same rejection as the
+/// ground-truth check for every writer; this is the friendlier, earlier-message version for the
+/// two untyped-boundary callers.
+pub(crate) fn reject_event_due_date(schedule: &Schedule) -> Result<(), ItemError> {
+    let kind = ItemKind::Event;
+    reject_field(kind, "dueDate", &schedule.due_date)?;
+    reject_flag(kind, "hasDueTime", Some(schedule.has_due_time))
+}
+
 /// A Simple item is a bare checkable name — no schedule, no `event_type`, no offset (root
 /// CLAUDE.md's Domain Models section). Its rejections have no counterpart on any other kind.
 pub(crate) fn reject_simple_only_fields(

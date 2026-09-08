@@ -23,10 +23,11 @@ impl ProjectEventRow {
             item_url: format!("/web/projects/{project_id}/events/{}", item.id),
             name: item.name.clone(),
             complete: false,
-            due_date: item
-                .due_date()
-                .map(|d| format_display_date(to_local(d, tz), true)),
-            overdue: item.is_overdue(Utc::now()),
+            // Events can no longer carry a `dueDate` (root CLAUDE.md's Scheduled start/end
+            // section) — `Row`'s `due_date`/`overdue` fields stay `None`/`false` here since
+            // they're shared with `ProjectTaskRow`, which still populates them.
+            due_date: None,
+            overdue: false,
             scheduled_date: item
                 .scheduled_date()
                 .map(|d| format_display_date(to_local(d, tz), item.has_scheduled_time())),
@@ -198,8 +199,6 @@ pub struct ProjectEventDetailFields {
     pub scheduled_time_input: String,
     pub scheduled_end_date_input: String,
     pub scheduled_end_time_input: String,
-    pub due_date_input: String,
-    pub due_time_input: String,
     pub event_type_input: String,
     /// Set only on the fragment returned by a successful save — see `items.rs`'s
     /// `DetailFields.just_saved` for the full rationale.
@@ -230,17 +229,6 @@ impl ProjectEventDetailFields {
         } else {
             String::new()
         };
-        let local_due_date = item.due_date().map(|d| to_local(d, tz));
-        let due_date_input = local_due_date
-            .map(|d| d.format("%Y-%m-%d").to_string())
-            .unwrap_or_default();
-        let due_time_input = if item.has_due_time() {
-            local_due_date
-                .map(|d| d.format("%H:%M").to_string())
-                .unwrap_or_default()
-        } else {
-            String::new()
-        };
         Self {
             id: item.id.clone(),
             project_id: project_id.to_string(),
@@ -250,8 +238,6 @@ impl ProjectEventDetailFields {
             scheduled_time_input,
             scheduled_end_date_input,
             scheduled_end_time_input,
-            due_date_input,
-            due_time_input,
             event_type_input: item.event_type().unwrap_or_default(),
             just_saved,
         }
@@ -268,8 +254,6 @@ pub struct ProjectEventDetailView {
     pub description: Option<String>,
     pub scheduled_date: Option<String>,
     pub scheduled_end_date: Option<String>,
-    pub due_date: Option<String>,
-    pub overdue: bool,
     pub event_type: Option<String>,
     /// See `project_tasks::templates::ProjectTaskDetailView::series_link`'s identical
     /// rationale.
@@ -292,16 +276,11 @@ impl ProjectEventDetailView {
         let scheduled_end_date = item
             .scheduled_end_date()
             .map(|d| format_display_date(to_local(d, tz), item.has_end_time()));
-        let due_date = item
-            .due_date()
-            .map(|d| format_display_date(to_local(d, tz), item.has_due_time()));
         Self {
             id: item.id.clone(),
             description: item.description.clone(),
             scheduled_date,
             scheduled_end_date,
-            due_date,
-            overdue: item.is_overdue(Utc::now()),
             event_type: item.event_type(),
             series_link,
             reminders: reminder_labels(&reminders, tz),
@@ -387,8 +366,6 @@ pub struct ProjectEventSeriesOccurrenceView {
     pub description: Option<String>,
     pub is_skipped: bool,
     pub scheduled_date: Option<String>,
-    pub due_date: Option<String>,
-    pub overdue: bool,
     pub event_type: Option<String>,
     pub skip_url: String,
     pub unskip_url: String,
@@ -407,17 +384,16 @@ impl ProjectEventSeriesOccurrenceView {
     ) -> Self {
         let occurrence_ts = occurrence_date.timestamp();
         let local = to_local(occurrence_date, tz);
-        let is_due_date_basis = crate::service::item_series::is_due_date_basis(series);
-        let due_date = is_due_date_basis.then(|| format_display_date(local, true));
-        let scheduled_date = (!is_due_date_basis).then(|| format_display_date(local, true));
+        // An Event series' `basis` is always `None` — `DUE_DATE`/`COMPLETION` are Task-only
+        // (`validate_series_basis`) — so the occurrence's cycle date is always its scheduled
+        // date, never a due date.
+        let scheduled_date = Some(format_display_date(local, true));
         Self {
             series_id: series.id.clone(),
             occurrence_ts,
             description: series.description.clone(),
             is_skipped,
             scheduled_date,
-            overdue: is_due_date_basis && occurrence_date < Utc::now(),
-            due_date,
             event_type: series.event_type.clone(),
             skip_url: format!(
                 "/web/projects/{project_id}/series/{}/occurrences/{occurrence_ts}/skip",
@@ -450,8 +426,6 @@ pub struct ProjectEventSeriesOccurrenceFields {
     pub scheduled_time_input: String,
     pub scheduled_end_date_input: String,
     pub scheduled_end_time_input: String,
-    pub due_date_input: String,
-    pub due_time_input: String,
     pub event_type_input: String,
     pub update_url: String,
 }
@@ -465,36 +439,19 @@ impl ProjectEventSeriesOccurrenceFields {
     ) -> Self {
         let occurrence_ts = occurrence_date.timestamp();
         let local = to_local(occurrence_date, tz);
+        // See `ProjectEventSeriesOccurrenceView::from_series` — an Event series' cycle date is
+        // always its scheduled date, never a due date.
         let date_input = local.format("%Y-%m-%d").to_string();
         let time_input = local.format("%H:%M").to_string();
-        let is_due_date_basis = crate::service::item_series::is_due_date_basis(series);
         Self {
             series_id: series.id.clone(),
             occurrence_ts,
             name: series.name.clone(),
             description: series.description.clone().unwrap_or_default(),
-            scheduled_date_input: if is_due_date_basis {
-                String::new()
-            } else {
-                date_input.clone()
-            },
-            scheduled_time_input: if is_due_date_basis {
-                String::new()
-            } else {
-                time_input.clone()
-            },
+            scheduled_date_input: date_input,
+            scheduled_time_input: time_input,
             scheduled_end_date_input: String::new(),
             scheduled_end_time_input: String::new(),
-            due_date_input: if is_due_date_basis {
-                date_input
-            } else {
-                String::new()
-            },
-            due_time_input: if is_due_date_basis {
-                time_input
-            } else {
-                String::new()
-            },
             event_type_input: series.event_type.clone().unwrap_or_default(),
             update_url: format!(
                 "/web/projects/{project_id}/series/{}/occurrences/{occurrence_ts}/event",
