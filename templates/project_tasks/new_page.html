@@ -95,7 +95,6 @@
     <form hx-post="/web/projects/{{ project_id }}/tasks/batch" hx-target="#page" hx-select="#page" hx-swap="innerHTML"
       class="mt-3 space-y-2">
       <input type="hidden" name="redirect" value="1" />
-      {% if show_complete %}<input type="hidden" name="showComplete" value="1" />{% endif %}
       {% if !filters_query.is_empty() %}<input type="hidden" name="filtersQuery" value="{{ filters_query }}" />{% endif %}
       <textarea name="names" rows="4" placeholder="One task per line"
         class="block w-full rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 placeholder:text-gray-400 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:placeholder:text-gray-500 dark:focus:outline-indigo-500"></textarea>

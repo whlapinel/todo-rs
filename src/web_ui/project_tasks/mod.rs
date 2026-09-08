@@ -86,10 +86,13 @@ pub struct ProjectTaskForm {
     /// fields. Individual fields aren't an option here: `ListFilterQuery::due_date`'s wire name
     /// (`dueDate`) collides with this same form's own item-due-date input, since both this
     /// filter round-trip and the real item fields live in the same `<form>` — see
-    /// `templates/project_tasks/new_page.html`'s "New task" dialog. Only actually consumed by
-    /// the `redirect` branch of `create_project_task_form` (via `redirect_to_project_tasks`,
-    /// which appends it to the redirect URL as-is); harmless and unread everywhere else
-    /// `ProjectTaskForm` is posted (update forms have no redirect-to-list branch at all).
+    /// `templates/project_tasks/new_page.html`'s "New task" dialog. Consumed two ways by
+    /// `create_project_task_form`: the `redirect` branch appends it to the redirect URL as-is
+    /// (`redirect_to_project_tasks`), and the in-place branch parses it back into a
+    /// `ListFilters` (`ListFilters::from_query_string`) so the re-rendered `#items-list` honors
+    /// the same filters the underlying list page had active. Harmless and unread everywhere
+    /// else `ProjectTaskForm` is posted (update forms have no redirect-to-list or
+    /// whole-list-rebuild branch at all).
     filters_query: Option<String>,
     /// Only present/honored server-side on a team-backed project — see
     /// `service::team_items::create_team_item`/`update_team_item`'s own admin gate.
@@ -813,39 +816,6 @@ pub(crate) async fn render_sibling_rows(
     Ok(rows)
 }
 
-pub(crate) fn render_rows(
-    items: &[Item],
-    project_id: &str,
-    names: &HashMap<String, String>,
-    show_complete: bool,
-    tz: i32,
-    skip_urls: &HashMap<String, String>,
-    team_id: Option<&str>,
-) -> Result<Vec<String>, ItemError> {
-    let visible: Vec<&Item> = items
-        .iter()
-        .filter(|i| show_complete || !i.complete())
-        .collect();
-    visible
-        .iter()
-        .map(|i| {
-            ProjectTaskRow::from_item(
-                i,
-                project_id,
-                names,
-                &visible,
-                tz,
-                skip_urls.get(&i.id).cloned(),
-                team_id.is_some(),
-                show_complete,
-                None,
-            )
-            .render()
-        })
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(ItemError::from)
-}
-
 /// Stage 5 of the series sub-items plan: the still-virtual sub-items of one parent cycle,
 /// rendered as nested rows in the order their definitions were authored (`sort_order`), or
 /// `None` when there are none to show.
@@ -895,13 +865,14 @@ fn render_virtual_child_rows(
     Ok(Some(html))
 }
 
-/// Stage 10 gap 2: the flat Tasks list's own version of `render_rows`, merging in each
-/// Task-typed series' single current virtual occurrence (if any) alongside real items —
-/// mirrors `project_calendar::render_rows`'s exact merge pattern (render each kind to
-/// `(timestamp, html)` pairs, concatenate, sort by timestamp, discard the timestamp). Kept
-/// separate from `render_rows` rather than adding a parameter to it, since `render_rows` has
-/// three other call sites in this module (children/subordinate task lists) where virtual
-/// occurrences don't apply.
+/// Stage 10 gap 2: the flat Tasks list's own renderer, merging in each Task-typed series'
+/// single current virtual occurrence (if any) alongside real items — mirrors
+/// `project_calendar::render_rows`'s exact merge pattern (render each kind to `(timestamp,
+/// html)` pairs, concatenate, sort by timestamp, discard the timestamp). Also the sole
+/// renderer for `render_scope_fragment`'s flat-list branch now (via `list_task_rows_for_project`
+/// below) — that branch used to call a separate, pre-treegrid/pre-filtering `render_rows`
+/// instead, which this module no longer has, per the "adding a new task renders the old
+/// project list" entry in docs/archived/archived_issues_and_features.md.
 ///
 /// `in_list_view` is threaded onto `ProjectTaskVirtualRow` so its checkbox/Skip/Unskip only
 /// target `#items-list` (see `handlers::list_task_rows_for_project`) when this is really the
@@ -964,7 +935,9 @@ pub(crate) async fn render_rows_with_virtual(
     let dep_map = item_dependencies
         .list_for_items(&visible.iter().map(|i| i.id.clone()).collect::<Vec<_>>())
         .await?;
-    let mut entries: Vec<(i64, String)> = Vec::with_capacity(visible.len());
+    // See `sort_key`'s doc comment for the `(timestamp, source_rank)` shape — real items and
+    // virtual occurrences below both key into this same tuple so they merge into one ordering.
+    let mut entries: Vec<((i64, u8), String)> = Vec::with_capacity(visible.len());
     for i in &visible {
         let mut row = ProjectTaskRow::from_item(
             i,
@@ -1062,7 +1035,11 @@ pub(crate) async fn render_rows_with_virtual(
                 true,
                 2,
             )?;
-            entries.push((occ.occurrence_date.timestamp(), row.render()?));
+            let source_rank = if occ.is_due_date_basis { 0 } else { 1 };
+            entries.push((
+                (occ.occurrence_date.timestamp(), source_rank),
+                row.render()?,
+            ));
         }
     }
     entries.sort_by_key(|(key, _)| *key);
@@ -1217,12 +1194,30 @@ pub(crate) fn items_list_inner_html(rows: &[String]) -> String {
 }
 
 /// `list_project_items_unchecked` already scopes to top-level, non-Template items — this narrows
-/// further to `Task` and sorts by due date (undated tasks last), mirroring
-/// `tasks::list_tasks`/`team_tasks::list_team_tasks`'s original precedent. `priority` is
+/// further to `Task` and sorts by date (undated-by-either-field tasks last). `priority` is
 /// deliberately not part of sort order (root CLAUDE.md's Priority section) — it's filterable
-/// (`ListFilters::priority`) but due date stays primary.
-fn sort_key(item: &Item) -> i64 {
-    item.due_date().map(|d| d.timestamp()).unwrap_or(i64::MAX)
+/// (`ListFilters::priority`) but date stays primary.
+///
+/// The timestamp is `due_date`, falling back to `scheduled_date` only when there's no due date
+/// at all — **not** `due_date.or(scheduled_date)` picked once and left at that, but a real
+/// fallback: a task carrying both still sorts on its due date. Before this, a scheduled-only
+/// task (no due date) fell all the way to `i64::MAX`, sorting after every dated task regardless
+/// of how soon its scheduled start was — see the "Sorting in lists" entry in
+/// docs/archived/archived_issues_and_features.md. The `u8` tiebreaker exists for the case this
+/// fallback creates: a due-dated task and a scheduled-only task that land on the exact same
+/// timestamp now tie on the first tuple element, and per that same entry a due date should win
+/// the tie over a scheduled date, hence `0` (due) sorting before `1` (scheduled) before `2`
+/// (neither). `render_rows_with_virtual`'s own merge of this with virtual series occurrences
+/// mirrors this same two-part key, ranking an occurrence by its series'
+/// `ProjectOccurrence::is_due_date_basis` the same way.
+fn sort_key(item: &Item) -> (i64, u8) {
+    match item.due_date() {
+        Some(d) => (d.timestamp(), 0),
+        None => match item.scheduled_date() {
+            Some(d) => (d.timestamp(), 1),
+            None => (i64::MAX, 2),
+        },
+    }
 }
 
 pub(crate) async fn list_project_tasks(
@@ -1248,67 +1243,72 @@ pub(crate) async fn sibling_group(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn render_scope_fragment(
     repo: &Arc<dyn ItemRepo>,
     teams: &Arc<dyn TeamRepo>,
+    users: &Arc<dyn UserRepo>,
+    series: &Arc<dyn ItemSeriesRepo>,
     project_id: &str,
     team_id: Option<&str>,
     requester_user_id: &str,
     parent_item_id: Option<&str>,
-    show_complete: bool,
+    filters: &ListFilters,
     tz: i32,
     item_dependencies: &Arc<dyn ItemDependencyRepo>,
-    // Passed straight through to `render_sibling_rows` — see its own parameter's comment.
-    series: &Arc<dyn ItemSeriesRepo>,
 ) -> Result<Html<String>, ItemError> {
-    let names = match team_id {
-        Some(team_id) => names_for(teams, team_id, requester_user_id).await?,
-        None => HashMap::new(),
-    };
-    // The `Some(parent_id)` branch is this same Sub-items panel's own create-refresh (the
-    // detail page's "New sub-item"/"Add multiple at once" forms both target `#children-list`
-    // via this function) — it needs `render_sibling_rows`' badge/children_html treatment for
-    // the exact reason `render_children_fragment`'s initial load does, or the badge would
-    // flicker away the moment a sub-item is added. The `None` (flat top-level list) branch is a
-    // different screen's own create-refresh and keeps its existing `render_rows` behavior.
-    let (rows, empty_message) = if let Some(parent_id) = parent_item_id {
+    // The `Some(parent_id)` branch is the Sub-items panel's own create-refresh (the detail
+    // page's "New sub-item"/"Add multiple at once" forms both target `#children-list` via this
+    // function) — it needs `render_sibling_rows`' badge/children_html treatment for the exact
+    // reason `render_children_fragment`'s initial load does, or the badge would flicker away
+    // the moment a sub-item is added. There's no `ListFilters` applied here yet — sub-items
+    // aren't filterable at all today, see docs/issues_and_features.md.
+    if let Some(parent_id) = parent_item_id {
+        let names = match team_id {
+            Some(team_id) => names_for(teams, team_id, requester_user_id).await?,
+            None => HashMap::new(),
+        };
         let items =
             list_project_items_unchecked(repo, project_id, Some(parent_id.to_string())).await?;
         let visible: Vec<&Item> = items.iter().collect();
-        (
-            render_sibling_rows(
-                repo,
-                &visible,
-                project_id,
-                &names,
-                tz,
-                team_id.is_some(),
-                true,
-                item_dependencies,
-                series,
-            )
-            .await?,
-            "No sub-items yet.",
+        let rows = render_sibling_rows(
+            repo,
+            &visible,
+            project_id,
+            &names,
+            tz,
+            team_id.is_some(),
+            true,
+            item_dependencies,
+            series,
         )
-    } else {
-        let items = list_project_tasks(repo, project_id).await?;
-        (
-            render_rows(
-                &items,
-                project_id,
-                &names,
-                show_complete,
-                tz,
-                &HashMap::new(),
-                team_id,
-            )?,
-            "No tasks yet.",
-        )
-    };
-    render(ProjectTaskRowsFragmentTemplate {
-        rows,
-        empty_message: empty_message.to_string(),
-    })
+        .await?;
+        return render(ProjectTaskRowsFragmentTemplate {
+            rows,
+            empty_message: "No sub-items yet.".to_string(),
+        });
+    }
+    // The flat top-level list: reuse the exact same assembly the page load and every in-place
+    // list rebuild elsewhere in this module already share (`list_task_rows_for_project`), so a
+    // create's response can't drift from what a full reload of the Tasks list would show —
+    // treegrid markup, merged-in virtual series occurrences, dependency badges, and every
+    // `ListFilters` dimension included, not just `show_complete`. This used to call the older,
+    // pre-treegrid/pre-filtering `render_rows` directly — see the "adding a new task renders
+    // the old project list" entry in docs/archived/archived_issues_and_features.md.
+    let rows = list_task_rows_for_project(
+        repo,
+        teams,
+        users,
+        series,
+        project_id,
+        team_id,
+        requester_user_id,
+        filters,
+        tz,
+        item_dependencies,
+    )
+    .await?;
+    Ok(Html(items_list_inner_html(&rows)))
 }
 
 #[cfg(test)]
@@ -1526,6 +1526,62 @@ mod tests {
             .schedule_mut()
             .expect("has schedule")
             .due_date = DateTime::from_timestamp(secs, 0);
+    }
+
+    fn set_scheduled_date(item: &mut Item, secs: i64) {
+        item.item_type
+            .schedule_mut()
+            .expect("has schedule")
+            .scheduled_date = DateTime::from_timestamp(secs, 0);
+    }
+
+    /// See `sort_key`'s doc comment: a task with no due date falls back to its scheduled date
+    /// rather than sorting after every dated task — the "Sorting in lists" bug.
+    #[test]
+    fn sort_key_falls_back_to_scheduled_date_when_due_date_is_absent() {
+        let mut due_later = task("a", "A", false);
+        set_due_date(&mut due_later, 9_000);
+
+        let mut scheduled_earlier = task("b", "B", false);
+        set_scheduled_date(&mut scheduled_earlier, 1_000);
+
+        let undated = task("c", "C", false);
+
+        let mut items = vec![due_later, scheduled_earlier, undated];
+        items.sort_by_key(sort_key);
+
+        assert_eq!(
+            items.iter().map(|i| i.id.as_str()).collect::<Vec<_>>(),
+            vec!["b", "a", "c"]
+        );
+    }
+
+    #[test]
+    fn sort_key_prefers_due_date_over_scheduled_date_when_both_are_set() {
+        let mut item = task("a", "A", false);
+        set_due_date(&mut item, 9_000);
+        set_scheduled_date(&mut item, 1_000);
+
+        assert_eq!(sort_key(&item), (9_000, 0));
+    }
+
+    /// Per the "Sorting in lists" entry: same-timestamp items resolve in favor of the one
+    /// carrying a due date over the one only carrying a scheduled date.
+    #[test]
+    fn sort_key_breaks_a_same_timestamp_tie_in_favor_of_due_date() {
+        let mut due = task("a", "A", false);
+        set_due_date(&mut due, 5_000);
+
+        let mut scheduled = task("b", "B", false);
+        set_scheduled_date(&mut scheduled, 5_000);
+
+        let mut items = vec![scheduled, due];
+        items.sort_by_key(sort_key);
+
+        assert_eq!(
+            items.iter().map(|i| i.id.as_str()).collect::<Vec<_>>(),
+            vec!["a", "b"]
+        );
     }
 
     /// Due date sorts tasks regardless of priority (undated tasks last) — priority is

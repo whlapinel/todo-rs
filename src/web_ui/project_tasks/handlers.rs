@@ -1860,6 +1860,7 @@ pub async fn create_project_task_form(
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(users): Extension<Arc<dyn UserRepo>>,
     Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
     Extension(item_dependencies): Extension<Arc<dyn ItemDependencyRepo>>,
     Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
@@ -1868,7 +1869,6 @@ pub async fn create_project_task_form(
 ) -> Result<Response, ItemError> {
     let project =
         project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
-    let show_complete = form.show_complete.is_some();
     let redirect = form.redirect.is_some();
     let filters_query = form.filters_query.clone().unwrap_or_default();
     let return_to = form.return_to.clone();
@@ -1894,17 +1894,19 @@ pub async fn create_project_task_form(
             },
         );
     }
+    let filters = ListFilters::from_query_string(&filters_query);
     Ok(render_scope_fragment(
         &repo,
         &teams,
+        &users,
+        &series,
         &project_id,
         project.team_id.as_deref(),
         &auth_user.user_id,
         parent_item_id.as_deref(),
-        show_complete,
+        &filters,
         tz,
         &item_dependencies,
-        &series,
     )
     .await?
     .into_response())
@@ -1915,7 +1917,6 @@ pub async fn create_project_task_form(
 pub struct BatchForm {
     names: String,
     parent_item_id: Option<String>,
-    show_complete: Option<String>,
     /// See `ProjectTaskForm::filters_query`'s identical rationale — an opaque, pre-encoded
     /// `ListFilters::query_string()` fragment, not individual `ListFilterQuery` fields.
     filters_query: Option<String>,
@@ -1931,6 +1932,7 @@ pub async fn create_project_tasks_batch(
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(users): Extension<Arc<dyn UserRepo>>,
     Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
     Extension(item_dependencies): Extension<Arc<dyn ItemDependencyRepo>>,
     Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
@@ -1979,17 +1981,19 @@ pub async fn create_project_tasks_batch(
             },
         );
     }
+    let filters = ListFilters::from_query_string(form.filters_query.as_deref().unwrap_or(""));
     Ok(render_scope_fragment(
         &repo,
         &teams,
+        &users,
+        &series,
         &project_id,
         project.team_id.as_deref(),
         &auth_user.user_id,
         parent_item_id.as_deref(),
-        form.show_complete.is_some(),
+        &filters,
         tz,
         &item_dependencies,
-        &series,
     )
     .await?
     .into_response())

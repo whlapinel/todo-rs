@@ -134,6 +134,17 @@ impl Default for ListFilters {
 }
 
 impl ListFilters {
+    /// Parses the exact opaque fragment `query_string()` produces (see its own doc comment) —
+    /// for a caller that only has the fragment as an already-encoded `String` (a hidden form
+    /// field round-tripped through a dialog, e.g. `ProjectTaskForm::filters_query`) rather than
+    /// as the current request's own query string, which `from_query`/`Query<ListFilterQuery>`
+    /// already cover. A malformed fragment (there's no way for a well-behaved client to produce
+    /// one) falls back to `ListFilterQuery::default()`, i.e. `ListFilters::default()`, same as
+    /// an absent one.
+    pub fn from_query_string(s: &str) -> Self {
+        Self::from_query(serde_urlencoded::from_str(s).unwrap_or_default())
+    }
+
     pub fn from_query(q: ListFilterQuery) -> Self {
         Self {
             show_complete: q.show_complete.as_deref() == Some("1"),
@@ -643,6 +654,35 @@ mod tests {
             filters.query_string(),
             "showComplete=1&assignedTo=bob&dueDate=overdue&schedule=past&recurring=no&priority=2"
         );
+    }
+
+    #[test]
+    fn from_query_string_round_trips_query_string_output() {
+        let filters = ListFilters::from_query(ListFilterQuery {
+            show_complete: Some("1".to_string()),
+            assigned_to: Some("bob".to_string()),
+            due_date: Some("overdue".to_string()),
+            schedule: Some("past".to_string()),
+            recurring: Some("no".to_string()),
+            priority: Some("2".to_string()),
+        });
+        assert_eq!(
+            ListFilters::from_query_string(&filters.query_string()),
+            filters
+        );
+    }
+
+    #[test]
+    fn from_query_string_defaults_on_a_malformed_fragment() {
+        assert_eq!(
+            ListFilters::from_query_string("not a valid fragment %"),
+            ListFilters::default()
+        );
+    }
+
+    #[test]
+    fn from_query_string_defaults_on_an_empty_fragment() {
+        assert_eq!(ListFilters::from_query_string(""), ListFilters::default());
     }
 
     #[test]

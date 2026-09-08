@@ -3340,6 +3340,7 @@ dependencies = [
  "rrule",
  "serde",
  "serde_json",
+ "serde_urlencoded",
  "sqlx",
  "thiserror 2.0.19",
  "todo-server-sdk",
