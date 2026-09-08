@@ -244,12 +244,26 @@
   </template>
   {% endif %}
 
-  <div class="rounded-md bg-gray-50 px-4 py-3 text-sm text-gray-600 dark:bg-white/5 dark:text-gray-300">
-    Click a task (or press Enter/Space while it's focused) to select it — click it again to open
-    its actions menu, including <strong>Mark complete</strong>. Shift-click extends the
-    selection to a range; Ctrl/Cmd-click adds or removes just one row. With anything selected,
-    use <strong>Actions</strong> above to apply a change to everything selected.
-  </div>
+  <!-- docs/issues_and_features.md's "fold the instructions for keyboard interactivity ...
+       into a little (i) keyboard button" — a plain <details>/<summary> disclosure (nav.html's
+       notifications menu is the precedent for this codebase's no-JS dropdown shape; unlike
+       that one, this panel's content is static so it needs no hx-get). Hidden below md: the
+       row-selection gestures it documents (click, Shift-click, Ctrl/Cmd-click) are mouse/
+       keyboard interactions with no mobile equivalent. -->
+  <details class="relative hidden md:block">
+    <summary
+      class="flex w-fit list-none cursor-pointer items-center gap-x-1 rounded-md px-2 py-1 text-sm text-gray-500 hover:bg-gray-50 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-gray-200">
+      {% include "icons/info.html" %}
+      Keyboard
+    </summary>
+    <div
+      class="absolute z-10 mt-2 w-96 rounded-md border border-gray-200 bg-white px-4 py-3 text-sm text-gray-600 shadow-lg dark:border-white/10 dark:bg-gray-800 dark:text-gray-300">
+      Click a task (or press Enter/Space while it's focused) to select it — click it again to open
+      its actions menu, including <strong>Mark complete</strong>. Shift-click extends the
+      selection to a range; Ctrl/Cmd-click adds or removes just one row. With anything selected,
+      use <strong>Actions</strong> above to apply a change to everything selected.
+    </div>
+  </details>
 
   <!-- role="treegrid" (see Row::treegrid's doc comment / the Tasks-list keyboard-nav pilot) —
        every row here is a real role="row" (top-level tasks + their in-place-expanded
