@@ -78,7 +78,14 @@
   <script>
     (function () {
       var d = document.getElementById('day-drawer');
-      if (d && !d.open) d.showModal();
+      if (d && !d.open) {
+        d.showModal();
+        // focusDialogContent is defined in base.html's own trailing <script>, further down
+        // the same document than this one — guard rather than rely on load order, since this
+        // still runs on a genuine top-level/bookmarked `?date=...` load (see the comment
+        // above), same as `templates/project_tasks/edit_page.html`'s own script.
+        if (typeof focusDialogContent === 'function') focusDialogContent(d);
+      }
     })();
   </script>
   {% endif %}

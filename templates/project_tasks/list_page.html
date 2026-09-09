@@ -13,7 +13,7 @@
       <a href="/web/projects" hx-boost="false"
         class="inline-flex items-center justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-xs inset-ring inset-ring-gray-300 hover:bg-gray-50 dark:bg-white/10 dark:text-white dark:shadow-none dark:inset-ring-white/5 dark:hover:bg-white/20">
         Up to projects</a>
-      <button type="button" onclick="document.getElementById('task-filters-dialog').showModal()"
+      <button type="button" onclick="var d=document.getElementById('task-filters-dialog'); d.showModal(); focusDialogContent(d);"
         class="relative inline-flex items-center justify-center gap-x-1.5 rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-xs inset-ring inset-ring-gray-300 hover:bg-gray-50 dark:bg-white/10 dark:text-white dark:shadow-none dark:inset-ring-white/5 dark:hover:bg-white/20">
         {% include "icons/filter.html" %}
         Filters

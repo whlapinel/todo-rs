@@ -100,7 +100,11 @@
     // htmx:afterSwap-driven auto-open never fires for it — this covers that one case directly.
     (function () {
       var d = document.getElementById('day-drawer');
-      if (d && !d.open) d.showModal();
+      if (d && !d.open) {
+        d.showModal();
+        // See main_calendar/calendar_page.html's identical script for why this is guarded.
+        if (typeof focusDialogContent === 'function') focusDialogContent(d);
+      }
     })();
   </script>
   {% endif %}

@@ -160,6 +160,25 @@
       localStorage.setItem("sidebarCollapsed", collapsed ? "1" : "0");
     }
 
+    // Moves focus into a just-(re)shown dialog's own content — see
+    // docs/issues_and_features.md's "Put focus on dialogs when opened" entry. Native
+    // showModal() already runs the UA's own focusing steps, but every dialog fragment in this
+    // app wraps its actual form in a `tabindex="0"` centering div (so a light-dismiss "outside
+    // click" — see focus:outline-hidden — has somewhere neutral to land) which happens to be
+    // the *first* focusable descendant in tree order, so the UA's default lands focus there
+    // instead of on any real field. And content swapped into an *already*-open dialog (Edit,
+    // Reschedule, Assign, Add sub-item swapping over the row-actions menu — every one shares
+    // #action-dialog rather than opening a fresh one) gets no UA focusing behavior at all,
+    // since showModal() isn't called again for those. Called after every such (re)population,
+    // so it's the one place deciding where focus goes rather than relying on the UA to guess
+    // right only on a fresh open.
+    function focusDialogContent(dialog) {
+      var el = dialog.querySelector(
+        'input:not([type="hidden"]):not(:disabled), textarea:not(:disabled), select:not(:disabled), a[href], button:not(:disabled)'
+      );
+      (el || dialog).focus({ preventScroll: true });
+    }
+
     // #action-dialog (below) is a persistent <dialog> — only its innerHTML is swapped by
     // hx-get requests (row action buttons like the reschedule calendar icon), so the
     // element's own id survives across opens rather than being replaced by a fresh
@@ -188,7 +207,9 @@
     // tolerate that rather than assume a normal ajax-swap's shape.
     document.addEventListener('htmx:afterSwap', (e) => {
       const dialog = e.detail.target?.matches?.('dialog') ? e.detail.target : null;
-      if (dialog && !dialog.open) dialog.showModal();
+      if (!dialog) return;
+      if (!dialog.open) dialog.showModal();
+      focusDialogContent(dialog);
     });
 
     // #action-dialog/#error-dialog live outside #page specifically so they survive normal
@@ -464,6 +485,7 @@
       if (title) title.textContent = tpl.dataset.name || '';
       htmx.process(dialog);
       dialog.showModal();
+      focusDialogContent(dialog);
     }
 
     // Arrow-key navigation among #action-menu-popover's own items (row-actions and batch-
@@ -687,6 +709,7 @@
       if (idsInput) idsInput.value = Array.from(selectedItemIds).join(',');
       htmx.process(dialog);
       dialog.showModal();
+      focusDialogContent(dialog);
     }
 
     // The row-actions popover's Reschedule/Assign (which hx-get #action-dialog, a separate

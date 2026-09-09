@@ -13,14 +13,24 @@
      showing. -->
 <script>
   (function () {
-    var dialog = document.getElementById('action-dialog');
-    var frag = document.getElementById('dialog-fragment');
-    if (dialog && frag && !dialog.open) {
-      dialog.innerHTML = '';
-      while (frag.firstChild) dialog.appendChild(frag.firstChild);
-      frag.remove();
-      htmx.process(dialog);
-      dialog.showModal();
+    function open() {
+      var dialog = document.getElementById('action-dialog');
+      var frag = document.getElementById('dialog-fragment');
+      if (dialog && frag && !dialog.open) {
+        dialog.innerHTML = '';
+        while (frag.firstChild) dialog.appendChild(frag.firstChild);
+        frag.remove();
+        htmx.process(dialog);
+        dialog.showModal();
+        focusDialogContent(dialog);
+      }
+    }
+    if (document.getElementById('action-dialog')) {
+      open();
+    } else {
+      // See project_tasks/edit_page.html's identical script for why this fallback
+      // (and the focusDialogContent call above) exist.
+      document.addEventListener('DOMContentLoaded', open);
     }
   })();
 </script>
