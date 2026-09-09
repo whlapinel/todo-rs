@@ -2,9 +2,22 @@
 // in src/main.rs, since this file is served from /web/static/sw.js). Content
 // here is always live/user-specific, so navigations go network-first with an
 // offline fallback page rather than serving stale cached HTML. Static assets
-// (css/js/icons under /web/static/) are cached so the app shell still loads
-// (and can render the offline page's own styling) with no connection.
-const CACHE_VERSION = "v1";
+// (css/js/icons under /web/static/) are also network-first, falling back to
+// the cache only when the network is unavailable, so the app shell still
+// loads (and can render the offline page's own styling) with no connection.
+//
+// Deliberately NOT cache-first: `style.css`/`htmx.min.js` change on every
+// `task web-styles`/build without any corresponding edit to this file, so
+// nothing bumps CACHE_VERSION or triggers this worker's own install/activate
+// cycle when they do. A cache-first strategy therefore pinned whichever
+// build happened to be current the first time a browser cached these files —
+// every later deploy's CSS/JS changes stayed invisible, surviving even a
+// plain reload, until a hard refresh bypassed the service worker outright
+// (reported in docs/issues_and_features.md as "have to hard refresh every
+// time to get the correct [treegrid] highlighting"). Network-first still
+// updates the cache on every successful fetch, so the offline fallback keeps
+// working — it just always prefers live content when there is any.
+const CACHE_VERSION = "v2";
 const STATIC_CACHE = `prl-static-${CACHE_VERSION}`;
 const OFFLINE_URL = "/web/static/offline.html";
 
@@ -52,15 +65,13 @@ self.addEventListener("fetch", (event) => {
 
   if (url.pathname.startsWith("/web/static/")) {
     event.respondWith(
-      caches.match(request).then(
-        (cached) =>
-          cached ||
-          fetch(request).then((response) => {
-            const copy = response.clone();
-            caches.open(STATIC_CACHE).then((cache) => cache.put(request, copy));
-            return response;
-          })
-      )
+      fetch(request)
+        .then((response) => {
+          const copy = response.clone();
+          caches.open(STATIC_CACHE).then((cache) => cache.put(request, copy));
+          return response;
+        })
+        .catch(() => caches.match(request))
     );
   }
 });
