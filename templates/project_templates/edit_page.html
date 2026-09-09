@@ -30,6 +30,102 @@
       </div>
       <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">The auto-created item's own due date, in days from the event (negative = before, positive = after, 0 = same day).</p>
     </label>
+    {% if is_team_project %}
+    <div>
+      <span class="mt-2 flex gap-4">
+        <label class="inline-flex items-center gap-1.5 text-sm font-normal text-gray-900 dark:text-white">
+          <input type="radio" name="assignmentMode" value="fixed" {% if !is_rotating %}checked{% endif %}
+                 class="size-4 border-gray-300 text-indigo-600 focus:ring-indigo-600 dark:border-white/20 dark:bg-white/5" /> Fixed
+        </label>
+        <label class="inline-flex items-center gap-1.5 text-sm font-normal text-gray-900 dark:text-white">
+          <input type="radio" name="assignmentMode" value="rotate" {% if is_rotating %}checked{% endif %}
+                 class="size-4 border-gray-300 text-indigo-600 focus:ring-indigo-600 dark:border-white/20 dark:bg-white/5" /> Rotate among
+        </label>
+      </span>
+    </div>
+    <div class="assignment-fixed-field flex items-center gap-x-4" {% if is_rotating %}hidden{% endif %}>
+      <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Assign to
+        <div class="mt-2 grid grid-cols-1">
+          <select name="assignedToUserId"
+                  class="col-start-1 row-start-1 block w-full appearance-none rounded-md bg-white py-1.5 pr-8 pl-3 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:*:bg-gray-800 dark:focus:outline-indigo-500">
+            <option value="" {% if assigned_to_user_id.is_none() %}selected{% endif %}>Unassigned</option>
+            {% for opt in assignee_options %}
+            <option value="{{ opt.0 }}" {% if assigned_to_user_id.as_deref() == Some(opt.0.as_str()) %}selected{% endif %}>{{ opt.1 }}</option>
+            {% endfor %}
+          </select>
+        </div>
+      </label>
+    </div>
+    <div class="assignment-rotate-field" {% if !is_rotating %}hidden{% endif %}>
+      <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Rotate among</label>
+      <div class="mt-2 space-y-1">
+        {% for opt in assignee_options %}
+        <label class="flex items-center gap-1.5 text-sm font-normal text-gray-900 dark:text-white">
+          <!-- No `name` here — axum 0.6's Form extractor can't deserialize repeated
+               same-named keys into a Vec (see project_item_series's identical
+               checkboxes). The `rotationUserIds` hidden input below carries the
+               actual comma-joined submission instead. -->
+          <input type="checkbox" class="rotation-member-checkbox size-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-600 dark:border-white/20 dark:bg-white/5" value="{{ opt.0 }}" {% if rotation_user_ids.contains(opt.0) %}checked{% endif %} /> {{ opt.1 }}
+        </label>
+        {% endfor %}
+      </div>
+      <input type="hidden" name="rotationUserIds" value="{{ rotation_user_ids.join(",") }}" />
+      <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">Cycles through the checked members, by how many tasks this template has already produced, one per firing.</p>
+    </div>
+    {% if is_team_admin %}
+    <div>
+      <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Points
+        <div class="mt-2">
+          <input type="number" name="points" min="0" value="{% if let Some(p) = points %}{{ p }}{% endif %}"
+                 class="block w-full rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 placeholder:text-gray-400 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:placeholder:text-gray-500 dark:focus:outline-indigo-500" />
+        </div>
+      </label>
+      <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">Awarded to the assignee each time the auto-created task is completed.</p>
+    </div>
+    {% endif %}
+    <script>
+    (function() {
+      var form = document.currentScript.closest("form");
+      if (!form) return;
+      // Same Fixed/Rotate toggle as project_item_series's edit page — hides *and
+      // disables* the inactive field group so it never gets submitted.
+      function updateRotationHiddenField() {
+        var hidden = form.querySelector('input[name="rotationUserIds"]');
+        if (!hidden) return;
+        var ids = Array.prototype.slice
+          .call(form.querySelectorAll(".rotation-member-checkbox:checked"))
+          .map(function (cb) { return cb.value; });
+        hidden.value = ids.join(",");
+      }
+      function updateAssignmentMode() {
+        var modeRadio = form.querySelector('input[name="assignmentMode"]:checked');
+        var isRotate = !!modeRadio && modeRadio.value === "rotate";
+        var fixedField = form.querySelector(".assignment-fixed-field");
+        var rotateField = form.querySelector(".assignment-rotate-field");
+        if (fixedField) {
+          fixedField.hidden = isRotate;
+          fixedField.querySelectorAll("input, select").forEach(function (field) {
+            field.disabled = isRotate;
+          });
+        }
+        if (rotateField) {
+          rotateField.hidden = !isRotate;
+          rotateField.querySelectorAll("input, select").forEach(function (field) {
+            field.disabled = !isRotate;
+          });
+        }
+        updateRotationHiddenField();
+      }
+      form.querySelectorAll(".rotation-member-checkbox").forEach(function (cb) {
+        cb.addEventListener("change", updateRotationHiddenField);
+      });
+      form.querySelectorAll('input[name="assignmentMode"]').forEach(function (radio) {
+        radio.addEventListener("change", updateAssignmentMode);
+      });
+      updateAssignmentMode();
+    })();
+    </script>
+    {% endif %}
     <div class="flex items-center gap-x-3">
       <button type="submit" class="inline-flex items-center justify-center rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-xs hover:bg-indigo-500 dark:bg-indigo-500 dark:shadow-none dark:hover:bg-indigo-400">Save and close</button>
       <a href="/web/projects/{{ project_id }}/templates/{{ id }}" hx-target="#page" hx-select="#page" hx-swap="innerHTML"

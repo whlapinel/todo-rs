@@ -1,9 +1,12 @@
-use crate::domain::item::{Item, ItemKind, ItemType, Recurrence, Schedule, TaskItem, TemplateItem};
+use crate::domain::item::{
+    Item, ItemKind, ItemType, Recurrence, Schedule, TaskItem, TeamAssignment, TemplateItem,
+};
 #[cfg(test)]
 use crate::domain::recurrence;
 use crate::service::activity_log::reverse_entry;
 use crate::service::item_input::{EditItem, NewItem, NewItemKind, build_item_type};
 use crate::service::item_series;
+use crate::service::item_series::rotation_assignee;
 use crate::storage::sqlite::{
     ActivityLogRepo, ItemDependencyRepo, ItemRepo, ItemSeriesRepo, ProjectRepo, ReminderRepo,
     RepoError,
@@ -187,8 +190,11 @@ pub async fn update_item(
 
     // Series membership is set once at materialization and never re-resolved from an edit,
     // so it is folded back in here rather than being expressible on `EditItemKind` — same
-    // carry-forward reasoning as `project_id` below.
-    let kind = edit.kind.into_new_kind(current.series_id());
+    // carry-forward reasoning as `project_id` below. `source_template_id` follows the
+    // identical set-once convention (see `Item::source_template_id`'s doc comment).
+    let kind = edit
+        .kind
+        .into_new_kind(current.series_id(), current.source_template_id());
     let complete = kind.complete();
 
     if complete && !current.complete() && has_incomplete_children(repo, &edit.item_id).await? {
@@ -581,6 +587,7 @@ pub(crate) fn copy_template_children<'a>(
                 recurrence,
                 team_assignment: None,
                 source_event_id: None,
+                source_template_id: None,
                 priority: child.priority(),
                 complete: false,
                 series_id: None,
@@ -599,12 +606,56 @@ pub(crate) fn copy_template_children<'a>(
     })
 }
 
+/// Resolves the `TeamAssignment` a root `template`'s instantiation stamps onto the new
+/// top-level task it creates: its fixed `assigned_to_user_id`/`points` if set,
+/// otherwise (when the template is rotating) whichever `template_rotation_members`
+/// entry is up next. The rotation index is a plain **count** of tasks this template has
+/// already produced (`ItemRepo::list_by_source_template`, keyed by `TaskItem::
+/// source_template_id`) — the count-based analogue of `item_series::
+/// resolve_occurrence_assignee`'s calendar-based `occurrence_index`, since a template
+/// fires off ad hoc Event creation with no recurrence rule to derive an index from.
+/// Same stateless spirit as series rotation (no stored cursor to repair), just counting
+/// past firings instead of elapsed calendar cycles — see root CLAUDE.md's Assignment
+/// rotation section for the calendar-based original and why it doesn't transfer
+/// directly. `Ok(None)` for a template with no assignment configured at all.
+///
+/// Race note, deliberately unmitigated: two events matching the same rotating template
+/// firing at nearly the same instant could both count the same prior total and land on
+/// the same assignee. Chore-style assignment, not safety-critical — accepted rather
+/// than adding locking with no precedent elsewhere in this codebase.
+pub(crate) async fn resolve_template_assignment(
+    repo: &Arc<dyn ItemRepo>,
+    template: &Item,
+) -> Result<Option<TeamAssignment>, RepoError> {
+    let points = template.points();
+    if let Some(assigned_to_user_id) = template.assigned_to_user_id() {
+        return Ok(Some(TeamAssignment {
+            assigned_to_user_id: Some(assigned_to_user_id),
+            points,
+        }));
+    }
+    let rotation = repo.list_template_rotation_members(&template.id).await?;
+    if rotation.is_empty() {
+        return Ok(None);
+    }
+    let index = repo.list_by_source_template(&template.id).await?.len();
+    Ok(rotation_assignee(&rotation, index)
+        .cloned()
+        .map(|assigned_to_user_id| TeamAssignment {
+            assigned_to_user_id: Some(assigned_to_user_id),
+            points,
+        }))
+}
+
 /// Creates the event-auto-trigger's *one* new item: a top-level Task named after `event`,
 /// linked to it via `source_event_id` (the only item the event itself references — see root
 /// CLAUDE.md's Events section). `template`'s own `due_offset_days` (its `Recurrence`, root-only
 /// — see `Item::validate`'s scoped exception) measures this task's due date from the event's own
 /// anchor (`event_anchor`, never `item_anchor`) and, unlike every other offset in this codebase,
-/// may be positive: "due N days after the event" is exactly what this task is for.
+/// may be positive: "due N days after the event" is exactly what this task is for. Its
+/// assignment comes from `resolve_template_assignment` (fixed or rotating, per the template's
+/// own configuration), and it carries `source_template_id` forward so a rotating template can
+/// count its own prior firings on the next event.
 ///
 /// `template`'s direct children then nest under the new task as ordinary `parent_item_id`
 /// sub-items via the ordinary `copy_template_children` — reversing this trigger's old
@@ -621,6 +672,7 @@ pub(crate) fn copy_template_children_to_event<'a>(
     Box::pin(async move {
         let due_date = event_anchor(event)
             .and_then(|anchor| template.deadline_from_offset(anchor, tz_offset_minutes));
+        let team_assignment = resolve_template_assignment(repo, template).await?;
 
         let mut parent_task = event.clone();
         parent_task.id = String::new();
@@ -632,8 +684,9 @@ pub(crate) fn copy_template_children_to_event<'a>(
                 ..Schedule::default()
             },
             recurrence: Recurrence::default(),
-            team_assignment: None,
+            team_assignment,
             source_event_id: Some(event_id.to_string()),
+            source_template_id: Some(template.id.clone()),
             priority: None,
             complete: false,
             series_id: None,
@@ -684,6 +737,7 @@ pub(crate) fn copy_children_as_template<'a>(
                 schedule,
                 recurrence,
                 event_type,
+                team_assignment: None,
             });
             let new_child_id = repo.create(&new_child).await?;
             copy_children_as_template(repo, &child.id, &new_child_id).await?;
@@ -772,6 +826,7 @@ mod tests {
                 schedule: Schedule::default(),
                 recurrence: Recurrence::default(),
                 event_type: Some(event_type.to_string()),
+                team_assignment: None,
             }),
             ..Item::default()
         }
@@ -788,6 +843,7 @@ mod tests {
                     ..Recurrence::default()
                 },
                 event_type: None,
+                team_assignment: None,
             }),
             ..Item::default()
         }
@@ -805,6 +861,7 @@ mod tests {
                 recurrence: Recurrence::default(),
                 team_assignment: None,
                 source_event_id: None,
+                source_template_id: None,
                 priority: None,
                 complete: false,
                 series_id: None,
@@ -842,6 +899,7 @@ mod tests {
                 },
                 team_assignment: None,
                 source_event_id: None,
+                source_template_id: None,
                 priority: None,
                 complete: false,
                 series_id: None,
@@ -866,6 +924,13 @@ mod tests {
             .withf(|project_id: &str| project_id == "p1")
             .times(1)
             .returning(|_| Ok(vec![template_item("tpl1", "u1", "rain")]));
+
+        // The template has no fixed assignee, so `resolve_template_assignment` checks
+        // for a rotation next — empty here, same as "no assignment configured at all".
+        mock.expect_list_template_rotation_members()
+            .withf(|template_id: &str| template_id == "tpl1")
+            .times(1)
+            .returning(|_| Ok(vec![]));
 
         // The trigger's one new parented Task, named after the Event and linked to it via
         // sourceEventId — created before the template's children are listed at all (see
@@ -917,6 +982,63 @@ mod tests {
         assert_eq!(item_id, "new-event-id");
     }
 
+    /// End-to-end proof that the trigger actually carries a root template's configured
+    /// assignment onto the parented task it creates, not just that `resolve_template_
+    /// assignment` computes the right value in isolation (covered separately above).
+    #[tokio::test]
+    async fn create_item_with_matching_event_type_stamps_the_templates_fixed_assignee() {
+        let mut mock = MockItemRepo::new();
+
+        mock.expect_create()
+            .withf(|item: &Item| item.parent_item_id().is_none() && item.kind() == ItemKind::Event)
+            .times(1)
+            .returning(|_| Ok("new-event-id".to_string()));
+
+        mock.expect_list_templates_by_project()
+            .times(1)
+            .returning(|_| {
+                let mut template = template_item("tpl1", "u1", "rain");
+                if let ItemType::Template(t) = &mut template.item_type {
+                    t.team_assignment = Some(TeamAssignment {
+                        assigned_to_user_id: Some("alice".to_string()),
+                        points: Some(5),
+                    });
+                }
+                Ok(vec![template])
+            });
+
+        mock.expect_create()
+            .withf(|item: &Item| {
+                item.source_event_id().as_deref() == Some("new-event-id")
+                    && item.assigned_to_user_id().as_deref() == Some("alice")
+                    && item.points() == Some(5)
+                    && item.source_template_id().as_deref() == Some("tpl1")
+            })
+            .times(1)
+            .returning(|_| Ok("new-parent-task-id".to_string()));
+
+        mock.expect_list_children()
+            .withf(|parent_id: &str| parent_id == "tpl1")
+            .times(1)
+            .returning(|_| Ok(vec![]));
+
+        let repo: Arc<dyn ItemRepo> = Arc::new(mock);
+
+        create_item(
+            &repo,
+            "u1",
+            new_item(
+                "It rained",
+                NewItemKind::Event(NewEvent {
+                    event_type: Some("rain".to_string()),
+                    ..Default::default()
+                }),
+            ),
+        )
+        .await
+        .expect("should create item");
+    }
+
     #[tokio::test]
     async fn create_item_with_matching_event_type_anchors_the_parented_task_and_its_children_correctly()
      {
@@ -949,10 +1071,16 @@ mod tests {
                             ..Recurrence::default()
                         },
                         event_type: Some("rain".to_string()),
+                        team_assignment: None,
                     }),
                     ..Item::default()
                 }])
             });
+
+        mock.expect_list_template_rotation_members()
+            .withf(|template_id: &str| template_id == "tpl1")
+            .times(1)
+            .returning(|_| Ok(vec![]));
 
         let expected_parent_due =
             recurrence::apply_end_of_day(event_scheduled + chrono::Duration::days(2), 0);
@@ -1005,6 +1133,73 @@ mod tests {
         )
         .await
         .expect("should create item");
+    }
+
+    #[tokio::test]
+    async fn resolve_template_assignment_returns_none_when_nothing_configured() {
+        let mut mock = MockItemRepo::new();
+        mock.expect_list_template_rotation_members()
+            .withf(|id: &str| id == "tpl1")
+            .times(1)
+            .returning(|_| Ok(vec![]));
+        let repo: Arc<dyn ItemRepo> = Arc::new(mock);
+
+        let template = template_item("tpl1", "u1", "rain");
+        let result = resolve_template_assignment(&repo, &template).await.unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn resolve_template_assignment_returns_the_fixed_assignee_and_points() {
+        let mut template = template_item("tpl1", "u1", "rain");
+        if let ItemType::Template(t) = &mut template.item_type {
+            t.team_assignment = Some(TeamAssignment {
+                assigned_to_user_id: Some("alice".to_string()),
+                points: Some(5),
+            });
+        }
+        // A fixed assignee never needs the rotation-membership or firing-count lookups.
+        let repo: Arc<dyn ItemRepo> = Arc::new(MockItemRepo::new());
+
+        let result = resolve_template_assignment(&repo, &template)
+            .await
+            .unwrap()
+            .expect("expected a resolved assignment");
+        assert_eq!(result.assigned_to_user_id.as_deref(), Some("alice"));
+        assert_eq!(result.points, Some(5));
+    }
+
+    /// The core rotation claim: the assignee is picked by *counting how many tasks this
+    /// template has already produced* (`list_by_source_template`), not by any calendar
+    /// math — since an event-triggered template has no recurrence rule to run that math
+    /// against (see `resolve_template_assignment`'s doc comment).
+    #[tokio::test]
+    async fn resolve_template_assignment_picks_the_next_rotation_member_by_firing_count() {
+        let template = template_item("tpl1", "u1", "rain");
+
+        let mut mock = MockItemRepo::new();
+        mock.expect_list_template_rotation_members()
+            .withf(|id: &str| id == "tpl1")
+            .times(1)
+            .returning(|_| Ok(vec!["alice".to_string(), "bob".to_string()]));
+        // Two prior firings already exist — the third (index 2) wraps back to "alice"
+        // (2 % 2 == 0), exactly like `item_series`'s own modulo cycling.
+        mock.expect_list_by_source_template()
+            .withf(|id: &str| id == "tpl1")
+            .times(1)
+            .returning(|_| {
+                Ok(vec![
+                    Item::new_user_item("u1", "Firing 1"),
+                    Item::new_user_item("u1", "Firing 2"),
+                ])
+            });
+        let repo: Arc<dyn ItemRepo> = Arc::new(mock);
+
+        let result = resolve_template_assignment(&repo, &template)
+            .await
+            .unwrap()
+            .expect("expected a resolved rotation assignment");
+        assert_eq!(result.assigned_to_user_id.as_deref(), Some("alice"));
     }
 
     #[tokio::test]
@@ -1922,6 +2117,7 @@ mod tests {
                     schedule: Schedule::default(),
                     recurrence: Recurrence::default(),
                     event_type: None,
+                    team_assignment: None,
                 }),
                 ..Item::default()
             })

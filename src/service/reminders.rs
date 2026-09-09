@@ -161,6 +161,7 @@ mod tests {
                 recurrence: Recurrence::default(),
                 team_assignment,
                 source_event_id: None,
+                source_template_id: None,
                 priority: None,
                 complete: false,
                 series_id: None,

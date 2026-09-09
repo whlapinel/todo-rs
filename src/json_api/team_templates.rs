@@ -39,6 +39,9 @@ pub async fn create_team_template(
             source_item_id: input.source_item_id,
             event_type: input.event_type,
             due_offset_days: None,
+            assigned_to_user_id: None,
+            rotation_user_ids: None,
+            points: None,
         },
     )
     .await

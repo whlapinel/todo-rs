@@ -84,6 +84,11 @@ pub struct NewTask {
     /// Internal-only — never exposed via Smithy/CLI/MCP. Set exclusively by
     /// `service::item_series::get_or_materialize_occurrence`.
     pub series_id: Option<String>,
+    /// Internal-only, as `series_id` above — never exposed via Smithy/CLI/MCP. Set
+    /// exclusively by `service::items::copy_template_children_to_event`/
+    /// `web_ui::project_templates::handlers::use_project_template_form`. See
+    /// `Item::source_template_id`'s doc comment.
+    pub source_template_id: Option<String>,
 }
 
 /// No `parent_item_id`: an Event structurally cannot be a child of anything.
@@ -241,6 +246,7 @@ pub(crate) fn build_item_type(
             recurrence: recurrence(t.due_offset_days),
             team_assignment,
             source_event_id: t.anchor.source_event_id(),
+            source_template_id: t.source_template_id,
             priority: t.priority,
             complete: t.complete,
             series_id: t.series_id,
@@ -263,6 +269,10 @@ pub(crate) fn build_item_type(
             schedule: t.schedule,
             recurrence: recurrence(t.due_offset_days),
             event_type: t.event_type,
+            // A nested template child is never top-level, so it can never carry an
+            // assignment of its own — see `TemplateItem::team_assignment`'s doc
+            // comment. `NewTemplate` has no field to accept one in the first place.
+            team_assignment: None,
         }),
     }
 }
@@ -388,14 +398,20 @@ pub struct EditItem {
 }
 
 impl EditItemKind {
-    /// An edit is a create plus the one field a create's caller supplies and an edit's
-    /// caller cannot: `series_id`. An item's series membership is set once at
-    /// materialization and carried forward from the stored item (root CLAUDE.md's Item
-    /// series section), which is exactly what `series_id` is here — so rather than a second
-    /// near-identical `build_item_type`, the update paths fold that carried-forward value
-    /// back in and reuse the create one. The `Simple` and `Template` arms drop it, as their
-    /// payloads have no such field.
-    pub(crate) fn into_new_kind(self, series_id: Option<String>) -> NewItemKind {
+    /// An edit is a create plus the fields a create's caller supplies and an edit's
+    /// caller cannot: `series_id` and (Task-only) `source_template_id`. An item's series
+    /// membership is set once at materialization and carried forward from the stored
+    /// item (root CLAUDE.md's Item series section), which is exactly what `series_id` is
+    /// here; `source_template_id` follows the identical "set once, carried forward
+    /// unchanged" convention (see `Item::source_template_id`'s doc comment) — so rather
+    /// than a second near-identical `build_item_type`, the update paths fold both
+    /// carried-forward values back in and reuse the create one. The `Simple` and
+    /// `Template` arms drop both, as their payloads have no such fields.
+    pub(crate) fn into_new_kind(
+        self,
+        series_id: Option<String>,
+        source_template_id: Option<String>,
+    ) -> NewItemKind {
         match self {
             EditItemKind::Task(t) => NewItemKind::Task(NewTask {
                 anchor: t.anchor,
@@ -405,6 +421,7 @@ impl EditItemKind {
                 complete: t.complete,
                 assignment: t.assignment,
                 series_id,
+                source_template_id,
             }),
             EditItemKind::Event(e) => NewItemKind::Event(NewEvent {
                 schedule: e.schedule,
@@ -623,6 +640,7 @@ mod tests {
                 // assignment and passes it separately, which is what the argument below is.
                 assignment: TeamAssignment::default(),
                 series_id: Some("s1".into()),
+                source_template_id: Some("tpl1".into()),
             }),
             Some(TeamAssignment {
                 assigned_to_user_id: Some("u1".into()),
@@ -648,6 +666,7 @@ mod tests {
         );
         assert_eq!(task.team_assignment.as_ref().unwrap().points, Some(5));
         assert_eq!(task.series_id.as_deref(), Some("s1"));
+        assert_eq!(task.source_template_id.as_deref(), Some("tpl1"));
         assert_eq!(task.schedule.due_date, Some(dt(1_000)));
         assert!(task.schedule.has_due_time);
         assert!(!task.schedule.has_end_time);
@@ -764,7 +783,9 @@ mod tests {
         }));
         assert_eq!(edit.item_id, "i1");
 
-        let kind = edit.kind.into_new_kind(Some("s1".into()));
+        let kind = edit
+            .kind
+            .into_new_kind(Some("s1".into()), Some("tpl1".into()));
         assert!(kind.complete());
         let NewItemKind::Task(ref task) = kind else {
             panic!("expected a Task input");
@@ -780,6 +801,7 @@ mod tests {
         assert!(task.complete);
         assert_eq!(task.priority, Some(1));
         assert_eq!(task.series_id.as_deref(), Some("s1"));
+        assert_eq!(task.source_template_id.as_deref(), Some("tpl1"));
     }
 
     /// The update side of "events cannot be marked complete" / "simple items cannot be
@@ -811,7 +833,8 @@ mod tests {
     /// `SimpleItem` has no such field, and neither does `TemplateItem`.
     #[test]
     fn kinds_without_a_series_field_drop_the_carried_forward_id() {
-        let kind = EditItemKind::Simple(EditSimple::default()).into_new_kind(Some("s1".into()));
+        let kind = EditItemKind::Simple(EditSimple::default())
+            .into_new_kind(Some("s1".into()), Some("tpl1".into()));
         assert!(matches!(built(kind), ItemType::Simple(_)));
 
         let kind = EditItemKind::Template(EditTemplate {
@@ -820,7 +843,7 @@ mod tests {
             event_type: None,
             due_offset_days: None,
         })
-        .into_new_kind(Some("s1".into()));
+        .into_new_kind(Some("s1".into()), Some("tpl1".into()));
         assert!(matches!(built(kind), ItemType::Template(_)));
     }
 
@@ -848,6 +871,7 @@ mod tests {
                 points: Some(5),
             },
             series_id: Some("s1".into()),
+            source_template_id: None,
         })
         .coerce_to_template("root".into());
 
@@ -1009,6 +1033,7 @@ mod tests {
                 assigned_to_user_id: Some("u1".into()),
                 points: Some(5),
             });
+            t.source_template_id = Some("tpl1".into());
         });
 
         let edit = EditItem {
@@ -1022,7 +1047,7 @@ mod tests {
         };
 
         let ItemType::Task(task) = build_item_type(
-            edit.kind.into_new_kind(None),
+            edit.kind.into_new_kind(None, item.source_template_id()),
             Some(TeamAssignment {
                 assigned_to_user_id: item.assigned_to_user_id(),
                 points: item.points(),
@@ -1032,6 +1057,7 @@ mod tests {
         };
         assert_eq!(task.parent_item_id.as_deref(), Some("p"));
         assert_eq!(task.source_event_id, None);
+        assert_eq!(task.source_template_id.as_deref(), Some("tpl1"));
         assert_eq!(task.priority, Some(2));
         assert!(task.complete);
         assert_eq!(task.recurrence.due_offset_days, Some(-3));

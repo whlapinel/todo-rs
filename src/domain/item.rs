@@ -85,9 +85,13 @@ pub struct Recurrence {
     pub due_offset_days: Option<i32>,
 }
 
-/// Team-item-only, `Task`-only, top-level-only. Admin-only enforcement of *who* may
-/// set `points` lives in the service layer (`create_team_item`/`update_team_item`),
-/// not here; the top-level-only restriction is enforced by `Item::validate` below.
+/// Team-item-only, top-level-only, and — as of Stage 3 of the templates-assignment
+/// work — settable on either `TaskItem` or a *root* `TemplateItem` (see
+/// `TemplateItem::team_assignment`). Admin-only enforcement of *who* may set `points`
+/// lives in the service layer (`create_team_item`/`update_team_item`,
+/// `create_team_template`/`update_team_template`), not here; the top-level-only
+/// restriction is enforced by `Item::validate` below (`points` on a Task or Template
+/// child is rejected the same way).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct TeamAssignment {
     pub assigned_to_user_id: Option<String>,
@@ -113,6 +117,18 @@ pub struct TaskItem {
     /// (see `Item::validate`) and only settable on `Task` — only a Task
     /// has anywhere to put it.
     pub source_event_id: Option<String>,
+    /// The root `TemplateItem` whose event-trigger or "Use" instantiation produced
+    /// this task — set once, at creation, only by `service::items::
+    /// copy_template_children_to_event`/`web_ui::project_templates::handlers::
+    /// use_project_template_form`, never by any Smithy field, CLI flag, or MCP
+    /// parameter (same "set once, carried forward unchanged, no wire setter"
+    /// convention as `series_id`). Its only purpose is letting a rotating template
+    /// count how many tasks it has already produced (`ItemRepo::
+    /// list_by_source_template`) to compute whose turn is next — see
+    /// `service::items::resolve_template_assignment`. Unlike `source_event_id`, this
+    /// carries no anchor-date meaning and has no `Item::validate` mutual-exclusion
+    /// rule with `parent_item_id`.
+    pub source_template_id: Option<String>,
     /// 1 (highest) through 4 (lowest); `None` sorts last. Task-only, but
     /// unlike `team_assignment` above it's a plain personal-productivity
     /// field — not team-backed-project-only, not admin-gated, and not
@@ -174,6 +190,24 @@ pub struct TemplateItem {
     pub schedule: Schedule,
     pub recurrence: Recurrence,
     pub event_type: Option<String>,
+    /// The assignment a *root* template's instantiation stamps onto the new
+    /// top-level task it creates — `assigned_to_user_id`/`points` here, exactly
+    /// mirroring `TaskItem::team_assignment`. A rotating template's member list is
+    /// **not** part of this struct (or this field at all): it lives in the separate
+    /// `template_rotation_members` table, mirroring `ItemSeries`'s own
+    /// `assigned_to_user_id`-vs-rotation-membership-table split (root CLAUDE.md's
+    /// "Assignment rotation" section) — `assigned_to_user_id` here and a non-empty
+    /// rotation are mutually exclusive, enforced in `service::templates::
+    /// resolve_template_assignment`, not here.
+    ///
+    /// Only ever meaningful on a *root* template (`parent_item_id.is_none()`): a
+    /// nested template child's own copy becomes an ordinary `parent_item_id`
+    /// sub-item, never top-level, so it can never carry one — `Item::validate`'s
+    /// existing "child items cannot have points" check (which reads through this
+    /// field via `Item::points()`) already rejects `points` on a non-root Template
+    /// for free, and no create/edit path for a template child (`NewTemplate`/
+    /// `EditTemplate`) exposes these fields at all.
+    pub team_assignment: Option<TeamAssignment>,
 }
 
 /// Payload for `ItemType::Simple` — a bare checkable name with no scheduling
@@ -352,6 +386,7 @@ impl ItemType {
     pub fn team_assignment(&self) -> Option<&TeamAssignment> {
         match self {
             ItemType::Task(t) => t.team_assignment.as_ref(),
+            ItemType::Template(t) => t.team_assignment.as_ref(),
             _ => None,
         }
     }
@@ -359,6 +394,13 @@ impl ItemType {
     pub fn source_event_id(&self) -> Option<&str> {
         match self {
             ItemType::Task(t) => t.source_event_id.as_deref(),
+            _ => None,
+        }
+    }
+
+    pub fn source_template_id(&self) -> Option<&str> {
+        match self {
+            ItemType::Task(t) => t.source_template_id.as_deref(),
             _ => None,
         }
     }
@@ -551,6 +593,10 @@ impl Item {
 
     pub fn source_event_id(&self) -> Option<String> {
         self.item_type.source_event_id().map(|s| s.to_string())
+    }
+
+    pub fn source_template_id(&self) -> Option<String> {
+        self.item_type.source_template_id().map(|s| s.to_string())
     }
 
     pub fn priority(&self) -> Option<i32> {
@@ -783,7 +829,13 @@ mod tests {
                     ..task.team_assignment.clone().unwrap_or_default()
                 })
             }
-            _ => panic!("points only settable on Task"),
+            ItemType::Template(template) => {
+                template.team_assignment = Some(TeamAssignment {
+                    points: Some(points),
+                    ..template.team_assignment.clone().unwrap_or_default()
+                })
+            }
+            _ => panic!("points only settable on Task/Template"),
         }
     }
 
@@ -894,6 +946,27 @@ mod tests {
     #[test]
     fn validate_allows_points_on_top_level_item() {
         let mut item = Item::new_user_item("u1", "Task");
+        set_points(&mut item, 10);
+        assert!(item.validate().is_ok());
+    }
+
+    /// A nested template child's copy is never top-level (root CLAUDE.md's Assignment
+    /// rotation / TemplateItem::team_assignment doc comment) — the existing "child items
+    /// cannot have points" check (which now reads through `TemplateItem::team_assignment`
+    /// via `Item::points()`) rejects it for free, with no dedicated rule needed.
+    #[test]
+    fn validate_rejects_points_on_a_non_root_template() {
+        let mut item = Item::default();
+        item.item_type = ItemType::from_kind(ItemKind::Template);
+        set_parent_item_id(&mut item, "root-template-id");
+        set_points(&mut item, 10);
+        assert!(item.validate().is_err());
+    }
+
+    #[test]
+    fn validate_allows_points_on_a_root_template() {
+        let mut item = Item::default();
+        item.item_type = ItemType::from_kind(ItemKind::Template);
         set_points(&mut item, 10);
         assert!(item.validate().is_ok());
     }

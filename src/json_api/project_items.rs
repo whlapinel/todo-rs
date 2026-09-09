@@ -64,6 +64,7 @@ fn try_into_new_item(input: input::CreateProjectItemInput) -> Result<NewItem, It
                     points: input.points,
                 },
                 series_id: None,
+                source_template_id: None,
             })
         }
         ItemKind::Event => {

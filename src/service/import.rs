@@ -204,6 +204,7 @@ fn build_row_new_item(
                     points,
                 },
                 series_id: None,
+                source_template_id: None,
             })
         }
         ItemKind::Event => {

@@ -27,6 +27,72 @@ use axum::response::{Html, IntoResponse, Response};
 use chrono::{DateTime, Utc};
 use std::sync::Arc;
 
+/// Turns the edit form's `assignmentMode` radio + the two candidate field groups into
+/// the `(assigned_to_user_id, rotation_user_ids)` pair `UpdateProjectTemplateParams`
+/// expects — the template-screen twin of `project_item_series::handlers::
+/// resolve_assignment_mode_fields`, parameterized over the raw fields directly rather
+/// than a whole form struct since this screen only needs the update form's shape (the
+/// quick-create form has no assignment fields at all — description doesn't either;
+/// both are edit-only).
+fn resolve_assignment_mode_fields(
+    assignment_mode: Option<&str>,
+    assigned_to_user_id: Option<&str>,
+    rotation_user_ids: Option<&str>,
+) -> (Option<String>, Option<Vec<String>>) {
+    if assignment_mode == Some("rotate") {
+        let ids = rotation_user_ids
+            .unwrap_or("")
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect();
+        (None, Some(ids))
+    } else {
+        (non_empty(&assigned_to_user_id.map(str::to_string)), None)
+    }
+}
+
+/// Resolves a root template's assignment for display: `(Some(assignee_name), vec![])`
+/// for a fixed assignee, `(None, [member names...])` for a rotating one, `(None, [])`
+/// for a personal project or a template with no assignment configured at all. Shared
+/// by the detail page and the update handler's own response tail (`ProjectTemplateDetailPageTemplate`).
+async fn resolve_template_assignment_display(
+    repo: &Arc<dyn ItemRepo>,
+    teams: &Arc<dyn TeamRepo>,
+    requester_user_id: &str,
+    project: &crate::domain::project::Project,
+    template: &Item,
+) -> Result<(Option<String>, Vec<String>), ItemError> {
+    let Some(team_id) = &project.team_id else {
+        return Ok((None, Vec::new()));
+    };
+    if let Some(id) = template.assigned_to_user_id() {
+        let name_by_id: std::collections::HashMap<String, String> =
+            active_member_options(teams, team_id, requester_user_id)
+                .await?
+                .into_iter()
+                .collect();
+        return Ok((Some(name_by_id.get(&id).cloned().unwrap_or(id)), Vec::new()));
+    }
+    let rotation = repo.list_template_rotation_members(&template.id).await?;
+    if rotation.is_empty() {
+        return Ok((None, Vec::new()));
+    }
+    let name_by_id: std::collections::HashMap<String, String> =
+        active_member_options(teams, team_id, requester_user_id)
+            .await?
+            .into_iter()
+            .collect();
+    Ok((
+        None,
+        rotation
+            .into_iter()
+            .map(|id| name_by_id.get(&id).cloned().unwrap_or(id))
+            .collect(),
+    ))
+}
+
 fn active_context(project_id: &str) -> ActiveContext {
     ActiveContext::Project(project_id.to_string())
 }
@@ -187,6 +253,11 @@ pub async fn create_project_template_form(
             source_item_id: None,
             event_type: non_empty(&form.event_type),
             due_offset_days: parse_signed_offset(&form.due_offset_days),
+            // Assignment is edit-only on this screen, same as `description` — the
+            // quick-create form (list_page.html) has no fields for either.
+            assigned_to_user_id: None,
+            rotation_user_ids: None,
+            points: None,
         },
     )
     .await?;
@@ -244,6 +315,12 @@ pub async fn project_template_detail_page(
     .await?;
     let event_type = template.event_type();
     let due_offset_days = template.due_offset_days();
+    let project =
+        project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
+    let (assignee_name, rotation_member_names) =
+        resolve_template_assignment_display(&repo, &teams, &auth_user.user_id, &project, &template)
+            .await?;
+    let points = template.points();
     render(ProjectTemplateDetailPageTemplate {
         project_id,
         id: template.id,
@@ -251,6 +328,9 @@ pub async fn project_template_detail_page(
         description: template.description.clone(),
         event_type,
         due_offset_days,
+        assignee_name,
+        rotation_member_names,
+        points,
         nav_html,
     })
 }
@@ -284,6 +364,21 @@ pub async fn project_template_edit_page(
         .due_offset_days()
         .map(|d| d.to_string())
         .unwrap_or_default();
+    let project =
+        project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
+    let is_team_project = project.team_id.is_some();
+    let (assignee_options, is_team_admin) = match &project.team_id {
+        Some(team_id) => (
+            active_member_options(&teams, team_id, &auth_user.user_id).await?,
+            project_service::is_project_admin(&projects, &teams, &project_id, &auth_user.user_id)
+                .await,
+        ),
+        None => (Vec::new(), false),
+    };
+    let rotation_user_ids = repo.list_template_rotation_members(&template.id).await?;
+    let is_rotating = !rotation_user_ids.is_empty();
+    let assigned_to_user_id = template.assigned_to_user_id();
+    let points = template.points();
     render(ProjectTemplateEditPageTemplate {
         project_id,
         id: template.id,
@@ -291,6 +386,13 @@ pub async fn project_template_edit_page(
         description: template.description.clone().unwrap_or_default(),
         event_type,
         due_offset_days_input,
+        is_team_project,
+        is_team_admin,
+        assignee_options,
+        assigned_to_user_id,
+        rotation_user_ids,
+        is_rotating,
+        points,
         nav_html,
     })
 }
@@ -302,6 +404,17 @@ pub struct UpdateProjectTemplateForm {
     description: Option<String>,
     event_type: Option<String>,
     due_offset_days: Option<String>,
+    /// Only present/honored server-side on a team-backed project — see
+    /// `service::templates::resolve_template_assignment_input`'s own gate.
+    assigned_to_user_id: Option<String>,
+    /// The Fixed/Rotate radio toggle — see `resolve_assignment_mode_fields`.
+    assignment_mode: Option<String>,
+    /// The rotation checkbox group's real submission, kept in sync by this page's own
+    /// `<script>` — see `resolve_assignment_mode_fields`'s doc comment.
+    rotation_user_ids: Option<String>,
+    /// Same team-project-only caveat as `assigned_to_user_id`; additionally silently
+    /// dropped server-side unless the requester is that project's admin.
+    points: Option<String>,
 }
 
 pub async fn update_project_template_form(
@@ -312,6 +425,17 @@ pub async fn update_project_template_form(
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Form(form): Form<UpdateProjectTemplateForm>,
 ) -> Result<Html<String>, ItemError> {
+    let (assigned_to_user_id, rotation_user_ids) = resolve_assignment_mode_fields(
+        form.assignment_mode.as_deref(),
+        form.assigned_to_user_id.as_deref(),
+        form.rotation_user_ids.as_deref(),
+    );
+    let points = form
+        .points
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .and_then(|s| s.parse().ok());
     template_service::update_project_template(
         &repo,
         &projects,
@@ -324,6 +448,9 @@ pub async fn update_project_template_form(
             description: non_empty(&form.description),
             event_type: non_empty(&form.event_type),
             due_offset_days: parse_signed_offset(&form.due_offset_days),
+            assigned_to_user_id,
+            rotation_user_ids,
+            points,
         },
     )
     .await?;
@@ -338,6 +465,12 @@ pub async fn update_project_template_form(
     .await?;
     let event_type = template.event_type();
     let due_offset_days = template.due_offset_days();
+    let project =
+        project_service::get_project(&projects, &teams, &project_id, &auth_user.user_id).await?;
+    let (assignee_name, rotation_member_names) =
+        resolve_template_assignment_display(&repo, &teams, &auth_user.user_id, &project, &template)
+            .await?;
+    let points = template.points();
     render(ProjectTemplateDetailPageTemplate {
         project_id,
         id: template.id,
@@ -345,6 +478,9 @@ pub async fn update_project_template_form(
         description: template.description.clone(),
         event_type,
         due_offset_days,
+        assignee_name,
+        rotation_member_names,
+        points,
         nav_html,
     })
 }

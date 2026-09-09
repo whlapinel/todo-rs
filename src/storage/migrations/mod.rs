@@ -18,6 +18,7 @@ mod add_item_series_id;
 mod add_item_series_rotation_members;
 mod add_item_series_template_item_id;
 mod add_item_source_event_id;
+mod add_item_template_assignment;
 mod add_projects;
 mod add_push_subscriptions;
 mod add_reminders;
@@ -55,6 +56,7 @@ use add_item_series_id::AddItemSeriesId;
 use add_item_series_rotation_members::AddItemSeriesRotationMembers;
 use add_item_series_template_item_id::AddItemSeriesTemplateItemId;
 use add_item_source_event_id::AddItemSourceEventId;
+use add_item_template_assignment::AddItemTemplateAssignment;
 use add_projects::AddProjects;
 use add_push_subscriptions::AddPushSubscriptions;
 use add_reminders::AddReminders;
@@ -143,6 +145,7 @@ fn all_migrations() -> Vec<Box<dyn Migration>> {
         Box::new(EnsureAttachmentsCommentId),
         Box::new(AddItemSeriesChildren),
         Box::new(RetireItemSeriesScheduledBasis),
+        Box::new(AddItemTemplateAssignment),
     ]
 }
 
@@ -569,7 +572,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 36);
+        assert_eq!(applied_count, 37);
     }
 
     #[tokio::test]
@@ -582,7 +585,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 36);
+        assert_eq!(applied_count, 37);
     }
 
     #[tokio::test]
@@ -596,6 +599,6 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 36);
+        assert_eq!(applied_count, 37);
     }
 }

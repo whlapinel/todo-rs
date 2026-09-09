@@ -882,6 +882,9 @@ pub async fn save_project_event_as_template(
             source_item_id: Some(item_id),
             event_type: None,
             due_offset_days: None,
+            assigned_to_user_id: None,
+            rotation_user_ids: None,
+            points: None,
         },
     )
     .await?;

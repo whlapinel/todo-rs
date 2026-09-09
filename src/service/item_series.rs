@@ -702,7 +702,14 @@ fn occurrence_index(
 /// Pure: same inputs always produce the same assignee, regardless of materialization
 /// order, skip history, or which occurrence is touched first — no stored "whose turn"
 /// cursor, per docs/assignment-rotation-plan.md's stateless-rotation decision.
-fn rotation_assignee(rotation: &[String], index: usize) -> Option<&String> {
+///
+/// `pub(crate)` as of Stage 3 of the templates-assignment work — also called directly
+/// by `service::items::resolve_template_assignment`, which derives its own `index` from
+/// a firing *count* (`ItemRepo::list_by_source_template`) rather than this module's
+/// calendar-based `occurrence_index`, since a template has no recurrence rule to run
+/// that math against. This function itself is just `rotation[index % rotation.len()]`,
+/// with no series-specific knowledge, so both callers share it unchanged.
+pub(crate) fn rotation_assignee(rotation: &[String], index: usize) -> Option<&String> {
     if rotation.is_empty() {
         None
     } else {

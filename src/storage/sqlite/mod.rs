@@ -111,6 +111,32 @@ pub trait ItemRepo: Send + Sync {
     ) -> Result<Vec<Item>, RepoError>;
     async fn list_children(&self, parent_item_id: &str) -> Result<Vec<Item>, RepoError>;
     async fn list_by_source_event(&self, source_event_id: &str) -> Result<Vec<Item>, RepoError>;
+    /// Every task a root Template has ever produced (event-trigger or manual "Use"),
+    /// via `TaskItem::source_template_id` — its count is how `service::items::
+    /// resolve_template_assignment` computes a rotating template's next assignee, the
+    /// count-based analogue of `ItemSeriesRepo::list_rotation_members`'s calendar-based
+    /// index (root CLAUDE.md's Assignment rotation section).
+    async fn list_by_source_template(
+        &self,
+        source_template_id: &str,
+    ) -> Result<Vec<Item>, RepoError>;
+    /// A root Template's rotation membership — mirrors `ItemSeriesRepo::
+    /// list_rotation_members` exactly, including its `ORDER BY user_id ASC` convention
+    /// (a separate `template_rotation_members` table, not a column on `items`; see
+    /// `TemplateItem::team_assignment`'s doc comment for why). Empty (not an error) for
+    /// a template with no rotation configured.
+    async fn list_template_rotation_members(
+        &self,
+        template_id: &str,
+    ) -> Result<Vec<String>, RepoError>;
+    /// Full-replace of a root Template's rotation membership — mirrors
+    /// `ItemSeriesRepo::set_rotation_members` exactly, including "empty slice clears
+    /// it".
+    async fn set_template_rotation_members(
+        &self,
+        template_id: &str,
+        user_ids: &[String],
+    ) -> Result<(), RepoError>;
     /// The full current set of imported items for one calendar subscription — what
     /// the Stage 3 sync diff (docs/google-calendar-import-plan.md) compares a
     /// freshly-parsed iCal feed against. `calendar_subscription_id`/`google_event_id`
@@ -728,7 +754,21 @@ fn row_to_item(row: &sqlx::sqlite::SqliteRow) -> Item {
     let points: Option<i32> = row.get("points");
     let priority: Option<i32> = row.get("priority");
     let source_event_id: Option<String> = row.get("source_event_id");
+    let source_template_id: Option<String> = row.get("source_template_id");
     let parent_item_id: Option<String> = row.get("parent_item_id");
+    // Shared by `Task` and `Template` below — a root `TemplateItem` carries the same
+    // `assigned_to_user_id`/`points` columns a `TaskItem` does (root CLAUDE.md's Points
+    // section / Stage 3 of the templates-assignment work); only one of the two match
+    // arms below ever actually consumes this per row, so the move is safe despite
+    // `TeamAssignment` not being `Copy`.
+    let team_assignment = if assigned_to_user_id.is_some() || points.is_some() {
+        Some(TeamAssignment {
+            assigned_to_user_id,
+            points,
+        })
+    } else {
+        None
+    };
 
     let kind: ItemKind = row
         .get::<Option<String>, _>("item_type")
@@ -743,15 +783,9 @@ fn row_to_item(row: &sqlx::sqlite::SqliteRow) -> Item {
             parent_item_id,
             schedule,
             recurrence,
-            team_assignment: if assigned_to_user_id.is_some() || points.is_some() {
-                Some(TeamAssignment {
-                    assigned_to_user_id,
-                    points,
-                })
-            } else {
-                None
-            },
+            team_assignment,
             source_event_id,
+            source_template_id,
             priority,
             complete: complete.unwrap_or(0) != 0,
             series_id,
@@ -769,6 +803,7 @@ fn row_to_item(row: &sqlx::sqlite::SqliteRow) -> Item {
             schedule,
             recurrence,
             event_type,
+            team_assignment,
         }),
         ItemKind::Simple => ItemType::Simple(SimpleItem { parent_item_id }),
     };
@@ -862,10 +897,27 @@ pub async fn create_pool(url: &str) -> Result<SqlitePool, sqlx::Error> {
             points INTEGER,
             priority INTEGER,
             source_event_id TEXT,
+            source_template_id TEXT,
             project_id TEXT,
             series_id TEXT,
             google_event_id TEXT,
             calendar_subscription_id TEXT
+        )",
+    )
+    .execute(&pool)
+    .await?;
+    // Stage 3 of the templates-assignment work (root CLAUDE.md's Assignment rotation
+    // section) — an unordered set of project-member user ids a root Template rotates a
+    // triggered/instantiated task's assignee across, mirroring
+    // `item_series_rotation_members` exactly (including its `ORDER BY user_id ASC`
+    // cycle-order convention, not a stored `position`). Mutually exclusive with
+    // `items.assigned_to_user_id` on the template's own row (enforced at the service
+    // layer, not here).
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS template_rotation_members (
+            template_id TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            PRIMARY KEY (template_id, user_id)
         )",
     )
     .execute(&pool)

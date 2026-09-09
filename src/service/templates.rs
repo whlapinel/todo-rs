@@ -1,8 +1,73 @@
-use crate::domain::item::{Item, ItemType, Recurrence, Schedule, TemplateItem};
+use crate::domain::item::{Item, ItemType, Recurrence, Schedule, TeamAssignment, TemplateItem};
 use crate::service::items::{ItemError, copy_children_as_template};
-use crate::service::projects::require_project_member;
+use crate::service::projects::{
+    require_project_admin, require_project_member, resolve_project_assignee,
+};
 use crate::storage::sqlite::{ItemRepo, ProjectRepo, TeamRepo};
 use std::sync::Arc;
+
+/// Resolves a root template's `TeamAssignment` (fixed) plus its rotation membership
+/// from a create/update request — the template-level mirror of `item_series::
+/// resolve_series_assignment`, sharing the identical mutual-exclusion, "explicitly
+/// empty rotation is rejected", team-backed-project-only, and admin-gated-points rules
+/// (root CLAUDE.md's Assignment rotation / Points sections). Unlike that function this
+/// has no `item_type` axis to check — every caller here is already building a root
+/// Template, and a non-root template child has no path that can reach this at all (see
+/// `TemplateItem::team_assignment`'s doc comment).
+async fn resolve_template_assignment_input(
+    projects: &Arc<dyn ProjectRepo>,
+    teams: &Arc<dyn TeamRepo>,
+    project_id: &str,
+    requester_user_id: &str,
+    assigned_to_user_id: Option<String>,
+    rotation_user_ids: Option<Vec<String>>,
+    points: Option<i32>,
+) -> Result<(Option<String>, Vec<String>, Option<i32>), ItemError> {
+    if assigned_to_user_id.is_some() && rotation_user_ids.is_some() {
+        return Err(ItemError::Invalid(
+            "assignedToUserId and rotationUserIds are mutually exclusive".to_string(),
+        ));
+    }
+    if let Some(ids) = &rotation_user_ids
+        && ids.is_empty()
+    {
+        return Err(ItemError::Invalid(
+            "rotationUserIds cannot be explicitly empty — omit it to clear the rotation"
+                .to_string(),
+        ));
+    }
+    if assigned_to_user_id.is_none() && rotation_user_ids.is_none() && points.is_none() {
+        return Ok((None, Vec::new(), None));
+    }
+    let project = projects.get(project_id).await?;
+    if project.team_id.is_none() {
+        return Err(ItemError::Invalid(
+            "assignedToUserId/rotationUserIds/points require a team-backed project".to_string(),
+        ));
+    }
+    let resolved_assignee =
+        resolve_project_assignee(projects, project_id, assigned_to_user_id).await?;
+    let mut resolved_rotation = Vec::new();
+    for user_id in rotation_user_ids.into_iter().flatten() {
+        // `resolve_project_assignee` only returns `None` when given `None` — we always
+        // pass `Some`, so the result is always `Some` too.
+        if let Some(resolved) =
+            resolve_project_assignee(projects, project_id, Some(user_id)).await?
+        {
+            resolved_rotation.push(resolved);
+        }
+    }
+    let resolved_points = if points.is_some()
+        && require_project_admin(projects, teams, project_id, requester_user_id)
+            .await
+            .is_ok()
+    {
+        points
+    } else {
+        None
+    };
+    Ok((resolved_assignee, resolved_rotation, resolved_points))
+}
 
 #[derive(Debug, Default)]
 pub struct CreateTemplateParams {
@@ -72,6 +137,10 @@ pub async fn create_template(
         schedule,
         recurrence,
         event_type,
+        // Assignment/points are a team-backed-project-only concept (root CLAUDE.md's
+        // Points section) — a personal template has no field to accept one in the
+        // first place, matching `CreateTemplateParams` here carrying no such field.
+        team_assignment: None,
     });
     item.description = description;
 
@@ -132,6 +201,19 @@ pub struct CreateTeamTemplateParams {
     pub event_type: Option<String>,
     /// See `CreateTemplateParams::due_offset_days`.
     pub due_offset_days: Option<i32>,
+    /// The fixed assignee a root template's instantiation stamps onto the new
+    /// top-level task it creates (`service::items::resolve_template_assignment`).
+    /// Mutually exclusive with `rotation_user_ids` — see
+    /// `resolve_template_assignment_input`. `None` here means "no fixed assignee",
+    /// not necessarily "no assignment at all" (a rotation might still apply).
+    pub assigned_to_user_id: Option<String>,
+    /// The rotating alternative to `assigned_to_user_id` — see
+    /// `resolve_template_assignment_input`'s doc comment for the full mutual-exclusion/
+    /// empty-rejection rules, which mirror `item_series`'s identical field exactly.
+    pub rotation_user_ids: Option<Vec<String>>,
+    /// Team-backed-project-only, admin-gated exactly like `TeamAssignment::points`
+    /// elsewhere — see `resolve_template_assignment_input`.
+    pub points: Option<i32>,
 }
 
 /// Team-scoped twin of `create_template` above. Reuses `copy_children_as_template`
@@ -196,15 +278,38 @@ pub async fn create_team_template(
     if params.due_offset_days.is_some() {
         recurrence.due_offset_days = params.due_offset_days;
     }
+    let (assigned_to_user_id, rotation_user_ids, points) = resolve_template_assignment_input(
+        projects,
+        teams,
+        &params.project_id,
+        &params.requester_user_id,
+        params.assigned_to_user_id,
+        params.rotation_user_ids,
+        params.points,
+    )
+    .await?;
     item.item_type = ItemType::Template(TemplateItem {
         parent_item_id: None,
         schedule,
         recurrence,
         event_type,
+        team_assignment: if assigned_to_user_id.is_some() || points.is_some() {
+            Some(TeamAssignment {
+                assigned_to_user_id,
+                points,
+            })
+        } else {
+            None
+        },
     });
     item.description = description;
 
     let template_id = repo.create(&item).await?;
+
+    if !rotation_user_ids.is_empty() {
+        repo.set_template_rotation_members(&template_id, &rotation_user_ids)
+            .await?;
+    }
 
     if let Some(source_id) = &source_id {
         copy_children_as_template(repo, source_id, &template_id).await?;
@@ -223,6 +328,15 @@ pub struct UpdateTeamTemplateParams {
     pub event_type: Option<String>,
     /// See `CreateTemplateParams::due_offset_days`.
     pub due_offset_days: Option<i32>,
+    /// See `CreateTeamTemplateParams::assigned_to_user_id`. Follows the same
+    /// direct-overwrite, no-service-layer-merge convention as `event_type`/
+    /// `due_offset_days` above — every update call site must round-trip the current
+    /// value explicitly to preserve it.
+    pub assigned_to_user_id: Option<String>,
+    /// See `CreateTeamTemplateParams::rotation_user_ids`.
+    pub rotation_user_ids: Option<Vec<String>>,
+    /// See `CreateTeamTemplateParams::points`.
+    pub points: Option<i32>,
 }
 
 /// Team-scoped twin of `update_template` above. Rewritten in Stage 5 of
@@ -251,15 +365,42 @@ pub async fn update_team_template(
         return Err(ItemError::Invalid("item is not a template".to_string()));
     }
 
+    let (assigned_to_user_id, rotation_user_ids, points) = resolve_template_assignment_input(
+        projects,
+        teams,
+        &params.project_id,
+        &params.requester_user_id,
+        params.assigned_to_user_id,
+        params.rotation_user_ids,
+        params.points,
+    )
+    .await?;
+
     let mut item = current;
     item.name = params.name;
     item.description = params.description;
     if let ItemType::Template(t) = &mut item.item_type {
         t.event_type = params.event_type;
         t.recurrence.due_offset_days = params.due_offset_days;
+        // Direct-overwrite, same convention as `event_type`/`due_offset_days` above —
+        // omitting either field on an update clears it rather than preserving the
+        // current value.
+        t.team_assignment = if assigned_to_user_id.is_some() || points.is_some() {
+            Some(TeamAssignment {
+                assigned_to_user_id,
+                points,
+            })
+        } else {
+            None
+        };
     }
 
     repo.update_by_project(&item).await?;
+    // Full-replace regardless of whether rotation_user_ids is empty, mirroring
+    // `item_series::update_series` — so switching a template from rotating back to
+    // fixed (or to neither) actually clears its prior members.
+    repo.set_template_rotation_members(&params.template_id, &rotation_user_ids)
+        .await?;
     Ok(())
 }
 
@@ -294,6 +435,13 @@ pub struct CreateProjectTemplateParams {
     pub event_type: Option<String>,
     /// See `CreateTemplateParams::due_offset_days`.
     pub due_offset_days: Option<i32>,
+    /// See `CreateTeamTemplateParams::assigned_to_user_id`. Dropped on the personal
+    /// (team-less) branch below — a personal template has no field to accept one.
+    pub assigned_to_user_id: Option<String>,
+    /// See `CreateTeamTemplateParams::rotation_user_ids`.
+    pub rotation_user_ids: Option<Vec<String>>,
+    /// See `CreateTeamTemplateParams::points`.
+    pub points: Option<i32>,
 }
 
 /// Stage B5d's project-scoped create path — same "resolve project_id down to user_id/
@@ -326,6 +474,9 @@ pub async fn create_project_template(
                     source_item_id: params.source_item_id,
                     event_type: params.event_type,
                     due_offset_days: params.due_offset_days,
+                    assigned_to_user_id: params.assigned_to_user_id,
+                    rotation_user_ids: params.rotation_user_ids,
+                    points: params.points,
                 },
             )
             .await?
@@ -358,6 +509,12 @@ pub struct UpdateProjectTemplateParams {
     pub event_type: Option<String>,
     /// See `CreateTemplateParams::due_offset_days`.
     pub due_offset_days: Option<i32>,
+    /// See `CreateProjectTemplateParams::assigned_to_user_id`.
+    pub assigned_to_user_id: Option<String>,
+    /// See `CreateProjectTemplateParams::rotation_user_ids`.
+    pub rotation_user_ids: Option<Vec<String>>,
+    /// See `CreateProjectTemplateParams::points`.
+    pub points: Option<i32>,
 }
 
 /// Stage B5d's project-scoped update path — same delegation shape as
@@ -385,6 +542,9 @@ pub async fn update_project_template(
                     description: params.description,
                     event_type: params.event_type,
                     due_offset_days: params.due_offset_days,
+                    assigned_to_user_id: params.assigned_to_user_id,
+                    rotation_user_ids: params.rotation_user_ids,
+                    points: params.points,
                 },
             )
             .await
@@ -452,6 +612,7 @@ mod tests {
                         },
                         team_assignment: None,
                         source_event_id: None,
+                        source_template_id: None,
                         priority: None,
                         complete: false,
                         series_id: None,
@@ -531,6 +692,93 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn create_team_template_with_a_fixed_assignee_sets_it_on_the_template() {
+        let mut items_mock = MockItemRepo::new();
+        items_mock
+            .expect_create()
+            .withf(|item: &Item| item.assigned_to_user_id().as_deref() == Some("alice"))
+            .times(1)
+            .returning(|_| Ok("tpl1".to_string()));
+
+        let mut projects = MockProjectRepo::new();
+        projects.expect_get().returning(|_| Ok(shared_project()));
+        projects
+            .expect_member_role()
+            .returning(|_, _| Ok(Some(TeamRole::Member)));
+
+        let repo: Arc<dyn ItemRepo> = Arc::new(items_mock);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+        let projects: Arc<dyn ProjectRepo> = Arc::new(projects);
+
+        create_team_template(
+            &repo,
+            &teams,
+            &projects,
+            CreateTeamTemplateParams {
+                project_id: "p1".to_string(),
+                requester_user_id: "member1".to_string(),
+                name: "Chore".to_string(),
+                description: None,
+                source_item_id: None,
+                event_type: None,
+                due_offset_days: None,
+                assigned_to_user_id: Some("alice".to_string()),
+                rotation_user_ids: None,
+                points: None,
+            },
+        )
+        .await
+        .expect("should create team template with a fixed assignee");
+    }
+
+    #[tokio::test]
+    async fn create_team_template_with_a_rotation_persists_the_membership() {
+        let mut items_mock = MockItemRepo::new();
+        items_mock
+            .expect_create()
+            .withf(|item: &Item| item.assigned_to_user_id().is_none())
+            .times(1)
+            .returning(|_| Ok("tpl1".to_string()));
+        items_mock
+            .expect_set_template_rotation_members()
+            .withf(|template_id: &str, ids: &[String]| {
+                template_id == "tpl1" && ids == ["alice".to_string(), "bob".to_string()]
+            })
+            .times(1)
+            .returning(|_, _| Ok(()));
+
+        let mut projects = MockProjectRepo::new();
+        projects.expect_get().returning(|_| Ok(shared_project()));
+        projects
+            .expect_member_role()
+            .returning(|_, _| Ok(Some(TeamRole::Member)));
+
+        let repo: Arc<dyn ItemRepo> = Arc::new(items_mock);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+        let projects: Arc<dyn ProjectRepo> = Arc::new(projects);
+
+        create_team_template(
+            &repo,
+            &teams,
+            &projects,
+            CreateTeamTemplateParams {
+                project_id: "p1".to_string(),
+                requester_user_id: "member1".to_string(),
+                name: "Chore".to_string(),
+                description: None,
+                source_item_id: None,
+                event_type: None,
+                due_offset_days: None,
+                assigned_to_user_id: None,
+                rotation_user_ids: Some(vec!["alice".to_string(), "bob".to_string()]),
+                points: None,
+            },
+        )
+        .await
+        .expect("should create team template with a rotation");
+    }
+
+    #[tokio::test]
     async fn create_team_template_rejects_simple_source() {
         let mut mock = MockItemRepo::new();
         mock.expect_get_by_project()
@@ -568,6 +816,9 @@ mod tests {
                 source_item_id: Some("src".to_string()),
                 event_type: None,
                 due_offset_days: None,
+                assigned_to_user_id: None,
+                rotation_user_ids: None,
+                points: None,
             },
         )
         .await;
@@ -592,6 +843,7 @@ mod tests {
                         schedule: Schedule::default(),
                         recurrence: Recurrence::default(),
                         event_type: None,
+                        team_assignment: None,
                     }),
                     ..Item::default()
                 })
@@ -641,6 +893,7 @@ mod tests {
                         recurrence: Recurrence::default(),
                         team_assignment: None,
                         source_event_id: None,
+                        source_template_id: None,
                         priority: None,
                         complete: false,
                         series_id: None,
@@ -684,6 +937,7 @@ mod tests {
                         schedule: Schedule::default(),
                         recurrence: Recurrence::default(),
                         event_type: None,
+                        team_assignment: None,
                     }),
                     ..Item::default()
                 })
@@ -697,6 +951,10 @@ mod tests {
             })
             .times(1)
             .returning(|_| Ok(()));
+        mock.expect_set_template_rotation_members()
+            .withf(|template_id: &str, ids: &[String]| template_id == "tpl1" && ids.is_empty())
+            .times(1)
+            .returning(|_, _| Ok(()));
 
         let mut projects = MockProjectRepo::new();
         projects.expect_get().returning(|_| Ok(shared_project()));
@@ -720,6 +978,9 @@ mod tests {
                 description: None,
                 event_type: Some("rain".to_string()),
                 due_offset_days: None,
+                assigned_to_user_id: None,
+                rotation_user_ids: None,
+                points: None,
             },
         )
         .await
@@ -745,6 +1006,165 @@ mod tests {
             owner_user_id: "owner1".to_string(),
             team_id: Some("team1".to_string()),
         }
+    }
+
+    #[tokio::test]
+    async fn resolve_template_assignment_input_rejects_mutually_exclusive_fields() {
+        let projects: Arc<dyn ProjectRepo> = Arc::new(MockProjectRepo::new());
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+
+        let result = resolve_template_assignment_input(
+            &projects,
+            &teams,
+            "p1",
+            "owner1",
+            Some("alice".to_string()),
+            Some(vec!["bob".to_string()]),
+            None,
+        )
+        .await;
+
+        assert!(matches!(result, Err(ItemError::Invalid(_))));
+    }
+
+    #[tokio::test]
+    async fn resolve_template_assignment_input_rejects_explicitly_empty_rotation() {
+        let projects: Arc<dyn ProjectRepo> = Arc::new(MockProjectRepo::new());
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+
+        let result = resolve_template_assignment_input(
+            &projects,
+            &teams,
+            "p1",
+            "owner1",
+            None,
+            Some(vec![]),
+            None,
+        )
+        .await;
+
+        assert!(matches!(result, Err(ItemError::Invalid(_))));
+    }
+
+    #[tokio::test]
+    async fn resolve_template_assignment_input_short_circuits_when_nothing_requested() {
+        // No mock expectations at all — proves this never even fetches the project when
+        // every field is omitted, same as `resolve_series_assignment`'s identical guard.
+        let projects: Arc<dyn ProjectRepo> = Arc::new(MockProjectRepo::new());
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+
+        let result =
+            resolve_template_assignment_input(&projects, &teams, "p1", "owner1", None, None, None)
+                .await
+                .unwrap();
+
+        assert_eq!(result, (None, Vec::new(), None));
+    }
+
+    #[tokio::test]
+    async fn resolve_template_assignment_input_rejects_a_personal_project() {
+        let mut projects_mock = MockProjectRepo::new();
+        projects_mock
+            .expect_get()
+            .returning(|_| Ok(personal_project()));
+        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+
+        let result = resolve_template_assignment_input(
+            &projects,
+            &teams,
+            "p1",
+            "owner1",
+            Some("alice".to_string()),
+            None,
+            None,
+        )
+        .await;
+
+        assert!(matches!(result, Err(ItemError::Invalid(_))));
+    }
+
+    #[tokio::test]
+    async fn resolve_template_assignment_input_resolves_a_fixed_assignee_on_a_team_project() {
+        let mut projects_mock = MockProjectRepo::new();
+        projects_mock
+            .expect_get()
+            .returning(|_| Ok(shared_project()));
+        projects_mock
+            .expect_member_role()
+            .returning(|_, _| Ok(Some(TeamRole::Member)));
+        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+
+        let (assigned_to_user_id, rotation, points) = resolve_template_assignment_input(
+            &projects,
+            &teams,
+            "p1",
+            "owner1",
+            Some("alice".to_string()),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(assigned_to_user_id.as_deref(), Some("alice"));
+        assert!(rotation.is_empty());
+        assert_eq!(points, None);
+    }
+
+    #[tokio::test]
+    async fn resolve_template_assignment_input_drops_points_for_a_non_admin() {
+        let mut projects_mock = MockProjectRepo::new();
+        projects_mock
+            .expect_get()
+            .returning(|_| Ok(shared_project()));
+        projects_mock
+            .expect_member_role()
+            .returning(|_, _| Ok(Some(TeamRole::Member)));
+        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+
+        let (_, _, points) = resolve_template_assignment_input(
+            &projects,
+            &teams,
+            "p1",
+            "requester1",
+            None,
+            None,
+            Some(10),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(points, None);
+    }
+
+    #[tokio::test]
+    async fn resolve_template_assignment_input_keeps_points_for_an_admin() {
+        let mut projects_mock = MockProjectRepo::new();
+        projects_mock
+            .expect_get()
+            .returning(|_| Ok(shared_project()));
+        projects_mock
+            .expect_member_role()
+            .returning(|_, _| Ok(Some(TeamRole::Admin)));
+        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+
+        let (_, _, points) = resolve_template_assignment_input(
+            &projects,
+            &teams,
+            "p1",
+            "admin1",
+            None,
+            None,
+            Some(10),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(points, Some(10));
     }
 
     #[tokio::test]
@@ -903,6 +1323,7 @@ mod tests {
                     schedule: Schedule::default(),
                     recurrence: Recurrence::default(),
                     event_type: None,
+                    team_assignment: None,
                 }),
                 ..Item::default()
             })
@@ -949,6 +1370,7 @@ mod tests {
                     schedule: Schedule::default(),
                     recurrence: Recurrence::default(),
                     event_type: None,
+                    team_assignment: None,
                 }),
                 ..Item::default()
             })
@@ -957,6 +1379,9 @@ mod tests {
             .expect_update_by_project()
             .times(1)
             .returning(|_| Ok(()));
+        items_mock
+            .expect_set_template_rotation_members()
+            .returning(|_, _| Ok(()));
 
         let repo: Arc<dyn ItemRepo> = Arc::new(items_mock);
         let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);

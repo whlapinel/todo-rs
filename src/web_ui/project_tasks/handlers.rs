@@ -3111,6 +3111,9 @@ pub async fn save_project_task_as_template(
             source_item_id: Some(item_id),
             event_type: None,
             due_offset_days: None,
+            assigned_to_user_id: None,
+            rotation_user_ids: None,
+            points: None,
         },
     )
     .await?;
@@ -3262,6 +3265,7 @@ mod resolve_task_anchor_date_tests {
                 recurrence: Recurrence::default(),
                 team_assignment: None,
                 source_event_id: None,
+                source_template_id: None,
                 priority: None,
                 complete: false,
                 series_id: None,

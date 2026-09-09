@@ -9,7 +9,7 @@ pub struct SqliteItemRepo(pub SqlitePool);
 const ITEM_SELECT: &str =
     "SELECT id, user_id, project_id, parent_item_id, name, description, due_date, scheduled_date, scheduled_end_date, complete, recurrence, recurrence_basis,
             has_due_time, has_scheduled_time, has_end_time,
-            item_type, event_type, due_offset_days, assigned_to_user_id, points, priority, source_event_id, series_id,
+            item_type, event_type, due_offset_days, assigned_to_user_id, points, priority, source_event_id, source_template_id, series_id,
             google_event_id, calendar_subscription_id,
             EXISTS(SELECT 1 FROM items c WHERE c.parent_item_id = items.id) AS has_children";
 
@@ -64,6 +64,57 @@ impl ItemRepo for SqliteItemRepo {
             .await
             .map_err(db_err)
             .map(|rows| rows.iter().map(row_to_item).collect())
+    }
+
+    async fn list_by_source_template(
+        &self,
+        source_template_id: &str,
+    ) -> Result<Vec<Item>, RepoError> {
+        let q = format!(
+            "{ITEM_SELECT} FROM items WHERE source_template_id = ? \
+             ORDER BY COALESCE(due_date, 9999999999999) ASC"
+        );
+        sqlx::query(&q)
+            .bind(source_template_id)
+            .fetch_all(&self.0)
+            .await
+            .map_err(db_err)
+            .map(|rows| rows.iter().map(row_to_item).collect())
+    }
+
+    async fn list_template_rotation_members(
+        &self,
+        template_id: &str,
+    ) -> Result<Vec<String>, RepoError> {
+        sqlx::query("SELECT user_id FROM template_rotation_members WHERE template_id = ? ORDER BY user_id ASC")
+            .bind(template_id)
+            .fetch_all(&self.0)
+            .await
+            .map_err(db_err)
+            .map(|rows| rows.iter().map(|row| row.get("user_id")).collect())
+    }
+
+    async fn set_template_rotation_members(
+        &self,
+        template_id: &str,
+        user_ids: &[String],
+    ) -> Result<(), RepoError> {
+        sqlx::query("DELETE FROM template_rotation_members WHERE template_id = ?")
+            .bind(template_id)
+            .execute(&self.0)
+            .await
+            .map_err(db_err)?;
+        for user_id in user_ids {
+            sqlx::query(
+                "INSERT INTO template_rotation_members (template_id, user_id) VALUES (?, ?)",
+            )
+            .bind(template_id)
+            .bind(user_id)
+            .execute(&self.0)
+            .await
+            .map_err(db_err)?;
+        }
+        Ok(())
     }
 
     async fn list_by_calendar_subscription(
@@ -134,8 +185,8 @@ impl ItemRepo for SqliteItemRepo {
         let has_end_time: i64 = item.has_end_time() as i64;
         let item_type: &str = item.kind().as_str();
         sqlx::query(
-            "INSERT INTO items (id, user_id, project_id, parent_item_id, name, description, due_date, scheduled_date, scheduled_end_date, complete, recurrence, recurrence_basis, has_due_time, has_scheduled_time, has_end_time, item_type, event_type, due_offset_days, assigned_to_user_id, points, priority, source_event_id, series_id, google_event_id, calendar_subscription_id)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO items (id, user_id, project_id, parent_item_id, name, description, due_date, scheduled_date, scheduled_end_date, complete, recurrence, recurrence_basis, has_due_time, has_scheduled_time, has_end_time, item_type, event_type, due_offset_days, assigned_to_user_id, points, priority, source_event_id, source_template_id, series_id, google_event_id, calendar_subscription_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(&item.user_id)
@@ -159,6 +210,7 @@ impl ItemRepo for SqliteItemRepo {
         .bind(item.points())
         .bind(item.priority())
         .bind(item.source_event_id())
+        .bind(item.source_template_id())
         .bind(item.series_id())
         .bind(item.google_event_id())
         .bind(item.calendar_subscription_id())
@@ -179,7 +231,7 @@ impl ItemRepo for SqliteItemRepo {
         let item_type: &str = item.kind().as_str();
         let rows = sqlx::query(
             "UPDATE items SET name = ?, description = ?, due_date = ?, scheduled_date = ?, scheduled_end_date = ?, complete = ?, recurrence = ?, recurrence_basis = ?, \
-             has_due_time = ?, has_scheduled_time = ?, has_end_time = ?, parent_item_id = ?, item_type = ?, event_type = ?, due_offset_days = ?, assigned_to_user_id = ?, priority = ?, source_event_id = ?, project_id = ?, series_id = ?, google_event_id = ?, calendar_subscription_id = ? \
+             has_due_time = ?, has_scheduled_time = ?, has_end_time = ?, parent_item_id = ?, item_type = ?, event_type = ?, due_offset_days = ?, assigned_to_user_id = ?, priority = ?, source_event_id = ?, source_template_id = ?, project_id = ?, series_id = ?, google_event_id = ?, calendar_subscription_id = ? \
              WHERE id = ? AND user_id = ?",
         )
         .bind(&item.name)
@@ -200,6 +252,7 @@ impl ItemRepo for SqliteItemRepo {
         .bind(item.assigned_to_user_id())
         .bind(item.priority())
         .bind(item.source_event_id())
+        .bind(item.source_template_id())
         .bind(&item.project_id)
         .bind(item.series_id())
         .bind(item.google_event_id())
@@ -224,7 +277,7 @@ impl ItemRepo for SqliteItemRepo {
         let item_type: &str = item.kind().as_str();
         let rows = sqlx::query(
             "UPDATE items SET name = ?, description = ?, due_date = ?, scheduled_date = ?, scheduled_end_date = ?, complete = ?, recurrence = ?, recurrence_basis = ?, \
-             has_due_time = ?, has_scheduled_time = ?, has_end_time = ?, parent_item_id = ?, item_type = ?, event_type = ?, due_offset_days = ?, assigned_to_user_id = ?, points = ?, priority = ?, source_event_id = ?, series_id = ?, google_event_id = ?, calendar_subscription_id = ? \
+             has_due_time = ?, has_scheduled_time = ?, has_end_time = ?, parent_item_id = ?, item_type = ?, event_type = ?, due_offset_days = ?, assigned_to_user_id = ?, points = ?, priority = ?, source_event_id = ?, source_template_id = ?, series_id = ?, google_event_id = ?, calendar_subscription_id = ? \
              WHERE id = ? AND project_id = ?",
         )
         .bind(&item.name)
@@ -246,6 +299,7 @@ impl ItemRepo for SqliteItemRepo {
         .bind(item.points())
         .bind(item.priority())
         .bind(item.source_event_id())
+        .bind(item.source_template_id())
         .bind(item.series_id())
         .bind(item.google_event_id())
         .bind(item.calendar_subscription_id())
@@ -277,7 +331,7 @@ impl ItemRepo for SqliteItemRepo {
         sqlx::query(
             "SELECT items.id, items.user_id, items.project_id, items.parent_item_id, items.name, items.description, items.due_date, items.scheduled_date, items.scheduled_end_date,
                     items.complete, items.recurrence, items.recurrence_basis, items.has_due_time, items.has_scheduled_time, items.has_end_time,
-                    items.item_type, items.event_type, items.due_offset_days, items.assigned_to_user_id, items.points, items.priority, items.source_event_id, items.series_id,
+                    items.item_type, items.event_type, items.due_offset_days, items.assigned_to_user_id, items.points, items.priority, items.source_event_id, items.source_template_id, items.series_id,
                     items.google_event_id, items.calendar_subscription_id,
                     COALESCE(parent.name, '') AS parent_name,
                     EXISTS(SELECT 1 FROM items c WHERE c.parent_item_id = items.id) AS has_children
@@ -316,7 +370,7 @@ impl ItemRepo for SqliteItemRepo {
         sqlx::query(
             "SELECT items.id, items.user_id, items.project_id, items.parent_item_id, items.name, items.description, items.due_date, items.scheduled_date, items.scheduled_end_date,
                     items.complete, items.recurrence, items.recurrence_basis, items.has_due_time, items.has_scheduled_time, items.has_end_time,
-                    items.item_type, items.event_type, items.due_offset_days, items.assigned_to_user_id, items.points, items.priority, items.source_event_id, items.series_id,
+                    items.item_type, items.event_type, items.due_offset_days, items.assigned_to_user_id, items.points, items.priority, items.source_event_id, items.source_template_id, items.series_id,
                     items.google_event_id, items.calendar_subscription_id,
                     COALESCE(parent.name, '') AS parent_name,
                     EXISTS(SELECT 1 FROM items c WHERE c.parent_item_id = items.id) AS has_children
@@ -426,10 +480,21 @@ mod tests {
                 points INTEGER,
                 priority INTEGER,
                 source_event_id TEXT,
+                source_template_id TEXT,
                 project_id TEXT,
                 series_id TEXT,
                 google_event_id TEXT,
                 calendar_subscription_id TEXT
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE template_rotation_members (
+                template_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                PRIMARY KEY (template_id, user_id)
             )",
         )
         .execute(&pool)
@@ -529,6 +594,7 @@ mod tests {
             schedule: Schedule::default(),
             recurrence: Recurrence::default(),
             event_type: None,
+            team_assignment: None,
         });
         repo.create(&template).await.unwrap();
 
@@ -542,6 +608,7 @@ mod tests {
             schedule: Schedule::default(),
             recurrence: Recurrence::default(),
             event_type: None,
+            team_assignment: None,
         });
         repo.create(&other_project_template).await.unwrap();
 
@@ -568,6 +635,7 @@ mod tests {
                 points: Some(5),
             }),
             source_event_id: None,
+            source_template_id: None,
             priority: Some(2),
             complete: false,
             series_id: None,
@@ -706,5 +774,90 @@ mod tests {
 
         let result = repo.update_by_project(&item).await;
         assert!(matches!(result, Err(RepoError::NotFound)));
+    }
+
+    #[tokio::test]
+    async fn source_template_id_round_trips_through_create_and_is_queryable() {
+        let pool = test_pool().await;
+        let repo = SqliteItemRepo(pool);
+
+        let mut linked = item_in_project("p1", "From template");
+        if let ItemType::Task(t) = &mut linked.item_type {
+            t.source_template_id = Some("tpl1".to_string());
+        }
+        let id = repo.create(&linked).await.unwrap();
+        repo.create(&item_in_project("p1", "Unrelated"))
+            .await
+            .unwrap();
+
+        let fetched = repo.get_by_project("p1", &id).await.unwrap();
+        assert_eq!(fetched.source_template_id().as_deref(), Some("tpl1"));
+
+        let matches = repo.list_by_source_template("tpl1").await.unwrap();
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].id, id);
+    }
+
+    #[tokio::test]
+    async fn list_template_rotation_members_returns_empty_for_a_template_with_none_set() {
+        let pool = test_pool().await;
+        let repo = SqliteItemRepo(pool);
+
+        let members = repo.list_template_rotation_members("tpl1").await.unwrap();
+        assert!(members.is_empty());
+    }
+
+    #[tokio::test]
+    async fn set_template_rotation_members_then_list_round_trips_sorted_by_user_id() {
+        let pool = test_pool().await;
+        let repo = SqliteItemRepo(pool);
+
+        repo.set_template_rotation_members(
+            "tpl1",
+            &["carol".to_string(), "alice".to_string(), "bob".to_string()],
+        )
+        .await
+        .unwrap();
+
+        let members = repo.list_template_rotation_members("tpl1").await.unwrap();
+        assert_eq!(members, vec!["alice", "bob", "carol"]);
+    }
+
+    #[tokio::test]
+    async fn set_template_rotation_members_replaces_the_prior_set() {
+        let pool = test_pool().await;
+        let repo = SqliteItemRepo(pool);
+
+        repo.set_template_rotation_members("tpl1", &["alice".to_string(), "bob".to_string()])
+            .await
+            .unwrap();
+        repo.set_template_rotation_members("tpl1", &["carol".to_string()])
+            .await
+            .unwrap();
+
+        let members = repo.list_template_rotation_members("tpl1").await.unwrap();
+        assert_eq!(members, vec!["carol"]);
+    }
+
+    #[tokio::test]
+    async fn template_rotation_members_are_scoped_to_their_own_template() {
+        let pool = test_pool().await;
+        let repo = SqliteItemRepo(pool);
+
+        repo.set_template_rotation_members("tpl1", &["alice".to_string()])
+            .await
+            .unwrap();
+        repo.set_template_rotation_members("tpl2", &["bob".to_string()])
+            .await
+            .unwrap();
+
+        assert_eq!(
+            repo.list_template_rotation_members("tpl1").await.unwrap(),
+            vec!["alice"]
+        );
+        assert_eq!(
+            repo.list_template_rotation_members("tpl2").await.unwrap(),
+            vec!["bob"]
+        );
     }
 }

@@ -1218,6 +1218,7 @@ mod tests {
                         assigned_to_user_id: Some("member1".to_string()),
                     }),
                     source_event_id: None,
+                    source_template_id: None,
                     priority: None,
                     complete: true,
                     series_id: None,

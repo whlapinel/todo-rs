@@ -391,6 +391,7 @@ pub(crate) fn create_params_from_form(
                     .and_then(|s| s.parse().ok()),
             },
             series_id: None,
+            source_template_id: None,
         }),
     }
 }

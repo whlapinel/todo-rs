@@ -342,8 +342,11 @@ pub async fn update_team_item(
     }
 
     // Series membership is set once at materialization and never re-resolved from an edit
-    // — see `items::update_item`'s identical carry-forward.
-    let kind = edit.kind.into_new_kind(current.series_id());
+    // — see `items::update_item`'s identical carry-forward, including for
+    // `source_template_id`.
+    let kind = edit
+        .kind
+        .into_new_kind(current.series_id(), current.source_template_id());
     let complete = kind.complete();
 
     if complete && !current.complete() && has_incomplete_children(repo, &edit.item_id).await? {
@@ -749,6 +752,7 @@ mod tests {
                     assigned_to_user_id: assigned_to_user_id.map(str::to_string),
                 }),
                 source_event_id: None,
+                source_template_id: None,
                 priority: None,
                 complete: false,
                 series_id: None,
@@ -1611,6 +1615,7 @@ mod tests {
                     schedule: Schedule::default(),
                     recurrence: Recurrence::default(),
                     event_type: None,
+                    team_assignment: None,
                 }),
                 ..Item::default()
             })
@@ -1680,10 +1685,17 @@ mod tests {
                         schedule: Schedule::default(),
                         recurrence: Recurrence::default(),
                         event_type: Some("rain".to_string()),
+                        team_assignment: None,
                     }),
                     ..Item::default()
                 }])
             });
+
+        items
+            .expect_list_template_rotation_members()
+            .withf(|template_id: &str| template_id == "tpl1")
+            .times(1)
+            .returning(|_| Ok(vec![]));
 
         items
             .expect_create()

@@ -27,6 +27,16 @@
   <p class="text-sm whitespace-pre-wrap text-gray-700 dark:text-gray-300">{{ d }}</p>
   {% endif %}
 
+  {% if let Some(name) = assignee_name %}
+  <p class="text-sm text-gray-500 dark:text-gray-400">Assigns the auto-created task to: <span class="font-medium text-gray-700 dark:text-gray-300">{{ name }}</span>
+    {% if let Some(p) = points %} &mdash; {{ p }} point{% if *p != 1 %}s{% endif %}{% endif %}
+  </p>
+  {% else if !rotation_member_names.is_empty() %}
+  <p class="text-sm text-gray-500 dark:text-gray-400">Rotates the auto-created task's assignee among: <span class="font-medium text-gray-700 dark:text-gray-300">{{ rotation_member_names.join(", ") }}</span>
+    {% if let Some(p) = points %} &mdash; {{ p }} point{% if *p != 1 %}s{% endif %}{% endif %}
+  </p>
+  {% endif %}
+
   <ul id="template-items" class="divide-y divide-gray-100 rounded-lg border border-gray-200 bg-white px-4 dark:divide-white/5 dark:border-white/10 dark:bg-gray-800/50"
       hx-get="/web/projects/{{ project_id }}/templates/{{ id }}/items" hx-trigger="load"
       hx-target="this" hx-select="unset" hx-swap="innerHTML"></ul>

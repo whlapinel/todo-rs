@@ -101,6 +101,16 @@ pub struct ProjectTemplateDetailPageTemplate {
     pub description: Option<String>,
     pub event_type: Option<String>,
     pub due_offset_days: Option<i32>,
+    /// Resolved display name (via `active_member_options`' id→name map), not the raw
+    /// id — mirrors `project_tasks::templates::Row::assignee_name`. `None` for a
+    /// personal project, a template with no fixed assignee, or a rotating one (see
+    /// `rotation_member_names` below).
+    pub assignee_name: Option<String>,
+    /// Resolved display names of a rotating template's members, in the same
+    /// `ORDER BY user_id ASC` order `ItemRepo::list_template_rotation_members` returns
+    /// — empty for a fixed-assignee or unassigned template.
+    pub rotation_member_names: Vec<String>,
+    pub points: Option<i32>,
     pub nav_html: String,
 }
 
@@ -115,6 +125,18 @@ pub struct ProjectTemplateEditPageTemplate {
     /// Signed, never negated (see `project_templates::parse_signed_offset`) — blank when
     /// unset, matching `ChildDetailFields::due_offset_days_input`'s own "no offset" convention.
     pub due_offset_days_input: String,
+    /// Gates whether the assignment section renders at all — a personal (team-less)
+    /// project's templates have no field to accept one, same as `project_tasks`'s own
+    /// `is_team_project` gate.
+    pub is_team_project: bool,
+    /// Gates the Points field specifically — mirrors `project_item_series`'s own
+    /// `is_team_admin` gate on the identical field.
+    pub is_team_admin: bool,
+    pub assignee_options: Vec<(String, String)>,
+    pub assigned_to_user_id: Option<String>,
+    pub rotation_user_ids: Vec<String>,
+    pub is_rotating: bool,
+    pub points: Option<i32>,
     pub nav_html: String,
 }
 
