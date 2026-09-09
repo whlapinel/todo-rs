@@ -3110,6 +3110,7 @@ pub async fn save_project_task_as_template(
             description: None,
             source_item_id: Some(item_id),
             event_type: None,
+            due_offset_days: None,
         },
     )
     .await?;

@@ -100,6 +100,7 @@ pub struct ProjectTemplateDetailPageTemplate {
     pub name: String,
     pub description: Option<String>,
     pub event_type: Option<String>,
+    pub due_offset_days: Option<i32>,
     pub nav_html: String,
 }
 
@@ -111,6 +112,9 @@ pub struct ProjectTemplateEditPageTemplate {
     pub name: String,
     pub description: String,
     pub event_type: String,
+    /// Signed, never negated (see `project_templates::parse_signed_offset`) — blank when
+    /// unset, matching `ChildDetailFields::due_offset_days_input`'s own "no offset" convention.
+    pub due_offset_days_input: String,
     pub nav_html: String,
 }
 

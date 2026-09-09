@@ -681,7 +681,15 @@ impl Item {
         // new write may set one: the web UI's own offset field enforces "days before" (positive
         // input, negated before it reaches here) at the presentation layer, and this is the
         // matching enforcement point for every other writer (CLI, MCP, direct API calls).
-        if self.due_offset_days().is_some_and(|d| d > 0) {
+        // Scoped exception for a root Template (no parent — see `TemplateItem::parent_item_id`):
+        // its offset measures the event-triggered parented task's due date from the *event's*
+        // anchor (see `copy_template_children_to_event`), which can legitimately fall after it
+        // ("due 3 days after the event") — that task is the event's downstream counterpart, not
+        // a prerequisite of it. Every other offset (a template's own nested children, or any
+        // real item's) still measures a sub-item against something it supports, where "after"
+        // never makes sense.
+        let is_root_template = self.kind() == ItemKind::Template && self.parent_item_id().is_none();
+        if self.due_offset_days().is_some_and(|d| d > 0) && !is_root_template {
             return Err(
                 "due offset days cannot be positive (days after the due date are not allowed)"
                     .to_string(),
@@ -755,7 +763,8 @@ mod tests {
         match &mut item.item_type {
             ItemType::Task(task) => task.parent_item_id = Some(parent_id.to_string()),
             ItemType::Simple(simple) => simple.parent_item_id = Some(parent_id.to_string()),
-            _ => panic!("parent_item_id only settable on Task/Simple"),
+            ItemType::Template(template) => template.parent_item_id = Some(parent_id.to_string()),
+            _ => panic!("parent_item_id only settable on Task/Simple/Template"),
         }
     }
 
@@ -1028,6 +1037,43 @@ mod tests {
         item.item_type = ItemType::from_kind(ItemKind::Template);
         set_event_type(&mut item, "rain");
         assert!(item.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_positive_offset_on_a_task() {
+        let mut item = Item::new_task("u1", "Pack boxes");
+        set_parent_item_id(&mut item, "parent1");
+        set_due_offset_days(&mut item, 1);
+        assert_eq!(
+            item.validate(),
+            Err(
+                "due offset days cannot be positive (days after the due date are not allowed)"
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn validate_allows_positive_offset_on_a_root_template() {
+        let mut item = Item::new_user_item("u1", "Watch prep");
+        item.item_type = ItemType::from_kind(ItemKind::Template);
+        set_due_offset_days(&mut item, 3);
+        assert!(item.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_positive_offset_on_a_non_root_template() {
+        let mut item = Item::new_user_item("u1", "Book venue");
+        item.item_type = ItemType::from_kind(ItemKind::Template);
+        set_parent_item_id(&mut item, "root-template-id");
+        set_due_offset_days(&mut item, 3);
+        assert_eq!(
+            item.validate(),
+            Err(
+                "due offset days cannot be positive (days after the due date are not allowed)"
+                    .to_string()
+            )
+        );
     }
 
     #[test]

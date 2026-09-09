@@ -16,6 +16,12 @@ pub struct CreateTemplateParams {
     /// left `None` by the legacy `json_api::templates::create_template` handler,
     /// matching that path's pre-Stage-5 behavior of never populating `project_id`.
     pub project_id: Option<String>,
+    /// The root template's own offset, measured against a matching Event's anchor when the
+    /// event-trigger fires (`copy_template_children_to_event`) — unlike every other offset in
+    /// this codebase, this one may be positive ("N days after the event"), per
+    /// `Item::validate()`'s scoped exception for a root Template. `None` if this template was
+    /// never meant to auto-fire off an Event's date at all.
+    pub due_offset_days: Option<i32>,
 }
 
 /// Moved from `json_api::templates::create_template`.
@@ -54,6 +60,13 @@ pub async fn create_template(
     if params.event_type.is_some() {
         event_type = params.event_type;
     }
+    // Only overwrite a `source_item_id` copy's own offset when the caller actually supplied
+    // one — mirrors `event_type`'s identical guard just above, for the identical reason: the
+    // "save an item as a template" callers (`web_ui::project_tasks`/`project_events`) always
+    // pass `None` here, and shouldn't silently clear whatever the source item's own offset was.
+    if params.due_offset_days.is_some() {
+        recurrence.due_offset_days = params.due_offset_days;
+    }
     item.item_type = ItemType::Template(TemplateItem {
         parent_item_id: None,
         schedule,
@@ -78,12 +91,16 @@ pub struct UpdateTemplateParams {
     pub name: String,
     pub description: Option<String>,
     pub event_type: Option<String>,
+    /// See `CreateTemplateParams::due_offset_days`. Follows `event_type`'s direct-overwrite,
+    /// no-service-layer-merge convention — every update construction site must round-trip the
+    /// current value explicitly to preserve it.
+    pub due_offset_days: Option<i32>,
 }
 
-/// Edits a template's own fields — `name`, `description`, and `event_type`, the only
-/// things the create form (`create_template` above) lets a caller set directly.
-/// `schedule`/`recurrence` (only ever populated by copying a source item at creation
-/// time) ride along unchanged.
+/// Edits a template's own fields — `name`, `description`, `event_type`, and now
+/// `due_offset_days`, the only things the create form (`create_template` above) lets a caller
+/// set directly. `schedule` (only ever populated by copying a source item at creation time)
+/// rides along unchanged.
 pub async fn update_template(
     repo: &Arc<dyn ItemRepo>,
     params: UpdateTemplateParams,
@@ -98,6 +115,7 @@ pub async fn update_template(
     item.description = params.description;
     if let ItemType::Template(t) = &mut item.item_type {
         t.event_type = params.event_type;
+        t.recurrence.due_offset_days = params.due_offset_days;
     }
 
     repo.update(&item).await?;
@@ -112,6 +130,8 @@ pub struct CreateTeamTemplateParams {
     pub description: Option<String>,
     pub source_item_id: Option<String>,
     pub event_type: Option<String>,
+    /// See `CreateTemplateParams::due_offset_days`.
+    pub due_offset_days: Option<i32>,
 }
 
 /// Team-scoped twin of `create_template` above. Reuses `copy_children_as_template`
@@ -169,6 +189,13 @@ pub async fn create_team_template(
     if params.event_type.is_some() {
         event_type = params.event_type;
     }
+    // Only overwrite a `source_item_id` copy's own offset when the caller actually supplied
+    // one — mirrors `event_type`'s identical guard just above, for the identical reason: the
+    // "save an item as a template" callers (`web_ui::project_tasks`/`project_events`) always
+    // pass `None` here, and shouldn't silently clear whatever the source item's own offset was.
+    if params.due_offset_days.is_some() {
+        recurrence.due_offset_days = params.due_offset_days;
+    }
     item.item_type = ItemType::Template(TemplateItem {
         parent_item_id: None,
         schedule,
@@ -194,6 +221,8 @@ pub struct UpdateTeamTemplateParams {
     pub name: String,
     pub description: Option<String>,
     pub event_type: Option<String>,
+    /// See `CreateTemplateParams::due_offset_days`.
+    pub due_offset_days: Option<i32>,
 }
 
 /// Team-scoped twin of `update_template` above. Rewritten in Stage 5 of
@@ -227,6 +256,7 @@ pub async fn update_team_template(
     item.description = params.description;
     if let ItemType::Template(t) = &mut item.item_type {
         t.event_type = params.event_type;
+        t.recurrence.due_offset_days = params.due_offset_days;
     }
 
     repo.update_by_project(&item).await?;
@@ -262,6 +292,8 @@ pub struct CreateProjectTemplateParams {
     pub description: Option<String>,
     pub source_item_id: Option<String>,
     pub event_type: Option<String>,
+    /// See `CreateTemplateParams::due_offset_days`.
+    pub due_offset_days: Option<i32>,
 }
 
 /// Stage B5d's project-scoped create path — same "resolve project_id down to user_id/
@@ -293,6 +325,7 @@ pub async fn create_project_template(
                     description: params.description,
                     source_item_id: params.source_item_id,
                     event_type: params.event_type,
+                    due_offset_days: params.due_offset_days,
                 },
             )
             .await?
@@ -307,6 +340,7 @@ pub async fn create_project_template(
                     source_item_id: params.source_item_id,
                     event_type: params.event_type,
                     project_id: Some(params.project_id.clone()),
+                    due_offset_days: params.due_offset_days,
                 },
             )
             .await?
@@ -322,6 +356,8 @@ pub struct UpdateProjectTemplateParams {
     pub name: String,
     pub description: Option<String>,
     pub event_type: Option<String>,
+    /// See `CreateTemplateParams::due_offset_days`.
+    pub due_offset_days: Option<i32>,
 }
 
 /// Stage B5d's project-scoped update path — same delegation shape as
@@ -348,6 +384,7 @@ pub async fn update_project_template(
                     name: params.name,
                     description: params.description,
                     event_type: params.event_type,
+                    due_offset_days: params.due_offset_days,
                 },
             )
             .await
@@ -361,6 +398,7 @@ pub async fn update_project_template(
                     name: params.name,
                     description: params.description,
                     event_type: params.event_type,
+                    due_offset_days: params.due_offset_days,
                 },
             )
             .await
@@ -447,6 +485,7 @@ mod tests {
                 source_item_id: Some("src".to_string()),
                 event_type: None,
                 project_id: None,
+                due_offset_days: None,
             },
         )
         .await
@@ -483,6 +522,7 @@ mod tests {
                 source_item_id: Some("src".to_string()),
                 event_type: None,
                 project_id: None,
+                due_offset_days: None,
             },
         )
         .await;
@@ -527,6 +567,7 @@ mod tests {
                 description: None,
                 source_item_id: Some("src".to_string()),
                 event_type: None,
+                due_offset_days: None,
             },
         )
         .await;
@@ -575,6 +616,7 @@ mod tests {
                 name: "New name".to_string(),
                 description: None,
                 event_type: Some("rain".to_string()),
+                due_offset_days: None,
             },
         )
         .await
@@ -617,6 +659,7 @@ mod tests {
                 name: "New name".to_string(),
                 description: None,
                 event_type: None,
+                due_offset_days: None,
             },
         )
         .await;
@@ -676,6 +719,7 @@ mod tests {
                 name: "New name".to_string(),
                 description: None,
                 event_type: Some("rain".to_string()),
+                due_offset_days: None,
             },
         )
         .await

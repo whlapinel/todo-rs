@@ -203,24 +203,21 @@ pub async fn create_team_item(
         );
     }
 
-    // Considers both the requester's personal templates and this project's own —
-    // same mechanism as service::items::create_item's trigger step. Lands as
-    // sourceEventId-linked top-level tasks (copy_template_children_to_event), not
-    // nested children — Events can never have children (see the parent-fetch check
-    // above). Reads the project's templates via `list_templates_by_project` (Stage 1
-    // of docs/team-id-removal-plan.md) rather than the old `team_id`-keyed
-    // `list_team_templates`.
+    // Considers both the requester's personal templates and this project's own — same
+    // mechanism as service::items::create_item's trigger step. Lands as one parented Task
+    // linked to the event via sourceEventId (copy_template_children_to_event), with the
+    // template's own children nested under it — Events can never have children themselves
+    // (see the parent-fetch check above). Reads the project's templates via
+    // `list_templates_by_project` (Stage 1 of docs/team-id-removal-plan.md) rather than the
+    // old `team_id`-keyed `list_team_templates`.
     if let Some(event_type) = item.event_type() {
-        // `item` here is always the just-created Event — its anchor is `event_anchor`
-        // (scheduled_date), never `item_anchor` (due_date). See `event_anchor`'s doc comment.
-        let root_date = event_anchor(&item);
         let mut templates = repo.list_templates(requester_user_id).await?;
         templates.extend(repo.list_templates_by_project(&project_id).await?);
         for tpl in templates
             .iter()
             .filter(|t| t.event_type().as_deref() == Some(event_type.as_str()))
         {
-            copy_template_children_to_event(repo, &tpl.id, &item_id, root_date, tz_offset).await?;
+            copy_template_children_to_event(repo, tpl, &item, &item_id, tz_offset).await?;
         }
     }
     Ok(item_id)
@@ -549,7 +546,7 @@ pub async fn update_team_item(
 mod tests {
     use super::*;
     use crate::domain::item::{EventItem, ItemType, Recurrence, Schedule, TaskItem, TemplateItem};
-    use crate::service::item_input::{EditItemKind, EditTask, NewTask, NewTemplate};
+    use crate::service::item_input::{EditItemKind, EditTask, NewEvent, NewTask, NewTemplate};
 
     /// `create_team_item`/`update_team_item` take a kind-typed input as of Stage 8 of
     /// docs/archived/typed-item-params-plan.md, so every test below names only the fields its own
@@ -1646,5 +1643,82 @@ mod tests {
         )
         .await
         .expect("a template child is not a library template");
+    }
+
+    /// Team-project counterpart to `items::tests::
+    /// create_item_with_matching_event_type_copies_template_children` — the trigger itself
+    /// (`copy_template_children_to_event`) is shared and thoroughly covered there (including
+    /// the Stage 2 offset-anchoring redesign); this just proves `create_team_item`'s own call
+    /// site still wires it up correctly, matching against the project's own template library.
+    #[tokio::test]
+    async fn create_team_item_with_matching_event_type_creates_a_parented_task_linked_to_the_event()
+    {
+        let mut items = MockItemRepo::new();
+
+        items
+            .expect_create()
+            .withf(|item: &Item| item.parent_item_id().is_none() && item.kind() == ItemKind::Event)
+            .times(1)
+            .returning(|_| Ok("new-event-id".to_string()));
+
+        items
+            .expect_list_templates()
+            .withf(|user_id: &str| user_id == "member1")
+            .times(1)
+            .returning(|_| Ok(vec![]));
+
+        items
+            .expect_list_templates_by_project()
+            .withf(|project_id: &str| project_id == "p1")
+            .times(1)
+            .returning(|_| {
+                Ok(vec![Item {
+                    id: "tpl1".to_string(),
+                    project_id: Some("p1".to_string()),
+                    item_type: ItemType::Template(TemplateItem {
+                        parent_item_id: None,
+                        schedule: Schedule::default(),
+                        recurrence: Recurrence::default(),
+                        event_type: Some("rain".to_string()),
+                    }),
+                    ..Item::default()
+                }])
+            });
+
+        items
+            .expect_create()
+            .withf(|item: &Item| {
+                item.parent_item_id().is_none()
+                    && item.source_event_id().as_deref() == Some("new-event-id")
+            })
+            .times(1)
+            .returning(|_| Ok("new-parent-task-id".to_string()));
+
+        items
+            .expect_list_children()
+            .withf(|parent_id: &str| parent_id == "tpl1")
+            .times(1)
+            .returning(|_| Ok(vec![]));
+
+        let items: Arc<dyn ItemRepo> = Arc::new(items);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+        let projects: Arc<dyn ProjectRepo> =
+            Arc::new(project_with_role("p1", "t1", TeamRole::Member));
+
+        create_team_item(
+            &items,
+            &teams,
+            &projects,
+            "member1",
+            new_item(
+                "It rained",
+                NewItemKind::Event(NewEvent {
+                    event_type: Some("rain".to_string()),
+                    ..Default::default()
+                }),
+            ),
+        )
+        .await
+        .expect("should create team item");
     }
 }

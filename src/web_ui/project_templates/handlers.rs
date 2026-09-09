@@ -18,7 +18,9 @@ use crate::web_ui::TzOffset;
 use crate::web_ui::nav::{self, ActiveContext, SidebarSection};
 use crate::web_ui::project_tasks::active_member_options;
 use crate::web_ui::project_templates::templates::*;
-use crate::web_ui::project_templates::{non_empty, parse_offset, render, require_project_template};
+use crate::web_ui::project_templates::{
+    non_empty, parse_offset, parse_signed_offset, render, require_project_template,
+};
 use askama::Template;
 use axum::extract::{Extension, Form, Path};
 use axum::response::{Html, IntoResponse, Response};
@@ -162,6 +164,7 @@ pub struct CreateProjectTemplateForm {
     name: String,
     description: Option<String>,
     event_type: Option<String>,
+    due_offset_days: Option<String>,
 }
 
 pub async fn create_project_template_form(
@@ -183,6 +186,7 @@ pub async fn create_project_template_form(
             description: non_empty(&form.description),
             source_item_id: None,
             event_type: non_empty(&form.event_type),
+            due_offset_days: parse_signed_offset(&form.due_offset_days),
         },
     )
     .await?;
@@ -239,12 +243,14 @@ pub async fn project_template_detail_page(
     )
     .await?;
     let event_type = template.event_type();
+    let due_offset_days = template.due_offset_days();
     render(ProjectTemplateDetailPageTemplate {
         project_id,
         id: template.id,
         name: template.name,
         description: template.description.clone(),
         event_type,
+        due_offset_days,
         nav_html,
     })
 }
@@ -274,12 +280,17 @@ pub async fn project_template_edit_page(
     )
     .await?;
     let event_type = template.event_type().unwrap_or_default();
+    let due_offset_days_input = template
+        .due_offset_days()
+        .map(|d| d.to_string())
+        .unwrap_or_default();
     render(ProjectTemplateEditPageTemplate {
         project_id,
         id: template.id,
         name: template.name,
         description: template.description.clone().unwrap_or_default(),
         event_type,
+        due_offset_days_input,
         nav_html,
     })
 }
@@ -290,6 +301,7 @@ pub struct UpdateProjectTemplateForm {
     name: String,
     description: Option<String>,
     event_type: Option<String>,
+    due_offset_days: Option<String>,
 }
 
 pub async fn update_project_template_form(
@@ -311,6 +323,7 @@ pub async fn update_project_template_form(
             name: form.name.trim().to_string(),
             description: non_empty(&form.description),
             event_type: non_empty(&form.event_type),
+            due_offset_days: parse_signed_offset(&form.due_offset_days),
         },
     )
     .await?;
@@ -324,12 +337,14 @@ pub async fn update_project_template_form(
     )
     .await?;
     let event_type = template.event_type();
+    let due_offset_days = template.due_offset_days();
     render(ProjectTemplateDetailPageTemplate {
         project_id,
         id: template.id,
         name: template.name,
         description: template.description.clone(),
         event_type,
+        due_offset_days,
         nav_html,
     })
 }

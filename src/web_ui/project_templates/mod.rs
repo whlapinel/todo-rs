@@ -43,6 +43,18 @@ pub(crate) fn parse_offset(form_value: &Option<String>) -> Option<i32> {
         .map(|d| -(d as i32))
 }
 
+/// The root template's own offset (see `Item::validate()`'s scoped exception for a root
+/// Template), parsed as a plain signed number rather than negated like `parse_offset` above —
+/// unlike every other offset in this codebase, this one may legitimately be positive ("days
+/// after the event"), so there's no "days before" convention to translate through.
+pub(crate) fn parse_signed_offset(form_value: &Option<String>) -> Option<i32> {
+    form_value
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .and_then(|s| s.parse::<i32>().ok())
+}
+
 pub(crate) fn non_empty(v: &Option<String>) -> Option<String> {
     v.as_ref()
         .map(|s| s.trim())

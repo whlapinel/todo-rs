@@ -1,4 +1,4 @@
-use crate::domain::item::{Item, ItemKind, ItemType, TaskItem, TemplateItem};
+use crate::domain::item::{Item, ItemKind, ItemType, Recurrence, Schedule, TaskItem, TemplateItem};
 #[cfg(test)]
 use crate::domain::recurrence;
 use crate::service::activity_log::reverse_entry;
@@ -128,15 +128,13 @@ pub async fn create_item(
     }
     let item_id = repo.create(&item).await?;
 
-    // An event-typed item can auto-instantiate matching templates' direct children as
-    // sourceEventId-linked top-level tasks (see copy_template_children_to_event) — same
-    // trigger the templates screen's "Use" flow shares (copy_template_children), just fired
-    // by event_type matching instead of a manual click, and landing as references rather
-    // than nested children since Events can't have children.
+    // An event-typed item can auto-instantiate a matching template as one parented Task
+    // linked to the event via sourceEventId (see copy_template_children_to_event) — same
+    // trigger the templates screen's "Use" flow shares (copy_template_children) one level
+    // down, just fired by event_type matching instead of a manual click.
     if let Some(event_type) = item.event_type() {
         // `item` here is always the just-created Event (see this trigger's own doc comment
         // above) — its anchor is `event_anchor` (scheduled_date), never `item_anchor` (due_date).
-        let root_date = event_anchor(&item);
         // Project-scoped, not `list_templates(user_id)` — the latter matched templates across
         // *every* team-less project the user owns, not just this one (the same ambiguity this
         // function's doc comment describes for `project_id` itself).
@@ -145,7 +143,7 @@ pub async fn create_item(
             .iter()
             .filter(|t| t.event_type().as_deref() == Some(event_type.as_str()))
         {
-            copy_template_children_to_event(repo, &tpl.id, &item_id, root_date, tz_offset).await?;
+            copy_template_children_to_event(repo, tpl, &item, &item_id, tz_offset).await?;
         }
     }
     Ok(item_id)
@@ -601,51 +599,55 @@ pub(crate) fn copy_template_children<'a>(
     })
 }
 
-/// Copies a matching template's *direct* children onto a newly created Event as top-level,
-/// `source_event_id`-referencing tasks instead of `parent_item_id`-nested ones — Events can
-/// never have children (see `Item::validate`), so this is the event-auto-trigger's own entry
-/// point rather than a call to `copy_template_children` directly. Each direct child's own
-/// descendants (grandchildren of the template, if any) nest normally under it via the ordinary
-/// `copy_template_children` — only the direct link to the Event itself is a reference, not the
-/// whole subtree; a source-event-linked task is free to have its own ordinary child subtree.
+/// Creates the event-auto-trigger's *one* new item: a top-level Task named after `event`,
+/// linked to it via `source_event_id` (the only item the event itself references — see root
+/// CLAUDE.md's Events section). `template`'s own `due_offset_days` (its `Recurrence`, root-only
+/// — see `Item::validate`'s scoped exception) measures this task's due date from the event's own
+/// anchor (`event_anchor`, never `item_anchor`) and, unlike every other offset in this codebase,
+/// may be positive: "due N days after the event" is exactly what this task is for.
+///
+/// `template`'s direct children then nest under the new task as ordinary `parent_item_id`
+/// sub-items via the ordinary `copy_template_children` — reversing this trigger's old
+/// fixed-root-on-the-event semantics. Each child's own offset is now measured against the new
+/// task's own due date, so `sync_offset_children` (parent_item_id-driven) keeps them in step on
+/// any later reschedule of the task, exactly like a hand-built parent/children subtree.
 pub(crate) fn copy_template_children_to_event<'a>(
     repo: &'a Arc<dyn ItemRepo>,
-    template_parent_id: &'a str,
+    template: &'a Item,
+    event: &'a Item,
     event_id: &'a str,
-    event_anchor: Option<DateTime<Utc>>,
     tz_offset_minutes: i32,
 ) -> Pin<Box<dyn Future<Output = Result<(), RepoError>> + Send + 'a>> {
     Box::pin(async move {
-        let children = repo.list_children(template_parent_id).await?;
-        for child in children {
-            let mut new_child = child.clone();
-            new_child.id = String::new();
-            let mut schedule = child.item_type.schedule().cloned().unwrap_or_default();
-            schedule.due_date =
-                event_anchor.and_then(|root| child.deadline_from_offset(root, tz_offset_minutes));
-            schedule.has_due_time = false;
-            let recurrence = child.item_type.recurrence().cloned().unwrap_or_default();
-            new_child.item_type = ItemType::Task(TaskItem {
-                parent_item_id: None,
-                schedule,
-                recurrence,
-                team_assignment: None,
-                source_event_id: Some(event_id.to_string()),
-                priority: child.priority(),
-                complete: false,
-                series_id: None,
-            });
-            let new_child_id = repo.create(&new_child).await?;
-            copy_template_children(
-                repo,
-                &child.id,
-                &new_child_id,
-                event_anchor,
-                tz_offset_minutes,
-            )
-            .await?;
-        }
-        Ok(())
+        let due_date = event_anchor(event)
+            .and_then(|anchor| template.deadline_from_offset(anchor, tz_offset_minutes));
+
+        let mut parent_task = event.clone();
+        parent_task.id = String::new();
+        parent_task.description = None;
+        parent_task.item_type = ItemType::Task(TaskItem {
+            parent_item_id: None,
+            schedule: Schedule {
+                due_date,
+                ..Schedule::default()
+            },
+            recurrence: Recurrence::default(),
+            team_assignment: None,
+            source_event_id: Some(event_id.to_string()),
+            priority: None,
+            complete: false,
+            series_id: None,
+        });
+        let parent_task_id = repo.create(&parent_task).await?;
+
+        copy_template_children(
+            repo,
+            &template.id,
+            &parent_task_id,
+            due_date,
+            tz_offset_minutes,
+        )
+        .await
     })
 }
 
@@ -852,6 +854,9 @@ mod tests {
     async fn create_item_with_matching_event_type_copies_template_children() {
         let mut mock = MockItemRepo::new();
 
+        // The Event itself — matches broadly on `parent_item_id().is_none()`, but only for
+        // `times(1)`, so this consumes just the first `create()` call (the Event); the
+        // trigger's own parented-task create below needs its own, more specific expectation.
         mock.expect_create()
             .withf(|item: &Item| item.parent_item_id().is_none())
             .times(1)
@@ -862,15 +867,28 @@ mod tests {
             .times(1)
             .returning(|_| Ok(vec![template_item("tpl1", "u1", "rain")]));
 
-        mock.expect_list_children()
-            .withf(|parent_id: &str| parent_id == "tpl1")
-            .times(1)
-            .returning(|_| Ok(vec![template_child("child1", "tpl1", 1)]));
-
+        // The trigger's one new parented Task, named after the Event and linked to it via
+        // sourceEventId — created before the template's children are listed at all (see
+        // `copy_template_children_to_event`).
         mock.expect_create()
             .withf(|item: &Item| {
                 item.parent_item_id().is_none()
                     && item.source_event_id().as_deref() == Some("new-event-id")
+            })
+            .times(1)
+            .returning(|_| Ok("new-parent-task-id".to_string()));
+
+        mock.expect_list_children()
+            .withf(|parent_id: &str| parent_id == "tpl1")
+            .times(1)
+            .returning(|_| Ok(vec![template_child("child1", "tpl1", -1)]));
+
+        // The template's direct child now nests under the new parented task as an ordinary
+        // structural sub-item, not a second sourceEventId reference.
+        mock.expect_create()
+            .withf(|item: &Item| {
+                item.parent_item_id().as_deref() == Some("new-parent-task-id")
+                    && item.source_event_id().is_none()
             })
             .times(1)
             .returning(|_| Ok("new-child-id".to_string()));
@@ -897,6 +915,96 @@ mod tests {
         .expect("should create item");
 
         assert_eq!(item_id, "new-event-id");
+    }
+
+    #[tokio::test]
+    async fn create_item_with_matching_event_type_anchors_the_parented_task_and_its_children_correctly()
+     {
+        // Exercises the full Stage 2 redesign: the root template's own (here positive — "due
+        // after the event") offset sets the new parented task's due date off the event's
+        // anchor, and the template's child then measures its own offset off that parented
+        // task's due date, not the event's, proving the reversed fixed-root semantics
+        // described in `copy_template_children_to_event`'s doc comment.
+        let mut mock = MockItemRepo::new();
+        let event_scheduled = DateTime::parse_from_rfc3339("2026-06-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        mock.expect_create()
+            .withf(|item: &Item| item.parent_item_id().is_none())
+            .times(1)
+            .returning(|_| Ok("new-event-id".to_string()));
+
+        mock.expect_list_templates_by_project()
+            .times(1)
+            .returning(|_| {
+                Ok(vec![Item {
+                    id: "tpl1".to_string(),
+                    user_id: Some("u1".to_string()),
+                    item_type: ItemType::Template(TemplateItem {
+                        parent_item_id: None,
+                        schedule: Schedule::default(),
+                        recurrence: Recurrence {
+                            due_offset_days: Some(2),
+                            ..Recurrence::default()
+                        },
+                        event_type: Some("rain".to_string()),
+                    }),
+                    ..Item::default()
+                }])
+            });
+
+        let expected_parent_due =
+            recurrence::apply_end_of_day(event_scheduled + chrono::Duration::days(2), 0);
+        mock.expect_create()
+            .withf(move |item: &Item| {
+                item.source_event_id().as_deref() == Some("new-event-id")
+                    && item.parent_item_id().is_none()
+                    && item.due_date() == Some(expected_parent_due)
+            })
+            .times(1)
+            .returning(|_| Ok("new-parent-task-id".to_string()));
+
+        mock.expect_list_children()
+            .withf(|parent_id: &str| parent_id == "tpl1")
+            .times(1)
+            .returning(|_| Ok(vec![template_child("child1", "tpl1", -1)]));
+
+        let expected_child_due =
+            template_child("child1", "tpl1", -1).deadline_from_offset(expected_parent_due, 0);
+        mock.expect_create()
+            .withf(move |item: &Item| {
+                item.parent_item_id().as_deref() == Some("new-parent-task-id")
+                    && item.source_event_id().is_none()
+                    && item.due_date() == expected_child_due
+            })
+            .times(1)
+            .returning(|_| Ok("new-child-id".to_string()));
+
+        mock.expect_list_children()
+            .withf(|parent_id: &str| parent_id == "child1")
+            .times(1)
+            .returning(|_| Ok(vec![]));
+
+        let repo: Arc<dyn ItemRepo> = Arc::new(mock);
+
+        create_item(
+            &repo,
+            "u1",
+            new_item(
+                "It rained",
+                NewItemKind::Event(NewEvent {
+                    event_type: Some("rain".to_string()),
+                    schedule: Schedule {
+                        scheduled_date: Some(event_scheduled),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }),
+            ),
+        )
+        .await
+        .expect("should create item");
     }
 
     #[tokio::test]

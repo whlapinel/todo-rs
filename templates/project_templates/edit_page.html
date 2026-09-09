@@ -23,6 +23,13 @@
       </div>
       <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">When set, creating a new Event with this same event type automatically copies this template's sub-items onto it.</p>
     </label>
+    <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Offset from the event's date
+      <div class="mt-2">
+        <input type="number" name="dueOffsetDays" value="{{ due_offset_days_input }}" step="1"
+               class="block w-24 rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:focus:outline-indigo-500" />
+      </div>
+      <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">The auto-created item's own due date, in days from the event (negative = before, positive = after, 0 = same day).</p>
+    </label>
     <div class="flex items-center gap-x-3">
       <button type="submit" class="inline-flex items-center justify-center rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-xs hover:bg-indigo-500 dark:bg-indigo-500 dark:shadow-none dark:hover:bg-indigo-400">Save and close</button>
       <a href="/web/projects/{{ project_id }}/templates/{{ id }}" hx-target="#page" hx-select="#page" hx-swap="innerHTML"
