@@ -1,39 +1,88 @@
-<li id="all-tasks-virtual-{{ series_id }}-{{ occurrence_ts }}" class="py-2">
+<!-- Cross-project counterpart to project_tasks/virtual_row.html — see AllProjectsTaskVirtualRow's
+     doc comment for why this carries the same unconditional treegrid/row-actions-menu markup
+     that struct's non-cross-project sibling does, plus a project-name badge in the detail
+     line. `id="item-{{ row_id }}"`, not a screen-prefixed id — same `item-`-prefix convention
+     every other selectable row uses (see ProjectTaskVirtualRow::row_id's doc comment). -->
+<li id="item-{{ row_id }}" class="py-2" role="row" aria-level="1"{% if children_html.is_some() %} aria-expanded="false"{% endif %}>
   <div class="flex items-center gap-x-3">
     {% if is_skipped %}
+    <div class="flex min-w-0 flex-1 items-center gap-x-3" role="gridcell">
     <span class="shrink-0 size-4"></span>
     <span class="min-w-0 flex-1 truncate line-through text-gray-400 dark:text-gray-500">{{ name }}</span>
     <span class="shrink-0 text-[10px] uppercase tracking-wide font-semibold text-gray-400 dark:text-gray-500">Skipped</span>
+    </div>
     {% else %}
-    {% if let Some(url) = complete_url %}
-    <input type="checkbox" hx-post="{{ url }}"
-      hx-target="#items-list" hx-select="unset" hx-swap="innerHTML transition:true"
-      class="shrink-0 size-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-600 dark:border-white/20 dark:bg-white/5" />
+    <!-- No checkbox — completing lives in this row's own row-actions menu below, matching
+         project_tasks/virtual_row.html's identical treegrid change. This slot is a chevron once
+         the series has sub-item definitions and an alignment spacer otherwise. -->
+    <div class="contents" role="gridcell">
+    {% if children_html.is_some() %}
+    <button type="button" onclick="toggleChildren('{{ row_id }}')"
+      class="shrink-0 flex size-4 items-center justify-center cursor-pointer text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300">
+      <span id="chevron-{{ row_id }}">&#9656;</span>
+    </button>
     {% else %}
     <span class="shrink-0 size-4"></span>
     {% endif %}
-    <!-- See project_calendar/virtual_row.html's identical doc comment — explicit
-         hx-get/target/select avoids blanking #page. -->
-    <a href="{{ materialize_url }}" hx-get="{{ materialize_url }}" hx-target="#action-dialog"
-      hx-select="#dialog-fragment" hx-swap="innerHTML"
-      class="min-w-0 flex-1 truncate text-gray-900 dark:text-white">{{ name }}</a>
-    {% if children_html.is_some() %}
-    <!-- Expand control for this occurrence's still-virtual sub-items. Separate from the name
-         (unlike components/row.html's non-treegrid branch, where the name itself toggles),
-         because the name here still has to open the occurrence's own Details dialog. -->
-    <button type="button" onclick="toggleChildren('{{ toggle_id }}')"
-      class="shrink-0 flex size-4 items-center justify-center cursor-pointer text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300">
-      <span id="chevron-{{ toggle_id }}">&#9656;</span>
-    </button>
-    {% endif %}
+    </div>
+    <div class="flex min-w-0 flex-1 items-center gap-x-3" role="gridcell">
+    <!-- Plain text, not a link — a treegrid row's own click/Enter/Space selects it instead
+         (base.html's activateRow); the materialize dialog is still reachable via this row's
+         own row-actions menu's "Details" entry below. -->
+    <span class="min-w-0 flex-1 truncate text-gray-900 dark:text-white">{{ name }}</span>
+    <span class="shrink-0 [&>svg]:size-4" title="Part of a recurring series">{% include "icons/recurring.html" %}</span>
     {% if is_current %}
     <span class="shrink-0 text-[10px] uppercase tracking-wide font-semibold text-indigo-600 dark:text-indigo-400">Current</span>
     {% endif %}
+    </div>
     {% endif %}
+    <div class="contents" role="gridcell">
+    <button type="button" id="row-menu-btn-{{ row_id }}" onclick="openRowActionsMenu('{{ row_id }}', this)"
+      class="shrink-0 cursor-pointer text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300">
+      {% include "icons/ellipses.html" %}
+    </button>
+    </div>
+    <!-- Same pre-rendered/hidden pattern as components/row.html's own menu — see its doc
+         comment. Edit/Add sub-item materialize the occurrence as an internal step of their own
+         write. Duplicate/Move/Save as template/Delete still require a real item id and stay out
+         of scope here, same as project_tasks/virtual_row.html's identical menu. -->
+    <template id="row-actions-menu-{{ row_id }}" data-name="{{ name }}">
+      <div class="divide-y divide-gray-100 dark:divide-white/10">
+        {% if is_skipped %}
+        <button type="button" hx-post="{{ unskip_url }}"
+          hx-target="#items-list" hx-select="unset" hx-swap="innerHTML transition:true"
+          class="block w-full cursor-pointer px-4 py-3 text-left text-sm text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-white/5">Unskip</button>
+        {% else %}
+        <!-- Materializes the occurrence and completes it in one step, mirroring
+             project_tasks/virtual_row.html's identical Mark complete entry — rebuilds the
+             whole list since completing the series' current occurrence advances its cursor. -->
+        <button type="button" hx-post="{{ complete_url }}"
+          hx-target="#items-list" hx-select="unset" hx-swap="innerHTML transition:true"
+          class="block w-full cursor-pointer px-4 py-3 text-left text-sm text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-white/5">Mark complete</button>
+        {% endif %}
+        <a href="{{ materialize_url }}" hx-get="{{ materialize_url }}" hx-target="#action-dialog"
+          hx-select="#dialog-fragment" hx-swap="innerHTML"
+          class="block px-4 py-3 text-sm text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-white/5">Details</a>
+        {% if !is_skipped %}
+        <a href="{{ edit_url }}" hx-get="{{ edit_url }}" hx-target="#action-dialog"
+          hx-select="#dialog-fragment" hx-swap="innerHTML"
+          class="block px-4 py-3 text-sm text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-white/5">Edit</a>
+        <button type="button" hx-get="{{ add_child_url }}" hx-target="#action-dialog"
+          hx-select="unset" hx-swap="innerHTML"
+          class="block w-full cursor-pointer px-4 py-3 text-left text-sm text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-white/5">Add sub-item</button>
+        <button type="button" hx-post="{{ skip_url }}" hx-confirm="Skip this occurrence?"
+          hx-target="#items-list" hx-select="unset" hx-swap="innerHTML transition:true"
+          class="block w-full cursor-pointer px-4 py-3 text-left text-sm text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-500/10">Skip</button>
+        {% endif %}
+      </div>
+    </template>
   </div>
   <div class="mt-1 flex items-center gap-x-3 pl-7 text-xs text-gray-500 dark:text-gray-400">
     <div class="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1">
       <span class="rounded bg-gray-100 px-1.5 py-0.5 text-gray-600 dark:bg-white/10 dark:text-gray-300">{{ project_name }}</span>
+      {% if let Some(p) = priority_label %}
+      <span class="text-amber-600 dark:text-amber-400">🚩 {{ p }}</span>
+      {% endif %}
       {% if let Some(assignee) = assignee_name %}
       <span class="text-indigo-600 dark:text-indigo-400">[{{ assignee }}]</span>
       {% endif %}
@@ -43,19 +92,9 @@
       <span>📅 {{ date_label }}</span>
       {% endif %}
     </div>
-    {% if is_skipped %}
-    <button hx-post="{{ unskip_url }}"
-      hx-target="#items-list" hx-select="unset" hx-swap="innerHTML transition:true"
-      class="shrink-0 cursor-pointer text-gray-400 hover:text-indigo-500 dark:text-gray-500 dark:hover:text-indigo-400">Unskip</button>
-    {% else %}
-    <button hx-post="{{ skip_url }}" hx-confirm="Skip this occurrence?"
-      hx-target="#items-list" hx-select="unset" hx-swap="innerHTML transition:true"
-      class="shrink-0 cursor-pointer text-gray-400 hover:text-red-500 dark:text-gray-500 dark:hover:text-red-400">Skip</button>
-    {% endif %}
   </div>
   {% if let Some(children) = children_html %}
-  <!-- Already in the DOM, initially hidden — see components/row.html's identical nested list. -->
-  <ul id="item-{{ toggle_id }}-children" class="hidden mt-2 ml-2 border-l border-gray-200 dark:border-white/10">
+  <ul id="item-{{ row_id }}-children" class="hidden mt-2 ml-2 border-l border-gray-200 dark:border-white/10" role="rowgroup">
     {{ children|safe }}
   </ul>
   {% endif %}

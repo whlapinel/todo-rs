@@ -33,12 +33,18 @@ fn render<T: Template>(t: T) -> Result<Html<String>, ItemError> {
 /// Cross-project counterpart to `project_tasks::templates::ProjectTaskVirtualRow` — a Task
 /// series' current occurrence, tagged with the project it belongs to (mirrors
 /// `main_calendar::MainCalendarVirtualRow`, minus the type symbol/label since this list is
-/// Task-only already).
+/// Task-only already). Since this screen opted into the treegrid keyboard-nav pilot
+/// (docs/issues_and_features.md's "Extend the Tasks list's treegrid keyboard nav..." entry),
+/// this struct's own template now carries the same unconditional `role="row"`/row-actions-menu
+/// markup `project_tasks::templates::ProjectTaskVirtualRow`'s does — see that struct's doc
+/// comment for why no `treegrid` toggle field is needed here (this screen has no non-treegrid
+/// mode to fall back to, unlike the generic `components::row::Row`).
 #[derive(Template)]
 #[template(path = "all_projects_tasks/virtual_row.html")]
 struct AllProjectsTaskVirtualRow {
-    series_id: String,
-    occurrence_ts: i64,
+    /// `"{series_id}:{occurrence_ts}"` — see `ProjectTaskVirtualRow::row_id`'s doc comment;
+    /// this is the same composite id, just also carrying a project tag alongside it.
+    row_id: String,
     project_name: String,
     name: String,
     date_label: String,
@@ -46,20 +52,17 @@ struct AllProjectsTaskVirtualRow {
     overdue: bool,
     materialize_url: String,
     skip_url: String,
-    complete_url: Option<String>,
+    complete_url: String,
     is_current: bool,
     assignee_name: Option<String>,
+    priority_label: Option<String>,
     is_skipped: bool,
     unskip_url: String,
+    edit_url: String,
+    add_child_url: String,
     /// Stage 5 of the series sub-items plan — this occurrence's still-virtual sub-items,
-    /// already rendered and inlined hidden. See `ProjectTaskVirtualRow::children_html`; the
-    /// only difference here is that this screen isn't a treegrid, so the toggle hangs off the
-    /// name the way `components/row.html`'s own non-treegrid branch does.
+    /// already rendered and inlined hidden. See `ProjectTaskVirtualRow::children_html`.
     children_html: Option<String>,
-    /// `base.html`'s `toggleChildren` addresses elements as `item-{id}-children`/`chevron-{id}`,
-    /// and this screen's `<li>` carries an `all-tasks-virtual-…` id rather than an `item-…` one
-    /// — so the toggle gets its own id rather than reusing the row's.
-    toggle_id: String,
 }
 
 impl AllProjectsTaskVirtualRow {
@@ -91,8 +94,7 @@ impl AllProjectsTaskVirtualRow {
         }
         let list_query = format!("?{}", parts.join("&"));
         Self {
-            series_id: occ.series_id.clone(),
-            occurrence_ts: occ.occurrence_date.timestamp(),
+            row_id: format!("{}:{}", occ.series_id, occ.occurrence_date.timestamp()),
             project_name: project_name.to_string(),
             name: occ.series_name.clone(),
             date_label: format_display_date(local, true),
@@ -100,32 +102,30 @@ impl AllProjectsTaskVirtualRow {
             overdue: occ.is_due_date_basis && occ.occurrence_date < Utc::now(),
             materialize_url: occ.materialize_url(project_id),
             skip_url: format!("{}{list_query}", occ.skip_url(project_id)),
-            complete_url: occ
-                .is_current
-                .then(|| format!("{}{list_query}", occ.complete_url(project_id))),
+            complete_url: format!("{}{list_query}", occ.complete_url(project_id)),
             is_current: occ.is_current,
             assignee_name: occ.assigned_to_user_name.clone(),
+            priority_label: priority_label_for(occ.priority),
             is_skipped: occ.is_skipped(),
             unskip_url: format!("{}{list_query}", occ.unskip_url(project_id)),
+            edit_url: occ.edit_url(project_id),
+            add_child_url: occ.add_task_child_url(project_id),
             // Filled in by `list_all_projects_task_rows`, which holds the fan-out.
             children_html: None,
-            toggle_id: format!(
-                "all-tasks-{}-{}",
-                occ.series_id,
-                occ.occurrence_date.timestamp()
-            ),
         }
     }
 }
 
 /// Cross-project counterpart to `project_tasks::templates::ProjectTaskVirtualChildRow` — one
 /// still-virtual sub-item, nested under its occurrence's row. Duplicated rather than shared
-/// with that type for the same reason `AllProjectsTaskVirtualRow` is: this screen's rows carry
-/// a project tag and no treegrid/selection markup at all (see this module's own doc comment on
-/// the duplicate-small-per-screen-helpers precedent).
+/// with that type for the same reason `AllProjectsTaskVirtualRow` is (this module's own doc
+/// comment on the duplicate-small-per-screen-helpers precedent) — carries the same treegrid
+/// row-actions-menu markup now that this screen is one.
 #[derive(Template)]
 #[template(path = "all_projects_tasks/virtual_child_row.html")]
 struct AllProjectsTaskVirtualChildRow {
+    /// See `ProjectTaskVirtualChildRow::row_id`.
+    row_id: String,
     name: String,
     date_label: String,
     overdue: bool,
@@ -133,7 +133,11 @@ struct AllProjectsTaskVirtualChildRow {
     offset_label: Option<String>,
     priority_label: Option<String>,
     detail_url: String,
+    edit_url: String,
     complete_url: String,
+    /// `aria-level` — one below the parent occurrence's row (always 2 on this screen, since
+    /// every top-level row here is level 1 — see `all_projects_task_row`'s own `row.level`).
+    level: u32,
 }
 
 impl AllProjectsTaskVirtualChildRow {
@@ -143,6 +147,7 @@ impl AllProjectsTaskVirtualChildRow {
         tz: i32,
         filters: &ListFilters,
         project_filter: Option<&str>,
+        level: u32,
     ) -> Self {
         // Same `?view=all-tasks&…` round-trip `AllProjectsTaskVirtualRow::from_occurrence`
         // builds — see its doc comment.
@@ -156,6 +161,7 @@ impl AllProjectsTaskVirtualChildRow {
         }
         let list_query = format!("?{}", parts.join("&"));
         Self {
+            row_id: view.row_id(),
             name: view.child_name.clone(),
             date_label: format_display_date(to_local(view.date, tz), true),
             overdue: view.date < Utc::now(),
@@ -164,7 +170,9 @@ impl AllProjectsTaskVirtualChildRow {
             ),
             priority_label: priority_label_for(view.priority),
             detail_url: view.detail_url(project_id),
+            edit_url: view.edit_url(project_id),
             complete_url: format!("{}{list_query}", view.complete_url(project_id)),
+            level,
         }
     }
 }
@@ -172,6 +180,7 @@ impl AllProjectsTaskVirtualChildRow {
 /// The still-virtual sub-items of one parent cycle, in authored order — this screen's own copy
 /// of `project_tasks::render_virtual_child_rows` (see that function for why materialized ones
 /// are filtered out here rather than at the call site).
+#[allow(clippy::too_many_arguments)]
 fn render_virtual_child_rows(
     child_occurrences: &[SeriesChildOccurrenceView],
     series_id: &str,
@@ -180,6 +189,7 @@ fn render_virtual_child_rows(
     tz: i32,
     filters: &ListFilters,
     project_filter: Option<&str>,
+    level: u32,
 ) -> Result<Option<String>, ItemError> {
     let mut views: Vec<&SeriesChildOccurrenceView> = child_occurrences
         .iter()
@@ -201,6 +211,7 @@ fn render_virtual_child_rows(
                 tz,
                 filters,
                 project_filter,
+                level,
             )
             .render()?,
         );
@@ -252,6 +263,15 @@ pub(crate) fn all_projects_task_row(
     row.series_sub_item = series_sub_item;
     row.materialized_occurrence = row.materialized_occurrence || series_sub_item;
     row.project_name = Some(project_name.to_string());
+    // Treegrid keyboard-nav pilot, extended to this screen (docs/issues_and_features.md's
+    // "Extend the Tasks list's treegrid keyboard nav..." entry) — this screen only ever lists
+    // top-level items (see this function's own doc comment), so every row built here is level
+    // 1, exactly like `project_tasks::render_rows_with_virtual`'s own top-level rows. Nested
+    // children (built via `render_expandable_children` by this module's callers) are tagged
+    // `?view=tasks-list` rather than `?view=all-tasks`, deliberately — see those call sites'
+    // own comments.
+    row.treegrid = true;
+    row.level = 1;
     // #6 of docs/issues_and_features.md — a row with children was falling into the
     // `detail_via_dialog` name-click branch instead of expanding in place, since this function
     // never set `children_html` (unlike `project_tasks`'s own flat-list row assembly). Reuses
@@ -444,10 +464,18 @@ pub(crate) async fn list_all_projects_task_rows(
                     1,
                     None,
                     Some(series),
-                    // Treegrid keyboard-nav pilot is Tasks-list-only for now — see
-                    // `Row::treegrid`'s doc comment.
-                    false,
-                    0,
+                    // This screen is now a treegrid too (docs/issues_and_features.md's
+                    // "Extend the Tasks list's treegrid keyboard nav..." entry) — every row here
+                    // is level 1 (see `all_projects_task_row`'s doc comment), so a nested child
+                    // is level 2. `render_expandable_children` tags a child's complete/edit URL
+                    // `?view=tasks-list` regardless of caller, which routes a saved child back
+                    // through the exact same treegrid-aware, indent-aware rebuild the flat Tasks
+                    // list itself uses (`update_project_task_form`'s fallback branch) rather than
+                    // `all_projects_task_row` — correct here, since that function assumes a
+                    // top-level row (unconditional `project_name`/`expanded_row`, no
+                    // `indent_class`) and would render a nested child wrong.
+                    true,
+                    1,
                 )
                 .await?;
                 // has_children counts filtered-out children too — see
@@ -466,6 +494,7 @@ pub(crate) async fn list_all_projects_task_rows(
                     tz,
                     filters,
                     project_filter,
+                    2,
                 )? {
                     Some(virtual_children) => Some(match children_html {
                         Some(existing) => existing + &virtual_children,
@@ -512,6 +541,7 @@ pub(crate) async fn list_all_projects_task_rows(
                 tz,
                 filters,
                 project_filter,
+                2,
             )?;
             entries.push((occ.occurrence_date.timestamp(), row.render()?));
         }
@@ -800,10 +830,10 @@ pub async fn toggle_all_projects_task_complete(
                     1,
                     None,
                     Some(&series),
-                    // Treegrid keyboard-nav pilot is Tasks-list-only for now — see
-                    // `Row::treegrid`'s doc comment.
-                    false,
-                    0,
+                    // See `list_all_projects_task_rows`'s identical call for why `true, 1`
+                    // (this screen's own treegrid rows are always level 1).
+                    true,
+                    1,
                 )
                 .await?;
                 // has_children counts filtered-out children too — see

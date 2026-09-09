@@ -1,22 +1,40 @@
 <!-- One still-virtual sub-item of a series occurrence, nested under its parent's row on the
-     cross-project Tasks list. See AllProjectsTaskVirtualChildRow. Deliberately has no Skip
+     cross-project Tasks list — see AllProjectsTaskVirtualChildRow and
+     project_tasks/virtual_child_row.html's identical (non-cross-project) counterpart. No Skip
      (there is no sub-item Skip) and no project tag — the parent row directly above it already
-     carries one. -->
-<li class="py-2">
+     carries one. `id="item-{{ row_id }}"` follows the same convention every other selectable
+     row uses. -->
+<li id="item-{{ row_id }}" class="py-2 pl-8" role="row" aria-level="{{ level }}" aria-selected="false">
   <div class="flex items-center gap-x-3">
-    <input type="checkbox" hx-post="{{ complete_url }}"
-      hx-target="#items-list" hx-select="unset" hx-swap="innerHTML transition:true"
-      class="shrink-0 size-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-600 dark:border-white/20 dark:bg-white/5" />
-    <!-- See project_calendar/virtual_row.html's doc comment on why the hx-get/target/select
-         are explicit rather than inherited from body's hx-boost. -->
-    <a href="{{ detail_url }}" hx-get="{{ detail_url }}" hx-target="#action-dialog"
-      hx-select="#dialog-fragment" hx-swap="innerHTML"
-      class="min-w-0 flex-1 truncate text-gray-900 dark:text-white">{{ name }}</a>
+    <div class="contents" role="gridcell">
+    <span class="shrink-0 size-4"></span>
+    </div>
+    <div class="flex min-w-0 flex-1 items-center gap-x-3" role="gridcell">
+    <span class="min-w-0 flex-1 truncate text-gray-900 dark:text-white">{{ name }}</span>
     <span class="shrink-0 text-[10px] uppercase tracking-wide font-semibold text-gray-400 dark:text-gray-500">Sub-item</span>
+    </div>
+    <div class="contents" role="gridcell">
+    <button type="button" id="row-menu-btn-{{ row_id }}" onclick="openRowActionsMenu('{{ row_id }}', this)"
+      class="shrink-0 cursor-pointer text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300">
+      {% include "icons/ellipses.html" %}
+    </button>
+    </div>
+    <template id="row-actions-menu-{{ row_id }}" data-name="{{ name }}">
+      <div class="divide-y divide-gray-100 dark:divide-white/10">
+        <button type="button" hx-post="{{ complete_url }}"
+          hx-target="#items-list" hx-select="unset" hx-swap="innerHTML transition:true"
+          class="block w-full cursor-pointer px-4 py-3 text-left text-sm text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-white/5">Mark complete</button>
+        <a href="{{ detail_url }}" hx-get="{{ detail_url }}" hx-target="#action-dialog"
+          hx-select="#dialog-fragment" hx-swap="innerHTML"
+          class="block px-4 py-3 text-sm text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-white/5">Details</a>
+        <a href="{{ edit_url }}" hx-get="{{ edit_url }}" hx-target="#action-dialog" hx-select="#dialog-fragment"
+          hx-swap="innerHTML"
+          class="block px-4 py-3 text-sm text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-white/5">Edit</a>
+      </div>
+    </template>
   </div>
   <div class="mt-1 flex items-center gap-x-3 pl-7 text-xs text-gray-500 dark:text-gray-400">
     <div class="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1">
-      <!-- See project_tasks/virtual_child_row.html's identical offset badge. -->
       {% if let Some(label) = offset_label %}
       <span>{{ label }}</span>
       {% endif %}

@@ -104,10 +104,34 @@
     </div>
   </dialog>
 
-  <ul id="items-list"
+  <!-- Keyboard disclosure — mirrors templates/project_tasks/list_page.html's identical panel,
+       minus the "use Actions above" sentence: this screen has no batch Actions button yet
+       (docs/issues_and_features.md tracks extending batch actions here separately, since the
+       existing batch endpoints are per-project and this screen spans several). Hidden below md:
+       the row-selection gestures it documents have no mobile equivalent. -->
+  <details class="relative hidden md:block">
+    <summary
+      class="flex w-fit list-none cursor-pointer items-center gap-x-1 rounded-md px-2 py-1 text-sm text-gray-500 hover:bg-gray-50 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-gray-200">
+      {% include "icons/info.html" %}
+      Keyboard
+    </summary>
+    <div
+      class="absolute z-10 mt-2 w-96 rounded-md border border-gray-200 bg-white px-4 py-3 text-sm text-gray-600 shadow-lg dark:border-white/10 dark:bg-gray-800 dark:text-gray-300">
+      Click a task (or press Enter/Space while it's focused) to select it — click it again to open
+      its actions menu, including <strong>Mark complete</strong>. Shift-click extends the
+      selection to a range; Ctrl/Cmd-click adds or removes just one row.
+    </div>
+  </details>
+
+  <!-- role="treegrid" — see components/row.html's/Row::treegrid's doc comment and
+       docs/issues_and_features.md's "Extend the Tasks list's treegrid keyboard nav..." entry,
+       which this screen is the first to pick up. Every row here is a real role="row" (top-level
+       tasks + their in-place-expanded descendants, plus any still-virtual series occurrence),
+       so base.html's treegrid keydown handler and row-selection JS work unchanged. -->
+  <ul id="items-list" role="treegrid" aria-label="Tasks" aria-multiselectable="true"
     class="divide-y divide-gray-100 rounded-lg border border-gray-200 bg-white px-4 dark:divide-white/5 dark:border-white/10 dark:bg-gray-800/50">
     {% if rows.is_empty() %}
-    <li class="py-3 text-sm text-gray-500 dark:text-gray-400">No tasks yet.</li>
+    <li class="py-3 text-sm text-gray-500 dark:text-gray-400" role="row"><div class="contents" role="gridcell">No tasks yet.</div></li>
     {% else %}
     {% for row in rows %}
     {{ row|safe }}
@@ -115,4 +139,12 @@
     {% endif %}
   </ul>
 </div>
+<!-- Runs on every load of this page, boosted or not — see project_tasks/list_page.html's
+     identical script for why this has to be inline rather than relying on base.html's own
+     once-per-real-page-load initialization. -->
+<script>
+  selectedItemIds = new Set();
+  selectionAnchorId = null;
+  updateBatchActionsUI();
+</script>
 {% endblock %}
