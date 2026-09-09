@@ -716,10 +716,11 @@ mod tests {
                 ..Item::default()
             })
         });
-        // `items::update_item` (the personal dispatch target) fetches its own
-        // `current` via the personal-shaped `get`, separate from the `get_by_project`
-        // fetch above.
-        items.expect_get().returning(|_, _| {
+        // `items::update_item` (the personal dispatch target) fetches its own `current`
+        // via the same project-scoped `get_by_project` as the fetch above — both reads
+        // now go through the project-shaped `ItemRepo` methods (docs/issues_and_features.md's
+        // "second team-less project" fix).
+        items.expect_get_by_project().returning(|_, _| {
             Ok(Item {
                 id: "item1".to_string(),
                 name: "Mow the lawn".to_string(),
@@ -732,7 +733,10 @@ mod tests {
                 ..Item::default()
             })
         });
-        items.expect_update().times(1).returning(|_| Ok(()));
+        items
+            .expect_update_by_project()
+            .times(1)
+            .returning(|_| Ok(()));
         let repo: Arc<dyn ItemRepo> = Arc::new(items);
 
         let mut projects_mock = MockProjectRepo::new();
@@ -825,7 +829,7 @@ mod tests {
             })
         });
         // Reopening must never even be attempted — the pre-check rejects first.
-        items.expect_update().times(0);
+        items.expect_update_by_project().times(0);
         let repo: Arc<dyn ItemRepo> = Arc::new(items);
 
         let mut projects_mock = MockProjectRepo::new();

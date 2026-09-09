@@ -2661,7 +2661,7 @@ mod tests {
 
         let mut items_mock = MockItemRepo::new();
         items_mock
-            .expect_get()
+            .expect_get_by_project()
             .returning(|_, _| Ok(Item::new_user_item("owner1", "Standup")));
         items_mock.expect_list_children().returning(|_| Ok(vec![]));
         items_mock
@@ -5014,20 +5014,25 @@ mod tests {
             })
             .times(1)
             .returning(|_| Ok("child-item-id".to_string()));
+        // `create_item` resolves the new child's offset anchor by walking up to its top-level
+        // ancestor — the freshly materialized parent occurrence, which (being Task-typed)
+        // carries a due_date. Registered before (mockall tries expectations in registration
+        // order) and scoped to `"parent-item-id"` specifically, so the generic `get_by_project`
+        // stub below still answers every other lookup.
+        items_mock
+            .expect_get_by_project()
+            .withf(|_, item_id: &str| item_id == "parent-item-id")
+            .returning(|_, item_id| {
+                let mut item = Item::new_project_item("p1", "Party");
+                item.id = item_id.to_string();
+                if let Some(schedule) = item.item_type.schedule_mut() {
+                    schedule.due_date = Some(occurrence_date());
+                }
+                Ok(item)
+            });
         items_mock.expect_get_by_project().returning(|_, item_id| {
             let mut item = Item::new_project_item("p1", "Book venue");
             item.id = item_id.to_string();
-            Ok(item)
-        });
-        // `create_item` resolves the new child's offset anchor by walking up to its top-level
-        // ancestor — the freshly materialized parent occurrence, which (being Task-typed)
-        // carries a due_date.
-        items_mock.expect_get().returning(|_, item_id| {
-            let mut item = Item::new_project_item("p1", "Party");
-            item.id = item_id.to_string();
-            if let Some(schedule) = item.item_type.schedule_mut() {
-                schedule.due_date = Some(occurrence_date());
-            }
             Ok(item)
         });
         items_mock.expect_list_children().returning(|_| Ok(vec![]));

@@ -253,7 +253,7 @@ pub async fn create_project_item(
         Some(_) => {
             team_items::create_team_item(repo, teams, projects, requester_user_id, new).await
         }
-        None => items::create_item(repo, projects, &project.owner_user_id, new).await,
+        None => items::create_item(repo, &project.owner_user_id, new).await,
     }?;
     let item = repo.get_by_project(&project_id, &item_id).await?;
     reminders::sync_item_reminders(reminders_repo, projects, &item).await?;
@@ -494,7 +494,7 @@ pub async fn delete_project_item(
                 series,
                 reminders_repo,
                 item_dependencies_repo,
-                &project.owner_user_id,
+                project_id,
                 item_id,
             )
             .await?
@@ -838,18 +838,18 @@ mod tests {
             .returning(|_| Ok(personal_project()));
         let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
 
+        // Both `update_project_item`'s own pre-update fetch (the `!complete` fetch that gates
+        // `validate_uncompletable`/`record_task_uncompletion`, see its doc comment) and
+        // `items::update_item`'s `current` fetch now go through the same project-scoped
+        // `get_by_project` — a single unconditional stub answers both.
         let mut items_mock = MockItemRepo::new();
-        items_mock
-            .expect_get()
-            .returning(|_, _| Ok(Item::new_user_item("owner1", "Old name")));
-        // `complete: false` in the request against an already-incomplete item is not a
-        // complete->incomplete transition, so this is the `!complete` fetch that gates
-        // `validate_uncompletable`/`record_task_uncompletion` (see update_project_item's
-        // doc comment) — not a series-related call at all here.
         items_mock
             .expect_get_by_project()
             .returning(|_, _| Ok(Item::new_user_item("owner1", "Old name")));
-        items_mock.expect_update().times(1).returning(|_| Ok(()));
+        items_mock
+            .expect_update_by_project()
+            .times(1)
+            .returning(|_| Ok(()));
         let repo: Arc<dyn ItemRepo> = Arc::new(items_mock);
 
         let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
@@ -933,7 +933,9 @@ mod tests {
 
         // `was_complete`'s pre-update fetch — the item is already complete, so a pure
         // resubmit (`complete: true` again) reaches the dependency-edit branch, which must
-        // reject before ever calling `ItemDependencyRepo::set_dependencies`.
+        // reject before ever calling `ItemDependencyRepo::set_dependencies`. Both this fetch
+        // and `items::update_item`'s own `current` fetch go through the same project-scoped
+        // `get_by_project` now.
         let mut items_mock = MockItemRepo::new();
         items_mock.expect_get_by_project().returning(|_, _| {
             let mut item = Item::new_user_item("owner1", "Task");
@@ -942,14 +944,10 @@ mod tests {
             }
             Ok(item)
         });
-        items_mock.expect_get().returning(|_, _| {
-            let mut item = Item::new_user_item("owner1", "Task");
-            if let crate::domain::item::ItemType::Task(task) = &mut item.item_type {
-                task.complete = true;
-            }
-            Ok(item)
-        });
-        items_mock.expect_update().times(1).returning(|_| Ok(()));
+        items_mock
+            .expect_update_by_project()
+            .times(1)
+            .returning(|_| Ok(()));
         let repo: Arc<dyn ItemRepo> = Arc::new(items_mock);
 
         let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
@@ -996,11 +994,11 @@ mod tests {
         let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
 
         let mut items_mock = MockItemRepo::new();
-        items_mock
-            .expect_get()
-            .returning(|_, _| Ok(Item::new_user_item("owner1", "Old name")));
         items_mock.expect_list_children().returning(|_| Ok(vec![]));
-        items_mock.expect_update().times(1).returning(|_| Ok(()));
+        items_mock
+            .expect_update_by_project()
+            .times(1)
+            .returning(|_| Ok(()));
         items_mock
             .expect_get_by_project()
             .returning(|_, _| Ok(Item::new_user_item("owner1", "Old name")));
@@ -1069,13 +1067,11 @@ mod tests {
             .returning(|_| Ok(personal_project()));
         let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
 
-        let mut items_mock = MockItemRepo::new();
-        items_mock
-            .expect_get()
-            .returning(|_, _| Ok(Item::new_user_item("owner1", "Old name")));
         // The `!complete` fetch that decides whether this is actually a
         // complete->incomplete transition — the item was complete, and the request
-        // asks for `complete: false`, so it is.
+        // asks for `complete: false`, so it is. `items::update_item`'s own `current`
+        // fetch shares this same project-scoped `get_by_project` stub now.
+        let mut items_mock = MockItemRepo::new();
         items_mock.expect_get_by_project().returning(|_, _| {
             let mut item = Item::new_user_item("owner1", "Old name");
             if let crate::domain::item::ItemType::Task(task) = &mut item.item_type {
@@ -1083,11 +1079,22 @@ mod tests {
             }
             Ok(item)
         });
-        items_mock.expect_update().times(1).returning(|_| Ok(()));
+        items_mock
+            .expect_update_by_project()
+            .times(1)
+            .returning(|_| Ok(()));
         let repo: Arc<dyn ItemRepo> = Arc::new(items_mock);
 
         let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
-        let activity_log: Arc<dyn ActivityLogRepo> = Arc::new(MockActivityLogRepo::new());
+        // A genuine complete->incomplete transition now reaches `update_item`'s
+        // `most_recent_unreversed` lookup (previously masked by this test's stale
+        // personal-`get` fixture always returning an incomplete item) — `None` means no
+        // activity-log entry to reverse, which is fine: this test is about the series hook.
+        let mut activity_log_mock = MockActivityLogRepo::new();
+        activity_log_mock
+            .expect_most_recent_unreversed()
+            .returning(|_, _| Ok(None));
+        let activity_log: Arc<dyn ActivityLogRepo> = Arc::new(activity_log_mock);
 
         let mut series_mock = MockItemSeriesRepo::new();
         series_mock
@@ -1337,7 +1344,7 @@ mod tests {
 
         let mut items_mock = MockItemRepo::new();
         items_mock
-            .expect_get()
+            .expect_get_by_project()
             .returning(|_, _| Ok(Item::new_user_item("owner1", "Task")));
         items_mock.expect_list_children().returning(|_| Ok(vec![]));
         items_mock
@@ -1534,7 +1541,7 @@ mod tests {
 
         let mut items_mock = MockItemRepo::new();
         items_mock
-            .expect_get()
+            .expect_get_by_project()
             .returning(|_, _| Ok(Item::new_user_item("owner1", "Standup")));
         items_mock.expect_list_children().returning(|_| Ok(vec![]));
         items_mock
@@ -1602,7 +1609,7 @@ mod tests {
 
         let mut items_mock = MockItemRepo::new();
         items_mock
-            .expect_get()
+            .expect_get_by_project()
             .returning(|_, _| Ok(Item::new_user_item("owner1", "Parent")));
         items_mock
             .expect_list_children()

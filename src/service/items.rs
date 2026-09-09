@@ -24,11 +24,15 @@ pub use crate::service::error::ItemError;
 /// gave it, leaving a bad reference to `Item::validate`/the repo rather than guessing here.
 async fn parent_kind_of(
     repo: &Arc<dyn ItemRepo>,
-    user_id: &str,
+    project_id: &str,
     parent_item_id: &Option<String>,
 ) -> Option<ItemKind> {
     match parent_item_id {
-        Some(parent_id) => repo.get(user_id, parent_id).await.ok().map(|p| p.kind()),
+        Some(parent_id) => repo
+            .get_by_project(project_id, parent_id)
+            .await
+            .ok()
+            .map(|p| p.kind()),
         None => None,
     }
 }
@@ -57,15 +61,17 @@ pub(crate) fn require_template_has_template_parent(
 /// Moved from `json_api::items::create_item` (C.0.2 of the migration plan) — this is the one
 /// place "what does creating an item mean" is decided; `json_api` and `web_ui` both call in.
 ///
-/// `user_id` is a separate parameter rather than a field on `NewItem` because the personal
-/// branch is keyed by owner, not project: `project_items::create_project_item` resolves it
-/// from the project's `owner_user_id` before delegating here. `new.project_id` is deliberately
-/// *not* read — this branch resolves the item's `project_id` through
-/// `find_personal_project(user_id)` instead, the dual-write described below, exactly as the
-/// flat `CreateItemParams` (which had no `project_id` field at all) forced it to.
+/// `user_id` is a separate parameter rather than being read off `new.project_id` alone because
+/// the owner still needs recording on `Item::user_id` (the legacy column `ItemRepo`'s
+/// personal-shaped methods key off — see root CLAUDE.md's Storage Layer section);
+/// `project_items::create_project_item` resolves it from the project's `owner_user_id` before
+/// delegating here. Every project-scoped lookup below uses `new.project_id` directly instead of
+/// re-deriving it via `ProjectRepo::find_personal_project(user_id)` — that heuristic
+/// (`WHERE owner_user_id = ? AND team_id IS NULL LIMIT 1`) is ambiguous the moment a user owns
+/// more than one team-less project, which is exactly the "second team-less project" bug
+/// (`docs/issues_and_features.md`) this fixes.
 pub async fn create_item(
     repo: &Arc<dyn ItemRepo>,
-    projects: &Arc<dyn ProjectRepo>,
     user_id: &str,
     new: NewItem,
 ) -> Result<String, ItemError> {
@@ -78,11 +84,13 @@ pub async fn create_item(
         ));
     }
 
+    let project_id = new.project_id.clone();
+
     // Child items of a template automatically become template items; Events can never
     // have children (see `Item::source_event_id` — a task references an event instead
     // of nesting under it).
     let parent_item_id = new.kind.parent_item_id();
-    let parent_kind = parent_kind_of(repo, user_id, &parent_item_id).await;
+    let parent_kind = parent_kind_of(repo, &project_id, &parent_item_id).await;
     if parent_kind == Some(ItemKind::Event) {
         return Err(ItemError::Invalid(
             "Events cannot have children; link a task to it via sourceEventId instead".to_string(),
@@ -103,17 +111,15 @@ pub async fn create_item(
     // dropped here, matching that. See root CLAUDE.md's Points section.
     item.item_type = build_item_type(kind, None);
     item.description = new.description.clone();
-    // Dual-write, stage B2 (docs/project-abstraction-plan.md) — alongside the
-    // still-authoritative `user_id`. Left `None` if the user somehow has no personal
-    // project yet (shouldn't happen post-login, see `ensure_default_project`) rather
-    // than hard-failing item creation over it.
-    item.project_id = projects.find_personal_project(user_id).await?.map(|p| p.id);
+    // The request's own `project_id`, not a re-derived guess — see this function's doc
+    // comment. Still a dual-write alongside `user_id` (stage B2, docs/project-abstraction-plan.md).
+    item.project_id = Some(project_id.clone());
 
     item.validate().map_err(ItemError::Invalid)?;
 
     let tz_offset = new.timezone_offset_minutes.unwrap_or(0);
     if item.is_offset_driven() {
-        let anchor = resolve_offset_anchor(repo, user_id, &item).await?;
+        let anchor = resolve_offset_anchor(repo, &project_id, &item).await?;
         let new_due_date = anchor.and_then(|a| item.deadline_from_offset(a, tz_offset));
         if let Some(schedule) = item.item_type.schedule_mut() {
             schedule.due_date = new_due_date;
@@ -131,7 +137,10 @@ pub async fn create_item(
         // `item` here is always the just-created Event (see this trigger's own doc comment
         // above) — its anchor is `event_anchor` (scheduled_date), never `item_anchor` (due_date).
         let root_date = event_anchor(&item);
-        let templates = repo.list_templates(user_id).await?;
+        // Project-scoped, not `list_templates(user_id)` — the latter matched templates across
+        // *every* team-less project the user owns, not just this one (the same ambiguity this
+        // function's doc comment describes for `project_id` itself).
+        let templates = repo.list_templates_by_project(&project_id).await?;
         for tpl in templates
             .iter()
             .filter(|t| t.event_type().as_deref() == Some(event_type.as_str()))
@@ -142,10 +151,11 @@ pub async fn create_item(
     Ok(item_id)
 }
 
-/// Moved from `json_api::items::update_item`. `repo.get` below scopes the fetch to
-/// `user_id`, so a mismatched (non-owned) `item_id` surfaces as `ItemError::NotFound`
+/// Moved from `json_api::items::update_item`. `repo.get_by_project` below scopes the fetch to
+/// `edit.project_id`, so a mismatched (non-owned) `item_id` surfaces as `ItemError::NotFound`
 /// rather than silently operating on someone else's item. `user_id` is a separate parameter
-/// for the same reason it is on `create_item`.
+/// for the same reason it is on `create_item` (activity-log attribution and the legacy
+/// `Item::user_id` dual-write), not for scoping the lookup.
 ///
 /// `activity_log` (see docs/archived/archived_issues_and_features.md's "unify completion-undo" note) mirrors
 /// `team_items::update_team_item`'s own completion logging, minus the points/assignee
@@ -169,7 +179,7 @@ pub async fn update_item(
         ));
     }
 
-    let current = repo.get(user_id, &edit.item_id).await?;
+    let current = repo.get_by_project(&edit.project_id, &edit.item_id).await?;
 
     if current.google_event_id().is_some() {
         return Err(ItemError::Invalid(
@@ -192,7 +202,7 @@ pub async fn update_item(
     // Events can never have children (a task references an event via
     // sourceEventId instead of nesting under it).
     let parent_item_id = kind.parent_item_id();
-    let parent_kind = parent_kind_of(repo, user_id, &parent_item_id).await;
+    let parent_kind = parent_kind_of(repo, &edit.project_id, &parent_item_id).await;
     if parent_kind == Some(ItemKind::Event) {
         return Err(ItemError::Invalid(
             "Events cannot have children; link a task to it via sourceEventId instead".to_string(),
@@ -222,7 +232,7 @@ pub async fn update_item(
 
     let tz_offset = edit.timezone_offset_minutes.unwrap_or(0);
     if item.is_offset_driven() {
-        let anchor = resolve_offset_anchor(repo, user_id, &item).await?;
+        let anchor = resolve_offset_anchor(repo, &edit.project_id, &item).await?;
         let new_due_date = anchor.and_then(|a| item.deadline_from_offset(a, tz_offset));
         if let Some(schedule) = item.item_type.schedule_mut() {
             schedule.due_date = new_due_date;
@@ -260,14 +270,14 @@ pub async fn update_item(
         reverse_entry(projects, activity_log, &entry).await?;
     }
 
-    repo.update(&item).await?;
+    repo.update_by_project(&item).await?;
     // Bug fix (docs/issues_and_features.md's "top-level parent id" entry): descendants must
     // always be measured against the true top-level ancestor's anchor, not `item`'s own anchor
     // — using `item_anchor(&item)` here silently chained a mid-chain item's own (already
     // offset-derived) date to its children whenever `item` itself has a `parent_item_id`,
     // corrupting every deeper descendant's due date.
-    let old_due_anchor = top_level_anchor(repo, user_id, &current).await?;
-    let new_due_anchor = top_level_anchor(repo, user_id, &item).await?;
+    let old_due_anchor = top_level_anchor(repo, &edit.project_id, &current).await?;
+    let new_due_anchor = top_level_anchor(repo, &edit.project_id, &item).await?;
     if let Some(new_due_anchor) = new_due_anchor
         && Some(new_due_anchor) != old_due_anchor
     {
@@ -291,11 +301,11 @@ pub async fn update_item(
 }
 
 /// Moved from `json_api::items::delete_item`, with one behavior fix: the original never
-/// scoped the delete to `user_id` at all (it deleted whatever `item_id` it was given,
-/// regardless of who made the request), unlike every other item operation in this module and
-/// unlike `team_items`'s `delete_team_item` (which checks `require_active_member` first).
-/// `repo.get` below is scoped to `user_id`, so a non-owned `item_id` now surfaces as
-/// `ItemError::NotFound` instead of being silently deleted.
+/// scoped the delete to its owning project at all (it deleted whatever `item_id` it was
+/// given, regardless of who made the request), unlike every other item operation in this
+/// module and unlike `team_items`'s `delete_team_item` (which checks `require_active_member`
+/// first). `repo.get_by_project` below is scoped to `project_id`, so a non-owned `item_id` now
+/// surfaces as `ItemError::NotFound` instead of being silently deleted.
 ///
 /// Calls `item_series::unlink_deleted_item_occurrence` for every recursively-deleted child, not
 /// just `item_id` itself (its caller, `project_items::delete_project_item`, already does that for
@@ -316,10 +326,10 @@ pub async fn delete_item(
     series: &Arc<dyn ItemSeriesRepo>,
     reminders: &Arc<dyn ReminderRepo>,
     item_dependencies: &Arc<dyn ItemDependencyRepo>,
-    user_id: &str,
+    project_id: &str,
     item_id: &str,
 ) -> Result<(), ItemError> {
-    let current = repo.get(user_id, item_id).await?;
+    let current = repo.get_by_project(project_id, item_id).await?;
     if current.google_event_id().is_some() {
         return Err(ItemError::Invalid(
             "this item was imported from Google Calendar and cannot be deleted".to_string(),
@@ -402,12 +412,12 @@ pub(crate) fn event_anchor(event: &Item) -> Option<DateTime<Utc>> {
 /// the walk.
 pub(crate) async fn top_level_anchor(
     repo: &Arc<dyn ItemRepo>,
-    user_id: &str,
+    project_id: &str,
     item: &Item,
 ) -> Result<Option<DateTime<Utc>>, RepoError> {
     let mut current = item.clone();
     while let Some(parent_id) = current.parent_item_id().map(|s| s.to_string()) {
-        current = repo.get(user_id, &parent_id).await?;
+        current = repo.get_by_project(project_id, &parent_id).await?;
     }
     Ok(item_anchor(&current))
 }
@@ -420,15 +430,15 @@ pub(crate) async fn top_level_anchor(
 /// resolved anchor itself has no date.
 pub(crate) async fn resolve_offset_anchor(
     repo: &Arc<dyn ItemRepo>,
-    user_id: &str,
+    project_id: &str,
     item: &Item,
 ) -> Result<Option<DateTime<Utc>>, RepoError> {
     if let Some(event_id) = item.source_event_id() {
-        let event = repo.get(user_id, &event_id).await?;
+        let event = repo.get_by_project(project_id, &event_id).await?;
         Ok(event_anchor(&event))
     } else if let Some(parent_id) = item.parent_item_id() {
-        let parent = repo.get(user_id, &parent_id).await?;
-        top_level_anchor(repo, user_id, &parent).await
+        let parent = repo.get_by_project(project_id, &parent_id).await?;
+        top_level_anchor(repo, project_id, &parent).await
     } else {
         Ok(None)
     }
@@ -706,17 +716,14 @@ mod tests {
         Arc::new(MockItemDependencyRepo::new())
     }
 
-    /// `create_item`'s `find_personal_project` lookup, stubbed to "none found" — none
-    /// of these tests care about the resolved `project_id`, so this keeps them from
-    /// each having to build their own `MockProjectRepo`. Doubles as a harmless
-    /// `update_item` `projects` stub for tests that never hit a genuine uncomplete
-    /// transition (see `no_op_activity_log`'s doc comment) — a mock method with no
-    /// matching call made against it is never an error, only an unmocked *called*
-    /// method is.
+    /// A harmless `update_item` `projects` stub (used by `reverse_entry` on a genuine
+    /// uncomplete transition) for tests that don't care about that path — a mock method
+    /// with no matching call made against it is never an error, only an unmocked *called*
+    /// method is. `create_item` no longer takes a `projects` argument at all (it reads
+    /// `new.project_id` directly instead of re-deriving it via `find_personal_project`),
+    /// so this is `update_item`-only now.
     fn no_personal_project() -> Arc<dyn ProjectRepo> {
-        let mut mock = MockProjectRepo::new();
-        mock.expect_find_personal_project().returning(|_| Ok(None));
-        Arc::new(mock)
+        Arc::new(MockProjectRepo::new())
     }
 
     /// `update_item` only ever touches `activity_log` on a genuine complete<->incomplete
@@ -729,9 +736,9 @@ mod tests {
 
     /// `create_item`/`update_item` take a kind-typed input as of Stage 8 of
     /// docs/archived/typed-item-params-plan.md, so every test below names only the fields its own
-    /// assertion is about and lets the variant supply the rest. `project_id` is inert on
-    /// this module's personal branch — `create_item` resolves the stored one through
-    /// `find_personal_project` instead (see its doc comment).
+    /// assertion is about and lets the variant supply the rest. `project_id` is read directly
+    /// by `create_item`/`update_item` now (see their doc comments) — tests that assert on it
+    /// use `"p1"` throughout.
     fn new_item(name: &str, kind: NewItemKind) -> NewItem {
         NewItem {
             project_id: "p1".to_string(),
@@ -850,8 +857,8 @@ mod tests {
             .times(1)
             .returning(|_| Ok("new-event-id".to_string()));
 
-        mock.expect_list_templates()
-            .withf(|user_id: &str| user_id == "u1")
+        mock.expect_list_templates_by_project()
+            .withf(|project_id: &str| project_id == "p1")
             .times(1)
             .returning(|_| Ok(vec![template_item("tpl1", "u1", "rain")]));
 
@@ -877,7 +884,6 @@ mod tests {
 
         let item_id = create_item(
             &repo,
-            &no_personal_project(),
             "u1",
             new_item(
                 "It rained",
@@ -901,7 +907,7 @@ mod tests {
             .times(1)
             .returning(|_| Ok("new-event-id".to_string()));
 
-        mock.expect_list_templates()
+        mock.expect_list_templates_by_project()
             .times(1)
             .returning(|_| Ok(vec![template_item("tpl1", "u1", "snow")]));
 
@@ -912,7 +918,6 @@ mod tests {
 
         create_item(
             &repo,
-            &no_personal_project(),
             "u1",
             new_item(
                 "It rained",
@@ -952,8 +957,8 @@ mod tests {
             .unwrap()
             .with_timezone(&Utc);
 
-        mock.expect_get()
-            .withf(|user_id: &str, item_id: &str| user_id == "u1" && item_id == "event1")
+        mock.expect_get_by_project()
+            .withf(|project_id: &str, item_id: &str| project_id == "p1" && item_id == "event1")
             .times(1)
             .returning(move |_, _| Ok(event_item("event1", "u1", due_date)));
 
@@ -961,7 +966,6 @@ mod tests {
 
         let err = create_item(
             &repo,
-            &no_personal_project(),
             "u1",
             new_item(
                 "Sneaky child",
@@ -988,8 +992,8 @@ mod tests {
             .unwrap()
             .with_timezone(&Utc);
 
-        mock.expect_get()
-            .withf(|user_id: &str, item_id: &str| user_id == "u1" && item_id == "event1")
+        mock.expect_get_by_project()
+            .withf(|project_id: &str, item_id: &str| project_id == "p1" && item_id == "event1")
             .times(1)
             .returning(move |_, _| {
                 Ok(Item {
@@ -1024,7 +1028,6 @@ mod tests {
 
         create_item(
             &repo,
-            &no_personal_project(),
             "u1",
             new_item(
                 "Buy cake",
@@ -1063,8 +1066,8 @@ mod tests {
             .unwrap()
             .with_timezone(&Utc);
 
-        mock.expect_get()
-            .withf(|user_id: &str, item_id: &str| user_id == "u1" && item_id == "event1")
+        mock.expect_get_by_project()
+            .withf(|project_id: &str, item_id: &str| project_id == "p1" && item_id == "event1")
             .times(1)
             .returning(move |_, _| {
                 Ok(Item {
@@ -1097,7 +1100,6 @@ mod tests {
 
         create_item(
             &repo,
-            &no_personal_project(),
             "u1",
             new_item(
                 "Buy cake",
@@ -1116,8 +1118,8 @@ mod tests {
     async fn delete_item_unlinks_source_event_tasks_without_deleting_them() {
         let mut mock = MockItemRepo::new();
 
-        mock.expect_get()
-            .withf(|user_id: &str, item_id: &str| user_id == "u1" && item_id == "event1")
+        mock.expect_get_by_project()
+            .withf(|project_id: &str, item_id: &str| project_id == "u1" && item_id == "event1")
             .times(1)
             .returning(|_, _| {
                 Ok(Item {
@@ -1192,13 +1194,12 @@ mod tests {
     #[tokio::test]
     async fn create_item_rejects_a_template_under_a_non_template_parent() {
         let mut mock = MockItemRepo::new();
-        mock.expect_get()
+        mock.expect_get_by_project()
             .returning(|_, _| Ok(task_with_due_date("task1", Utc::now())));
         let repo: Arc<dyn ItemRepo> = Arc::new(mock);
 
         let err = create_item(
             &repo,
-            &no_personal_project(),
             "u1",
             new_item(
                 "Sneaky template",
@@ -1228,7 +1229,6 @@ mod tests {
 
         let err = create_item(
             &repo,
-            &no_personal_project(),
             "u1",
             new_item(
                 "Backwards window",
@@ -1285,7 +1285,7 @@ mod tests {
     #[tokio::test]
     async fn update_item_rejects_editing_a_google_calendar_imported_item() {
         let mut mock = MockItemRepo::new();
-        mock.expect_get().returning(|_, _| {
+        mock.expect_get_by_project().returning(|_, _| {
             Ok(Item {
                 id: "item1".to_string(),
                 item_type: ItemType::Event(EventItem {
@@ -1318,7 +1318,7 @@ mod tests {
     #[tokio::test]
     async fn delete_item_rejects_deleting_a_google_calendar_imported_item() {
         let mut mock = MockItemRepo::new();
-        mock.expect_get().returning(|_, _| {
+        mock.expect_get_by_project().returning(|_, _| {
             Ok(Item {
                 id: "item1".to_string(),
                 item_type: ItemType::Event(EventItem {
@@ -1360,10 +1360,10 @@ mod tests {
             .unwrap()
             .with_timezone(&Utc);
 
-        mock.expect_get()
+        mock.expect_get_by_project()
             .returning(move |_, _| Ok(task_with_due_date("item1", old_due)));
 
-        mock.expect_update()
+        mock.expect_update_by_project()
             .withf(move |item: &Item| item.id == "item1" && item.due_date() == Some(new_due))
             .times(1)
             .returning(|_| Ok(()));
@@ -1435,10 +1435,10 @@ mod tests {
             .unwrap()
             .with_timezone(&Utc);
 
-        mock.expect_get()
+        mock.expect_get_by_project()
             .returning(move |_, _| Ok(task_with_due_date("item1", old_due)));
 
-        mock.expect_update()
+        mock.expect_update_by_project()
             .withf(move |item: &Item| item.id == "item1" && item.due_date() == Some(new_due))
             .times(1)
             .returning(|_| Ok(()));
@@ -1509,10 +1509,10 @@ mod tests {
             .unwrap()
             .with_timezone(&Utc);
 
-        mock.expect_get()
+        mock.expect_get_by_project()
             .returning(move |_, _| Ok(task_with_due_date("item1", due)));
 
-        mock.expect_update()
+        mock.expect_update_by_project()
             .withf(move |item: &Item| item.id == "item1" && item.due_date() == Some(due))
             .times(1)
             .returning(|_| Ok(()));
@@ -1547,7 +1547,7 @@ mod tests {
     async fn update_item_rejects_completion_with_incomplete_child() {
         let mut mock = MockItemRepo::new();
 
-        mock.expect_get().returning(|_, _| {
+        mock.expect_get_by_project().returning(|_, _| {
             Ok(Item {
                 id: "item1".to_string(),
                 user_id: Some("u1".to_string()),
@@ -1594,7 +1594,7 @@ mod tests {
     async fn update_item_allows_completion_when_all_children_complete() {
         let mut mock = MockItemRepo::new();
 
-        mock.expect_get().returning(|_, _| {
+        mock.expect_get_by_project().returning(|_, _| {
             Ok(Item {
                 id: "item1".to_string(),
                 user_id: Some("u1".to_string()),
@@ -1615,7 +1615,9 @@ mod tests {
                     ..Item::default()
                 }])
             });
-        mock.expect_update().times(1).returning(|_| Ok(()));
+        mock.expect_update_by_project()
+            .times(1)
+            .returning(|_| Ok(()));
 
         let repo: Arc<dyn ItemRepo> = Arc::new(mock);
 
@@ -1656,7 +1658,7 @@ mod tests {
     async fn update_item_rejects_field_edit_on_completed_item() {
         let mut mock = MockItemRepo::new();
 
-        mock.expect_get().returning(|_, _| {
+        mock.expect_get_by_project().returning(|_, _| {
             Ok(Item {
                 id: "item1".to_string(),
                 user_id: Some("u1".to_string()),
@@ -1695,7 +1697,7 @@ mod tests {
     async fn update_item_allows_pure_complete_toggle_both_directions() {
         let mut mock = MockItemRepo::new();
 
-        mock.expect_get().returning(|_, _| {
+        mock.expect_get_by_project().returning(|_, _| {
             Ok(Item {
                 id: "item1".to_string(),
                 user_id: Some("u1".to_string()),
@@ -1707,7 +1709,9 @@ mod tests {
                 ..Item::default()
             })
         });
-        mock.expect_update().times(1).returning(|_| Ok(()));
+        mock.expect_update_by_project()
+            .times(1)
+            .returning(|_| Ok(()));
 
         let repo: Arc<dyn ItemRepo> = Arc::new(mock);
 
@@ -1736,43 +1740,34 @@ mod tests {
         .expect("pure toggle should be allowed on a completed item");
     }
 
+    /// Regression test for `docs/issues_and_features.md`'s "second team-less project" bug:
+    /// `create_item` used to re-derive `project_id` via `ProjectRepo::find_personal_project`
+    /// — `WHERE owner_user_id = ? AND team_id IS NULL LIMIT 1`, ambiguous once a user owns
+    /// more than one team-less project — instead of using the request's own `project_id`.
+    /// Asserting against `"p2"` here (not `new_item`'s usual `"p1"` default) proves the
+    /// stored `project_id` tracks whatever the request actually named, not a fixed or
+    /// re-derived value; `create_item` no longer takes a `ProjectRepo` at all.
     #[tokio::test]
-    async fn create_item_resolves_project_id_from_personal_project() {
+    async fn create_item_uses_the_requested_project_id() {
         let mut mock = MockItemRepo::new();
         mock.expect_create()
-            .withf(|item: &Item| item.project_id.as_deref() == Some("p1"))
+            .withf(|item: &Item| item.project_id.as_deref() == Some("p2"))
             .times(1)
             .returning(|_| Ok("new-item-id".to_string()));
         let repo: Arc<dyn ItemRepo> = Arc::new(mock);
 
-        let mut projects_mock = MockProjectRepo::new();
-        projects_mock
-            .expect_find_personal_project()
-            .withf(|user_id: &str| user_id == "u1")
-            .returning(|_| {
-                Ok(Some(crate::domain::project::Project {
-                    id: "p1".to_string(),
-                    name: "Personal".to_string(),
-                    owner_user_id: "u1".to_string(),
-                    team_id: None,
-                }))
-            });
-        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
+        let mut new = new_item("Buy milk", NewItemKind::Task(NewTask::default()));
+        new.project_id = "p2".to_string();
 
-        create_item(
-            &repo,
-            &projects,
-            "u1",
-            new_item("Buy milk", NewItemKind::Task(NewTask::default())),
-        )
-        .await
-        .expect("should create item");
+        create_item(&repo, "u1", new)
+            .await
+            .expect("should create item under the requested project");
     }
 
     #[tokio::test]
     async fn update_item_carries_forward_project_id_from_current() {
         let mut mock = MockItemRepo::new();
-        mock.expect_get().returning(|_, _| {
+        mock.expect_get_by_project().returning(|_, _| {
             Ok(Item {
                 id: "item1".to_string(),
                 user_id: Some("u1".to_string()),
@@ -1781,7 +1776,7 @@ mod tests {
                 ..Item::default()
             })
         });
-        mock.expect_update()
+        mock.expect_update_by_project()
             .withf(|item: &Item| item.project_id.as_deref() == Some("p1"))
             .times(1)
             .returning(|_| Ok(()));
@@ -1805,7 +1800,7 @@ mod tests {
     #[tokio::test]
     async fn update_item_keeps_a_template_child_template_typed() {
         let mut mock = MockItemRepo::new();
-        mock.expect_get().returning(|_, id| {
+        mock.expect_get_by_project().returning(|_, id| {
             if id == "tpl1" {
                 return Ok(template_item("tpl1", "u1", "rain"));
             }
@@ -1823,7 +1818,7 @@ mod tests {
                 ..Item::default()
             })
         });
-        mock.expect_update()
+        mock.expect_update_by_project()
             .withf(|item: &Item| item.kind() == ItemKind::Template)
             .times(1)
             .returning(|_| Ok(()));
@@ -1856,7 +1851,7 @@ mod tests {
     #[tokio::test]
     async fn create_item_allows_an_explicit_template_child_under_a_template() {
         let mut mock = MockItemRepo::new();
-        mock.expect_get()
+        mock.expect_get_by_project()
             .returning(|_, _| Ok(template_item("tpl1", "u1", "rain")));
         mock.expect_create()
             .withf(|item: &Item| item.kind() == ItemKind::Template)
@@ -1866,7 +1861,6 @@ mod tests {
 
         create_item(
             &repo,
-            &no_personal_project(),
             "u1",
             new_item(
                 "Book venue",

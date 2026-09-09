@@ -49,32 +49,26 @@ fn active_context(project_id: &str) -> ActiveContext {
     ActiveContext::Project(project_id.to_string())
 }
 
-/// Dispatches to the project-scoped (`team_items::resolve_offset_anchor_project`) or personal
-/// (`items::resolve_offset_anchor`) anchor resolution depending on `project.team_id`, the same
-/// way `update_project_item` dispatches the update itself (`src/service/project_items.rs`). A
-/// team-backed project's items carry a `NULL` `user_id` column (they're scoped by `project_id`,
-/// not `user_id`), so calling the personal, `user_id`-scoped `resolve_offset_anchor` against one
-/// — as every call site here used to, unconditionally — makes its internal `repo.get(user_id,
-/// parent_id)` look up the parent via `WHERE id = ? AND user_id = ?`, binding
-/// `auth_user.user_id` against a row whose `user_id` is `NULL`: SQL's three-valued logic means
-/// that comparison is never true, so `RepoError::NotFound` bubbles up as `ItemError::NotFound`
-/// even though the item's own read/write had already succeeded. See the "completing an item
-/// returns a not found error" bug in docs/issues_and_features.md — it only reproduced for a
-/// team-backed sub-item (or an event-linked task), since `resolve_offset_anchor` only ever calls
-/// `repo.get` when the item has a `parentItemId` or `sourceEventId` to resolve.
+/// Dispatches to `team_items::resolve_offset_anchor_project` or `items::resolve_offset_anchor`
+/// depending on `project.team_id`, the same way `update_project_item` dispatches the update
+/// itself (`src/service/project_items.rs`). Both now resolve strictly against `project.id` via
+/// `ItemRepo::get_by_project` — `items::resolve_offset_anchor`'s old `user_id`-scoped lookup
+/// (`repo.get(user_id, parent_id)`, `WHERE id = ? AND user_id = ?`) is what caused the
+/// "completing an item returns a not found error" bug in docs/issues_and_features.md when
+/// called against a team-backed item (whose `user_id` column is `NULL`, so the comparison was
+/// never true under SQL's three-valued logic) — fixed at the source alongside the
+/// "second team-less project" bug rather than patched here, so this dispatcher no longer needs
+/// `requester_user_id` at all.
 async fn resolve_task_anchor_date(
     repo: &Arc<dyn ItemRepo>,
     project: &Project,
-    requester_user_id: &str,
     item: &Item,
 ) -> Result<Option<DateTime<Utc>>, ItemError> {
     match &project.team_id {
         Some(_) => {
             crate::service::team_items::resolve_offset_anchor_project(repo, &project.id, item).await
         }
-        None => {
-            Ok(crate::service::items::resolve_offset_anchor(repo, requester_user_id, item).await?)
-        }
+        None => Ok(crate::service::items::resolve_offset_anchor(repo, &project.id, item).await?),
     }
 }
 
@@ -821,7 +815,7 @@ pub async fn project_task_edit_page(
     };
     let (depends_on_options, depends_on_item_ids) =
         depends_on_picker_data(&repo, &item_dependencies, &project_id, &item).await?;
-    let anchor_date = resolve_task_anchor_date(&repo, &project, &auth_user.user_id, &item).await?;
+    let anchor_date = resolve_task_anchor_date(&repo, &project, &item).await?;
     let fields = ProjectTaskDetailFields::from_item(
         &item,
         &project_id,
@@ -2773,8 +2767,7 @@ pub async fn update_project_task_form(
             };
             let (depends_on_options, depends_on_item_ids) =
                 depends_on_picker_data(&repo, &item_dependencies, &project_id, &updated).await?;
-            let anchor_date =
-                resolve_task_anchor_date(&repo, &project, &auth_user.user_id, &updated).await?;
+            let anchor_date = resolve_task_anchor_date(&repo, &project, &updated).await?;
             let fields = ProjectTaskDetailFields::from_item(
                 &updated,
                 &project_id,
@@ -3148,8 +3141,7 @@ pub async fn get_reschedule_task(
     let task = require_task(task)?;
     let view = super::normalize_row_view(q);
     if task.is_offset_driven() {
-        let anchor_date =
-            resolve_task_anchor_date(&repo, &project, &auth_user.user_id, &task).await?;
+        let anchor_date = resolve_task_anchor_date(&repo, &project, &task).await?;
         render(OffsetRescheduleDialog::from_task(
             &task,
             &project_id,
@@ -3305,20 +3297,25 @@ mod resolve_task_anchor_date_tests {
             ..Item::default()
         };
 
-        let anchor = resolve_task_anchor_date(&repo, &team_project(), "requester1", &child)
+        let anchor = resolve_task_anchor_date(&repo, &team_project(), &child)
             .await
             .expect("should resolve anchor");
         assert_eq!(anchor, Some(due_at(1_000)));
     }
 
+    /// A personal (team-less) project's items now resolve their offset anchor the same
+    /// project-scoped way a team-backed project's do (see `resolve_task_anchor_date`'s doc
+    /// comment) — `items::resolve_offset_anchor` no longer has a separate `user_id`-scoped
+    /// lookup at all, so this and `team_backed_project_resolves_anchor_via_project_scoped_lookup`
+    /// above now exercise the same `get_by_project` path through the two different dispatch
+    /// branches.
     #[tokio::test]
-    async fn personal_project_resolves_anchor_via_user_scoped_lookup() {
+    async fn personal_project_resolves_anchor_via_project_scoped_lookup() {
         let mut items = MockItemRepo::new();
         items
-            .expect_get()
-            .withf(|user_id, id| user_id == "owner1" && id == "parent1")
+            .expect_get_by_project()
+            .withf(|project_id, id| project_id == "proj1" && id == "parent1")
             .returning(|_, id| Ok(task_with_due_date(id, Some("owner1"), due_at(2_000))));
-        items.expect_get_by_project().never();
 
         let repo: Arc<dyn ItemRepo> = Arc::new(items);
         let child = Item {
@@ -3332,7 +3329,7 @@ mod resolve_task_anchor_date_tests {
             ..Item::default()
         };
 
-        let anchor = resolve_task_anchor_date(&repo, &personal_project(), "owner1", &child)
+        let anchor = resolve_task_anchor_date(&repo, &personal_project(), &child)
             .await
             .expect("should resolve anchor");
         assert_eq!(anchor, Some(due_at(2_000)));
