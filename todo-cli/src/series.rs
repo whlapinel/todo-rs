@@ -14,17 +14,18 @@ fn parse_series_item_type_flag(s: &str) -> ItemType {
     }
 }
 
-/// "schedule"/"completion"/"due-date" — a plain, unvalidated-by-Smithy string on the
-/// wire (see `ItemSeries::basis`'s doc comment). Only "completion"/"due-date" are ever
-/// sent explicitly; "schedule" maps to `None` since that's the server's own default
-/// when the field is omitted.
+/// "schedule"/"completion" — a plain, unvalidated-by-Smithy string on the wire (see
+/// `ItemSeries::basis`'s doc comment). Only "completion" is ever sent explicitly;
+/// "schedule" maps to `None` since that's the server's own default when the field is
+/// omitted. The old "due-date" opt-in (materializing a task series onto its due date
+/// instead of its scheduled date) was retired 2026-09-05 — a task series now always
+/// materializes onto its due date, so there's nothing left for it to opt into.
 fn parse_series_basis_flag(s: &str) -> Option<String> {
     match s.to_lowercase().as_str() {
         "schedule" => None,
         "completion" => Some("COMPLETION".to_string()),
-        "due-date" => Some("DUE_DATE".to_string()),
         _ => {
-            eprintln!("error: --basis must be 'schedule', 'completion', or 'due-date'");
+            eprintln!("error: --basis must be 'schedule' or 'completion'");
             std::process::exit(1);
         }
     }
@@ -47,10 +48,11 @@ pub enum SeriesCommand {
         /// Required: 'task' or 'event' — the kind of item this series materializes
         #[arg(long)]
         item_type: Option<String>,
-        /// 'schedule' (default), 'completion', or 'due-date' — 'completion' is only
-        /// valid on a task series with an "every N days/weeks/months/years" recurrence;
-        /// 'due-date' materializes each occurrence's due date instead of its scheduled
-        /// date. Both are otherwise task-series-only.
+        /// 'schedule' (default) or 'completion' — 'completion' is task-series-only, and
+        /// only valid with an "every N days/weeks/months/years" recurrence. A task
+        /// series always materializes onto its due date and an event series always
+        /// onto its scheduled date; 'basis' only chooses what the next occurrence is
+        /// measured from.
         #[arg(long)]
         basis: Option<String>,
         /// User id to assign every materialized occurrence to — only valid on a task
@@ -89,10 +91,11 @@ pub enum SeriesCommand {
         /// Required: 'task' or 'event' — the kind of item this series materializes
         #[arg(long)]
         item_type: Option<String>,
-        /// 'schedule' (default), 'completion', or 'due-date' — 'completion' is only
-        /// valid on a task series with an "every N days/weeks/months/years" recurrence;
-        /// 'due-date' materializes each occurrence's due date instead of its scheduled
-        /// date. Both are otherwise task-series-only.
+        /// 'schedule' (default) or 'completion' — 'completion' is task-series-only, and
+        /// only valid with an "every N days/weeks/months/years" recurrence. A task
+        /// series always materializes onto its due date and an event series always
+        /// onto its scheduled date; 'basis' only chooses what the next occurrence is
+        /// measured from.
         #[arg(long)]
         basis: Option<String>,
         /// User id to assign every materialized occurrence to — only valid on a task
@@ -287,7 +290,7 @@ pub async fn cmd_series(client: &Client, cmd: SeriesCommand, _user_id: Option<St
                 crate::helpers::fmt_date(out.anchor_date())
             );
             println!("item type:   {}", out.item_type());
-            println!("basis:       {}", out.basis().unwrap_or("SCHEDULE"));
+            println!("basis:       {}", out.basis().unwrap_or("DEFAULT"));
             println!("assigned to: {}", out.assigned_to_user_id().unwrap_or("-"));
             println!(
                 "points:      {}",

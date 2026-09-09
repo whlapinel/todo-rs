@@ -82,10 +82,11 @@ pub async fn get_or_materialize_occurrence(
     let occurrence_assignee =
         resolve_occurrence_assignee(series_repo, &series, occurrence_date, tz_offset_minutes)
             .await?;
-    // Due-date-basis materializes onto due_date instead of scheduled_date (see
-    // ItemSeries::basis's doc comment) — everything else about the created item is
-    // identical between the two branches.
-    let schedule = if is_due_date_basis(&series) {
+    // A Task series always materializes onto due_date; an Event series always
+    // materializes onto scheduled_date — see ItemSeries::basis's doc comment for why this
+    // is no longer a basis-driven choice (a Task series briefly had a scheduled-date
+    // option too, retired 2026-09-05).
+    let schedule = if series.item_type == ItemKind::Task {
         Schedule {
             due_date: Some(occurrence_date),
             has_due_time: true,
@@ -682,16 +683,6 @@ pub fn is_completion_basis(series: &ItemSeries) -> bool {
     series.basis.as_deref() == Some("COMPLETION")
 }
 
-/// Whether `series` materializes each occurrence with the occurrence date written to
-/// the item's `due_date` (and `has_due_time`) instead of `scheduled_date` — see
-/// `ItemSeries::basis`'s doc comment and `get_or_materialize_occurrence`. Orthogonal to
-/// `is_completion_basis`: this only changes which field a materialized occurrence's date
-/// lands on, not how the cursor advances (a due-date-basis series still advances on the
-/// fixed schedule, same as the default).
-pub fn is_due_date_basis(series: &ItemSeries) -> bool {
-    series.basis.as_deref() == Some("DUE_DATE")
-}
-
 /// Stage 2 of docs/assignment-rotation-plan.md: index of `occurrence_date` within
 /// `rule`'s sequence starting at `anchor`, 0-based. `occurrence_date` is always itself
 /// a member of that sequence (every caller derives it from the same rule/anchor), so
@@ -911,10 +902,12 @@ fn validate_series_item_type(item_type: ItemKind) -> Result<(), ItemError> {
     Ok(())
 }
 
-/// Stage 10 gap 1: `basis: Some("COMPLETION")` is only valid on a `Task`-typed series
-/// (Event-typed series have no completion/cursor concept — see `ItemSeries::basis`'s
-/// doc comment), and only for "every N days/weeks/months/years" `recurrence` patterns —
-/// a fixed weekday or day-of-month has no well-defined "N units after actual
+/// The only two legal values for `basis` are `None` and `Some("COMPLETION")` — see
+/// `ItemSeries::basis`'s doc comment, including why the once-legal `"DUE_DATE"` is now
+/// rejected like any other unrecognized string rather than silently treated as `None`.
+/// `COMPLETION` is further restricted to a `Task`-typed series (Event-typed series have
+/// no completion/cursor concept) with an "every N days/weeks/months/years" `recurrence`
+/// pattern — a fixed weekday or day-of-month has no well-defined "N units after actual
 /// completion" interpretation. `recurrence` is re-parsed here rather than threaded in
 /// pre-parsed, since `create_series`/`update_series` don't otherwise need a parsed
 /// `RecurrenceRule` for anything else.
@@ -924,6 +917,7 @@ fn validate_series_basis(
     recurrence: &str,
 ) -> Result<(), ItemError> {
     match basis.as_deref() {
+        None => Ok(()),
         Some("COMPLETION") => {
             if item_type != ItemKind::Task {
                 return Err(ItemError::Invalid(
@@ -946,15 +940,10 @@ fn validate_series_basis(
             }
             Ok(())
         }
-        Some("DUE_DATE") => {
-            if item_type != ItemKind::Task {
-                return Err(ItemError::Invalid(
-                    "basis: DUE_DATE is only valid on a TASK series".to_string(),
-                ));
-            }
-            Ok(())
-        }
-        _ => Ok(()),
+        Some(other) => Err(ItemError::Invalid(format!(
+            "basis: {other:?} is not a recognized value — the only supported value is \
+             COMPLETION (TASK series only); omit basis for the default"
+        ))),
     }
 }
 
@@ -1493,11 +1482,14 @@ pub struct ProjectOccurrence {
     pub assigned_to_user_id: Option<String>,
     pub assigned_to_user_name: Option<String>,
     pub state: OccurrenceState,
-    /// Mirrors `is_due_date_basis(series)` at the time this occurrence was listed — lets a
-    /// still-virtual occurrence's row render its date the same way a materialized one from the
-    /// same series would (💀 due-date vs 📅 scheduled-date icon/overdue styling), instead of
-    /// every virtual row rendering as a generic undated "Due:" label regardless of the series'
-    /// actual basis.
+    /// `true` for a Task-typed series, `false` for an Event-typed one — mirrors
+    /// `get_or_materialize_occurrence`'s own due_date-vs-scheduled_date choice, so a
+    /// still-virtual occurrence's row renders its date the same way a materialized one from
+    /// the same series would (💀 due-date vs 📅 scheduled-date icon/overdue styling), instead
+    /// of every virtual row rendering as a generic undated "Due:" label. Sourced from
+    /// `item_type` directly rather than `basis`: a Task series has had no scheduled-date
+    /// alternative since `"DUE_DATE"` was retired (`ItemSeries::basis`'s doc comment), so
+    /// this is no longer basis-dependent.
     pub is_due_date_basis: bool,
     /// The series' own `priority` — sourced here (not re-derived by callers) so a
     /// still-virtual/skipped occurrence sorts alongside real items the same way its
@@ -1739,7 +1731,7 @@ pub async fn list_occurrence_states_for_project(
                 assigned_to_user_id: occurrence_assignee,
                 assigned_to_user_name: occurrence_assignee_name,
                 state,
-                is_due_date_basis: is_due_date_basis(series),
+                is_due_date_basis: series.item_type == ItemKind::Task,
                 priority: series.priority,
             });
         }
@@ -2254,10 +2246,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn materializes_a_due_date_basis_task_onto_due_date_not_scheduled_date() {
+    async fn materializes_a_task_series_occurrence_onto_due_date_not_scheduled_date() {
         let mut task_series = series("p1");
         task_series.item_type = ItemKind::Task;
-        task_series.basis = Some("DUE_DATE".to_string());
         let mut series_mock = MockItemSeriesRepo::new();
         series_mock
             .expect_get_series()
@@ -2312,7 +2303,7 @@ mod tests {
             0,
         )
         .await
-        .expect("should materialize a due-date-basis task occurrence");
+        .expect("should materialize a task series occurrence");
 
         assert_eq!(item.name, "Standup");
     }
@@ -3987,7 +3978,31 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_series_rejects_due_date_basis_on_event_series() {
+    async fn create_series_rejects_due_date_basis_since_it_was_retired() {
+        let mut projects_mock = MockProjectRepo::new();
+        projects_mock
+            .expect_get()
+            .returning(|_| Ok(personal_project()));
+        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock.expect_create_series().times(0);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        // "DUE_DATE" used to be a legal opt-in on a TASK series (materializing onto
+        // due_date instead of scheduled_date) — retired 2026-09-05 since a Task series
+        // now always materializes onto due_date. It's rejected the same way any other
+        // unrecognized string is, not silently treated as the (now identical) default.
+        let mut params = create_params("p1");
+        params.item_type = ItemKind::Task;
+        params.event_type = None;
+        params.basis = Some("DUE_DATE".to_string());
+        let result = create_series(&projects, &teams, &series_repo, "owner1", params).await;
+        assert!(matches!(result, Err(ItemError::Invalid(_))));
+    }
+
+    #[tokio::test]
+    async fn create_series_rejects_an_unrecognized_basis_value() {
         let mut projects_mock = MockProjectRepo::new();
         projects_mock
             .expect_get()
@@ -3999,37 +4014,11 @@ mod tests {
         let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
 
         let mut params = create_params("p1");
-        params.item_type = ItemKind::Event;
-        params.basis = Some("DUE_DATE".to_string());
-        let result = create_series(&projects, &teams, &series_repo, "owner1", params).await;
-        assert!(matches!(result, Err(ItemError::Invalid(_))));
-    }
-
-    #[tokio::test]
-    async fn create_series_allows_due_date_basis_on_any_recurrence_pattern_for_a_task_series() {
-        let mut projects_mock = MockProjectRepo::new();
-        projects_mock
-            .expect_get()
-            .returning(|_| Ok(personal_project()));
-        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
-        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
-        let mut series_mock = MockItemSeriesRepo::new();
-        series_mock
-            .expect_create_series()
-            .withf(|s: &ItemSeries| s.basis.as_deref() == Some("DUE_DATE"))
-            .times(1)
-            .returning(|_| Ok("s1".to_string()));
-        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
-
-        let mut params = create_params("p1");
         params.item_type = ItemKind::Task;
         params.event_type = None;
-        // create_params()'s default recurrence is "every weekday" — unlike COMPLETION,
-        // DUE_DATE has no "every N units" restriction (it doesn't affect cursor
-        // advancement, only which field materialization writes to).
-        params.basis = Some("DUE_DATE".to_string());
+        params.basis = Some("BOGUS".to_string());
         let result = create_series(&projects, &teams, &series_repo, "owner1", params).await;
-        assert!(result.is_ok());
+        assert!(matches!(result, Err(ItemError::Invalid(_))));
     }
 
     #[tokio::test]
@@ -5013,12 +5002,13 @@ mod tests {
                     && item.due_offset_days() == Some(-30)
                     && item.priority() == Some(2)
                     && !item.has_due_time()
-                    // Records the known gap documented on `get_or_materialize_child_occurrence`:
-                    // a scheduled-basis series' occurrence carries no `due_date`, so
-                    // `create_item`'s offset recompute has no anchor and the sub-item lands
-                    // undated. Asserted rather than left implicit so that changing it is a
-                    // deliberate act with a failing test attached.
-                    && item.due_date().is_none()
+                    // A Task series always materializes its parent occurrence onto due_date
+                    // (the retired scheduled-date basis used to leave this undated — see
+                    // ItemSeries::basis's doc comment — but that's no longer reachable), so
+                    // `create_item`'s offset recompute has a real anchor and the sub-item
+                    // lands on its true lead-time date.
+                    && item.due_date().map(|d| d.date_naive())
+                        == Some((occurrence_date() - chrono::Duration::days(30)).date_naive())
                     // A sub-item is a child *of* an occurrence, not an occurrence itself.
                     && item.series_id().is_none()
             })
@@ -5030,10 +5020,14 @@ mod tests {
             Ok(item)
         });
         // `create_item` resolves the new child's offset anchor by walking up to its top-level
-        // ancestor — the freshly materialized parent occurrence.
+        // ancestor — the freshly materialized parent occurrence, which (being Task-typed)
+        // carries a due_date.
         items_mock.expect_get().returning(|_, item_id| {
             let mut item = Item::new_project_item("p1", "Party");
             item.id = item_id.to_string();
+            if let Some(schedule) = item.item_type.schedule_mut() {
+                schedule.due_date = Some(occurrence_date());
+            }
             Ok(item)
         });
         items_mock.expect_list_children().returning(|_| Ok(vec![]));
@@ -5056,102 +5050,6 @@ mod tests {
         .expect("should materialize the sub-item");
 
         assert_eq!(item.id, "child-item-id");
-    }
-
-    /// The due-date-basis counterpart of the test above, and the case that actually works
-    /// end to end: the parent occurrence carries a `due_date`, so `create_item`'s offset
-    /// recompute has an anchor and the sub-item lands on its true lead-time date.
-    #[tokio::test]
-    async fn a_due_date_basis_series_sub_item_lands_on_its_lead_time_date() {
-        let mut due_basis = task_series();
-        due_basis.basis = Some("DUE_DATE".to_string());
-        let mut series_mock = MockItemSeriesRepo::new();
-        series_mock
-            .expect_get_series_child()
-            .returning(|_| Ok(child("c1", "Book venue", 30)));
-        series_mock
-            .expect_get_series()
-            .returning(move |_| Ok(due_basis.clone()));
-        series_mock
-            .expect_get_child_occurrence()
-            .returning(|_, _| Ok(None));
-        series_mock
-            .expect_get_occurrence()
-            .returning(|_, _| Ok(None));
-        series_mock
-            .expect_list_rotation_members()
-            .returning(|_| Ok(Vec::new()));
-        series_mock
-            .expect_record_materialized_occurrence()
-            .returning(|_, _, _| Ok(()));
-        series_mock
-            .expect_record_materialized_child_occurrence()
-            .times(1)
-            .returning(|_, _, _| Ok(()));
-        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
-
-        let mut projects_mock = MockProjectRepo::new();
-        projects_mock
-            .expect_get()
-            .returning(|_| Ok(personal_project()));
-        projects_mock
-            .expect_find_personal_project()
-            .returning(|_| Ok(None));
-        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
-
-        let mut items_mock = MockItemRepo::new();
-        items_mock
-            .expect_create()
-            .withf(|item: &Item| item.parent_item_id().is_none())
-            .times(1)
-            .returning(|_| Ok("parent-item-id".to_string()));
-        items_mock
-            .expect_create()
-            .withf(|item: &Item| {
-                item.parent_item_id() == Some("parent-item-id".to_string())
-                    // Negated at the boundary, so `Item::validate`'s "cannot be positive"
-                    // rule holds by construction.
-                    && item.due_offset_days() == Some(-30)
-                    // `create_item`'s own offset recompute lands on the same date the
-                    // explicit `due_date` carried in — same arithmetic, same anchor.
-                    && item.due_date().map(|d| d.date_naive())
-                        == Some((occurrence_date() - chrono::Duration::days(30)).date_naive())
-            })
-            .times(1)
-            .returning(|_| Ok("child-item-id".to_string()));
-        items_mock.expect_get_by_project().returning(|_, item_id| {
-            let mut item = Item::new_project_item("p1", "Book venue");
-            item.id = item_id.to_string();
-            Ok(item)
-        });
-        // The offset anchor: a due-date-basis occurrence materializes onto `due_date`, which
-        // is what `item_anchor` reads.
-        items_mock.expect_get().returning(|_, item_id| {
-            let mut item = Item::new_project_item("p1", "Party");
-            item.id = item_id.to_string();
-            if let Some(schedule) = item.item_type.schedule_mut() {
-                schedule.due_date = Some(occurrence_date());
-            }
-            Ok(item)
-        });
-        items_mock.expect_list_children().returning(|_| Ok(vec![]));
-        let repo: Arc<dyn ItemRepo> = Arc::new(items_mock);
-
-        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
-
-        get_or_materialize_child_occurrence(
-            &repo,
-            &projects,
-            &teams,
-            &series_repo,
-            &no_op_reminders(),
-            "owner1",
-            "c1",
-            occurrence_date(),
-            0,
-        )
-        .await
-        .expect("should materialize the sub-item");
     }
 
     #[tokio::test]

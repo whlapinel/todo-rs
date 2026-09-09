@@ -296,10 +296,9 @@ pub struct CreateItemSeriesForm {
     recurrence: String,
     anchor_date: String,
     anchor_time: Option<String>,
-    /// A `<select>` of "" (schedule, the default) / "COMPLETION" / "DUE_DATE" — see
-    /// `ItemSeries::basis`'s doc comment. A blank selection submits as `Some("")`;
-    /// normalized to `None` via `non_empty` at each call site below, same convention as
-    /// `description`/`event_type`.
+    /// A `<select>` of "" (the default) / "COMPLETION" — see `ItemSeries::basis`'s doc
+    /// comment. A blank selection submits as `Some("")`; normalized to `None` via
+    /// `non_empty` at each call site below, same convention as `description`/`event_type`.
     basis: Option<String>,
     /// Only present/honored server-side on a team-backed project, Task-typed series —
     /// see `service::item_series::resolve_series_assignment`'s own gate.
@@ -361,12 +360,12 @@ fn parse_item_type(raw: &str) -> Result<ItemKind, ItemError> {
     }
 }
 
-/// A due-date-basis series' anchor is a due date, which defaults a bare (no-time) input
-/// to end-of-day — matching `due_date`'s own convention (CLAUDE.md's Scheduled start/end
-/// section) rather than `scheduled_date`'s start-of-day default that every other basis
-/// still uses.
-fn anchor_default_time(basis: &Option<String>) -> chrono::NaiveTime {
-    if basis.as_deref() == Some("DUE_DATE") {
+/// A Task series' anchor is a due date, which defaults a bare (no-time) input to
+/// end-of-day — matching `due_date`'s own convention (CLAUDE.md's Scheduled start/end
+/// section) rather than `scheduled_date`'s start-of-day default an Event series still
+/// uses.
+fn anchor_default_time(item_type: ItemKind) -> chrono::NaiveTime {
+    if item_type == ItemKind::Task {
         end_of_day()
     } else {
         start_of_day()
@@ -383,14 +382,14 @@ pub async fn create_project_item_series_form(
     Form(form): Form<CreateItemSeriesForm>,
 ) -> Result<Response, ItemError> {
     let basis = non_empty(&form.basis);
+    let item_type = parse_item_type(&form.item_type)?;
     let anchor_date = combine_local_to_utc(
         form.anchor_date.trim(),
         form.anchor_time.as_deref(),
         tz,
-        anchor_default_time(&basis),
+        anchor_default_time(item_type),
     )
     .ok_or_else(|| ItemError::Invalid("anchor date is required".to_string()))?;
-    let item_type = parse_item_type(&form.item_type)?;
     let (assigned_to_user_id, rotation_user_ids) = resolve_assignment_mode_fields(&form);
 
     item_series_service::create_series(
@@ -1075,14 +1074,14 @@ pub async fn update_project_item_series_form(
     Form(form): Form<CreateItemSeriesForm>,
 ) -> Result<Response, ItemError> {
     let basis = non_empty(&form.basis);
+    let item_type = parse_item_type(&form.item_type)?;
     let anchor_date = combine_local_to_utc(
         form.anchor_date.trim(),
         form.anchor_time.as_deref(),
         tz,
-        anchor_default_time(&basis),
+        anchor_default_time(item_type),
     )
     .ok_or_else(|| ItemError::Invalid("anchor date is required".to_string()))?;
-    let item_type = parse_item_type(&form.item_type)?;
     let (assigned_to_user_id, rotation_user_ids) = resolve_assignment_mode_fields(&form);
 
     item_series_service::update_series(

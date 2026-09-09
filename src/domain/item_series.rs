@@ -35,14 +35,32 @@ pub struct ItemSeries {
     /// occurrence is its own `anchor_date`. Meaningless for `Event`-typed series, which
     /// have no completion concept and so never advance it — always `None` for those.
     pub cursor_date: Option<DateTime<Utc>>,
-    /// Stage 10 gap 1: a plain, unvalidated-by-Smithy string, following the precedent
-    /// CLAUDE.md documents for `Item::recurrence_basis` (`ItemType` is the deliberate
-    /// exception, not the norm). `Some("COMPLETION")` measures the next occurrence from
-    /// *actual settlement time* (`Utc::now()` at completion/skip) rather than the fixed
-    /// schedule — see `service::item_series::is_completion_basis`. `None` (or any other
-    /// value) is today's only behavior, schedule-basis. Only meaningful for `Task`-typed
-    /// series with an "every N days/weeks/months/years" `recurrence` — validated at the
-    /// service layer (`validate_series_basis`), not structurally enforced here.
+    /// A plain, unvalidated-by-Smithy string, following the precedent CLAUDE.md documents
+    /// for `Item::recurrence_basis` (`ItemType` is the deliberate exception, not the norm)
+    /// — but unlike most such fields, only two values are actually legal, and
+    /// `service::item_series::validate_series_basis` rejects everything else outright
+    /// (including the retired `"DUE_DATE"`, see below) rather than silently treating an
+    /// unrecognized value as the default. `None` is the default: a Task-typed series
+    /// materializes each occurrence onto `due_date` and advances its cursor on the fixed
+    /// schedule; an Event-typed series (which can never set this field to anything but
+    /// `None`) materializes onto `scheduled_date`. `Some("COMPLETION")` — Task-only, and
+    /// only for an "every N days/weeks/months/years" `recurrence` — measures the next
+    /// occurrence from *actual settlement time* (`Utc::now()` at completion/skip) instead;
+    /// see `service::item_series::is_completion_basis`. It does not change which field a
+    /// materialized occurrence lands on, only how the cursor advances.
+    ///
+    /// A Task series' recurrence rule used to be able to materialize onto `scheduled_date`
+    /// too, selected by `basis: None` (the original default) with `Some("DUE_DATE")` as the
+    /// opt-in alternative — removed entirely (`docs/issues_and_features.md`, decided
+    /// 2026-09-05): a series' recurrence rule defines a due date, and scheduling is a
+    /// per-instance decision that has no business being what a recurrence rule produces.
+    /// `basis` briefly did double duty as a result (encoding both "due-date vs
+    /// scheduled-date" and "fixed-schedule vs completion-time" in one field that can only
+    /// hold one string) — collapsing to a single Task-side materialization target restores
+    /// it to the one orthogonal flag its doc comment already claimed it was. A migration
+    /// normalized every existing Task-typed row's `basis` to `None` unless it was already
+    /// `"COMPLETION"` (`AddItemSeriesDueDateOnly`), so no stored row can carry `"DUE_DATE"`
+    /// or a scheduled-date-basis `None` after it has run.
     pub basis: Option<String>,
     /// Points/assignment authority for this series' materialized occurrences —
     /// mirrors `TeamAssignment` at the item level (CLAUDE.md's Points section), but

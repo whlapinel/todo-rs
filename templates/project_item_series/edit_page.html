@@ -44,32 +44,22 @@
          validate_series_event_type in src/service/item_series.rs) — no form field for it
          here, unlike the real Event/Template screens that still use
          macros::event_type_field. -->
-    <!-- The scheduled-date basis (the old blank `<option value="">`) was removed from this
-         form on 2026-09-05: a series' recurrence rule defines a *due date*, and scheduling is
-         a per-instance decision, since the circumstances of one occurrence bear on when you
-         plan to do it. An existing scheduled-basis Task series therefore has no matching
-         option and lands on Due date, converting on the next save — that is intended, and is
-         also what closes the undated-sub-item gap (a scheduled-basis occurrence has no
-         `due_date`, so a sub-item materialized under one had nothing to compute its own
-         deadline from). Task-only: an Event series never renders this field at all, so it still
-         materializes onto `scheduled_date`. The backend half — retiring `is_due_date_basis` and
-         the two-branch materialization in `get_or_materialize_occurrence` — is tracked
-         separately in docs/issues_and_features.md. -->
+    <!-- A Task series always materializes each occurrence onto its due date — there is no
+         scheduled-date alternative (retired 2026-09-05, see CLAUDE.md's Item series section
+         and `ItemSeries::basis`'s doc comment; a one-time migration normalized every existing
+         row). This field only chooses what the *next occurrence* is measured from. Task-only:
+         an Event series never renders it, so it still materializes onto `scheduled_date`. -->
     {% if is_task %}
     <div>
       <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Occurrence basis
         <div class="mt-2">
           <select name="basis"
                   class="block w-full rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:focus:outline-indigo-500">
-            <option value="DUE_DATE" {% if basis != "COMPLETION" %}selected{% endif %}>Due date — each occurrence is due on the recurrence date</option>
+            <option value="" {% if basis != "COMPLETION" %}selected{% endif %}>Regular — next occurrence follows the fixed schedule</option>
             <option value="COMPLETION" {% if basis == "COMPLETION" %}selected{% endif %}>Completion — next occurrence is measured from when each one is actually completed</option>
           </select>
         </div>
       </label>
-      {% if basis != "COMPLETION" && basis != "DUE_DATE" %}
-      <p class="mt-1 text-xs text-amber-600 dark:text-amber-400">This series currently uses the
-        retired scheduled-date basis. Saving will convert it to Due date.</p>
-      {% endif %}
     </div>
     <div>
       <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Priority

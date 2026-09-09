@@ -128,7 +128,7 @@ pub struct EditProjectItemSeriesPageTemplate {
     pub description: String,
     pub is_task: bool,
     pub recurrence: String,
-    /// "" (schedule) / "COMPLETION" / "DUE_DATE" — see `ItemSeries::basis`'s doc comment.
+    /// "" (the default) / "COMPLETION" — see `ItemSeries::basis`'s doc comment.
     pub basis: String,
     pub anchor_date: String,
     pub anchor_time: String,

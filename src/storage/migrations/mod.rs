@@ -31,6 +31,7 @@ mod ensure_attachments_comment_id;
 mod has_tasks_to_simple;
 mod item_type_event_type;
 mod migrate_legacy_recurring_items;
+mod retire_item_series_scheduled_basis;
 mod scheduled_end_date;
 mod team_member_points;
 
@@ -68,6 +69,7 @@ use ensure_attachments_comment_id::EnsureAttachmentsCommentId;
 use has_tasks_to_simple::HasTasksToSimple;
 use item_type_event_type::ItemTypeEventType;
 use migrate_legacy_recurring_items::MigrateLegacyRecurringItems;
+use retire_item_series_scheduled_basis::RetireItemSeriesScheduledBasis;
 use scheduled_end_date::ScheduledEndDate;
 use sqlx::{Row, SqliteConnection, SqlitePool};
 use team_member_points::TeamMemberPoints;
@@ -140,6 +142,7 @@ fn all_migrations() -> Vec<Box<dyn Migration>> {
         Box::new(AddAttachments),
         Box::new(EnsureAttachmentsCommentId),
         Box::new(AddItemSeriesChildren),
+        Box::new(RetireItemSeriesScheduledBasis),
     ]
 }
 
@@ -566,7 +569,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 35);
+        assert_eq!(applied_count, 36);
     }
 
     #[tokio::test]
@@ -579,7 +582,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 35);
+        assert_eq!(applied_count, 36);
     }
 
     #[tokio::test]
@@ -593,6 +596,6 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(applied_count, 35);
+        assert_eq!(applied_count, 36);
     }
 }

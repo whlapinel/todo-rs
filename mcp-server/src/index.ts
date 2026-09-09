@@ -603,8 +603,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           },
           basis: {
             type: "string",
-            enum: ["SCHEDULE", "COMPLETION", "DUE_DATE"],
-            description: "Defaults to SCHEDULE. COMPLETION measures the next occurrence from actual completion/skip time instead of the fixed schedule — only valid on a TASK series with an 'every N days/weeks/months/years' recurrence. DUE_DATE materializes each occurrence with the occurrence date written to the item's due date instead of its scheduled date (the cursor still advances on the fixed schedule) — only valid on a TASK series.",
+            enum: ["SCHEDULE", "COMPLETION"],
+            description: "Defaults to SCHEDULE. COMPLETION measures the next occurrence from actual completion/skip time instead of the fixed schedule — only valid on a TASK series with an 'every N days/weeks/months/years' recurrence. A TASK series always materializes each occurrence onto the item's due date and an EVENT series always onto its scheduled date; basis only chooses what the next occurrence is measured from, not which date field is written (the old DUE_DATE opt-in for this was retired 2026-09-05).",
           },
           assignedToUserId: {
             type: "string",
@@ -659,8 +659,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           },
           basis: {
             type: "string",
-            enum: ["SCHEDULE", "COMPLETION", "DUE_DATE"],
-            description: "Defaults to SCHEDULE if omitted. COMPLETION measures the next occurrence from actual completion/skip time instead of the fixed schedule — only valid on a TASK series with an 'every N days/weeks/months/years' recurrence. DUE_DATE materializes each occurrence with the occurrence date written to the item's due date instead of its scheduled date (the cursor still advances on the fixed schedule) — only valid on a TASK series.",
+            enum: ["SCHEDULE", "COMPLETION"],
+            description: "Defaults to SCHEDULE if omitted. COMPLETION measures the next occurrence from actual completion/skip time instead of the fixed schedule — only valid on a TASK series with an 'every N days/weeks/months/years' recurrence. A TASK series always materializes each occurrence onto the item's due date and an EVENT series always onto its scheduled date; basis only chooses what the next occurrence is measured from, not which date field is written (the old DUE_DATE opt-in for this was retired 2026-09-05).",
           },
           assignedToUserId: {
             type: "string",

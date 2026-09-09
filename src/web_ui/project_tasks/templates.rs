@@ -1119,7 +1119,7 @@ impl ProjectTaskSeriesOccurrenceView {
     ) -> Self {
         let occurrence_ts = occurrence_date.timestamp();
         let local = to_local(occurrence_date, tz);
-        let is_due_date_basis = crate::service::item_series::is_due_date_basis(series);
+        let is_due_date_basis = series.item_type == ItemKind::Task;
         let due_date = is_due_date_basis.then(|| format_display_date(local, true));
         let scheduled_date = (!is_due_date_basis).then(|| format_display_date(local, true));
         Self {
@@ -1201,7 +1201,7 @@ impl ProjectTaskSeriesOccurrenceFields {
         let local = to_local(occurrence_date, tz);
         let date_input = local.format("%Y-%m-%d").to_string();
         let time_input = local.format("%H:%M").to_string();
-        let is_due_date_basis = crate::service::item_series::is_due_date_basis(series);
+        let is_due_date_basis = series.item_type == ItemKind::Task;
         Self {
             series_id: series.id.clone(),
             occurrence_ts,

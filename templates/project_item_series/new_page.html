@@ -47,15 +47,16 @@
          validate_series_event_type in src/service/item_series.rs) — no form field for it
          here, unlike the real Event/Template screens that still use
          macros::event_type_field. -->
-    <!-- No scheduled-date basis option — see edit_page.html's fuller comment on why it was
-         retired from this form on 2026-09-05. Due date is the default and the only alternative
-         to Completion for a Task series; an Event series never reaches this field. -->
+    <!-- A Task series always materializes each occurrence onto its due date — there is no
+         scheduled-date alternative (retired 2026-09-05: a series' recurrence rule defines a
+         due date, and scheduling is a per-instance decision). This field only chooses what the
+         *next occurrence* is measured from; an Event series never reaches it. -->
     <div class="completion-basis-field">
       <label class="block text-sm/6 font-medium text-gray-900 dark:text-white">Occurrence basis
         <div class="mt-2">
           <select name="basis"
                   class="block w-full rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:focus:outline-indigo-500">
-            <option value="DUE_DATE" selected>Due date — each occurrence is due on the recurrence date</option>
+            <option value="" selected>Regular — next occurrence follows the fixed schedule</option>
             <option value="COMPLETION">Completion — next occurrence is measured from when each one is actually completed</option>
           </select>
         </div>

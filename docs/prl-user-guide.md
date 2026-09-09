@@ -581,24 +581,27 @@ prl series create <project-id> "Standup" "every weekday" 2026-08-17 \
   --item-type event --description "Daily sync"
 ```
 
-`--basis schedule` (the default), `--basis completion`, or `--basis
-due-date` controls what the next occurrence is measured from and which date
-field each materialized occurrence gets: `schedule` uses the fixed
-recurrence rule and materializes onto the scheduled date; `completion`
-measures the next occurrence from when the current one was actually
-completed or skipped instead (only valid with an "every N
-days/weeks/months/years" recurrence — not a fixed weekday or day-of-month);
-`due-date` still follows the fixed schedule, but materializes each
-occurrence onto its due date instead of its scheduled date. Both
-`completion` and `due-date` are only valid on a task series (`--item-type
-task`).
+A task series always materializes each occurrence onto its due date; an
+event series always materializes onto its scheduled date — that's fixed by
+`--item-type`, not something `--basis` chooses. `--basis` only controls
+what the *next* occurrence is measured from: `schedule` (the default) uses
+the fixed recurrence rule; `completion` measures it from when the current
+occurrence was actually completed or skipped instead (only valid with an
+"every N days/weeks/months/years" recurrence — not a fixed weekday or
+day-of-month). `completion` is only valid on a task series (`--item-type
+task`); an event series has no completion concept and so has no non-default
+`--basis` to choose.
 
 ```sh
 prl series create <project-id> "Water plants" "every 3 days" 2026-08-17 \
   --item-type task --basis completion
-prl series create <project-id> "Pay rent" "every month on the 1st" 2026-09-01 \
-  --item-type task --basis due-date
 ```
+
+A task series used to also be able to materialize onto its *scheduled*
+date via `--basis due-date` — retired 2026-09-05 (a series' recurrence rule
+defines a due date; scheduling is a per-instance decision) and rejected by
+the server as an unrecognized `--basis` value now, the same as any other
+typo.
 
 `--assign <user-id>` fixes every materialized occurrence's assignee, and
 `--points <n>` awards that many points to the assignee on completion — both
