@@ -1,8 +1,8 @@
-use crate::domain::item::{Item, ItemType};
+use crate::domain::item::{Item, ItemType, Schedule, TeamAssignment};
 use crate::domain::project::Project;
 use crate::service::error::ItemError;
 use crate::service::item_dependencies;
-use crate::service::item_input::{EditItem, NewItem};
+use crate::service::item_input::{EditItem, NewEvent, NewItem, NewItemKind, NewTask, TaskAnchor};
 use crate::service::item_series;
 use crate::service::items::{self, item_anchor};
 use crate::service::projects::require_project_member;
@@ -418,20 +418,113 @@ pub async fn update_project_item(
     Ok(())
 }
 
+/// Stage 4 of the event->template trigger cleanup plan (`docs/archived/
+/// archived_issues_and_features.md`'s "Duplicating an Event doesn't re-fire..." entry).
+/// A Task's or Event's own top-level copy now routes through `create_project_item`
+/// instead of `repo.create` directly, so it gets full validation, its own reminders
+/// (`sync_item_reminders` was never reached by the old direct-copy path at all), and —
+/// for an Event whose `event_type` still matches a template — a fresh run of the
+/// event->template trigger, which recreates the parented task "for free" rather than
+/// needing bespoke duplicate-specific copy logic (root CLAUDE.md's Events section).
+///
+/// `series_id` and `source_template_id` are deliberately dropped rather than carried
+/// forward the way an edit's `into_new_kind` does: a duplicate is a brand-new,
+/// independent item, not a continuation of the series slot or template-firing lineage
+/// the original happened to carry — carrying `series_id` forward would bind a second
+/// item to the same series occurrence slot.
+///
+/// Simple items and template children have no trigger to worry about, so they keep the
+/// original direct-copy path — also the only path reachable for a root Template, since
+/// `NewItemKind::Template`'s non-optional parent means the funnel path can't represent
+/// one anyway.
 pub async fn duplicate_project_item(
     repo: &Arc<dyn ItemRepo>,
     projects: &Arc<dyn ProjectRepo>,
     teams: &Arc<dyn TeamRepo>,
+    reminders_repo: &Arc<dyn ReminderRepo>,
     requester_user_id: &str,
     project_id: &str,
     item_id: &str,
+    timezone_offset_minutes: Option<i32>,
 ) -> Result<(), ItemError> {
     require_project_member(projects, teams, project_id, requester_user_id).await?;
-    let mut copy = repo.get_by_project(project_id, item_id).await?;
-    copy.name = format!("{} (copy)", copy.name);
-    let copy_id = repo.create(&copy).await?;
-    copy_children(&copy.id, &copy_id, repo).await?;
+    let original = repo.get_by_project(project_id, item_id).await?;
+    let name = format!("{} (copy)", original.name);
+    let copy_id = match &original.item_type {
+        ItemType::Task(_) => {
+            let new = NewItem {
+                project_id: project_id.to_string(),
+                name,
+                description: original.description.clone(),
+                timezone_offset_minutes,
+                kind: NewItemKind::Task(NewTask {
+                    anchor: TaskAnchor::from_item(&original),
+                    schedule: schedule_of(&original),
+                    due_offset_days: original.due_offset_days(),
+                    priority: original.priority(),
+                    complete: original.complete(),
+                    assignment: TeamAssignment {
+                        assigned_to_user_id: original.assigned_to_user_id(),
+                        points: original.points(),
+                    },
+                    series_id: None,
+                    source_template_id: None,
+                }),
+            };
+            create_project_item(
+                repo,
+                projects,
+                teams,
+                reminders_repo,
+                requester_user_id,
+                new,
+            )
+            .await?
+        }
+        ItemType::Event(_) => {
+            let new = NewItem {
+                project_id: project_id.to_string(),
+                name,
+                description: original.description.clone(),
+                timezone_offset_minutes,
+                kind: NewItemKind::Event(NewEvent {
+                    schedule: schedule_of(&original),
+                    event_type: original.event_type(),
+                    due_offset_days: original.due_offset_days(),
+                    series_id: None,
+                }),
+            };
+            create_project_item(
+                repo,
+                projects,
+                teams,
+                reminders_repo,
+                requester_user_id,
+                new,
+            )
+            .await?
+        }
+        ItemType::Simple(_) | ItemType::Template(_) => {
+            let mut copy = original.clone();
+            copy.name = name;
+            repo.create(&copy).await?
+        }
+    };
+    copy_children(&original.id, &copy_id, repo).await?;
     Ok(())
+}
+
+/// The six `Schedule` fields, read back off an existing item — shared by
+/// `duplicate_project_item`'s Task and Event branches.
+fn schedule_of(item: &Item) -> Schedule {
+    Schedule {
+        due_date: item.due_date(),
+        has_due_time: item.has_due_time(),
+        scheduled_date: item.scheduled_date(),
+        has_scheduled_time: item.has_scheduled_time(),
+        scheduled_end_date: item.scheduled_end_date(),
+        has_end_time: item.has_end_time(),
+    }
 }
 
 #[async_recursion]
@@ -515,7 +608,7 @@ pub async fn delete_project_item(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::item::{ItemKind, TeamAssignment};
+    use crate::domain::item::ItemKind;
     use crate::domain::project::Project;
     use crate::domain::team::TeamRole;
     use crate::service::item_input::{EditItemKind, EditTask, NewItemKind, NewTask};
@@ -1682,6 +1775,178 @@ mod tests {
         .await
         .expect(
             "should delete the whole tree and un-materialize the reparented child's occurrence",
+        );
+    }
+
+    /// Stage 4 of the event->template trigger cleanup plan: a Task's duplicate now goes
+    /// through `create_project_item` rather than a raw `repo.create`, so it gets full
+    /// validation and its own reminders (`no_op_reminders_repo` stands in for the sync
+    /// call this test doesn't otherwise assert on) — and, the specific regression this
+    /// guards, the copy is severed from the original's series/template lineage rather
+    /// than carrying `seriesId`/`sourceTemplateId` forward onto a second item.
+    #[tokio::test]
+    async fn duplicate_project_item_routes_a_personal_task_through_the_create_funnel() {
+        let due = Utc::now();
+        let original = Item {
+            id: "i1".to_string(),
+            user_id: Some("owner1".to_string()),
+            project_id: Some("p1".to_string()),
+            name: "Buy milk".to_string(),
+            description: Some("2%".to_string()),
+            item_type: ItemType::Task(crate::domain::item::TaskItem {
+                parent_item_id: None,
+                schedule: Schedule {
+                    due_date: Some(due),
+                    ..Schedule::default()
+                },
+                recurrence: crate::domain::item::Recurrence::default(),
+                team_assignment: None,
+                source_event_id: None,
+                source_template_id: Some("tpl1".to_string()),
+                priority: Some(2),
+                complete: true,
+                series_id: Some("s1".to_string()),
+            }),
+            ..Item::default()
+        };
+
+        let mut projects_mock = MockProjectRepo::new();
+        projects_mock
+            .expect_get()
+            .returning(|_| Ok(personal_project()));
+        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+
+        let original_for_get = original.clone();
+        let mut items_mock = MockItemRepo::new();
+        items_mock
+            .expect_get_by_project()
+            .returning(move |_, item_id| {
+                if item_id == "i1" {
+                    Ok(original_for_get.clone())
+                } else {
+                    Ok(Item::new_user_item("owner1", "Buy milk (copy)"))
+                }
+            });
+        items_mock
+            .expect_create()
+            .withf(|item: &Item| {
+                item.name == "Buy milk (copy)"
+                    && item.description.as_deref() == Some("2%")
+                    && item.priority() == Some(2)
+                    && item.complete()
+                    && item.due_date().is_some()
+                    && item.series_id().is_none()
+                    && item.source_template_id().is_none()
+            })
+            .times(1)
+            .returning(|_| Ok("new-id".to_string()));
+        items_mock.expect_list_children().returning(|_| Ok(vec![]));
+        let repo: Arc<dyn ItemRepo> = Arc::new(items_mock);
+
+        let reminders = no_op_reminders_repo();
+
+        duplicate_project_item(
+            &repo, &projects, &teams, &reminders, "owner1", "p1", "i1", None,
+        )
+        .await
+        .expect("should duplicate the task through the create funnel");
+    }
+
+    /// The other half of Stage 4: duplicating an Event whose `eventType` still matches a
+    /// template must re-fire the event->template trigger and mint a fresh parented task —
+    /// "recreated for free" per the trigger cleanup plan, with no bespoke duplicate-side
+    /// copy logic. Before this stage `repo.create` was called exactly once (the raw
+    /// event copy); asserting two calls, event then task, is what would have caught the
+    /// bug this stage fixes.
+    #[tokio::test]
+    async fn duplicate_project_item_refires_the_event_template_trigger() {
+        let original_event = Item {
+            id: "e1".to_string(),
+            user_id: Some("owner1".to_string()),
+            project_id: Some("p1".to_string()),
+            name: "Trash day".to_string(),
+            description: None,
+            item_type: ItemType::Event(crate::domain::item::EventItem {
+                schedule: Schedule::default(),
+                recurrence: crate::domain::item::Recurrence::default(),
+                event_type: Some("trash".to_string()),
+                series_id: None,
+                google_event_id: None,
+                calendar_subscription_id: None,
+            }),
+            ..Item::default()
+        };
+        let template = Item {
+            id: "tpl1".to_string(),
+            user_id: Some("owner1".to_string()),
+            project_id: Some("p1".to_string()),
+            name: "Take out trash".to_string(),
+            item_type: ItemType::Template(crate::domain::item::TemplateItem {
+                parent_item_id: None,
+                schedule: Schedule::default(),
+                recurrence: crate::domain::item::Recurrence::default(),
+                event_type: Some("trash".to_string()),
+                team_assignment: None,
+            }),
+            ..Item::default()
+        };
+
+        let mut projects_mock = MockProjectRepo::new();
+        projects_mock
+            .expect_get()
+            .returning(|_| Ok(personal_project()));
+        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+
+        let original_for_get = original_event.clone();
+        let mut items_mock = MockItemRepo::new();
+        items_mock
+            .expect_get_by_project()
+            .returning(move |_, item_id| {
+                if item_id == "e1" {
+                    Ok(original_for_get.clone())
+                } else {
+                    let mut copy = original_for_get.clone();
+                    copy.id = item_id.to_string();
+                    copy.name = "Trash day (copy)".to_string();
+                    Ok(copy)
+                }
+            });
+
+        let created_kinds = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let created_kinds_recorder = created_kinds.clone();
+        items_mock
+            .expect_create()
+            .times(2)
+            .returning(move |item: &Item| {
+                created_kinds_recorder.lock().unwrap().push(item.kind());
+                if item.kind() == ItemKind::Event {
+                    Ok("new-event-id".to_string())
+                } else {
+                    Ok("new-task-id".to_string())
+                }
+            });
+        items_mock
+            .expect_list_templates_by_project()
+            .returning(move |_| Ok(vec![template.clone()]));
+        items_mock
+            .expect_list_template_rotation_members()
+            .returning(|_| Ok(vec![]));
+        items_mock.expect_list_children().returning(|_| Ok(vec![]));
+        let repo: Arc<dyn ItemRepo> = Arc::new(items_mock);
+
+        let reminders = no_op_reminders_repo();
+
+        duplicate_project_item(
+            &repo, &projects, &teams, &reminders, "owner1", "p1", "e1", None,
+        )
+        .await
+        .expect("should duplicate the event and refire its template trigger");
+
+        assert_eq!(
+            *created_kinds.lock().unwrap(),
+            vec![ItemKind::Event, ItemKind::Task]
         );
     }
 }

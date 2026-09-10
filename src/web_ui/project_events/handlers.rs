@@ -831,6 +831,8 @@ pub async fn duplicate_project_event_form(
     Extension(repo): Extension<Arc<dyn ItemRepo>>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
+    TzOffset(tz): TzOffset,
 ) -> Result<Response, ItemError> {
     let item = project_item_service::get_project_item(
         &repo,
@@ -846,9 +848,11 @@ pub async fn duplicate_project_event_form(
         &repo,
         &projects,
         &teams,
+        &reminders,
         &auth_user.user_id,
         &project_id,
         &item_id,
+        Some(tz),
     )
     .await?;
     Ok(hx_redirect(format!("/web/projects/{project_id}/events")))
