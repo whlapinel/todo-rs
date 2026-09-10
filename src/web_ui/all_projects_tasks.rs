@@ -662,25 +662,19 @@ pub struct NewAllProjectsTaskQuery {
     show_complete: Option<String>,
 }
 
-/// `GET /web/tasks/new` — Stage 3. Resolves the selected project (query param, else
-/// `personal_project_id`, else the first project) via `crate::web_ui::resolve_new_item_project`,
-/// then renders the dialog fragment for that project. Both the initial "+ New Task" click and
-/// the dialog's own project-select `onchange` hit this same route (see `new_page.html`).
+/// `GET /web/tasks/new` — Stage 3. Resolves the selected project (query param, else the first
+/// project) via `crate::web_ui::resolve_new_item_project`, then renders the dialog fragment for
+/// that project. Both the initial "+ New Task" click and the dialog's own project-select
+/// `onchange` hit this same route (see `new_page.html`).
 pub async fn new_all_projects_task_dialog(
     Extension(auth_user): Extension<AuthUser>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
-    Extension(users): Extension<Arc<dyn UserRepo>>,
     Extension(teams): Extension<Arc<dyn TeamRepo>>,
     Query(q): Query<NewAllProjectsTaskQuery>,
 ) -> Result<Html<String>, ItemError> {
     let user_projects = project_service::list_projects(&projects, &auth_user.user_id).await?;
-    let user = users.get(&auth_user.user_id).await?;
-    let selected = crate::web_ui::resolve_new_item_project(
-        &user_projects,
-        q.project.as_deref(),
-        user.personal_project_id.as_deref(),
-    )
-    .ok_or(ItemError::NotFound)?;
+    let selected = crate::web_ui::resolve_new_item_project(&user_projects, q.project.as_deref())
+        .ok_or(ItemError::NotFound)?;
     let project_id = selected.id.clone();
     let is_team_project = selected.team_id.is_some();
     let (assignee_options, is_team_admin) = match &selected.team_id {

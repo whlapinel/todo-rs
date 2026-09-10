@@ -226,17 +226,11 @@ pub struct NewAllProjectsEventQuery {
 pub async fn new_all_projects_event_dialog(
     Extension(auth_user): Extension<AuthUser>,
     Extension(projects): Extension<Arc<dyn ProjectRepo>>,
-    Extension(users): Extension<Arc<dyn UserRepo>>,
     Query(q): Query<NewAllProjectsEventQuery>,
 ) -> Result<Html<String>, ItemError> {
     let user_projects = project_service::list_projects(&projects, &auth_user.user_id).await?;
-    let user = users.get(&auth_user.user_id).await?;
-    let selected = crate::web_ui::resolve_new_item_project(
-        &user_projects,
-        q.project.as_deref(),
-        user.personal_project_id.as_deref(),
-    )
-    .ok_or(ItemError::NotFound)?;
+    let selected = crate::web_ui::resolve_new_item_project(&user_projects, q.project.as_deref())
+        .ok_or(ItemError::NotFound)?;
     let project_id = selected.id.clone();
     let project_options = user_projects
         .iter()

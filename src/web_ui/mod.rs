@@ -146,19 +146,20 @@ pub fn reminder_labels(reminders: &[crate::domain::reminder::Reminder], tz: i32)
 
 /// Resolves which project an all-projects "+ New" dialog should target — Stage 3 of
 /// `docs/dialog-item-forms-plan.md`. The query-string `project` param if given and it's one of
-/// the requester's own projects, else `users.personal_project_id` (Stage 0) if set and still
-/// one of them, else the first project `ProjectRepo::list_for_user` returned. Shared between
+/// the requester's own projects, else the first project `ProjectRepo::list_for_user` returned.
+/// Used to consult `users.personal_project_id` as a middle fallback before falling through to
+/// "first project"; dropped per the "Eliminate the 'personal project' concept" entry in
+/// `docs/issues_and_features.md` — nothing distinguishes that project from any other team-less
+/// one anymore, so it's no better a default than the first project already was. Shared between
 /// `all_projects_tasks`/`all_projects_events`'s own "+ New" dialogs since the cascade itself is
 /// identical, not screen-specific — unlike the small per-screen row/filter helpers elsewhere in
 /// this codebase that are deliberately duplicated instead of shared.
 pub(crate) fn resolve_new_item_project<'a>(
     user_projects: &'a [crate::domain::project::Project],
     query_project: Option<&str>,
-    personal_project_id: Option<&str>,
 ) -> Option<&'a crate::domain::project::Project> {
     query_project
         .and_then(|id| user_projects.iter().find(|p| p.id == id))
-        .or_else(|| personal_project_id.and_then(|id| user_projects.iter().find(|p| p.id == id)))
         .or_else(|| user_projects.first())
 }
 
