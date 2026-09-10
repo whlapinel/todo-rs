@@ -252,7 +252,7 @@ impl ProjectRepo for SqliteProjectRepo {
     async fn list_members(&self, project_id: &str) -> Result<Vec<ProjectMemberInfo>, RepoError> {
         sqlx::query(
             "SELECT users.id, users.first_name, users.last_name, users.email, users.google_id,
-                    users.timezone, users.personal_project_id, project_members.role, project_members.points
+                    users.timezone, project_members.role, project_members.points
              FROM project_members
              JOIN users ON project_members.user_id = users.id
              WHERE project_members.project_id = ?

@@ -2,7 +2,7 @@ use crate::domain::project::Project;
 use crate::domain::team::TeamRole;
 use crate::domain::user::User;
 use crate::service::items::ItemError;
-use crate::storage::sqlite::{ProjectMemberInfo, ProjectRepo, RepoError, TeamRepo, UserRepo};
+use crate::storage::sqlite::{ProjectMemberInfo, ProjectRepo, RepoError, TeamRepo};
 use std::sync::Arc;
 
 /// Checks that `user_id` can access `project_id` — a personal project (`team_id ==
@@ -132,31 +132,20 @@ pub async fn list_projects(
 /// call site (see `auth.rs`) rather than gated on "was this user just created",
 /// since `get_or_create_*` itself doesn't report that — checking "has zero projects"
 /// instead means this also self-heals any user who signed up before Project existed,
-/// without waiting on stage B's dedicated backfill migration.
-///
-/// Also backfills `users.personal_project_id` (`docs/dialog-item-forms-plan.md`'s Stage
-/// 0) on the same login-time self-healing schedule: a freshly created default project is
-/// recorded immediately; a user who already has a project but no `personal_project_id`
-/// yet (predates this column) gets one resolved via `ProjectRepo::find_personal_project`'s
-/// existing any-team-less-project heuristic — a one-time resolution after which this
-/// function never consults that heuristic again for that user. Takes the caller's
+/// without waiting on stage B's dedicated backfill migration. Takes the caller's
 /// already-fetched `User` rather than just `user_id` so this doesn't need its own
 /// `UserRepo::get` round trip — every call site already has one fresh off
 /// `get_or_create_by_google_id`/`get_or_create_by_email`.
+///
+/// Used to also backfill `users.personal_project_id` here; that field (and the
+/// `ProjectRepo::find_personal_project` heuristic it leaned on) is retired — see the
+/// "Eliminate the 'personal project' concept" entry in `docs/archived/archived_issues_and_features.md`.
 pub async fn ensure_default_project(
     projects: &Arc<dyn ProjectRepo>,
-    users: &Arc<dyn UserRepo>,
     user: &User,
 ) -> Result<(), ItemError> {
     if projects.list_for_user(&user.id).await?.is_empty() {
-        let project_id = create_project(projects, "Personal", &user.id).await?;
-        users.set_personal_project_id(&user.id, &project_id).await?;
-        return Ok(());
-    }
-    if user.personal_project_id.is_none() {
-        if let Some(p) = projects.find_personal_project(&user.id).await? {
-            users.set_personal_project_id(&user.id, &p.id).await?;
-        }
+        create_project(projects, "Personal", &user.id).await?;
     }
     Ok(())
 }
@@ -216,9 +205,9 @@ pub async fn update_project(
 /// `project_members` table (cascade lives in `SqliteProjectRepo::delete`). Requires
 /// the requester to already be a project admin. No longer guards against deleting
 /// the requester's own `personal_project_id` — see the "Eliminate the 'personal
-/// project' concept" entry in `docs/issues_and_features.md`; that guarantee was
-/// dropped rather than replaced, since nothing else in the codebase depends on any
-/// user always having an undeletable project.
+/// project' concept" entry in `docs/archived/archived_issues_and_features.md`; that
+/// guarantee was dropped rather than replaced, since nothing else in the codebase
+/// depends on any user always having an undeletable project.
 pub async fn delete_project(
     projects: &Arc<dyn ProjectRepo>,
     teams: &Arc<dyn TeamRepo>,
@@ -301,7 +290,7 @@ pub async fn detach_team_from_project(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::sqlite::{MockProjectRepo, MockTeamRepo, MockUserRepo};
+    use crate::storage::sqlite::{MockProjectRepo, MockTeamRepo};
 
     fn personal_project() -> Project {
         Project {
@@ -496,7 +485,7 @@ mod tests {
         assert_eq!(id, "p1");
     }
 
-    fn test_user(personal_project_id: Option<&str>) -> User {
+    fn test_user() -> User {
         User {
             id: "u1".to_string(),
             first_name: "A".to_string(),
@@ -504,7 +493,6 @@ mod tests {
             email: None,
             google_id: None,
             timezone: None,
-            personal_project_id: personal_project_id.map(str::to_string),
         }
     }
 
@@ -518,52 +506,21 @@ mod tests {
             })
             .returning(|_, _, _| Ok("p1".to_string()));
 
-        let mut user_mock = MockUserRepo::new();
-        user_mock
-            .expect_set_personal_project_id()
-            .withf(|user_id, project_id| user_id == "u1" && project_id == "p1")
-            .returning(|_, _| Ok(()));
-
         let projects: Arc<dyn ProjectRepo> = Arc::new(mock);
-        let users: Arc<dyn UserRepo> = Arc::new(user_mock);
-        ensure_default_project(&projects, &users, &test_user(None))
+        ensure_default_project(&projects, &test_user())
             .await
             .unwrap();
     }
 
     #[tokio::test]
-    async fn ensure_default_project_is_a_noop_when_personal_project_id_already_set() {
+    async fn ensure_default_project_is_a_noop_when_a_project_already_exists() {
         let mut mock = MockProjectRepo::new();
         mock.expect_list_for_user()
             .returning(|_| Ok(vec![personal_project()]));
+        // No expect_create() — proves a second project is never created.
 
         let projects: Arc<dyn ProjectRepo> = Arc::new(mock);
-        // No expectations set on either mock beyond list_for_user — a call to
-        // find_personal_project or set_personal_project_id would panic, proving this
-        // really is a no-op once personal_project_id is already populated.
-        let users: Arc<dyn UserRepo> = Arc::new(MockUserRepo::new());
-        ensure_default_project(&projects, &users, &test_user(Some("p1")))
-            .await
-            .unwrap();
-    }
-
-    #[tokio::test]
-    async fn ensure_default_project_backfills_personal_project_id_when_missing() {
-        let mut mock = MockProjectRepo::new();
-        mock.expect_list_for_user()
-            .returning(|_| Ok(vec![personal_project()]));
-        mock.expect_find_personal_project()
-            .returning(|_| Ok(Some(personal_project())));
-
-        let mut user_mock = MockUserRepo::new();
-        user_mock
-            .expect_set_personal_project_id()
-            .withf(|user_id, project_id| user_id == "u1" && project_id == "p1")
-            .returning(|_, _| Ok(()));
-
-        let projects: Arc<dyn ProjectRepo> = Arc::new(mock);
-        let users: Arc<dyn UserRepo> = Arc::new(user_mock);
-        ensure_default_project(&projects, &users, &test_user(None))
+        ensure_default_project(&projects, &test_user())
             .await
             .unwrap();
     }

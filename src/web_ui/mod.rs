@@ -149,8 +149,9 @@ pub fn reminder_labels(reminders: &[crate::domain::reminder::Reminder], tz: i32)
 /// the requester's own projects, else the first project `ProjectRepo::list_for_user` returned.
 /// Used to consult `users.personal_project_id` as a middle fallback before falling through to
 /// "first project"; dropped per the "Eliminate the 'personal project' concept" entry in
-/// `docs/issues_and_features.md` — nothing distinguishes that project from any other team-less
-/// one anymore, so it's no better a default than the first project already was. Shared between
+/// `docs/archived/archived_issues_and_features.md` — nothing distinguishes that project from
+/// any other team-less one anymore, so it's no better a default than the first project already
+/// was. Shared between
 /// `all_projects_tasks`/`all_projects_events`'s own "+ New" dialogs since the cascade itself is
 /// identical, not screen-specific — unlike the small per-screen row/filter helpers elsewhere in
 /// this codebase that are deliberately duplicated instead of shared.

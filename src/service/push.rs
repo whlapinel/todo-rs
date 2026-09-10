@@ -446,7 +446,6 @@ mod tests {
                 email: None,
                 google_id: None,
                 timezone: Some("America/New_York".to_string()),
-                personal_project_id: None,
             })
         });
         let users: Arc<dyn UserRepo> = Arc::new(users);
