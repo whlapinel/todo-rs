@@ -12,6 +12,8 @@ Do not use sub-agents (the `Agent` tool, including `Explore`/`general-purpose`/e
 
 Do not add `Co-Authored-By` trailers to commits.
 
+For multi-stage work done from a staged plan (a plan file with numbered stages, e.g. `.claude/plans/*.md`), commit at the completion of each stage without waiting for a fresh per-stage request to commit — the initial go-ahead to work the plan covers every stage's commit. This is the one exception to only committing when explicitly asked; it doesn't extend to unstaged/ad hoc work.
+
 Before creating any commit, run plain `cargo fmt` (no path arguments) from the repo root, then stage any resulting formatting changes as part of the commit. Keeping the whole repo uniformly formatted this way means there's never a partially-formatted file left for a later scoped `rustfmt <file>` or `cargo fmt -- <file>` invocation to collide with — which is what caused repeated formatting breakage in the past (a scoped invocation on a crate-root file like `src/main.rs` reformats every file transitively reachable through `mod` declarations, producing a huge unrelated diff). Always use plain `cargo fmt` with no arguments; never invoke the `rustfmt` binary directly or pass specific files to `cargo fmt --`.
 
 ## Commands
