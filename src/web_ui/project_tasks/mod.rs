@@ -1548,7 +1548,7 @@ mod tests {
 
         let undated = task("c", "C", false);
 
-        let mut items = vec![due_later, scheduled_earlier, undated];
+        let mut items = [due_later, scheduled_earlier, undated];
         items.sort_by_key(sort_key);
 
         assert_eq!(
@@ -1576,7 +1576,7 @@ mod tests {
         let mut scheduled = task("b", "B", false);
         set_scheduled_date(&mut scheduled, 5_000);
 
-        let mut items = vec![scheduled, due];
+        let mut items = [scheduled, due];
         items.sort_by_key(sort_key);
 
         assert_eq!(
@@ -1603,12 +1603,10 @@ mod tests {
         set_priority(&mut high_priority_mid_due, 1);
         set_due_date(&mut high_priority_mid_due, 2_000);
 
-        let mut items = vec![
-            low_priority_early_due,
+        let mut items = [low_priority_early_due,
             high_priority_late_due,
             no_priority,
-            high_priority_mid_due,
-        ];
+            high_priority_mid_due];
         items.sort_by_key(sort_key);
 
         assert_eq!(

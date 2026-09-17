@@ -1509,6 +1509,14 @@ impl ProjectOccurrence {
         matches!(self.state, OccurrenceState::Skipped)
     }
 
+    pub fn due_date(&self) -> Option<DateTime<Utc>> {
+        //only a task occurrence can have a due date
+        match self.item_type {
+            ItemKind::Task => Some(self.occurrence_date),
+            _ => None,
+        }
+    }
+
     /// `GET`s the no-side-effect read-only view for a still-virtual/skipped occurrence (see
     /// `project_item_series::handlers::project_item_series_occurrence_detail_page`), and is
     /// the base path every mutation route below nests under. The name predates Stage C, which

@@ -359,6 +359,15 @@ impl AllProjectsTasksQuery {
     }
 }
 
+fn sort_key(item: &Item) -> (i64, u8) {
+    match item.due_date() {
+        Some(d) => (d.timestamp(), 0),
+        None => match item.scheduled_date() {
+            Some(d) => (d.timestamp(), 1),
+            None => (i64::MAX, 2),
+        },
+    }
+}
 /// Cross-project row assembly — one project at a time, mirroring
 /// `project_tasks::list_task_rows_for_project`'s own gather shape (top-level Task items + each
 /// Task series' current non-materialized occurrence) but across every project the requester
@@ -389,7 +398,7 @@ pub(crate) async fn list_all_projects_task_rows(
     let user_projects = project_service::list_projects(projects, requester_user_id).await?;
     let now = Utc::now();
 
-    let mut entries: Vec<(i64, String)> = Vec::new();
+    let mut entries: Vec<((i64, u8), String)> = Vec::new();
     for project in &user_projects {
         if project_filter.is_some_and(|pid| pid != project.id) {
             continue;
@@ -444,7 +453,13 @@ pub(crate) async fn list_all_projects_task_rows(
             if !filters.matches(item, requester_user_id, is_team_project, now) {
                 continue;
             }
-            let ts = item.due_date().map(|d| d.timestamp()).unwrap_or(i64::MAX);
+            let sort_key = match item.due_date() {
+                Some(d) => (d.timestamp(), 0),
+                None => match item.scheduled_date() {
+                    Some(d) => (d.timestamp(), 1),
+                    None => (i64::MAX, 2),
+                },
+            };
             let skip_url =
                 item_series_service::skip_url_for_item(series, item, &project.id).await?;
             // Always false here — a materialized sub-item is nested, so it renders through
@@ -516,7 +531,7 @@ pub(crate) async fn list_all_projects_task_rows(
                 filters.show_complete,
                 children_html,
             )?;
-            entries.push((ts, html));
+            entries.push((sort_key, html));
         }
 
         let occurrences = all_occurrences
@@ -543,7 +558,7 @@ pub(crate) async fn list_all_projects_task_rows(
                 project_filter,
                 2,
             )?;
-            entries.push((occ.occurrence_date.timestamp(), row.render()?));
+            entries.push(((occ.occurrence_date.timestamp(), u8::MAX), row.render()?));
         }
     }
 
