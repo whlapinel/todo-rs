@@ -1687,6 +1687,16 @@ pub async fn skip_url_for_item(
 /// meaningless (and hidden) for anything but the series' actual current, overdue occurrence —
 /// same gating as the still-virtual row's own button. `None` for a non-Task item, an item never
 /// materialized from a series, a non-current occurrence, or a series that's already caught up.
+///
+/// Checks for an `item_occurrences` row *before* ever calling `get_series`, deliberately in that
+/// order: `delete_series` orphans an already-materialized item (CLAUDE.md's Item series
+/// section — "orphan, not cascade") but unconditionally drops that series' own
+/// `item_occurrences` rows in the same transaction, so a historical item whose series has since
+/// been deleted always fails this lookup first. Calling `get_series` unconditionally instead
+/// (an earlier version of this function did) means `ItemError::NotFound` propagates via `?` and
+/// 404s the *entire* Tasks list for any project with even one such item — exactly the kind of
+/// completed, long-lived item a real project accumulates over time but a small/fresh dev
+/// database never has occasion to.
 pub async fn skip_to_next_url_for_item(
     series_repo: &Arc<dyn ItemSeriesRepo>,
     item: &Item,
@@ -1696,13 +1706,13 @@ pub async fn skip_to_next_url_for_item(
     let (Some(series_id), ItemKind::Task) = (item.series_id(), item.kind()) else {
         return Ok(None);
     };
+    let Some(occurrence) = series_repo.find_occurrence_by_item_id(&item.id).await? else {
+        return Ok(None);
+    };
     let series = series_repo.get_series(&series_id).await?;
     let rule = recurrence::parse(&series.recurrence).map_err(ItemError::Invalid)?;
     let current = current_occurrence_date(&series, &rule, tz_offset_minutes);
-    let is_current = series_repo
-        .find_occurrence_by_item_id(&item.id)
-        .await?
-        .is_some_and(|o| o.occurrence_date == current);
+    let is_current = occurrence.occurrence_date == current;
     Ok((is_current && current < Utc::now())
         .then(|| format!("/web/projects/{project_id}/series/{series_id}/skip-to-next")))
 }
@@ -2067,6 +2077,7 @@ pub async fn fan_out_child_occurrences(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::item::{ItemType, TaskItem};
     use crate::domain::item_series::ItemSeries;
     use crate::domain::project::Project;
     use crate::storage::sqlite::{
@@ -2915,6 +2926,35 @@ mod tests {
         )
         .await
         .expect("should settle the occurrence without a separate fast-forward call");
+    }
+
+    /// Regression test: `delete_series` orphans an already-materialized item (drops the
+    /// series row and its own `item_occurrences` rows, but never touches `items` — see
+    /// CLAUDE.md's Item series section), so a historical completed item's `series_id` can
+    /// point at a series that no longer exists. `skip_to_next_url_for_item` used to call
+    /// `get_series` unconditionally and let its `NotFound` propagate, which 404'd the entire
+    /// Tasks list for any project with even one such item — exactly what a real, long-lived
+    /// project accumulates over time (discovered via prod data copied locally).
+    #[tokio::test]
+    async fn skip_to_next_url_for_item_is_none_for_an_item_whose_series_was_deleted() {
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock
+            .expect_find_occurrence_by_item_id()
+            .returning(|_| Ok(None));
+        series_mock.expect_get_series().times(0);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+
+        let mut item = Item::new_project_item("p1", "🐕💩 Pickup");
+        item.item_type = ItemType::Task(TaskItem {
+            series_id: Some("deleted-series".to_string()),
+            complete: true,
+            ..Default::default()
+        });
+
+        let url = skip_to_next_url_for_item(&series_repo, &item, "p1", 0)
+            .await
+            .expect("should not propagate the deleted series as an error");
+        assert_eq!(url, None);
     }
 
     #[tokio::test]
