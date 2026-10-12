@@ -672,6 +672,10 @@ pub(crate) async fn render_expandable_children(
             &visible,
             tz,
             skip_urls.get(&i.id).cloned(),
+            // Structurally never `Some` here: a nested child row can never be a series'
+            // current occurrence (occurrences are always top-level — see
+            // `Row::skip_to_next_url`'s doc comment).
+            None,
             is_team_project,
             show_complete,
             // In-place expanded children never carry a series badge yet — see
@@ -768,6 +772,7 @@ pub(crate) async fn render_sibling_rows(
             names,
             visible,
             tz,
+            None,
             None,
             is_team_project,
             show_complete,
@@ -900,6 +905,9 @@ pub(crate) async fn render_rows_with_virtual(
     requester_user_id: &str,
     tz: i32,
     skip_urls: &HashMap<String, String>,
+    // See `Row::skip_to_next_url`'s doc comment — mirrors `skip_urls` exactly, just for the
+    // "Skip to next" catch-up action instead of plain Skip.
+    skip_to_next_urls: &HashMap<String, String>,
     team_id: Option<&str>,
     in_list_view: bool,
     item_dependencies: &Arc<dyn ItemDependencyRepo>,
@@ -947,6 +955,7 @@ pub(crate) async fn render_rows_with_virtual(
             &visible,
             tz,
             skip_urls.get(&i.id).cloned(),
+            skip_to_next_urls.get(&i.id).cloned(),
             is_team_project,
             filters.show_complete,
             i.series_id()
@@ -1152,9 +1161,15 @@ pub(crate) async fn list_task_rows_for_project(
         (Vec::new(), HashMap::new(), Vec::new(), HashMap::new())
     };
     let mut skip_urls: HashMap<String, String> = HashMap::new();
+    let mut skip_to_next_urls: HashMap<String, String> = HashMap::new();
     for item in &items {
         if let Some(url) = item_series_service::skip_url_for_item(series, item, project_id).await? {
             skip_urls.insert(item.id.clone(), url);
+        }
+        if let Some(url) =
+            item_series_service::skip_to_next_url_for_item(series, item, project_id, tz).await?
+        {
+            skip_to_next_urls.insert(item.id.clone(), url);
         }
     }
     render_rows_with_virtual(
@@ -1167,6 +1182,7 @@ pub(crate) async fn list_task_rows_for_project(
         requester_user_id,
         tz,
         &skip_urls,
+        &skip_to_next_urls,
         team_id,
         true,
         item_dependencies,
@@ -1603,10 +1619,12 @@ mod tests {
         set_priority(&mut high_priority_mid_due, 1);
         set_due_date(&mut high_priority_mid_due, 2_000);
 
-        let mut items = [low_priority_early_due,
+        let mut items = [
+            low_priority_early_due,
             high_priority_late_due,
             no_priority,
-            high_priority_mid_due];
+            high_priority_mid_due,
+        ];
         items.sort_by_key(sort_key);
 
         assert_eq!(

@@ -35,6 +35,13 @@
     <button type="button" hx-post="{{ url }}" hx-confirm="Skip this occurrence?"
         class="block w-full cursor-pointer px-4 py-3 text-left text-sm text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-500/10">Skip</button>
     {% endif %}
+    {% if let Some(url) = skip_to_next_url %}
+    <!-- The materialized-row counterpart of project_tasks/virtual_row.html's own "Skip to next"
+         entry — same one-click catch-up route, reached from here since this is a materialized
+         row. See `Row::skip_to_next_url`'s doc comment for the gating. -->
+    <button type="button" hx-post="{{ url }}" hx-confirm="Skip every occurrence of this series up to today?"
+        class="block w-full cursor-pointer px-4 py-3 text-left text-sm text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-500/10">Skip to next</button>
+    {% endif %}
     {% endif %}
     {% if treegrid || children_html.is_some() %}
     <!-- Shown whenever the name-click doesn't already open this itself — either because it was

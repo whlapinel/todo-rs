@@ -136,6 +136,12 @@ pub struct Row {
     /// user never needs to know or care whether a series occurrence is materialized before
     /// skipping it. `None` for any item that never came from a series.
     pub skip_url: Option<String>,
+    /// `Some` only when this materialized row is a Task series' *current* occurrence and it's
+    /// overdue — i.e. the series has fallen behind schedule. See
+    /// `service::item_series::skip_to_next_url_for_item`/`skip_to_next_occurrence`'s doc
+    /// comments. `None` for any row that never came from a series, an Event series (no
+    /// current/cursor concept), or a Task series that's already caught up.
+    pub skip_to_next_url: Option<String>,
     /// True when this row is a series occurrence — top-level or sub-item — that has actually
     /// been materialized, i.e. it began as a plan the series computes and now has a real row of
     /// its own because something was persisted to it. Drives two things:

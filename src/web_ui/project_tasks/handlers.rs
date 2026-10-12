@@ -2610,6 +2610,12 @@ pub async fn update_project_task_form(
             let siblings_ref: Vec<&Item> = siblings.iter().collect();
             let skip_url =
                 item_series_service::skip_url_for_item(&series, &updated, &project_id).await?;
+            // See `Row::skip_to_next_url`'s doc comment — only the plain `ProjectTaskRow`/
+            // `all-tasks` branches below ever expose this (Calendar screens are out of scope),
+            // but it's cheap enough to compute unconditionally here, mirroring `skip_url` above.
+            let skip_to_next_url =
+                item_series_service::skip_to_next_url_for_item(&series, &updated, &project_id, tz)
+                    .await?;
             // This single-row swap can be re-rendering a materialized top-level occurrence *or*
             // a materialized sub-item (the nested row a sub-item's own edit posts from). The
             // calendar/all-projects row builders take the sub-item half and OR in `skip_url`
@@ -2700,6 +2706,7 @@ pub async fn update_project_task_form(
                     project.team_id.is_some(),
                     tz,
                     skip_url,
+                    skip_to_next_url,
                     series_sub_item,
                     show_complete,
                     children_html,
@@ -2712,6 +2719,7 @@ pub async fn update_project_task_form(
                         &siblings_ref,
                         tz,
                         skip_url,
+                        skip_to_next_url,
                         project.team_id.is_some(),
                         show_complete,
                         // This single-row rebuild (after an edit/checkbox toggle) has no

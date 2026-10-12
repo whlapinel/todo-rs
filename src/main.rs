@@ -407,6 +407,10 @@ fn build_web_router() -> Router {
             "/projects/:project_id/series/:series_id/occurrences/:occurrence_ts/unskip",
             post(unskip_project_item_series_occurrence_form),
         )
+        .route(
+            "/projects/:project_id/series/:series_id/skip-to-next",
+            post(skip_to_next_project_item_series_occurrence_form),
+        )
         .route("/projects/:project_id/calendar", get(project_calendar_page))
         .route(
             "/projects/:project_id/calendar/day",

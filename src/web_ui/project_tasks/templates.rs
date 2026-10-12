@@ -68,6 +68,7 @@ impl ProjectTaskRow {
         siblings: &[&Item],
         tz: i32,
         skip_url: Option<String>,
+        skip_to_next_url: Option<String>,
         is_team_project: bool,
         show_complete: bool,
         // `None` when `item.series_id` is unset; `Some(is_current)` otherwise — see
@@ -145,6 +146,7 @@ impl ProjectTaskRow {
             // rendering one — see `Row::series_sub_item`.
             series_sub_item: false,
             skip_url,
+            skip_to_next_url,
             toggle_complete_json: (!item.complete()).to_string(),
             show_complete,
             // Only an Event can ever be Google-Calendar-imported (see CLAUDE.md's Points/
@@ -487,6 +489,11 @@ pub struct ProjectTaskVirtualRow {
     pub overdue: bool,
     pub materialize_url: String,
     pub skip_url: String,
+    /// `Some` only when this is the series' current occurrence *and* it's overdue — i.e. the
+    /// series has fallen behind schedule and there's actually something to catch up (hidden
+    /// otherwise, where it'd be a no-op identical to plain Skip). See
+    /// `service::item_series::skip_to_next_occurrence`'s doc comment for the mechanism.
+    pub skip_to_next_url: Option<String>,
     pub complete_url: String,
     pub is_current: bool,
     /// Stage B of `docs/unify-virtual-materialized-occurrences-plan.md` — `true` when this
@@ -562,6 +569,10 @@ impl ProjectTaskVirtualRow {
             overdue: occ.is_due_date_basis && occ.occurrence_date < Utc::now(),
             materialize_url: occ.materialize_url(project_id),
             skip_url: format!("{}{list_query}", occ.skip_url(project_id)),
+            skip_to_next_url: (occ.item_type == ItemKind::Task
+                && occ.is_current
+                && occ.occurrence_date < Utc::now())
+            .then(|| format!("{}{list_query}", occ.skip_to_next_url(project_id))),
             complete_url: format!("{}{list_query}", occ.complete_url(project_id)),
             is_current: occ.is_current,
             is_skipped: occ.is_skipped(),

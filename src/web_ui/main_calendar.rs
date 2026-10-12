@@ -178,6 +178,9 @@ pub(crate) fn calendar_row(
             &[],
             tz,
             skip_url,
+            // "Skip to next" is Tasks-list-only (confirmed scope) — never shown on the
+            // Calendar screens, so this is always `None` here regardless of overdue state.
+            None,
             is_team_project,
             false,
             // The cross-project calendar doesn't run the batched occurrence-state query

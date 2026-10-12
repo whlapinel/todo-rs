@@ -52,6 +52,9 @@ struct AllProjectsTaskVirtualRow {
     overdue: bool,
     materialize_url: String,
     skip_url: String,
+    /// See `project_tasks::templates::ProjectTaskVirtualRow::skip_to_next_url`'s identical
+    /// doc comment.
+    skip_to_next_url: Option<String>,
     complete_url: String,
     is_current: bool,
     assignee_name: Option<String>,
@@ -102,6 +105,10 @@ impl AllProjectsTaskVirtualRow {
             overdue: occ.is_due_date_basis && occ.occurrence_date < Utc::now(),
             materialize_url: occ.materialize_url(project_id),
             skip_url: format!("{}{list_query}", occ.skip_url(project_id)),
+            skip_to_next_url: (occ.item_type == ItemKind::Task
+                && occ.is_current
+                && occ.occurrence_date < Utc::now())
+            .then(|| format!("{}{list_query}", occ.skip_to_next_url(project_id))),
             complete_url: format!("{}{list_query}", occ.complete_url(project_id)),
             is_current: occ.is_current,
             assignee_name: occ.assigned_to_user_name.clone(),
@@ -230,7 +237,6 @@ fn render_virtual_child_rows(
 /// (`docs/all-projects-landing-plan.md` Stage 4) — `update_project_task_form`'s `"all-tasks"` arm
 /// calls this same function to re-render a Reschedule/Assign save from this screen.
 #[allow(clippy::too_many_arguments)]
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn all_projects_task_row(
     item: &Item,
     project_id: &str,
@@ -239,6 +245,7 @@ pub(crate) fn all_projects_task_row(
     is_team_project: bool,
     tz: i32,
     skip_url: Option<String>,
+    skip_to_next_url: Option<String>,
     // See `project_calendar::calendar_row`'s identical parameter (`Row::series_sub_item`).
     series_sub_item: bool,
     show_complete: bool,
@@ -251,6 +258,7 @@ pub(crate) fn all_projects_task_row(
         &[],
         tz,
         skip_url,
+        skip_to_next_url,
         is_team_project,
         show_complete,
         // This cross-project screen only ever shows a series' current occurrence (mirroring
@@ -462,6 +470,9 @@ pub(crate) async fn list_all_projects_task_rows(
             };
             let skip_url =
                 item_series_service::skip_url_for_item(series, item, &project.id).await?;
+            let skip_to_next_url =
+                item_series_service::skip_to_next_url_for_item(series, item, &project.id, tz)
+                    .await?;
             // Always false here — a materialized sub-item is nested, so it renders through
             // `render_expandable_children` instead. The top-level half comes off `skip_url`
             // inside `all_projects_task_row`. See `Row::series_sub_item`.
@@ -527,6 +538,7 @@ pub(crate) async fn list_all_projects_task_rows(
                 is_team_project,
                 tz,
                 skip_url,
+                skip_to_next_url,
                 series_sub_item,
                 filters.show_complete,
                 children_html,
@@ -816,6 +828,9 @@ pub async fn toggle_all_projects_task_complete(
         Ok(updated) => {
             let skip_url =
                 item_series_service::skip_url_for_item(&series, &updated, &project_id).await?;
+            let skip_to_next_url =
+                item_series_service::skip_to_next_url_for_item(&series, &updated, &project_id, tz)
+                    .await?;
             // This single-row swap can re-render a nested sub-item too — see
             // `project_tasks::handlers::update_project_task_form`'s identical computation.
             let series_sub_item =
@@ -859,6 +874,7 @@ pub async fn toggle_all_projects_task_complete(
                 project.team_id.is_some(),
                 tz,
                 skip_url,
+                skip_to_next_url,
                 series_sub_item,
                 show_complete,
                 children_html,

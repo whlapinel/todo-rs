@@ -374,6 +374,85 @@ pub async fn skip_or_delete_series_occurrence(
     skip_occurrence(series_repo, series_id, occurrence_date, tz_offset_minutes).await
 }
 
+/// The "Skip to next" row action — bulk-catches-up a Task-typed series whose current occurrence
+/// has fallen behind schedule (see `current_occurrence_date`'s own doc comment: a backlogged
+/// series' current occurrence can sit arbitrarily far in the past until explicitly settled, one
+/// step at a time). Rather than looping the single-step `skip_or_delete_series_occurrence`
+/// primitive once per missed cycle, this does the minimum real work: `require_current_occurrence`'s
+/// own invariant (only the series' current occurrence is ever reachable/settleable) guarantees no
+/// date strictly between the old cursor and the catch-up target can possibly be materialized — the
+/// moment any such date was current, it would have had to be explicitly settled to advance the
+/// cursor past it, which is exactly the action being taken now. So only the one genuinely real
+/// occurrence (today's `current_occurrence_date`, the "most recent past occurrence") needs
+/// handling as an actual Skip (deleting a materialized item if present, marking that one date
+/// exdate); every older backlog date was never materialized and was never shown anywhere (the
+/// Tasks-list/Calendar past-date clamp already drops an unsettled virtual past date
+/// unconditionally), so fast-forwarding the cursor past them with no exdate rows of their own is
+/// not a loss of any visible state.
+///
+/// Rejects outright for an Event-typed series (no cursor/current concept at all) and no-ops when
+/// the series is already caught up (`current_occurrence_date >= Utc::now()`), mirroring the
+/// virtual row's own hidden-when-not-overdue gating.
+pub async fn skip_to_next_occurrence(
+    repo: &Arc<dyn ItemRepo>,
+    projects: &Arc<dyn ProjectRepo>,
+    teams: &Arc<dyn TeamRepo>,
+    series_repo: &Arc<dyn ItemSeriesRepo>,
+    reminders: &Arc<dyn ReminderRepo>,
+    item_dependencies: &Arc<dyn ItemDependencyRepo>,
+    requester_user_id: &str,
+    series_id: &str,
+    tz_offset_minutes: i32,
+) -> Result<(), ItemError> {
+    let series = series_repo.get_series(series_id).await?;
+    if series.item_type != ItemKind::Task {
+        return Err(ItemError::Invalid(
+            "only a Task-typed series has a current occurrence to skip to next".to_string(),
+        ));
+    }
+    let rule = recurrence::parse(&series.recurrence).map_err(ItemError::Invalid)?;
+    let current = current_occurrence_date(&series, &rule, tz_offset_minutes);
+    if current >= Utc::now() {
+        return Ok(());
+    }
+    // Handles the one real occurrence: deletes a materialized item if present, marks `current`
+    // exdate, and (via `skip_occurrence`'s existing `cursor_value_for_settlement`) advances the
+    // cursor one step — to `Utc::now()` for a completion-basis series (already enough, see
+    // below) or to `current` itself for a fixed-schedule one.
+    skip_or_delete_series_occurrence(
+        repo,
+        projects,
+        teams,
+        series_repo,
+        reminders,
+        item_dependencies,
+        requester_user_id,
+        series_id,
+        current,
+        tz_offset_minutes,
+    )
+    .await?;
+    // Completion-basis: cursor is now `Utc::now()`, so the next current (`advance_once(now)`) is
+    // already in the future — nothing further to do. Fixed-schedule: still possibly behind — fast-
+    // forward with pure date math (no further writes, no further exdate rows, see above) to the
+    // last occurrence date still before now, then one direct `advance_cursor` call lands the
+    // series on the correct current occurrence regardless of how many cycles were skipped.
+    if !is_completion_basis(&series) {
+        let mut probe = recurrence::advance_once(&rule, current, tz_offset_minutes);
+        let mut last_before_now = current;
+        while probe < Utc::now() {
+            last_before_now = probe;
+            probe = recurrence::advance_once(&rule, probe, tz_offset_minutes);
+        }
+        if last_before_now != current {
+            series_repo
+                .advance_cursor(series_id, last_before_now)
+                .await?;
+        }
+    }
+    Ok(())
+}
+
 /// The counterpart to Skip — reverses an exdate-marked occurrence back to virtual. Mirrors
 /// `record_task_uncompletion`'s cursor-safety rigor for a Task-typed series: only the
 /// occurrence at `cursor_date` (the series' most recently settled one) can be unskipped, the
@@ -1538,6 +1617,16 @@ impl ProjectOccurrence {
         format!("{}/unskip", self.materialize_url(project_id))
     }
 
+    /// The "Skip to next" row-actions-menu target — series-scoped (no occurrence timestamp),
+    /// since `skip_to_next_occurrence` always acts on whatever the series' *actual* current
+    /// occurrence is, not whatever date this particular row was rendered with.
+    pub fn skip_to_next_url(&self, project_id: &str) -> String {
+        format!(
+            "/web/projects/{project_id}/series/{}/skip-to-next",
+            self.series_id
+        )
+    }
+
     /// Row-checkbox target for a still-virtual/skipped Task occurrence — materializes and
     /// completes in one POST (`complete_project_item_series_occurrence_form`), the same
     /// composition `update_project_task_series_occurrence_form` already uses for the detail
@@ -1589,6 +1678,33 @@ pub async fn skip_url_for_item(
             o.occurrence_date.timestamp(),
         )
     }))
+}
+
+/// "Skip to next" row-actions-menu URL for an already-materialized series occurrence's own item
+/// row — the materialized counterpart to `ProjectOccurrence::skip_to_next_url`. Unlike
+/// `skip_url_for_item`, this re-derives `is_current`/overdue itself: an already-materialized
+/// `Item` carries no `ProjectOccurrence` to read those off, and `skip_to_next_occurrence` is
+/// meaningless (and hidden) for anything but the series' actual current, overdue occurrence —
+/// same gating as the still-virtual row's own button. `None` for a non-Task item, an item never
+/// materialized from a series, a non-current occurrence, or a series that's already caught up.
+pub async fn skip_to_next_url_for_item(
+    series_repo: &Arc<dyn ItemSeriesRepo>,
+    item: &Item,
+    project_id: &str,
+    tz_offset_minutes: i32,
+) -> Result<Option<String>, ItemError> {
+    let (Some(series_id), ItemKind::Task) = (item.series_id(), item.kind()) else {
+        return Ok(None);
+    };
+    let series = series_repo.get_series(&series_id).await?;
+    let rule = recurrence::parse(&series.recurrence).map_err(ItemError::Invalid)?;
+    let current = current_occurrence_date(&series, &rule, tz_offset_minutes);
+    let is_current = series_repo
+        .find_occurrence_by_item_id(&item.id)
+        .await?
+        .is_some_and(|o| o.occurrence_date == current);
+    Ok((is_current && current < Utc::now())
+        .then(|| format!("/web/projects/{project_id}/series/{series_id}/skip-to-next")))
 }
 
 /// True when `item` is a materialized *sub-item* of a series occurrence — i.e. a
@@ -2624,6 +2740,181 @@ mod tests {
 
         let result = skip_occurrence(&series_repo, "s1", occurrence_date(), 0).await;
         assert!(matches!(result, Err(ItemError::Invalid(_))));
+    }
+
+    #[tokio::test]
+    async fn skip_to_next_occurrence_rejects_an_event_typed_series() {
+        // `series("p1")` defaults to `ItemKind::Event` — no cursor/current concept, so
+        // this should reject outright without touching mark_exdate/advance_cursor at all
+        // (no expectations set for either, so any call to them would panic).
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock
+            .expect_get_series()
+            .returning(|_| Ok(series("p1")));
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let repo: Arc<dyn ItemRepo> = Arc::new(MockItemRepo::new());
+        let projects: Arc<dyn ProjectRepo> = Arc::new(MockProjectRepo::new());
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+
+        let result = skip_to_next_occurrence(
+            &repo,
+            &projects,
+            &teams,
+            &series_repo,
+            &no_op_reminders(),
+            &no_op_item_dependencies(),
+            "member1",
+            "s1",
+            0,
+        )
+        .await;
+        assert!(matches!(result, Err(ItemError::Invalid(_))));
+    }
+
+    #[tokio::test]
+    async fn skip_to_next_occurrence_is_a_no_op_when_already_caught_up() {
+        let mut task_series = series("p1");
+        task_series.item_type = ItemKind::Task;
+        // `current_occurrence_date` with `cursor_date: None` is the anchor itself — set it
+        // comfortably in the future so the series is already caught up.
+        task_series.anchor_date = Utc::now() + Duration::days(1);
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock
+            .expect_get_series()
+            .returning(move |_| Ok(task_series.clone()));
+        series_mock.expect_mark_exdate().times(0);
+        series_mock.expect_advance_cursor().times(0);
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let repo: Arc<dyn ItemRepo> = Arc::new(MockItemRepo::new());
+        let projects: Arc<dyn ProjectRepo> = Arc::new(MockProjectRepo::new());
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+
+        skip_to_next_occurrence(
+            &repo,
+            &projects,
+            &teams,
+            &series_repo,
+            &no_op_reminders(),
+            &no_op_item_dependencies(),
+            "member1",
+            "s1",
+            0,
+        )
+        .await
+        .expect("an already-caught-up series should be a no-op, not an error");
+    }
+
+    #[tokio::test]
+    async fn skip_to_next_occurrence_settles_one_occurrence_and_fast_forwards_the_cursor() {
+        let mut task_series = series("p1");
+        task_series.item_type = ItemKind::Task;
+        // Deep in the past relative to "now" at test-run time, so this series is many
+        // cycles behind schedule — exactly the backlog this action exists to catch up.
+        task_series.anchor_date = occurrence_date();
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock
+            .expect_get_series()
+            .returning(move |_| Ok(task_series.clone()));
+        // No materialized item and no exdate row at the current date — purely virtual, so
+        // `skip_or_delete_series_occurrence` never calls into `delete_project_item`, and
+        // `require_current_occurrence`'s self-heal loop breaks immediately.
+        series_mock
+            .expect_get_occurrence()
+            .returning(|_, _| Ok(None));
+        series_mock
+            .expect_mark_exdate()
+            .withf(|series_id: &str, date: &DateTime<Utc>| {
+                series_id == "s1" && *date == occurrence_date()
+            })
+            .times(1)
+            .returning(|_, _| Ok(()));
+        // Mirrors the implementation's own fast-forward math as this test's oracle — the one
+        // genuinely new computation this feature adds, see `skip_to_next_occurrence`'s doc
+        // comment.
+        let rule = recurrence::parse("every 7 days").unwrap();
+        let mut probe = recurrence::advance_once(&rule, occurrence_date(), 0);
+        let mut expected_fast_forward_target = occurrence_date();
+        while probe < Utc::now() {
+            expected_fast_forward_target = probe;
+            probe = recurrence::advance_once(&rule, probe, 0);
+        }
+        series_mock
+            .expect_advance_cursor()
+            .withf(move |series_id: &str, date: &DateTime<Utc>| {
+                series_id == "s1"
+                    && (*date == occurrence_date() || *date == expected_fast_forward_target)
+            })
+            .times(2)
+            .returning(|_, _| Ok(()));
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let repo: Arc<dyn ItemRepo> = Arc::new(MockItemRepo::new());
+        let projects: Arc<dyn ProjectRepo> = Arc::new(MockProjectRepo::new());
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+
+        skip_to_next_occurrence(
+            &repo,
+            &projects,
+            &teams,
+            &series_repo,
+            &no_op_reminders(),
+            &no_op_item_dependencies(),
+            "member1",
+            "s1",
+            0,
+        )
+        .await
+        .expect("should settle the one real occurrence and fast-forward the cursor");
+    }
+
+    #[tokio::test]
+    async fn skip_to_next_occurrence_advances_only_once_for_a_completion_basis_series() {
+        let mut task_series = series("p1");
+        task_series.item_type = ItemKind::Task;
+        task_series.basis = Some("COMPLETION".to_string());
+        task_series.anchor_date = occurrence_date();
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock
+            .expect_get_series()
+            .returning(move |_| Ok(task_series.clone()));
+        series_mock
+            .expect_get_occurrence()
+            .returning(|_, _| Ok(None));
+        series_mock
+            .expect_mark_exdate()
+            .withf(|series_id: &str, date: &DateTime<Utc>| {
+                series_id == "s1" && *date == occurrence_date()
+            })
+            .times(1)
+            .returning(|_, _| Ok(()));
+        // Exactly one call, to roughly `Utc::now()` — `cursor_value_for_settlement`'s own
+        // completion-basis behavior already lands the cursor past "now" in one step, so the
+        // fast-forward block is a no-op here (asserted by `times(1)`: a second call with any
+        // other date would fail this expectation's count).
+        series_mock
+            .expect_advance_cursor()
+            .withf(|series_id: &str, date: &DateTime<Utc>| {
+                series_id == "s1" && (Utc::now() - *date).num_seconds().abs() < 30
+            })
+            .times(1)
+            .returning(|_, _| Ok(()));
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let repo: Arc<dyn ItemRepo> = Arc::new(MockItemRepo::new());
+        let projects: Arc<dyn ProjectRepo> = Arc::new(MockProjectRepo::new());
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+
+        skip_to_next_occurrence(
+            &repo,
+            &projects,
+            &teams,
+            &series_repo,
+            &no_op_reminders(),
+            &no_op_item_dependencies(),
+            "member1",
+            "s1",
+            0,
+        )
+        .await
+        .expect("should settle the occurrence without a separate fast-forward call");
     }
 
     #[tokio::test]

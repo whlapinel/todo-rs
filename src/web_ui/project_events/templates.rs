@@ -103,6 +103,10 @@ impl ProjectEventRow {
             // An Event structurally cannot be a child, so it can never be a sub-item.
             series_sub_item: false,
             skip_url,
+            // "Skip to next" is meaningless for an Event series — no current/cursor concept
+            // (see `service::item_series::skip_to_next_occurrence`'s doc comment) — and, even if
+            // it weren't, Tasks-list-only is the confirmed scope (never shown on an Event row).
+            skip_to_next_url: None,
             toggle_complete_json: String::new(),
             show_complete: false,
             is_imported: item.google_event_id().is_some(),

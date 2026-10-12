@@ -56,6 +56,8 @@ impl ProjectSimpleItemRow {
             reschedule_url: None,
             assign_url: None,
             skip_url: None,
+            // Simple items are never part of an `item_series` (Task-typed series only).
+            skip_to_next_url: None,
             // Simple items never come from a series.
             materialized_occurrence: false,
             series_sub_item: false,

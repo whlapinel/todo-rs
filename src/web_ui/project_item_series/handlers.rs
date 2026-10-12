@@ -740,6 +740,100 @@ pub async fn unskip_project_item_series_occurrence_form(
     Ok(redirect_to_current_page(&headers, &project_id))
 }
 
+/// The "Skip to next" row action — bulk-catches-up a Task-typed series whose current occurrence
+/// has fallen behind schedule, in one click (see `item_series_service::skip_to_next_occurrence`'s
+/// doc comment for the mechanism). Series-scoped (no `occurrence_ts` in the path, unlike Skip/
+/// Unskip above) since the action always targets whatever the series' *actual* current occurrence
+/// is, not whatever date the clicked row happened to carry. Tasks-list screens only (confirmed
+/// scope) — only the `tasks-list`/`all-tasks` rebuild branches are wired; `redirect_to_current_page`
+/// is kept as a harmless fallback for any other caller, same as Skip/Unskip's own shape.
+pub async fn skip_to_next_project_item_series_occurrence_form(
+    Path((project_id, series_id)): Path<(String, String)>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(users): Extension<Arc<dyn UserRepo>>,
+    Extension(item_series): Extension<Arc<dyn ItemSeriesRepo>>,
+    Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
+    Extension(item_dependencies): Extension<Arc<dyn ItemDependencyRepo>>,
+    TzOffset(tz): TzOffset,
+    Query(q): Query<OccurrenceRowActionQuery>,
+    headers: HeaderMap,
+) -> Result<Response, ItemError> {
+    let series = item_series_service::get_series(
+        &projects,
+        &teams,
+        &item_series,
+        &auth_user.user_id,
+        &series_id,
+    )
+    .await?;
+    if series.project_id != project_id {
+        return Err(ItemError::NotFound);
+    }
+
+    item_series_service::skip_to_next_occurrence(
+        &repo,
+        &projects,
+        &teams,
+        &item_series,
+        &reminders,
+        &item_dependencies,
+        &auth_user.user_id,
+        &series_id,
+        tz,
+    )
+    .await?;
+
+    if q.view.as_deref() == Some("tasks-list") {
+        let filters = list_filters_from_parts(
+            &q.show_complete,
+            &q.assigned_to,
+            &q.due_date,
+            &q.schedule,
+            &q.recurring,
+            &q.priority,
+        );
+        return Ok(rebuild_tasks_list_response(
+            &repo,
+            &projects,
+            &teams,
+            &users,
+            &item_series,
+            &project_id,
+            &auth_user.user_id,
+            &filters,
+            tz,
+            &item_dependencies,
+        )
+        .await?);
+    }
+    if q.view.as_deref() == Some("all-tasks") {
+        let filters = list_filters_from_parts(
+            &q.show_complete,
+            &q.assigned_to,
+            &q.due_date,
+            &q.schedule,
+            &q.recurring,
+            &q.priority,
+        );
+        return Ok(rebuild_all_tasks_list_response(
+            &repo,
+            &projects,
+            &users,
+            &teams,
+            &item_series,
+            &auth_user.user_id,
+            &filters,
+            q.project.as_deref(),
+            tz,
+        )
+        .await?);
+    }
+    Ok(redirect_to_current_page(&headers, &project_id))
+}
+
 /// Shared by the `view=tasks-list` branch of both Skip and Unskip above — rebuilds `#items-list`
 /// exactly as `project_tasks::list_task_rows_for_project` would for a fresh page load, with no
 /// row singled out for a `Row`-style confirmation badge (unlike
