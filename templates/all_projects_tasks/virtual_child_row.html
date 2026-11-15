@@ -5,9 +5,9 @@
      carries one. `id="item-{{ row_id }}"` follows the same convention every other selectable
      row uses. -->
 <li id="item-{{ row_id }}" class="py-2 pl-8" role="row" aria-level="{{ level }}" aria-selected="false">
-  <div class="flex items-center gap-x-3">
+  <div class="flex items-center gap-x-2 sm:gap-x-3">
     <div class="contents" role="gridcell">
-    <span class="shrink-0 size-4"></span>
+    <span class="shrink-0 h-4 w-3 sm:w-4"></span>
     </div>
     <div class="flex min-w-0 flex-1 items-center gap-x-3" role="gridcell">
     <span class="min-w-0 flex-1 truncate text-gray-900 dark:text-white">{{ name }}</span>
@@ -33,7 +33,7 @@
       </div>
     </template>
   </div>
-  <div class="mt-1 flex items-center gap-x-3 pl-7 text-xs text-gray-500 dark:text-gray-400">
+  <div class="mt-1 flex items-center gap-x-3 pl-5 sm:pl-7 text-xs text-gray-500 dark:text-gray-400">
     <div class="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1">
       {% if let Some(label) = offset_label %}
       <span>{{ label }}</span>

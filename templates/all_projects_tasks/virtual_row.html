@@ -4,10 +4,10 @@
      line. `id="item-{{ row_id }}"`, not a screen-prefixed id — same `item-`-prefix convention
      every other selectable row uses (see ProjectTaskVirtualRow::row_id's doc comment). -->
 <li id="item-{{ row_id }}" class="py-2" role="row" aria-level="1"{% if children_html.is_some() %} aria-expanded="false"{% endif %}>
-  <div class="flex items-center gap-x-3">
+  <div class="flex items-center gap-x-2 sm:gap-x-3">
     {% if is_skipped %}
-    <div class="flex min-w-0 flex-1 items-center gap-x-3" role="gridcell">
-    <span class="shrink-0 size-4"></span>
+    <div class="flex min-w-0 flex-1 items-center gap-x-2 sm:gap-x-3" role="gridcell">
+    <span class="shrink-0 h-4 w-3 sm:w-4"></span>
     <span class="min-w-0 flex-1 truncate line-through text-gray-400 dark:text-gray-500">{{ name }}</span>
     <span class="shrink-0 text-[10px] uppercase tracking-wide font-semibold text-gray-400 dark:text-gray-500">Skipped</span>
     </div>
@@ -18,11 +18,11 @@
     <div class="contents" role="gridcell">
     {% if children_html.is_some() %}
     <button type="button" onclick="toggleChildren('{{ row_id }}')"
-      class="shrink-0 flex size-4 items-center justify-center cursor-pointer text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300">
+      class="shrink-0 flex h-4 w-3 sm:w-4 items-center justify-center cursor-pointer text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300">
       <span id="chevron-{{ row_id }}">&#9656;</span>
     </button>
     {% else %}
-    <span class="shrink-0 size-4"></span>
+    <span class="shrink-0 h-4 w-3 sm:w-4"></span>
     {% endif %}
     </div>
     <div class="flex min-w-0 flex-1 items-center gap-x-3" role="gridcell">
@@ -83,7 +83,7 @@
       </div>
     </template>
   </div>
-  <div class="mt-1 flex items-center gap-x-3 pl-7 text-xs text-gray-500 dark:text-gray-400">
+  <div class="mt-1 flex items-center gap-x-3 pl-5 sm:pl-7 text-xs text-gray-500 dark:text-gray-400">
     <div class="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1">
       <span class="rounded bg-gray-100 px-1.5 py-0.5 text-gray-600 dark:bg-white/10 dark:text-gray-300">{{ project_name }}</span>
       {% if let Some(p) = priority_label %}

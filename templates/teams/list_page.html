@@ -20,7 +20,7 @@
   {% if !pending_rows.is_empty() %}
   <div>
     <h3 class="text-base/7 font-semibold text-gray-900 mb-2 dark:text-white">Pending invites</h3>
-    <ul id="pending-list" class="divide-y divide-gray-100 rounded-lg border border-gray-200 bg-white px-4 dark:divide-white/5 dark:border-white/10 dark:bg-gray-800/50">
+    <ul id="pending-list" class="divide-y divide-gray-100 rounded-lg border border-gray-200 bg-white px-2 sm:px-4 dark:divide-white/5 dark:border-white/10 dark:bg-gray-800/50">
       {% for row in pending_rows %}
       {{ row|safe }}
       {% endfor %}
@@ -30,7 +30,7 @@
 
   <div>
     <h3 class="text-base/7 font-semibold text-gray-900 mb-2 dark:text-white">Your teams</h3>
-    <ul id="teams-list" class="divide-y divide-gray-100 rounded-lg border border-gray-200 bg-white px-4 dark:divide-white/5 dark:border-white/10 dark:bg-gray-800/50">
+    <ul id="teams-list" class="divide-y divide-gray-100 rounded-lg border border-gray-200 bg-white px-2 sm:px-4 dark:divide-white/5 dark:border-white/10 dark:bg-gray-800/50">
       {% if active_rows.is_empty() %}
       <li class="py-3 text-sm text-gray-500 dark:text-gray-400">No teams yet.</li>
       {% else %}

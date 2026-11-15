@@ -129,7 +129,7 @@
        tasks + their in-place-expanded descendants, plus any still-virtual series occurrence),
        so base.html's treegrid keydown handler and row-selection JS work unchanged. -->
   <ul id="items-list" role="treegrid" aria-label="Tasks" aria-multiselectable="true"
-    class="divide-y divide-gray-100 rounded-lg border border-gray-200 bg-white px-4 dark:divide-white/5 dark:border-white/10 dark:bg-gray-800/50">
+    class="divide-y divide-gray-100 rounded-lg border border-gray-200 bg-white px-2 sm:px-4 dark:divide-white/5 dark:border-white/10 dark:bg-gray-800/50">
     {% if rows.is_empty() %}
     <li class="py-3 text-sm text-gray-500 dark:text-gray-400" role="row"><div class="contents" role="gridcell">No tasks yet.</div></li>
     {% else %}

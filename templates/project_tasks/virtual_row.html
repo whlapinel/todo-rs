@@ -8,13 +8,13 @@
      (handlers::load_batch_items/parse_virtual_occurrence_id), which materializes it on the spot
      before applying the batch update. -->
 <li id="item-{{ row_id }}" class="py-2" role="row" aria-level="1"{% if children_html.is_some() %} aria-expanded="false"{% endif %}>
-  <div class="flex items-center gap-x-3">
+  <div class="flex items-center gap-x-2 sm:gap-x-3">
     {% if is_skipped %}
     <!-- Real nested flex, not `display: contents` — see components/row.html's identical
          comment on its own name+badges cell for why a mixed flex-growing/shrink-0 cell can't
          safely rely on `display: contents` for sizing. -->
-    <div class="flex min-w-0 flex-1 items-center gap-x-3" role="gridcell">
-    <span class="shrink-0 size-4"></span>
+    <div class="flex min-w-0 flex-1 items-center gap-x-2 sm:gap-x-3" role="gridcell">
+    <span class="shrink-0 h-4 w-3 sm:w-4"></span>
     <span class="min-w-0 flex-1 truncate line-through text-gray-400 dark:text-gray-500">{{ name }}</span>
     <span class="shrink-0 text-[10px] uppercase tracking-wide font-semibold text-gray-400 dark:text-gray-500">Skipped</span>
     </div>
@@ -27,11 +27,11 @@
     <div class="contents" role="gridcell">
     {% if children_html.is_some() %}
     <button type="button" onclick="toggleChildren('{{ row_id }}')"
-      class="shrink-0 flex size-4 items-center justify-center cursor-pointer text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300">
+      class="shrink-0 flex h-4 w-3 sm:w-4 items-center justify-center cursor-pointer text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300">
       <span id="chevron-{{ row_id }}">&#9656;</span>
     </button>
     {% else %}
-    <span class="shrink-0 size-4"></span>
+    <span class="shrink-0 h-4 w-3 sm:w-4"></span>
     {% endif %}
     </div>
     <!-- Real nested flex, not `display: contents` — see components/row.html's identical
@@ -123,7 +123,7 @@
       </div>
     </template>
   </div>
-  <div class="mt-1 flex items-center gap-x-3 pl-7 text-xs text-gray-500 dark:text-gray-400">
+  <div class="mt-1 flex items-center gap-x-3 pl-5 sm:pl-7 text-xs text-gray-500 dark:text-gray-400">
     <div class="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1">
       {% if let Some(p) = priority_label %}
       <span class="text-amber-600 dark:text-amber-400">🚩 {{ p }}</span>

@@ -37,7 +37,7 @@
   </p>
   {% endif %}
 
-  <ul id="template-items" class="divide-y divide-gray-100 rounded-lg border border-gray-200 bg-white px-4 dark:divide-white/5 dark:border-white/10 dark:bg-gray-800/50"
+  <ul id="template-items" class="divide-y divide-gray-100 rounded-lg border border-gray-200 bg-white px-2 sm:px-4 dark:divide-white/5 dark:border-white/10 dark:bg-gray-800/50"
       hx-get="/web/projects/{{ project_id }}/templates/{{ id }}/items" hx-trigger="load"
       hx-target="this" hx-select="unset" hx-swap="innerHTML"></ul>
 

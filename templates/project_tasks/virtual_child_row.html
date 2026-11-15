@@ -5,12 +5,12 @@
      virtual one, and the `child:`-prefixed composite id is resolved server-side
      (handlers::parse_virtual_row_id) if this row is ever swept into a batch action. -->
 <li id="item-{{ row_id }}" class="py-2 pl-8"{% if treegrid %} role="row" aria-level="{{ level }}" aria-selected="false"{% endif %}>
-  <div class="flex items-center gap-x-3">
+  <div class="flex items-center gap-x-2 sm:gap-x-3">
     <!-- Alignment spacer, matching the parent row's expand-control slot — a sub-item
          definition is flat (item_series_children has no nesting), so this row can never
          have children of its own to expand. -->
     <div class="contents"{% if treegrid %} role="gridcell"{% endif %}>
-    <span class="shrink-0 size-4"></span>
+    <span class="shrink-0 h-4 w-3 sm:w-4"></span>
     </div>
     <!-- Real nested flex, not `display: contents` — see components/row.html's identical
          comment on its own name+badges cell. -->
@@ -46,7 +46,7 @@
       </div>
     </template>
   </div>
-  <div class="mt-1 flex items-center gap-x-3 pl-7 text-xs text-gray-500 dark:text-gray-400">
+  <div class="mt-1 flex items-center gap-x-3 pl-5 sm:pl-7 text-xs text-gray-500 dark:text-gray-400">
     <div class="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1">
       <!-- Same offset badge components/row.html renders for the materialized version of this
            row, in the same position — see ProjectTaskVirtualChildRow::offset_label. -->

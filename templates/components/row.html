@@ -4,7 +4,7 @@
      isn't decorative: a view-transition-name is a CSS <custom-ident> and so cannot start with a
      digit, which a bare uuid sometimes does. -->
 <li id="item-{{ id }}" class="py-2 {{ indent_class }}" style="view-transition-name: item-{{ id }}"{% if treegrid %} role="row" aria-level="{{ level }}" aria-selected="false"{% if children_html.is_some() %} aria-expanded="false"{% endif %}{% endif %}>
-    <div class="flex items-center gap-x-3">
+    <div class="flex items-center gap-x-2 sm:gap-x-3">
         {% if treegrid %}
         <!-- Replaces the old complete-checkbox slot (see below): a dedicated expand/collapse
              control, decoupled from selection — clicking/tapping the row itself now selects it
@@ -14,11 +14,11 @@
         <div class="contents" role="gridcell">
         {% if children_html.is_some() %}
         <button type="button" onclick="toggleChildren('{{ id }}')"
-            class="shrink-0 flex size-4 items-center justify-center cursor-pointer text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300">
+            class="shrink-0 flex h-4 w-3 sm:w-4 items-center justify-center cursor-pointer text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300">
             <span id="chevron-{{ id }}">&#9656;</span>
         </button>
         {% else %}
-        <span class="shrink-0 size-4"></span>
+        <span class="shrink-0 h-4 w-3 sm:w-4"></span>
         {% endif %}
         </div>
         {% else if let Some(url) = complete_url %}
@@ -139,7 +139,7 @@
         {% endif %}
     </div>
     {% if expanded_row %}
-    <div class="mt-1 flex items-center gap-x-3 pl-7 text-xs text-gray-500 dark:text-gray-400">
+    <div class="mt-1 flex items-center gap-x-3 pl-5 sm:pl-7 text-xs text-gray-500 dark:text-gray-400">
         <div class="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1">
             {% if let Some(p) = project_name %}<span
                 class="rounded bg-gray-100 px-1.5 py-0.5 text-gray-600 dark:bg-white/10 dark:text-gray-300">{{ p
