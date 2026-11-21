@@ -68,6 +68,7 @@ use web_ui::assigned_items::assigned_items_page;
 use web_ui::login::login_page;
 use web_ui::main_calendar::*;
 use web_ui::notifications::{dismiss_notification_form, notifications_badge, notifications_list};
+use web_ui::profile::{profile_page, update_profile_form};
 use web_ui::project_activity::*;
 use web_ui::project_calendar::*;
 use web_ui::project_calendar_subscriptions::*;
@@ -440,6 +441,7 @@ fn build_web_router() -> Router {
             "/projects/:project_id/activity/:entry_id/undo",
             put(undo_project_activity_log_entry_form),
         )
+        .route("/profile", get(profile_page).post(update_profile_form))
         .route("/teams", get(teams_page).post(create_team_form))
         .route(
             "/teams/:team_id",

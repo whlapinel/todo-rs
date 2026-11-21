@@ -5,10 +5,12 @@ pub struct User {
     pub last_name: String,
     pub email: Option<String>,
     pub google_id: Option<String>,
-    /// IANA timezone name (e.g. "America/New_York"), set via `UpdateUser`. `None` until
-    /// a user explicitly sets one. Currently consumed only by
-    /// `service::calendar_sync` to resolve an imported all-day event's date into the
-    /// correct UTC instant — see root CLAUDE.md's Google Calendar import notes.
+    /// IANA timezone name (e.g. "America/New_York"), set via the web Profile screen
+    /// (`service::users::update_profile`) or `UpdateUser`. `None` until a user explicitly
+    /// sets one. The stand-in for the browser's live offset wherever there's no request to
+    /// read it from: `service::calendar_sync` (all-day event localization) and
+    /// `service::push` (reminder times in push text). Never auto-updated, so it goes stale
+    /// when a user moves unless they change it.
     pub timezone: Option<String>,
 }
 

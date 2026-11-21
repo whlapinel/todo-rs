@@ -16,3 +16,4 @@ pub mod reminders;
 pub mod team_items;
 pub mod teams;
 pub mod templates;
+pub mod users;

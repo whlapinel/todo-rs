@@ -8,6 +8,7 @@ pub mod login;
 pub mod main_calendar;
 pub mod nav;
 pub mod notifications;
+pub mod profile;
 pub mod project_activity;
 pub mod project_calendar;
 pub mod project_calendar_subscriptions;
