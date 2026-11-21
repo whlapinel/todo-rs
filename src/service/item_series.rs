@@ -988,6 +988,15 @@ fn validate_series_item_type(item_type: ItemKind) -> Result<(), ItemError> {
     Ok(())
 }
 
+/// Parse `recurrence` and return its canonical spelling. Runs on every create/update so a
+/// bad pattern is rejected at save time rather than surfacing as an error when the series
+/// is later read, and equivalent spellings are stored identically.
+fn normalize_series_recurrence(recurrence: &str) -> Result<String, ItemError> {
+    recurrence::parse(recurrence)
+        .map(|r| r.canonical())
+        .map_err(ItemError::Invalid)
+}
+
 /// The only two legal values for `basis` are `None` and `Some("COMPLETION")` — see
 /// `ItemSeries::basis`'s doc comment, including why the once-legal `"DUE_DATE"` is now
 /// rejected like any other unrecognized string rather than silently treated as `None`.
@@ -1174,6 +1183,10 @@ pub async fn create_series(
     require_project_member(projects, teams, &params.project_id, requester_user_id).await?;
     validate_series_item_type(params.item_type)?;
     validate_series_event_type(&params.event_type)?;
+    let params = CreateItemSeriesParams {
+        recurrence: normalize_series_recurrence(&params.recurrence)?,
+        ..params
+    };
     validate_series_basis(params.item_type, &params.basis, &params.recurrence)?;
     validate_series_priority(params.item_type, params.priority)?;
     let (assigned_to_user_id, rotation_user_ids, points) = resolve_series_assignment(
@@ -1324,6 +1337,10 @@ pub async fn update_series(
         ));
     }
     validate_series_event_type(&params.event_type)?;
+    let params = UpdateItemSeriesParams {
+        recurrence: normalize_series_recurrence(&params.recurrence)?,
+        ..params
+    };
     validate_series_basis(params.item_type, &params.basis, &params.recurrence)?;
     validate_series_priority(params.item_type, params.priority)?;
     let (assigned_to_user_id, rotation_user_ids, points) = resolve_series_assignment(
@@ -3888,7 +3905,7 @@ mod tests {
             name: "Standup".to_string(),
             description: None,
             event_type: None,
-            recurrence: "every weekday".to_string(),
+            recurrence: "every monday".to_string(),
             anchor_date: occurrence_date(),
             item_type: ItemKind::Event,
             basis: None,
@@ -4382,7 +4399,7 @@ mod tests {
         let mut params = create_params("p1");
         params.item_type = ItemKind::Task;
         params.event_type = None;
-        // create_params()'s default recurrence is "every weekday" — a WeeklyDay pattern,
+        // create_params()'s default recurrence is "every monday" — a WeeklyDay pattern,
         // not an "every N units" one.
         params.basis = Some("COMPLETION".to_string());
         let result = create_series(&projects, &teams, &series_repo, "owner1", params).await;

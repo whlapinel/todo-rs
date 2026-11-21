@@ -61,6 +61,65 @@ fn parse_time_str(s: &str) -> Option<(u8, u8)> {
     Some((h24, m))
 }
 
+impl RecurrenceRule {
+    /// The one spelling of this rule that gets persisted, so "Daily", "every day" and
+    /// "every 1 days" don't end up as three different-looking strings meaning the same
+    /// thing. Always re-parses to an equivalent rule.
+    pub fn canonical(&self) -> String {
+        let plural = |n: u32, unit: &str| {
+            if n == 1 {
+                format!("every {unit}")
+            } else {
+                format!("every {n} {unit}s")
+            }
+        };
+        let base = match &self.unit {
+            RecurrenceUnit::Days => plural(self.count, "day"),
+            RecurrenceUnit::Weeks => plural(self.count, "week"),
+            RecurrenceUnit::Months => plural(self.count, "month"),
+            RecurrenceUnit::Years => plural(self.count, "year"),
+            RecurrenceUnit::MonthlyDay(d) => {
+                let suffix = match (d % 100, d % 10) {
+                    (11..=13, _) => "th",
+                    (_, 1) => "st",
+                    (_, 2) => "nd",
+                    (_, 3) => "rd",
+                    _ => "th",
+                };
+                format!("every month on the {d}{suffix}")
+            }
+            RecurrenceUnit::WeeklyDay(w) => format!(
+                "every {}",
+                match w {
+                    Weekday::Mon => "monday",
+                    Weekday::Tue => "tuesday",
+                    Weekday::Wed => "wednesday",
+                    Weekday::Thu => "thursday",
+                    Weekday::Fri => "friday",
+                    Weekday::Sat => "saturday",
+                    Weekday::Sun => "sunday",
+                }
+            ),
+        };
+        match self.time_override {
+            Some((h, m)) => {
+                let (h12, ampm) = match h {
+                    0 => (12, "am"),
+                    1..=11 => (h, "am"),
+                    12 => (12, "pm"),
+                    _ => (h - 12, "pm"),
+                };
+                if m == 0 {
+                    format!("{base} at {h12}{ampm}")
+                } else {
+                    format!("{base} at {h12}:{m:02}{ampm}")
+                }
+            }
+            None => base,
+        }
+    }
+}
+
 pub fn parse(s: &str) -> Result<RecurrenceRule, String> {
     let s = s.trim().to_lowercase();
     let (base, time_override) = strip_time_suffix(&s);
@@ -176,7 +235,7 @@ fn extract_n(s: &str, unit: &str) -> Option<u32> {
         if let Some(rest) = s.strip_prefix(prefix) {
             let parts: Vec<&str> = rest.splitn(2, ' ').collect();
             if parts.len() == 2 {
-                if let Ok(n) = parts[0].parse::<u32>() {
+                if let Some(n) = parts[0].parse::<u32>().ok().filter(|n| *n > 0) {
                     if parts[1] == unit || parts[1] == unit_singular {
                         return Some(n);
                     }
@@ -231,8 +290,33 @@ pub fn retreat_once(
     retreat(rule, reference, tz_offset_minutes)
 }
 
-fn advance(rule: &RecurrenceRule, from: DateTime<Utc>, tz_offset_minutes: i32) -> DateTime<Utc> {
+/// Shift a UTC instant into "local wall-clock time stored as UTC", so calendar arithmetic
+/// (which weekday, which day-of-month, which time of day) is evaluated against the
+/// submitter's date rather than the UTC one. Without it, an end-of-day local deadline in a
+/// zone behind UTC is already the *next* UTC day, and "every sunday" landed on the
+/// preceding local day. `tz_offset_minutes` follows JavaScript's `getTimezoneOffset()`
+/// (UTC = local + offset).
+fn to_local(dt: DateTime<Utc>, tz_offset_minutes: i32) -> DateTime<Utc> {
+    dt - Duration::minutes(tz_offset_minutes as i64)
+}
+
+fn from_local(dt: DateTime<Utc>, tz_offset_minutes: i32) -> DateTime<Utc> {
+    dt + Duration::minutes(tz_offset_minutes as i64)
+}
+
+fn with_local_time(dt: DateTime<Utc>, time_override: Option<(u8, u8)>) -> DateTime<Utc> {
     use chrono::Timelike;
+    match time_override {
+        Some((h, m)) => dt
+            .with_hour(h as u32)
+            .and_then(|d| d.with_minute(m as u32))
+            .unwrap_or(dt),
+        None => dt,
+    }
+}
+
+fn advance(rule: &RecurrenceRule, from: DateTime<Utc>, tz_offset_minutes: i32) -> DateTime<Utc> {
+    let from = to_local(from, tz_offset_minutes);
     let next = match &rule.unit {
         RecurrenceUnit::Days => from + Duration::days(rule.count as i64),
         RecurrenceUnit::Weeks => from + Duration::weeks(rule.count as i64),
@@ -241,18 +325,11 @@ fn advance(rule: &RecurrenceRule, from: DateTime<Utc>, tz_offset_minutes: i32) -
         RecurrenceUnit::MonthlyDay(day) => next_month_day(from, *day),
         RecurrenceUnit::WeeklyDay(weekday) => next_weekday(from, *weekday),
     };
-    if let Some(time_override) = rule.time_override {
-        let (utc_h, utc_m) = override_to_utc_hm(time_override, tz_offset_minutes);
-        next.with_hour(utc_h)
-            .and_then(|d| d.with_minute(utc_m))
-            .unwrap_or(next)
-    } else {
-        next
-    }
+    from_local(with_local_time(next, rule.time_override), tz_offset_minutes)
 }
 
 fn retreat(rule: &RecurrenceRule, from: DateTime<Utc>, tz_offset_minutes: i32) -> DateTime<Utc> {
-    use chrono::Timelike;
+    let from = to_local(from, tz_offset_minutes);
     let prev = match &rule.unit {
         RecurrenceUnit::Days => from - Duration::days(rule.count as i64),
         RecurrenceUnit::Weeks => from - Duration::weeks(rule.count as i64),
@@ -261,24 +338,7 @@ fn retreat(rule: &RecurrenceRule, from: DateTime<Utc>, tz_offset_minutes: i32) -
         RecurrenceUnit::MonthlyDay(day) => prev_month_day(from, *day),
         RecurrenceUnit::WeeklyDay(weekday) => prev_weekday(from, *weekday),
     };
-    if let Some(time_override) = rule.time_override {
-        let (utc_h, utc_m) = override_to_utc_hm(time_override, tz_offset_minutes);
-        prev.with_hour(utc_h)
-            .and_then(|d| d.with_minute(utc_m))
-            .unwrap_or(prev)
-    } else {
-        prev
-    }
-}
-
-/// Convert a local (hour, minute) `time_override` to UTC (hour, minute), given the
-/// submitter's `tz_offset_minutes` (JavaScript `getTimezoneOffset()` convention:
-/// UTC = local + tz_offset_minutes).
-fn override_to_utc_hm(time_override: (u8, u8), tz_offset_minutes: i32) -> (u32, u32) {
-    let (h, m) = time_override;
-    let local_minutes = h as i32 * 60 + m as i32;
-    let utc_minutes = (local_minutes + tz_offset_minutes).rem_euclid(24 * 60);
-    ((utc_minutes / 60) as u32, (utc_minutes % 60) as u32)
+    from_local(with_local_time(prev, rule.time_override), tz_offset_minutes)
 }
 
 /// Build an `rrule` crate `RRuleSet` equivalent to `rule`, anchored at `anchor`.
@@ -294,16 +354,9 @@ fn to_rrule(
     anchor: DateTime<Utc>,
     tz_offset_minutes: i32,
 ) -> Result<RRuleSet, String> {
-    use chrono::Timelike;
-    let dt_start_utc = if let Some(time_override) = rule.time_override {
-        let (utc_h, utc_m) = override_to_utc_hm(time_override, tz_offset_minutes);
-        anchor
-            .with_hour(utc_h)
-            .and_then(|d| d.with_minute(utc_m))
-            .unwrap_or(anchor)
-    } else {
-        anchor
-    };
+    // The rule is evaluated in local wall-clock time (see `to_local`); the caller shifts
+    // the resulting dates back.
+    let dt_start_utc = with_local_time(to_local(anchor, tz_offset_minutes), rule.time_override);
     let dt_start = dt_start_utc.with_timezone(&Tz::UTC);
 
     let interval = u16::try_from(rule.count).unwrap_or(u16::MAX);
@@ -343,12 +396,12 @@ pub fn occurrences_between(
         return Vec::new();
     };
     rrule_set
-        .after(range_start.with_timezone(&Tz::UTC))
-        .before(range_end.with_timezone(&Tz::UTC))
+        .after(to_local(range_start, tz_offset_minutes).with_timezone(&Tz::UTC))
+        .before(to_local(range_end, tz_offset_minutes).with_timezone(&Tz::UTC))
         .all(u16::MAX)
         .dates
         .into_iter()
-        .map(|d| d.with_timezone(&Utc))
+        .map(|d| from_local(d.with_timezone(&Utc), tz_offset_minutes))
         .collect()
 }
 
@@ -646,5 +699,60 @@ mod tests {
                 dt(2026, 1, 3, 1, 0)
             ]
         );
+    }
+
+    #[test]
+    fn weekday_rule_uses_local_date_not_utc_date() {
+        // Sunday 23:59:59 local at UTC-5 is Monday 04:59:59 UTC; the next occurrence of
+        // "every sunday" must be the following local Sunday, not the UTC-Sunday before it.
+        let rule = parse("every sunday").unwrap();
+        let from = dt(2026, 11, 9, 4, 59); // Sun Nov 8 23:59 local at UTC-5
+        let next = advance_once(&rule, from, 300);
+        assert_eq!(next, dt(2026, 11, 16, 4, 59));
+        let occ = occurrences_between(&rule, from, from, dt(2026, 11, 30, 0, 0), 300);
+        assert_eq!(occ[0], from);
+        assert_eq!(occ[1], dt(2026, 11, 16, 4, 59));
+    }
+
+    #[test]
+    fn canonical_normalizes_equivalent_spellings() {
+        for (input, want) in [
+            ("Daily", "every day"),
+            ("every 1 days", "every day"),
+            ("every 2 weeks", "every 2 weeks"),
+            ("every sun", "every sunday"),
+            ("every month on the 2nd", "every month on the 2nd"),
+            ("every month on the 11", "every month on the 11th"),
+            ("every day at 8am", "every day at 8am"),
+            ("every friday at 5:00pm", "every friday at 5pm"),
+            ("every day at noon", "every day at 12pm"),
+            ("every day at midnight", "every day at 12am"),
+        ] {
+            assert_eq!(parse(input).unwrap().canonical(), want, "{input}");
+        }
+    }
+
+    #[test]
+    fn canonical_round_trips() {
+        for c in [
+            "every 3 months at 6:30pm",
+            "every month on the 21st",
+            "every 2 weeks",
+            "every sunday at 12am",
+        ] {
+            assert_eq!(parse(c).unwrap().canonical(), c);
+        }
+    }
+
+    #[test]
+    fn twenty_four_hour_times_are_rejected() {
+        // The time suffix accepts only am/pm, noon and midnight, so `canonical()` never
+        // has to round-trip a 24-hour spelling.
+        assert!(parse("every friday at 17:00").is_err());
+    }
+
+    #[test]
+    fn zero_interval_is_rejected() {
+        assert!(parse("every 0 days").is_err());
     }
 }
