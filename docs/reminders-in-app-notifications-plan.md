@@ -4,6 +4,7 @@ Status: **implemented (Stages D and E both landed, 2026-08-28)**. Written 2026-0
 
 ## Current state (confirmed by reading the code, not the stale docs bullet)
 
+
 - `reminders` table + migration, `ReminderKind` enum, `ReminderRepo` (`sync_auto_reminders`/`delete_for_item`/`list_for_item`), and `service::reminders::sync_item_reminders` all exist and are wired into every create/update/delete path (`src/service/project_items.rs`).
 - **Nothing reads a reminder anywhere.** `list_for_item` is dead code. There is no reminder UI at all — not even read-only — and no notification delivery of any kind.
 - No background process exists. The only precedent for one is the Google Calendar sync sweep (`src/main.rs:407-429`, a `tokio::spawn` sleep-loop calling `sync_all_subscriptions` every 15 min) — the first and only background loop in this codebase.
