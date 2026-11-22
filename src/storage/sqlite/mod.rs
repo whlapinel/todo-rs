@@ -586,6 +586,20 @@ pub trait ItemSeriesRepo: Send + Sync {
         expected_occurrence_date: DateTime<Utc>,
     ) -> Result<(), RepoError>;
 
+    /// Moves a Task series' cursor to `new_cursor` (`None` clears it), in either direction —
+    /// used only by `service::item_series::update_series` to put the cursor back on the
+    /// series' schedule after an edit changes its anchor or rule. Unlike `advance_cursor`/
+    /// `retreat_cursor` it isn't direction-guarded, since re-alignment can legitimately
+    /// land earlier (a later time of day moved to an earlier one); instead it's a
+    /// compare-and-set on the cursor still being `expected_cursor`, like `clear_cursor`, so
+    /// a settlement that raced the edit is left alone rather than clobbered.
+    async fn replace_cursor(
+        &self,
+        series_id: &str,
+        expected_cursor: DateTime<Utc>,
+        new_cursor: Option<DateTime<Utc>>,
+    ) -> Result<(), RepoError>;
+
     /// Deletes the `item_series` row and all its `item_occurrences` rows. Orphan, not
     /// cascade — never touches `items`; every already-materialized occurrence survives
     /// as a plain standalone item. See item_series.smithy's `DeleteItemSeries` doc

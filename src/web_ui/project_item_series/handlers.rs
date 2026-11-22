@@ -1207,6 +1207,7 @@ pub async fn update_project_item_series_form(
                 .filter(|s| !s.is_empty())
                 .and_then(|s| s.parse().ok()),
         },
+        tz,
     )
     .await?;
 

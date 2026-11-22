@@ -1,12 +1,11 @@
 use crate::push::{PushConfig, PushSendOutcome, send_push};
+use crate::service::users::resolve_tz_offset_minutes;
 use crate::storage::sqlite::{
     ItemRepo, ProjectRepo, PushSubscriptionRepo, ReminderRepo, RepoError, UserRepo,
 };
 use crate::web_ui::reminder_labels;
-use chrono::{Offset, Utc};
-use chrono_tz::Tz;
+use chrono::Utc;
 use std::collections::HashMap;
-use std::str::FromStr;
 use std::sync::{Arc, OnceLock};
 
 /// Ambient handle to the push-sending machinery (VAPID config, the subscriptions
@@ -327,34 +326,6 @@ pub(crate) fn detail_url(item: &crate::domain::item::Item, project_id: &str) -> 
     }
 }
 
-/// Resolves `user_id`'s IANA timezone (`users.timezone`, still unset for most users today —
-/// see CLAUDE.md's Scheduled start/end section) to an offset-minutes value for
-/// `reminder_labels`, falling back to UTC (0) when unset or unparseable — the same
-/// `Tz::from_str(tz).ok()` pattern `service::calendar_sync` already uses. A background sweep
-/// has no live `X-Tz-Offset-Minutes` header to fall back to the way a request handler does
-/// (`TzOffset`, `src/web_ui/mod.rs`), so this is the best available signal.
-async fn resolve_tz_offset_minutes(users: &Arc<dyn UserRepo>, user_id: &str) -> i32 {
-    let Ok(user) = users.get(user_id).await else {
-        return 0;
-    };
-    let Some(tz_name) = user.timezone else {
-        return 0;
-    };
-    let Ok(tz) = Tz::from_str(&tz_name) else {
-        return 0;
-    };
-    // `to_local`/`reminder_labels` (`src/web_ui/mod.rs`) use the JS `Date.getTimezoneOffset()`
-    // convention (positive when local is *behind* UTC), matching the `X-Tz-Offset-Minutes`
-    // header a live request carries. `local_minus_utc()` is chrono's opposite-signed native
-    // convention, so it's negated here to match.
-    -(Utc::now()
-        .with_timezone(&tz)
-        .offset()
-        .fix()
-        .local_minus_utc()
-        / 60)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -433,32 +404,6 @@ mod tests {
             &test_push_config(),
         )
         .await;
-    }
-
-    #[tokio::test]
-    async fn resolve_tz_offset_minutes_matches_js_get_timezone_offset_sign() {
-        let mut users = MockUserRepo::new();
-        users.expect_get().returning(|_| {
-            Ok(crate::domain::user::User {
-                id: "user1".to_string(),
-                first_name: "Test".to_string(),
-                last_name: "User".to_string(),
-                email: None,
-                google_id: None,
-                timezone: Some("America/New_York".to_string()),
-            })
-        });
-        let users: Arc<dyn UserRepo> = Arc::new(users);
-
-        let offset = resolve_tz_offset_minutes(&users, "user1").await;
-
-        // `America/New_York` is always behind UTC (EST -300 / EDT -240), so under the
-        // `Date.getTimezoneOffset()`/`to_local` convention this app uses everywhere else
-        // (positive when local is behind UTC), the resolved offset must be positive.
-        assert!(
-            offset > 0,
-            "expected a positive (behind-UTC) offset for America/New_York, got {offset}"
-        );
     }
 
     #[tokio::test]

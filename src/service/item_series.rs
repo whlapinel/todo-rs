@@ -955,6 +955,35 @@ pub fn current_occurrence_date(
     }
 }
 
+/// Where a Task series' settled `cursor` belongs on its (possibly just-edited) schedule
+/// `anchor`/`rule`: the latest occurrence of that schedule on or before the end of the
+/// cursor's own local day, or `None` (start over at the new anchor) when the new schedule
+/// has nothing that early.
+///
+/// The cursor is otherwise never re-derived from the anchor — `current_occurrence_date` is
+/// `advance_once(cursor)` — so leaving it alone after an edit keeps the *old* schedule
+/// alive: every completion re-settles at the old time of day and the new anchor's dates
+/// never become current (a daily series moved from 7:59 PM to 3:30 PM kept surfacing at
+/// 7:59 PM). Snapping by *local day* rather than to the latest occurrence before the
+/// cursor instant is what makes "I already did today's" survive the edit in both
+/// directions: moving 7:59 PM → 3:30 PM treats that day's 3:30 PM as done (it's before
+/// the cursor), and moving 3:30 PM → 9 PM treats that day's 9 PM as done too (it's after
+/// the cursor, but the same day), rather than asking for the day a second time.
+pub(crate) fn realigned_cursor(
+    rule: &recurrence::RecurrenceRule,
+    anchor: DateTime<Utc>,
+    cursor: DateTime<Utc>,
+    tz_offset_minutes: i32,
+) -> Option<DateTime<Utc>> {
+    let end_of_cursor_day = recurrence::apply_end_of_day(cursor, tz_offset_minutes);
+    if anchor > end_of_cursor_day {
+        return None;
+    }
+    recurrence::occurrences_between(rule, anchor, anchor, end_of_cursor_day, tz_offset_minutes)
+        .last()
+        .copied()
+}
+
 /// Stage 4a's plain CRUD passthroughs, gated by project *membership* (not admin) —
 /// a series is project-scoped content like a template, not a role/points-authority
 /// action, so it follows `create_project_template`'s auth level rather than
@@ -1317,6 +1346,7 @@ pub async fn update_series(
     requester_user_id: &str,
     series_id: &str,
     params: UpdateItemSeriesParams,
+    tz_offset_minutes: i32,
 ) -> Result<(), ItemError> {
     let current = series_repo.get_series(series_id).await?;
     require_project_member(projects, teams, &current.project_id, requester_user_id).await?;
@@ -1354,6 +1384,22 @@ pub async fn update_series(
         params.points,
     )
     .await?;
+    // Put the settled cursor on the schedule this edit leaves the series with — see
+    // `realigned_cursor`. Run on every save, not only when the anchor/rule changed: it's a
+    // no-op for a cursor already on schedule, and it lets a series whose schedule was edited
+    // before this existed (cursor stranded at the old time of day) heal by simply being
+    // re-saved. Not for a completion-basis series (judged by the *new* basis): there the
+    // cursor is the moment of the last completion, deliberately off any anchor-rooted
+    // schedule, and the next occurrence is measured from it. Switching *away* from
+    // completion-basis does re-align, since that leaves exactly such a cursor behind.
+    let new_basis_is_completion = params.basis.as_deref() == Some("COMPLETION");
+    let cursor_realignment = match (current.cursor_date, recurrence::parse(&params.recurrence)) {
+        (Some(cursor), Ok(rule)) if !new_basis_is_completion => {
+            let new_cursor = realigned_cursor(&rule, params.anchor_date, cursor, tz_offset_minutes);
+            (new_cursor != Some(cursor)).then_some((cursor, new_cursor))
+        }
+        _ => None,
+    };
     series_repo
         .update_series(
             series_id,
@@ -1368,10 +1414,10 @@ pub async fn update_series(
                 // itemType joins the rest of this endpoint's full-replace fields at
                 // stage 7b — no longer carried over from `current`.
                 item_type: params.item_type,
-                // Not a settable field of this endpoint — cursor_date only ever moves via
-                // ItemSeriesRepo::advance_cursor, and update_series's own SQL leaves the
-                // column untouched regardless of what's passed here; carried forward only
-                // so this struct literal is complete.
+                // Not a settable field of this endpoint — update_series's own SQL leaves
+                // the column untouched regardless of what's passed here; carried forward
+                // only so this struct literal is complete. A schedule change re-aligns it
+                // separately below, via replace_cursor.
                 cursor_date: current.cursor_date,
                 // basis is a normal round-trip field, same category as recurrence/
                 // anchor_date — omitting it does not preserve current.basis.
@@ -1385,6 +1431,11 @@ pub async fn update_series(
             },
         )
         .await?;
+    if let Some((cursor, new_cursor)) = cursor_realignment {
+        series_repo
+            .replace_cursor(series_id, cursor, new_cursor)
+            .await?;
+    }
     // Same round-trip convention as assigned_to_user_id/points above — a full-replace
     // write regardless of whether rotation_user_ids is empty, so switching a series
     // from rotating back to fixed (or to neither) actually clears its prior members
@@ -4453,7 +4504,8 @@ mod tests {
         let mut params = update_params();
         params.item_type = ItemKind::Task;
         params.event_type = Some("meeting".to_string());
-        let result = update_series(&projects, &teams, &series_repo, "owner1", "s1", params).await;
+        let result =
+            update_series(&projects, &teams, &series_repo, "owner1", "s1", params, 0).await;
         assert!(matches!(result, Err(ItemError::Invalid(_))));
     }
 
@@ -4478,7 +4530,8 @@ mod tests {
         let mut params = update_params();
         params.item_type = ItemKind::Event;
         params.event_type = Some("meeting".to_string());
-        let result = update_series(&projects, &teams, &series_repo, "owner1", "s1", params).await;
+        let result =
+            update_series(&projects, &teams, &series_repo, "owner1", "s1", params, 0).await;
         assert!(matches!(result, Err(ItemError::Invalid(_))));
     }
 
@@ -4500,7 +4553,8 @@ mod tests {
 
         let mut params = update_params();
         params.item_type = ItemKind::Template;
-        let result = update_series(&projects, &teams, &series_repo, "owner1", "s1", params).await;
+        let result =
+            update_series(&projects, &teams, &series_repo, "owner1", "s1", params, 0).await;
         assert!(matches!(result, Err(ItemError::Invalid(_))));
     }
 
@@ -4637,9 +4691,165 @@ mod tests {
             "owner1",
             "s1",
             update_params(),
+            0,
         )
         .await
         .expect("owner should be able to update the series");
+    }
+
+    fn utc(s: &str) -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc)
+    }
+
+    /// Pacific Standard Time under the `getTimezoneOffset` convention.
+    const PST: i32 = 480;
+
+    #[test]
+    fn realigned_cursor_snaps_an_old_time_of_day_onto_the_new_anchor_time() {
+        // The production case: a daily series settled through Nov 21 at its old 7:59 PM,
+        // then re-anchored to 3:30 PM. That day's 3:30 PM counts as done, so Nov 22's
+        // 3:30 PM — not 7:59 PM — becomes current.
+        let rule = recurrence::parse("every day").unwrap();
+        let new_anchor = utc("2026-10-01T23:30:00Z"); // Oct 1, 3:30 PM PST
+        let cursor = utc("2026-11-22T03:59:00Z"); // Nov 21, 7:59 PM PST
+
+        let realigned = realigned_cursor(&rule, new_anchor, cursor, PST).unwrap();
+
+        assert_eq!(realigned, utc("2026-11-21T23:30:00Z"));
+        assert_eq!(
+            recurrence::advance_once(&rule, realigned, PST),
+            utc("2026-11-22T23:30:00Z")
+        );
+    }
+
+    #[test]
+    fn realigned_cursor_counts_a_later_time_the_same_day_as_already_settled() {
+        let rule = recurrence::parse("every day").unwrap();
+        let new_anchor = utc("2026-10-02T05:00:00Z"); // Oct 1, 9:00 PM PST
+        let cursor = utc("2026-11-22T03:59:00Z"); // Nov 21, 7:59 PM PST
+
+        assert_eq!(
+            realigned_cursor(&rule, new_anchor, cursor, PST),
+            Some(utc("2026-11-22T05:00:00Z")) // Nov 21, 9:00 PM PST
+        );
+    }
+
+    #[test]
+    fn realigned_cursor_clears_when_the_new_anchor_is_after_the_cursor_day() {
+        let rule = recurrence::parse("every day").unwrap();
+        let new_anchor = utc("2026-12-01T23:30:00Z");
+        let cursor = utc("2026-11-22T03:59:00Z");
+
+        assert_eq!(realigned_cursor(&rule, new_anchor, cursor, PST), None);
+    }
+
+    /// A daily Task series settled through Nov 21 at 7:59 PM PST, anchored at that time.
+    fn settled_daily_task_series() -> ItemSeries {
+        ItemSeries {
+            item_type: ItemKind::Task,
+            recurrence: "every day".to_string(),
+            anchor_date: utc("2026-10-02T03:59:00Z"),
+            cursor_date: Some(utc("2026-11-22T03:59:00Z")),
+            ..series("p1")
+        }
+    }
+
+    fn task_update_params(anchor_date: DateTime<Utc>) -> UpdateItemSeriesParams {
+        UpdateItemSeriesParams {
+            item_type: ItemKind::Task,
+            recurrence: "every day".to_string(),
+            anchor_date,
+            ..update_params()
+        }
+    }
+
+    async fn run_task_series_update(
+        stored: ItemSeries,
+        params: UpdateItemSeriesParams,
+        expect_replace: Option<Option<DateTime<Utc>>>,
+    ) {
+        let mut series_mock = MockItemSeriesRepo::new();
+        series_mock
+            .expect_get_series()
+            .returning(move |_| Ok(stored.clone()));
+        series_mock.expect_update_series().returning(|_, _| Ok(()));
+        series_mock
+            .expect_set_rotation_members()
+            .returning(|_, _| Ok(()));
+        match expect_replace {
+            Some(expected_new) => {
+                series_mock
+                    .expect_replace_cursor()
+                    .withf(move |id, expected_old, new| {
+                        id == "s1"
+                            && *expected_old == utc("2026-11-22T03:59:00Z")
+                            && *new == expected_new
+                    })
+                    .times(1)
+                    .returning(|_, _, _| Ok(()));
+            }
+            None => {
+                series_mock.expect_replace_cursor().times(0);
+            }
+        }
+        let series_repo: Arc<dyn ItemSeriesRepo> = Arc::new(series_mock);
+        let mut projects_mock = MockProjectRepo::new();
+        projects_mock
+            .expect_get()
+            .returning(|_| Ok(personal_project()));
+        let projects: Arc<dyn ProjectRepo> = Arc::new(projects_mock);
+        let teams: Arc<dyn TeamRepo> = Arc::new(MockTeamRepo::new());
+
+        update_series(&projects, &teams, &series_repo, "owner1", "s1", params, PST)
+            .await
+            .expect("update should succeed");
+    }
+
+    #[tokio::test]
+    async fn update_series_realigns_the_cursor_when_the_anchor_moves() {
+        run_task_series_update(
+            settled_daily_task_series(),
+            task_update_params(utc("2026-10-01T23:30:00Z")),
+            Some(Some(utc("2026-11-21T23:30:00Z"))),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn update_series_leaves_an_on_schedule_cursor_alone() {
+        let stored = settled_daily_task_series();
+        let anchor = stored.anchor_date;
+        run_task_series_update(stored, task_update_params(anchor), None).await;
+    }
+
+    #[tokio::test]
+    async fn update_series_heals_a_stranded_cursor_even_when_nothing_changed() {
+        // The anchor was already moved to 3:30 PM before re-alignment existed, so the cursor
+        // is still at the old 7:59 PM; re-saving the series unchanged puts it back.
+        let stored = ItemSeries {
+            anchor_date: utc("2026-10-01T23:30:00Z"),
+            ..settled_daily_task_series()
+        };
+        let anchor = stored.anchor_date;
+        run_task_series_update(
+            stored,
+            task_update_params(anchor),
+            Some(Some(utc("2026-11-21T23:30:00Z"))),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn update_series_leaves_a_completion_basis_cursor_alone() {
+        let stored = ItemSeries {
+            basis: Some("COMPLETION".to_string()),
+            ..settled_daily_task_series()
+        };
+        let params = UpdateItemSeriesParams {
+            basis: Some("COMPLETION".to_string()),
+            ..task_update_params(utc("2026-10-01T23:30:00Z"))
+        };
+        run_task_series_update(stored, params, None).await;
     }
 
     #[tokio::test]
@@ -4663,7 +4873,7 @@ mod tests {
         // creation, so already-materialized occurrences can never disagree with it.
         let mut params = update_params();
         params.item_type = ItemKind::Task;
-        let err = update_series(&projects, &teams, &series_repo, "owner1", "s1", params)
+        let err = update_series(&projects, &teams, &series_repo, "owner1", "s1", params, 0)
             .await
             .expect_err("a series' kind is immutable");
         assert!(matches!(err, ItemError::Invalid(msg) if msg.contains("cannot be changed")));
@@ -4692,6 +4902,7 @@ mod tests {
             "not-the-owner",
             "s1",
             update_params(),
+            0,
         )
         .await;
         assert!(result.is_err());

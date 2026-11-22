@@ -318,6 +318,22 @@ impl ItemSeriesRepo for SqliteItemSeriesRepo {
         Ok(())
     }
 
+    async fn replace_cursor(
+        &self,
+        series_id: &str,
+        expected_cursor: DateTime<Utc>,
+        new_cursor: Option<DateTime<Utc>>,
+    ) -> Result<(), RepoError> {
+        sqlx::query("UPDATE item_series SET cursor_date = ? WHERE id = ? AND cursor_date = ?")
+            .bind(new_cursor.map(to_secs))
+            .bind(series_id)
+            .bind(to_secs(expected_cursor))
+            .execute(&self.0)
+            .await
+            .map_err(db_err)?;
+        Ok(())
+    }
+
     async fn delete_series(&self, series_id: &str) -> Result<(), RepoError> {
         // No FK/ON DELETE CASCADE between item_occurrences.series_id and item_series.id
         // (see the schema in create_pool()), so both deletes run in one transaction to
@@ -1103,6 +1119,42 @@ mod tests {
         assert_eq!(
             repo.get_series(&id).await.unwrap().cursor_date,
             Some(dt(2_000_000))
+        );
+    }
+
+    #[tokio::test]
+    async fn replace_cursor_moves_in_either_direction_or_clears() {
+        let pool = test_pool().await;
+        let repo = SqliteItemSeriesRepo(pool);
+        let id = repo.create_series(&sample_series("p1")).await.unwrap();
+        repo.advance_cursor(&id, dt(3_000_000)).await.unwrap();
+
+        repo.replace_cursor(&id, dt(3_000_000), Some(dt(2_000_000)))
+            .await
+            .unwrap();
+        assert_eq!(
+            repo.get_series(&id).await.unwrap().cursor_date,
+            Some(dt(2_000_000))
+        );
+
+        repo.replace_cursor(&id, dt(2_000_000), None).await.unwrap();
+        assert_eq!(repo.get_series(&id).await.unwrap().cursor_date, None);
+    }
+
+    #[tokio::test]
+    async fn replace_cursor_leaves_a_cursor_that_moved_since_alone() {
+        let pool = test_pool().await;
+        let repo = SqliteItemSeriesRepo(pool);
+        let id = repo.create_series(&sample_series("p1")).await.unwrap();
+        repo.advance_cursor(&id, dt(3_000_000)).await.unwrap();
+
+        repo.replace_cursor(&id, dt(2_500_000), Some(dt(1_000_000)))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            repo.get_series(&id).await.unwrap().cursor_date,
+            Some(dt(3_000_000))
         );
     }
 

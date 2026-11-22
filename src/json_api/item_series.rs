@@ -6,7 +6,8 @@ use crate::service::item_series::{
     CreateItemSeriesParams, SeriesChildParams, UpdateItemSeriesParams,
 };
 use crate::service::items::ItemError;
-use crate::storage::sqlite::{ItemSeriesRepo, ProjectRepo, TeamRepo};
+use crate::service::users::resolve_tz_offset_minutes;
+use crate::storage::sqlite::{ItemSeriesRepo, ProjectRepo, TeamRepo, UserRepo};
 use std::sync::Arc;
 use todo_server_sdk::{error, input, model, output, server, types::DateTime as SmithyDateTime};
 
@@ -113,8 +114,13 @@ pub async fn update_item_series(
     server::Extension(projects): server::Extension<Arc<dyn ProjectRepo>>,
     server::Extension(teams): server::Extension<Arc<dyn TeamRepo>>,
     server::Extension(item_series): server::Extension<Arc<dyn ItemSeriesRepo>>,
+    server::Extension(users): server::Extension<Arc<dyn UserRepo>>,
     server::Extension(auth): server::Extension<AuthUser>,
 ) -> Result<output::UpdateItemSeriesOutput, error::UpdateItemSeriesError> {
+    // No `timezoneOffsetMinutes` on this Smithy input; the stored profile timezone is the
+    // best available stand-in for the cursor re-alignment's "local day" (see
+    // `item_series_service::realigned_cursor`), and far better than 0 for a user behind UTC.
+    let tz_offset_minutes = resolve_tz_offset_minutes(&users, &auth.user_id).await;
     item_series_service::update_series(
         &projects,
         &teams,
@@ -134,6 +140,7 @@ pub async fn update_item_series(
             points: input.points,
             priority: input.priority,
         },
+        tz_offset_minutes,
     )
     .await
     .map_err(|e| error::UpdateItemSeriesError::from(to_msg(e)))?;

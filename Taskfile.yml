@@ -39,9 +39,18 @@ tasks:
       - cargo build
 
   copy-prod-db:
-    desc: Copies prod db to repo for testing
+    desc: Copies prod db (plus its WAL) to repo for testing
+    vars:
+      REMOTE: daddy@lapinel-fam.club
+      DIR: /opt/home-server-data/todo-data
     cmds:
-      - scp daddy@lapinel-fam.club:/opt/home-server-data/todo-data/todo.db .
+      # Prod runs SQLite in WAL mode: recent writes sit in todo.db-wal until a checkpoint, so
+      # copying todo.db alone can be hours stale. A leftover local -wal/-shm would be replayed
+      # onto the fresh copy, so those go first. The -shm is never copied — SQLite rebuilds it
+      # from the WAL on open. (No sqlite3 on the server, so no `.backup` snapshot.)
+      - rm -f todo.db-wal todo.db-shm
+      - scp {{.REMOTE}}:{{.DIR}}/todo.db .
+      - if ssh {{.REMOTE}} test -f {{.DIR}}/todo.db-wal; then scp {{.REMOTE}}:{{.DIR}}/todo.db-wal .; fi
 
   run:
     dotenv:
