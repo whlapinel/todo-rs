@@ -16,12 +16,21 @@
       </svg>
     </button>
     <a href="/web/tasks" class="shrink-0 text-sm font-semibold text-gray-900 dark:text-white">Home</a>
-    <nav class="flex flex-1 items-center gap-x-2 overflow-x-auto">
-      {% for pill in project_pills %}
-      <a href="{{ pill.href }}"
-        class="shrink-0 rounded-full px-3 py-1 text-sm font-medium {% if pill.is_active %}bg-indigo-600 text-white{% else %}text-gray-600 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-white/5{% endif %}">{{
-        pill.name }}</a>
-      {% endfor %}
+    {# Project switcher. Each option's value is the URL to load, so picking one is a plain
+       navigation (this header is hx-boost="false", same as the links it replaced).
+       autocomplete="off" stops Firefox restoring a stale choice on Back. #}
+    <nav class="flex min-w-0 flex-1 items-center">
+      <label for="project-switcher" class="sr-only">Project</label>
+      <select id="project-switcher" autocomplete="off" onchange="window.location.href = this.value"
+        class="min-w-0 max-w-full rounded-md bg-white py-1.5 pr-8 pl-3 text-sm text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:*:bg-gray-800 dark:focus:outline-indigo-500">
+        {% if no_project_context %}
+        <option value="" disabled selected hidden>Switch project…</option>
+        {% endif %}
+        <option value="{{ all_projects_href }}" {% if all_projects_active %}selected{% endif %}>All projects</option>
+        {% for opt in project_options %}
+        <option value="{{ opt.href }}" {% if opt.is_active %}selected{% endif %}>{{ opt.name }}</option>
+        {% endfor %}
+      </select>
     </nav>
     <details class="relative shrink-0">
       <summary class="flex list-none cursor-pointer p-1.5 text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white">

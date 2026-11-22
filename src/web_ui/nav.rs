@@ -20,7 +20,7 @@ pub enum ActiveContext {
 }
 
 /// Which item-type screen (if any) the current page belongs to. Drives both the sidebar's
-/// active-link highlighting and, via `section_href`, the href every nav link/pill actually
+/// active-link highlighting and, via `section_href`, the href every nav link/switcher option actually
 /// points at — see that function's doc comment.
 #[derive(Clone, Copy, PartialEq)]
 pub enum SidebarSection {
@@ -32,7 +32,7 @@ pub enum SidebarSection {
     None,
 }
 
-struct ProjectPill {
+struct ProjectOption {
     name: String,
     href: String,
     is_active: bool,
@@ -47,7 +47,14 @@ struct SectionLink {
 #[derive(Template)]
 #[template(path = "nav.html")]
 struct NavTemplate {
-    project_pills: Vec<ProjectPill>,
+    project_options: Vec<ProjectOption>,
+    /// The switcher's leading "All projects" entry — the cross-project counterpart of the
+    /// current section (only Events has one besides Tasks, so everything else lands on Tasks).
+    all_projects_href: &'static str,
+    all_projects_active: bool,
+    /// A page outside any project and outside the all-projects screens (Profile, Projects,
+    /// Teams) — the switcher shows a placeholder instead of claiming a selection.
+    no_project_context: bool,
     section_links: Vec<SectionLink>,
     calendar_href: Option<String>,
     activity_href: Option<String>,
@@ -55,7 +62,7 @@ struct NavTemplate {
 
 /// The one place that knows how a given (section, project) pair maps to a URL — used both
 /// for the sidebar's 4 section links (project fixed at the page's own active project, section
-/// varies over Tasks/Events/SimpleLists/Templates) and the top switcher's project pills
+/// varies over Tasks/Events/SimpleLists/Templates) and the top switcher's project options
 /// (section fixed at the page's own `section`, project varies over every project the user
 /// belongs to). That shared derivation is what makes "switching project preserves the current
 /// section" fall out for free rather than needing special-case code — same property the
@@ -81,12 +88,12 @@ pub async fn build_nav_html(
     active: ActiveContext,
     section: SidebarSection,
 ) -> Result<String, ItemError> {
-    let project_pills = project_service::list_projects(projects, user_id)
+    let project_options = project_service::list_projects(projects, user_id)
         .await?
         .into_iter()
         .map(|p| {
             let id = p.id.clone();
-            ProjectPill {
+            ProjectOption {
                 is_active: active == ActiveContext::Project(id.clone()),
                 href: section_href(section, &id),
                 name: p.name,
@@ -137,8 +144,18 @@ pub async fn build_nav_html(
         ActiveContext::None => (Vec::new(), None, None),
     };
 
+    let all_projects_href = match section {
+        SidebarSection::Events => "/web/events",
+        _ => "/web/tasks",
+    };
+    let all_projects_active = active == ActiveContext::AllProjects;
+    let no_project_context = active == ActiveContext::None;
+
     Ok(NavTemplate {
-        project_pills,
+        project_options,
+        all_projects_href,
+        all_projects_active,
+        no_project_context,
         section_links,
         calendar_href,
         activity_href,
