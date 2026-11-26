@@ -2486,6 +2486,204 @@ pub async fn batch_set_assignee_form(
     ))
 }
 
+#[derive(serde::Deserialize, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchCompleteForm {
+    item_ids: String,
+    filters_query: Option<String>,
+}
+
+/// Marks every selected task complete through the same `update_project_item` `complete: true`
+/// path the row checkbox uses, so every completion guard (incomplete children, dependencies,
+/// series current-occurrence/sub-item rules) and the points award apply per item unchanged.
+///
+/// Unlike the field-setting batch actions above, completion is **order-sensitive within one
+/// selection**: completing B before A fails when B depends on A, and a series' later occurrence
+/// isn't completable until the earlier one has advanced the cursor. Rather than making the
+/// caller order the selection, this retries in passes — each pass attempts everything still
+/// outstanding, and it stops once a pass completes nothing. What's left at that point is
+/// genuinely blocked (by something outside the selection) and is reported by name; everything
+/// else in the selection has still been completed — best-effort, like CSV import, not
+/// all-or-nothing. Already-complete items are skipped rather than re-submitted.
+pub async fn batch_complete_form(
+    Path(project_id): Path<String>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(activity_log): Extension<Arc<dyn ActivityLogRepo>>,
+    Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
+    Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
+    Extension(item_dependencies): Extension<Arc<dyn ItemDependencyRepo>>,
+    TzOffset(tz): TzOffset,
+    Form(form): Form<BatchCompleteForm>,
+) -> Result<Response, ItemError> {
+    let item_ids = parse_item_ids(&form.item_ids);
+    let items = load_batch_items(
+        &repo,
+        &projects,
+        &teams,
+        &series,
+        &reminders,
+        &project_id,
+        &auth_user.user_id,
+        &item_ids,
+        tz,
+    )
+    .await?;
+    let mut pending: Vec<Item> = items.into_iter().filter(|i| !i.complete()).collect();
+    let mut failures: Vec<(String, ItemError)> = Vec::new();
+    while !pending.is_empty() {
+        let before = pending.len();
+        failures.clear();
+        let mut still_pending = Vec::new();
+        for item in pending {
+            let mut task = EditTask::from_item(&item);
+            task.complete = true;
+            let edit = identity_edit(&project_id, &item, tz, task);
+            match project_item_service::update_project_item(
+                &repo,
+                &projects,
+                &teams,
+                &activity_log,
+                &series,
+                &reminders,
+                &item_dependencies,
+                &auth_user.user_id,
+                edit,
+            )
+            .await
+            {
+                Ok(_) => {}
+                // Only a rule rejection is worth retrying; anything else (not found, storage)
+                // won't change on a second attempt.
+                Err(ItemError::Invalid(msg)) => {
+                    failures.push((item.name.clone(), ItemError::Invalid(msg)));
+                    still_pending.push(item);
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        pending = still_pending;
+        if pending.len() == before {
+            break;
+        }
+    }
+    if !failures.is_empty() {
+        let details = failures
+            .iter()
+            .map(|(name, e)| format!("\"{name}\": {e}"))
+            .collect::<Vec<_>>()
+            .join("; ");
+        return Err(ItemError::Invalid(format!(
+            "{} of the selected tasks couldn't be completed (the rest were) — {details}",
+            failures.len()
+        )));
+    }
+    Ok(redirect_to_project_tasks(
+        &project_id,
+        form.filters_query.as_deref().unwrap_or(""),
+    ))
+}
+
+#[derive(serde::Deserialize, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchDeleteForm {
+    item_ids: String,
+    filters_query: Option<String>,
+}
+
+/// Deletes every selected task (and, as with a single-row Delete, its whole sub-item tree)
+/// through `delete_project_item`, so occurrence unlinking, reminder and dependency cleanup all
+/// apply per item unchanged.
+///
+/// **Series occurrences are refused, not deleted.** The single-row menu never offers Delete for
+/// one: a still-virtual occurrence has only Skip, and a materialized one's DELETE is labelled
+/// Reset because it un-materializes rather than removes (the row comes straight back as
+/// virtual — see `row_actions_menu.html`). A batch "Delete" that silently did either would be
+/// the "I deleted it and it came back" surprise that labelling exists to avoid. So this
+/// deliberately does *not* go through `load_batch_items`, which would materialize a virtual
+/// occurrence as a side effect of loading it, only for this handler to then reject it.
+///
+/// Every id is validated before anything is deleted, so a rejected selection changes nothing.
+/// During the delete loop a `NotFound` means an earlier delete in the same selection already
+/// cascaded through this item (it was selected along with an ancestor), so it counts as done.
+pub async fn batch_delete_form(
+    Path(project_id): Path<String>,
+    Extension(auth_user): Extension<AuthUser>,
+    Extension(repo): Extension<Arc<dyn ItemRepo>>,
+    Extension(projects): Extension<Arc<dyn ProjectRepo>>,
+    Extension(teams): Extension<Arc<dyn TeamRepo>>,
+    Extension(series): Extension<Arc<dyn ItemSeriesRepo>>,
+    Extension(reminders): Extension<Arc<dyn ReminderRepo>>,
+    Extension(item_dependencies): Extension<Arc<dyn ItemDependencyRepo>>,
+    Form(form): Form<BatchDeleteForm>,
+) -> Result<Response, ItemError> {
+    let item_ids = parse_item_ids(&form.item_ids);
+    if item_ids.is_empty() {
+        return Err(ItemError::Invalid("No items selected.".to_string()));
+    }
+    let mut occurrence_count = 0usize;
+    let mut items = Vec::with_capacity(item_ids.len());
+    for id in &item_ids {
+        if parse_virtual_row_id(id).is_some() {
+            occurrence_count += 1;
+            continue;
+        }
+        let item = require_task(
+            project_item_service::get_project_item(
+                &repo,
+                &projects,
+                &teams,
+                &project_id,
+                &auth_user.user_id,
+                id,
+            )
+            .await?,
+        )?;
+        let is_occurrence = item.series_id().is_some()
+            || series
+                .find_child_occurrence_by_item_id(&item.id)
+                .await
+                .map_err(ItemError::from)?
+                .is_some();
+        if is_occurrence {
+            occurrence_count += 1;
+            continue;
+        }
+        items.push(item);
+    }
+    if occurrence_count > 0 {
+        return Err(ItemError::Invalid(format!(
+            "{occurrence_count} of the selected tasks are series occurrences, which can't be \
+             deleted — use Skip (or Reset) on them individually, or edit the series. Nothing \
+             was deleted."
+        )));
+    }
+    for item in &items {
+        match project_item_service::delete_project_item(
+            &repo,
+            &projects,
+            &teams,
+            &series,
+            &reminders,
+            &item_dependencies,
+            &auth_user.user_id,
+            &project_id,
+            &item.id,
+        )
+        .await
+        {
+            Ok(()) | Err(ItemError::NotFound) => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(redirect_to_project_tasks(
+        &project_id,
+        form.filters_query.as_deref().unwrap_or(""),
+    ))
+}
+
 pub async fn update_project_task_form(
     Path((project_id, item_id)): Path<(String, String)>,
     Extension(auth_user): Extension<AuthUser>,

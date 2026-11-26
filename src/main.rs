@@ -139,6 +139,14 @@ fn build_web_router() -> Router {
             put(batch_set_assignee_form),
         )
         .route(
+            "/projects/:project_id/tasks/batch/complete",
+            put(batch_complete_form),
+        )
+        .route(
+            "/projects/:project_id/tasks/batch/delete",
+            put(batch_delete_form),
+        )
+        .route(
             "/projects/:project_id/tasks/:item_id",
             get(project_task_detail_page)
                 .put(update_project_task_form)
