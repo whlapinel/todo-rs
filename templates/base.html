@@ -488,6 +488,34 @@
       focusDialogContent(dialog);
     }
 
+    // Mobile counterpart to nav.html's bell dropdown — same bottom-sheet shell as
+    // openRowActionsMenuDialog above, with the fragment loaded into it by its own hx-get on
+    // `load` (the dropdown's `toggle from:closest details` trigger has no <details> here).
+    // Deliberately *no* `data-row-actions-menu` marker: that opts into the afterRequest
+    // listener's "close after a terminal action", and Dismiss (which swaps #notif-list in
+    // place) should leave the sheet open. Following a notification's link is what closes it.
+    // push.js re-wires #push-notif-toggle on htmx:afterSwap, so the toggle works here too.
+    function openNotificationsSheet() {
+      const dialog = document.getElementById('action-dialog');
+      if (!dialog) return;
+      dialog.innerHTML =
+        '<div class="fixed inset-0 bg-gray-500/75 dark:bg-gray-900/50 transition-opacity duration-300 ease-out opacity-0 group-open/dialog:opacity-100"></div>' +
+        '<div class="relative z-10 flex min-h-full items-end justify-center focus:outline-none">' +
+        '<div class="relative w-full max-h-[85vh] overflow-y-auto transform rounded-t-lg bg-white text-left shadow-xl transition-all duration-300 ease-out translate-y-4 opacity-0 group-open/dialog:translate-y-0 group-open/dialog:opacity-100 dark:bg-gray-800 dark:outline dark:-outline-offset-1 dark:outline-white/10">' +
+        '<div class="border-b border-gray-100 bg-gray-50 px-4 py-3 text-base font-semibold text-gray-900 dark:border-white/10 dark:bg-white/5 dark:text-white">Notifications</div>' +
+        '<div hx-get="/web/notifications" hx-trigger="load" hx-target="this" hx-select="unset" hx-swap="innerHTML"' +
+        ' onclick="if (event.target.closest(\'a\')) document.getElementById(\'action-dialog\').close()">' +
+        '<div class="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">Loading…</div></div>' +
+        '<div class="border-t border-gray-100 dark:border-white/10">' +
+        '<button type="button" onclick="document.getElementById(\'action-dialog\').close()" class="block w-full cursor-pointer px-4 py-3 text-center text-sm font-semibold text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-white/5">Close</button>' +
+        '</div>' +
+        '</div>' +
+        '</div>';
+      htmx.process(dialog);
+      dialog.showModal();
+      focusDialogContent(dialog);
+    }
+
     // Arrow-key navigation among #action-menu-popover's own items (row-actions and batch-
     // actions alike — both are just a flat `<div>` of `a`/`button`s, built from
     // components/row_actions_menu.html or the `batch-actions-menu` <template>, see
