@@ -2,21 +2,26 @@
 {% import "macros.html" as macros %}
 {% block title %}Tasks · Todo{% endblock %}
 {% block content %}
-<div class="space-y-6">
-  <div class="md:flex md:items-center md:justify-between">
+<div class="space-y-3 sm:space-y-6">
+  <!-- One row at every width, unlike the older `md:flex` header (which stacks the buttons
+       under the heading below md — on a phone that cost a whole extra row of vertical space).
+       Below sm the buttons compact instead: Filters goes icon-only (label kept for screen
+       readers) and padding tightens. The Up arrow is icon-only at every width. Shared by the
+       project_events/project_simple_lists/project_templates list pages and all_projects_tasks. -->
+  <div class="flex items-center justify-between gap-x-3">
     <div class="min-w-0 flex-1 flex items-center gap-x-3">
-      <h2 class="text-2xl/7 font-bold text-gray-900 sm:truncate sm:text-3xl sm:tracking-tight dark:text-white">Tasks
+      <h2 class="truncate text-xl/7 font-bold text-gray-900 sm:text-3xl sm:tracking-tight dark:text-white">Tasks
       </h2>
       {% if let Some(label) = points_label %}{% call macros::badge(label, "indigo") %}{% endcall %}{% endif %}
     </div>
-    <div class="mt-4 flex items-center gap-x-3 md:mt-0 md:ml-4">
-      <a href="/web/projects" hx-boost="false"
-        class="inline-flex items-center justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-xs inset-ring inset-ring-gray-300 hover:bg-gray-50 dark:bg-white/10 dark:text-white dark:shadow-none dark:inset-ring-white/5 dark:hover:bg-white/20">
-        Up to projects</a>
-      <button type="button" onclick="var d=document.getElementById('task-filters-dialog'); d.showModal(); focusDialogContent(d);"
-        class="relative inline-flex items-center justify-center gap-x-1.5 rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-xs inset-ring inset-ring-gray-300 hover:bg-gray-50 dark:bg-white/10 dark:text-white dark:shadow-none dark:inset-ring-white/5 dark:hover:bg-white/20">
+    <div class="flex shrink-0 items-center gap-x-2 sm:gap-x-3 md:ml-4">
+      <a href="/web/projects" hx-boost="false" aria-label="Up to projects" title="Up to projects"
+        class="inline-flex items-center justify-center rounded-md bg-white p-1.5 sm:p-2 text-gray-900 shadow-xs inset-ring inset-ring-gray-300 hover:bg-gray-50 dark:bg-white/10 dark:text-white dark:shadow-none dark:inset-ring-white/5 dark:hover:bg-white/20">
+        {% include "icons/arrow_up.html" %}</a>
+      <button type="button" aria-label="Filters" onclick="var d=document.getElementById('task-filters-dialog'); d.showModal(); focusDialogContent(d);"
+        class="relative inline-flex items-center justify-center gap-x-1.5 rounded-md bg-white px-2 py-1.5 sm:px-3 sm:py-2 text-sm font-semibold text-gray-900 shadow-xs inset-ring inset-ring-gray-300 hover:bg-gray-50 dark:bg-white/10 dark:text-white dark:shadow-none dark:inset-ring-white/5 dark:hover:bg-white/20">
         {% include "icons/filter.html" %}
-        Filters
+        <span class="hidden sm:inline">Filters</span>
         {% if !filters_query.is_empty() %}
         <span class="absolute -top-1 -right-1 size-2.5 rounded-full bg-indigo-600 dark:bg-indigo-500"></span>
         {% endif %}
@@ -28,12 +33,12 @@
            the current client-side selection (base.html's `selectedItemIds` Set), same as
            before — see base.html's `activateRow`/`openBatchActionsMenu` doc comments. -->
       <button type="button" id="batch-actions-btn" onclick="openBatchActionsMenu(this)" disabled
-        class="inline-flex items-center justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-xs inset-ring inset-ring-gray-300 hover:bg-gray-50 disabled:opacity-50 dark:bg-white/10 dark:text-white dark:shadow-none dark:inset-ring-white/5 dark:hover:bg-white/20 dark:disabled:hover:bg-white/10">
+        class="inline-flex items-center justify-center rounded-md bg-white px-2.5 py-1.5 sm:px-3 sm:py-2 text-sm font-semibold text-gray-900 shadow-xs inset-ring inset-ring-gray-300 hover:bg-gray-50 disabled:opacity-50 dark:bg-white/10 dark:text-white dark:shadow-none dark:inset-ring-white/5 dark:hover:bg-white/20 dark:disabled:hover:bg-white/10">
         Actions</button>
       <button type="button"
         hx-get="/web/projects/{{ project_id }}/tasks/new{% if !filters_query.is_empty() %}?{{ filters_query }}{% endif %}"
-        hx-target="#action-dialog" hx-select="#dialog-fragment" hx-swap="innerHTML"
-        class="inline-flex items-center justify-center rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-xs hover:bg-indigo-500 dark:bg-indigo-500 dark:shadow-none dark:hover:bg-indigo-400">
+        hx-target="#action-dialog" hx-select="#dialog-fragment" hx-swap="innerHTML" aria-label="New task"
+        class="inline-flex items-center justify-center rounded-md bg-indigo-600 px-2 py-1.5 sm:px-3 sm:py-2 text-sm font-semibold text-white shadow-xs hover:bg-indigo-500 dark:bg-indigo-500 dark:shadow-none dark:hover:bg-indigo-400">
         {% include "icons/add.html" %}
       </button>
     </div>

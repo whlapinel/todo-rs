@@ -1,25 +1,26 @@
 {% extends "base.html" %}
 {% block title %}Tasks · Todo{% endblock %}
 {% block content %}
-<div class="space-y-6">
-  <div class="md:flex md:items-center md:justify-between">
+<div class="space-y-3 sm:space-y-6">
+  <!-- One-row compact header below sm — see project_tasks/list_page.html's identical comment. -->
+  <div class="flex items-center justify-between gap-x-3">
     <div class="min-w-0 flex-1 flex items-center gap-x-3">
-      <h2 class="text-2xl/7 font-bold text-gray-900 sm:truncate sm:text-3xl sm:tracking-tight dark:text-white">All
+      <h2 class="truncate text-xl/7 font-bold text-gray-900 sm:text-3xl sm:tracking-tight dark:text-white">All
         Projects - Tasks
       </h2>
     </div>
-    <div class="mt-4 flex items-center gap-x-3 md:mt-0 md:ml-4">
-      <button type="button" onclick="var d=document.getElementById('task-filters-dialog'); d.showModal(); focusDialogContent(d);"
-        class="relative inline-flex items-center justify-center gap-x-1.5 rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-xs inset-ring inset-ring-gray-300 hover:bg-gray-50 dark:bg-white/10 dark:text-white dark:shadow-none dark:inset-ring-white/5 dark:hover:bg-white/20">
+    <div class="flex shrink-0 items-center gap-x-2 sm:gap-x-3 md:ml-4">
+      <button type="button" aria-label="Filters" onclick="var d=document.getElementById('task-filters-dialog'); d.showModal(); focusDialogContent(d);"
+        class="relative inline-flex items-center justify-center gap-x-1.5 rounded-md bg-white px-2 py-1.5 sm:px-3 sm:py-2 text-sm font-semibold text-gray-900 shadow-xs inset-ring inset-ring-gray-300 hover:bg-gray-50 dark:bg-white/10 dark:text-white dark:shadow-none dark:inset-ring-white/5 dark:hover:bg-white/20">
         {% include "icons/filter.html" %}
-        Filters
+        <span class="hidden sm:inline">Filters</span>
         {% if !filters_query.is_empty() || project_filter != "all" %}
         <span class="absolute -top-1 -right-1 size-2.5 rounded-full bg-indigo-600 dark:bg-indigo-500"></span>
         {% endif %}
       </button>
       <button type="button" hx-get="/web/tasks/new{% if show_complete %}?showComplete=1{% endif %}"
-        hx-target="#action-dialog" hx-select="#dialog-fragment" hx-swap="innerHTML"
-        class="inline-flex items-center justify-center rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-xs hover:bg-indigo-500 dark:bg-indigo-500 dark:shadow-none dark:hover:bg-indigo-400">
+        hx-target="#action-dialog" hx-select="#dialog-fragment" hx-swap="innerHTML" aria-label="New task"
+        class="inline-flex items-center justify-center rounded-md bg-indigo-600 px-2 py-1.5 sm:px-3 sm:py-2 text-sm font-semibold text-white shadow-xs hover:bg-indigo-500 dark:bg-indigo-500 dark:shadow-none dark:hover:bg-indigo-400">
         {% include "icons/add.html" %}
       </button>
     </div>
